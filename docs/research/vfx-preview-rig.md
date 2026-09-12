@@ -4,6 +4,10 @@ M712. The particle preview parked every system at the origin, which shows a miss
 still and a trail with nothing to trail behind. This is the rig that carries it instead, and the research
 behind guessing which rig a system wants.
 
+**M713 supersedes the guessing half of this, and the second part of this document records it.** The rig now
+comes from the spell record that names the system, when there is one; the name guess below is what is left
+for the systems nothing names.
+
 ## The file does not say
 
 A `VfxSystemDefinitionData` describes emitters and nothing else. Whether the thing it describes sits on a
@@ -94,3 +98,92 @@ accord alone - the map's own missiles are not the preview's to move.
   motion for them. A bone rig in particular would need a champion loaded beside the effect.
 - ltk-manager also carries a screen-bound rig - `AttachToCamera` on `PersistentVfxData` - on 7 records in
   30 archives. Rare enough to record and not build.
+
+---
+
+# M713 - the game answers, where the game has something to say
+
+The guess above is now the fallback. When the previewed system belongs to a champion, the rig comes from
+the spell record that names it, and flies at that ability's own speed.
+
+## The chain, and it is three different files
+
+| step | where |
+| --- | --- |
+| the spell object and its `mMissileEffectKey` | `data/characters/<champ>/<champ>.bin` - 5,885 of 5,888 |
+| the key, turned into THIS skin's system | `ResourceResolver.resourceMap` in `data/characters/<champ>/skins/skin<N>.bin` |
+| the system itself | usually a shared `<champ>_multi_skins_….bin`, which is 85% of resolved links |
+
+The key is a Hash and the map's value is an object link, 14,361 of 14,361 in both cases. Not one record in
+the corpus points at a system directly: the map is the only route. Exactly one `ResourceResolver` object
+per bin, no exceptions, median 71 entries.
+
+**Coverage is effectively total.** 1,255 spell records name a missile effect and **1,254 resolve end to
+end**. The single miss is Aurora's E, where the skin maps the key to the null link on purpose. Per
+(key × skin) pair: 61,640 of 61,935 resolve, and the whole residue is a skin deliberately suppressing an
+effect rather than a broken lookup. A null link means "this skin draws nothing here" and is dropped, not
+followed to another skin's system.
+
+## The brief's worked case was right about Ahri's E and wrong as a rule
+
+`mMissileSpec.movementComponent.mSpeed` holds for 1,114 of the 1,162 specs that author a speed. The
+component is polymorphic over **twelve** classes:
+
+| class | count | what it authors |
+| --- | ---: | --- |
+| FixedSpeedMovement | 1,118 | `mSpeed` |
+| FixedTimeMovement | 141 | `mTravelTime` |
+| AcceleratingMovement | 69 | `mInitialSpeed`, `mMinSpeed`, `mMaxSpeed`, `mAcceleration` |
+| FixedSpeedSplineMovement | 38 | `mSpeed` |
+| FixedTimeSplineMovement | 27 | `mTravelTime` |
+| eight more | 28 | circles, walls, physics, parametric |
+
+Ahri is the case that makes the point. Her passive, her Q, her Q-return and her W are all
+`AcceleratingMovement` or `CircleMovement` and author **no `mSpeed` at all**, so a reader that knows only
+the claimed path is silent on her signature ability. Two more places hide a speed: `ParametricMovement`
+nests it two levels down through `MovementEntries`, and two specs put one inside a `behaviors` action.
+
+Our reader switches on the FIELDS rather than the class, which is why it survives this - the discipline was
+already there from M631, when a class table would have shipped a speed of zero for thirteen spells. M713
+adds `mInitialSpeed` to it: an accelerating missile has no single speed and the one it leaves at is the
+honest stand-in, and that covers 74 more specs across four classes.
+
+**The legacy `missileSpeed` scalar is not used.** It is authored 3,096 times and agrees with the movement
+component on only 80.8% of the records that carry both; where it disagrees it disagrees badly (Akali's Q:
+99,999 against 6,200) and its maximum is 1,000,000,000.
+
+## What a preview does with an authored speed
+
+Speeds run from 0.5 to 2,500,000 units a second, median 1,750, p10 to p90 of 1,200 to 3,000. A plain clamp
+on the extremes is useless, so the rig clamps on the flight instead: at most the speed that crosses the rig
+in a twentieth of a second (Aurelion Sol's E would otherwise be half a millisecond) and at least the one
+that crosses it in thirty (Hwei's W, authored at 0.5, would take forty minutes). The note always quotes the
+spell's own number, not the clamped one.
+
+## When the link is available: only from a champion
+
+All six routes into the particle editor pass a `WadAssetEntry` and nothing else, and the editor has no WAD,
+no mounts and no way to read a second bin - by design, since every other thing it needs arrives as a
+callback keyed by the system. So the champion is read out of the entry's path, `data/characters/<champ>/…`,
+and the host does the three-bin walk on the same background thread as the parse.
+
+A map's `mapXX.bin`, the mode-specific data and a workshop loose file have no champion. They get nothing
+and keep the name guess, and that is not a gap to close later: nothing in a spell record names a map's
+placed systems.
+
+## The bone rigs are read and deliberately not carried
+
+The skin bin also holds two bone-attached populations, in the same file as the resource map, so reading
+them is free: `idleParticlesEffects` (23,372 keys, a bone named in 24,387 records) and the
+`PersistentEffectConditions` a buff switches on (10,553 keys, 9,857 with a bone). Both are surfaced - the
+panel says which bone and which buff - and neither gets a motion, because a bone rig needs the champion
+standing beside the effect and this window cannot load one. Saying "it hangs on `L_Eye` under `AhriR`" is
+the useful half and it is honest about the rest.
+
+Two field names had to be read out of the real bins rather than guessed: the idle container is
+`idleParticlesEffects`, and `OwnerCondition.Spell` is a **hash**, not a string. Reading either wrongly
+returns nothing, silently, which is the M590 failure shape.
+
+Still unread: `ParticleEventData` (56,380 keys), the largest bone population, which lives in the animation
+bins this does not open.
+

@@ -6614,6 +6614,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.ClassName = h => Meta.TryGetName(h, out var n) ? n : null;
         ParticleEditor.SaveOverrideAsync = SaveParticleOverride;
         ParticleEditor.OpenIssues = OpenParticleBinIssues;   // M125
+        // M713: what the game says a system is for. Keyed by the system, like every other resolver this
+        // view model hands over, so the editor never learns what a WAD is.
+        ParticleEditor.ResolveRole = def =>
+            _particleRoles.TryGetValue(def.PathHash, out var link) ? link : null;
 
         // M138: the wem encoder reuses vgmstream for input formats Media Foundation can't read
         Encoder.VgmstreamPath = Sound.VgmstreamPath;
@@ -6772,8 +6776,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M197 (4.5): parse off the UI thread. The map VFX bins this milestone makes reachable are far
             // larger than a champion bin - map22.bin measures around 3 seconds - and that was a hard freeze.
             var resolveName = ParticleEditor.ResolveBinName;
-            var (doc, defs) = await System.Threading.Tasks.Task.Run(
-                () => ParticleEditorViewModel.Parse(bytes, resolveName));
+            // M713: the roles are read off the champion's OTHER bins - the root bin for its spells and
+            // every skin bin for its resource map - so they are built here, beside the parse, and not on
+            // the UI thread. A champion with sixty skins is sixty small reads.
+            string? binPath = entry.IsResolved ? entry.Path : null;
+            var (doc, defs, roles) = await System.Threading.Tasks.Task.Run(
+                () =>
+                {
+                    var (d, dd) = ParticleEditorViewModel.Parse(bytes, resolveName);
+                    return (d, dd, BuildParticleRoles(binPath));
+                });
+            _particleRoles = roles;
             if (doc is null || !ParticleEditor.Load(entry, doc, defs, editable))
             {
                 _log.Warn("Particle", $"{entry.DisplayName} contains no VFX systems.");

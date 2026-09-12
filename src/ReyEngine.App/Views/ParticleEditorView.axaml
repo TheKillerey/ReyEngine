@@ -283,7 +283,23 @@
                                     ToolTip.Tip="It circles, so a trail or a ribbon has a path to lay itself along." />
                     </UniformGrid>
                   </Border>
+                  <!-- M713: which of the two the reader is looking at. The game's own wiring names about
+                       56% of systems; the rest fall back to M712's name guess and say so. -->
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Border Classes="badge" IsVisible="{Binding RoleIsAuthored}">
+                      <TextBlock Text="FROM THE SPELL RECORD" FontSize="8" />
+                    </Border>
+                    <Border Classes="badge"
+                            IsVisible="{Binding RoleIsAuthored, Converter={x:Static BoolConverters.Not}}">
+                      <TextBlock Text="GUESSED FROM THE NAME" FontSize="8" />
+                    </Border>
+                  </StackPanel>
                   <TextBlock Text="{Binding RigNote}" FontSize="9" Opacity="0.5" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding RigSpeed, StringFormat='Speed   {0:0} u/s'}" FontSize="10"
+                             Opacity="0.7" Margin="0,4,0,0" IsVisible="{Binding IsRigMissile}" />
+                  <Slider Minimum="100" Maximum="6000" Value="{Binding RigSpeed}"
+                          IsVisible="{Binding IsRigMissile}"
+                          ToolTip.Tip="How fast the missile flies. Riot's own speeds run from about 1,200 to 3,000, with a median of 1,750." />
                   <TextBlock Text="{Binding RigHeight, StringFormat='Height   {0:0} u'}" FontSize="10"
                              Opacity="0.7" Margin="0,4,0,0" />
                   <Slider Minimum="0" Maximum="600" Value="{Binding RigHeight}"

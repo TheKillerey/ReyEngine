@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Assets;
 using ReyEngine.Core.Decoding;
+using ReyEngine.Formats.Characters;
 using ReyEngine.Formats.Particles;
 using ReyEngine.Formats.Vfx;
 
@@ -149,11 +150,26 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         Cards.Add(new ParticleEmitterCardViewModel(value.Entry, this));   // M188 (3.5): the system's own fields
         foreach (var e in value.Entry.Emitters)
             Cards.Add(new ParticleEmitterCardViewModel(e, this));
-        // M712: open on what the name suggests. It is a guess and it says so - the reliable answer is the
-        // spell record that names the system as its missile, which this window does not read yet.
-        var guess = ReyEngine.Formats.Vfx.VfxRigNaming.For(value.Entry.Name);
-        RigMode = guess.Mode;
-        RigNote = guess.Why;
+        // M713: the game's own wiring first - a spell record that names this system as its missile says
+        // so, and hands over the speed with it. M712's name guess is the fallback for the systems nothing
+        // names, which is about 44% of them, and it stays labelled as a guess.
+        var def = _defs.GetValueOrDefault(value.Entry.PathHash);
+        if (def is not null && ResolveRole?.Invoke(def) is { } link)
+        {
+            RoleLink = link;
+            var rig = link.Rig(Rig);
+            RigMode = rig.Mode;
+            RigSpeed = rig.Speed;
+            RigNote = link.Why;
+        }
+        else
+        {
+            RoleLink = null;
+            RigSpeed = ReyEngine.Formats.Vfx.VfxRigDefaults.Speed;
+            var guess = ReyEngine.Formats.Vfx.VfxRigNaming.For(value.Entry.Name);
+            RigMode = guess.Mode;
+            RigNote = guess.Why;
+        }
         RebuildPlayback();
     }
 
@@ -260,6 +276,13 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     // is the exception - a simulator's random stream is fixed when it is built - so changing it rebuilds,
     // which is what Restart already does.
 
+    /// <summary>M713: what the GAME says this system is for, when the host can find out.
+    ///
+    /// <para>Keyed by the system, like every other resolver this view model is given, because it has no
+    /// access to a WAD and should not grow one. The host owns the mounts and the champion's other bins;
+    /// this asks and does not care how.</para></summary>
+    public Func<VfxSystemDefinition, VfxSystemLink?>? ResolveRole;
+
     [ObservableProperty] private ReyEngine.Formats.Vfx.VfxRigMode _rigMode;
     [ObservableProperty] private double _rigHeight = ReyEngine.Formats.Vfx.VfxRigDefaults.Height;
     [ObservableProperty] private bool _rigReplay;
@@ -268,11 +291,19 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     /// <summary>Why the rig opened where it did. Shown, because a guess the user cannot see is a guess they
     /// cannot correct.</summary>
     [ObservableProperty] private string _rigNote = "";
+    /// <summary>M713: the speed a missile rig flies at. Set from the spell record when there is one, and
+    /// left at the rig's own default when nothing names this system.</summary>
+    [ObservableProperty] private double _rigSpeed = ReyEngine.Formats.Vfx.VfxRigDefaults.Speed;
+    /// <summary>M713: the game's own statement about this system, or null when nothing names it. Drives
+    /// the badge that tells the reader which of the two they are looking at.</summary>
+    [ObservableProperty] private VfxSystemLink? _roleLink;
+    /// <summary>True when the rig came from the game's wiring rather than from the system's name.</summary>
+    public bool RoleIsAuthored => RoleLink is not null;
 
     /// <summary>What the viewport carries the system with. Rebuilt from the four settings above, so a
     /// binding on it updates the moment any of them moves.</summary>
     public ReyEngine.Formats.Vfx.VfxPreviewRig Rig => new(
-        RigMode, (float)RigHeight,
+        RigMode, (float)RigHeight, Speed: (float)RigSpeed,
         Replay: RigReplay, StopMidRun: RigStopMidRun);
 
     // One bool per segment over the enum, which is how a segmented control binds in this codebase. The
@@ -310,6 +341,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(Rig));
     }
     partial void OnRigHeightChanged(double value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRigSpeedChanged(double value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRoleLinkChanged(VfxSystemLink? value) => OnPropertyChanged(nameof(RoleIsAuthored));
     partial void OnRigReplayChanged(bool value) => OnPropertyChanged(nameof(Rig));
     partial void OnRigStopMidRunChanged(bool value) => OnPropertyChanged(nameof(Rig));
     partial void OnRigSeedChanged(int value) => RebuildPlayback();

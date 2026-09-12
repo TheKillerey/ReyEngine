@@ -240,6 +240,10 @@ public static class ChampionSpellData
     private static readonly uint FMovement = HashAlgorithms.Fnv1a("movementComponent");
     private static readonly uint FSpeed = HashAlgorithms.Fnv1a("mSpeed");
     private static readonly uint FTravelTime = HashAlgorithms.Fnv1a("mTravelTime");
+    // M713: the third way a movement authors its pace. 69 AcceleratingMovement specs carry no mSpeed and
+    // no mTravelTime at all, and Ahri's passive, Q, Q-return and W are four of them - so the reader was
+    // silent on her signature ability.
+    private static readonly uint FInitialSpeed = HashAlgorithms.Fnv1a("mInitialSpeed");
     private static readonly uint FMissileWidth = HashAlgorithms.Fnv1a("mMissileWidth");
     private static readonly uint FScriptName = HashAlgorithms.Fnv1a("mScriptName");
     private static readonly uint FTargetingTypeData = HashAlgorithms.Fnv1a("mTargetingTypeData");
@@ -500,6 +504,13 @@ public static class ChampionSpellData
     {
         if (F32(movement, FSpeed) is > 0f and var speed) return new MissileMotion(MissileMotionKind.ConstantSpeed, speed);
         if (F32(movement, FTravelTime) is > 0f and var seconds) return new MissileMotion(MissileMotionKind.FixedDuration, seconds);
+        // M713: an accelerating missile has no single speed, and its initial one is the honest stand-in -
+        // it is what the missile leaves at, and it is authored. 69 specs are AcceleratingMovement plus 5
+        // more across PhysicsMovement, DecelToLocationMovement and TrackMouseMovement, all of which carry
+        // mInitialSpeed and none of which carried anything this reader could use before. Reported as a
+        // constant speed rather than a fourth kind, because that is what it is for the first instant and
+        // every consumer already handles it.
+        if (F32(movement, FInitialSpeed) is > 0f and var initial) return new MissileMotion(MissileMotionKind.ConstantSpeed, initial);
         return MissileMotion.None;
     }
 
