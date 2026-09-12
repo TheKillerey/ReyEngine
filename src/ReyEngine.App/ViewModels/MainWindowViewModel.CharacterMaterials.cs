@@ -74,6 +74,55 @@ public sealed partial class MainWindowViewModel
     private Task SaveCharacterMaterialOverride() =>
         SaveMaterialOverrideFor(MeshPreview.MaterialEditor, ApplyCharacterMaterialsToPreview);
 
+    /// <summary>
+    /// M703: give a submesh a material of its own.
+    ///
+    /// <para>A character material is optional - Riot's scenery characters ship none, and neither does
+    /// anything the Character Creator writes - and a shader can only be changed on a material that
+    /// exists. This authors one from a skinned shader, seeded with the texture that submesh already
+    /// draws with so the model does not change appearance, points the submesh at it, saves, and selects
+    /// it in the editor, where its shader and parameters are then ordinary edits.</para>
+    /// </summary>
+    private async Task AddCharacterSubmeshMaterialAsync(SubmeshToggleViewModel row)
+    {
+        var editor = MeshPreview.MaterialEditor;
+        if (editor.BinEntry is not { } binEntry) { _log.Warn("Material", "No skin bin is open, so there is nothing to add a material to."); return; }
+        if (editor.Serialize() is not { } bytes) { _log.Warn("Material", "The open skin bin could not be read."); return; }
+
+        // the shader comes from the catalogue, so it has to be there
+        if (editor.Catalog is null && editor.SelectedShaderEnvironment is { } environment)
+            await LoadShaderCatalogAsync(environment);
+        if (Formats.Characters.CharacterMaterialBinder.PickShader(editor.Catalog) is not { } shader)
+        { _log.Error("Material", "No shader catalogue is loaded - pick a game environment in the Materials tab first."); return; }
+
+        if (Formats.Characters.CharacterMaterialBinder.SkinObjectPath(bytes, ResolveBinName) is not { } skinPath)
+        { _log.Error("Material", "This bin's skin object has no name in the hash database, so a material cannot be named after it."); return; }
+
+        // what the submesh draws with today: its own texture override, else the skin's default
+        string? diffuse = Formats.Characters.CharacterMaterialBinder.Overrides(bytes)
+            .FirstOrDefault(o => o.Submesh.Equals(row.Name, StringComparison.OrdinalIgnoreCase))?.Texture;
+        diffuse ??= Formats.Meshes.SkinMeshExtractor.Extract(bytes, ResolveWadPath)?.DefaultTexture;
+
+        var updated = Formats.Characters.CharacterMaterialBinder.AddMaterial(
+            bytes, skinPath, row.Name, shader, diffuse, out var error, out var materialPath);
+        if (updated is null) { _log.Error("Material", error ?? "The material could not be added."); return; }
+
+        // reload the editor on the new bytes, keeping the baseline it was opened against so the save
+        // still rebases onto whatever the project holds
+        var doc = Formats.Materials.MaterialDocument.Parse(updated, ResolveBinName, ResolveWadPath);
+        var baseline = editor.BaseBytes;
+        editor.Load(doc, binEntry, baseline);
+        editor.IsDirty = true;   // the file on disk does not have this yet
+        MeshPreview.RefreshOutliner();
+        editor.SelectedMaterial = editor.Materials.FirstOrDefault(m =>
+            m.Name.Equals(materialPath, StringComparison.OrdinalIgnoreCase))
+            ?? editor.Materials.FirstOrDefault(m => m.Name.EndsWith(materialPath[(materialPath.LastIndexOf('/') + 1)..], StringComparison.OrdinalIgnoreCase));
+        ApplyCharacterMaterialsToPreview();
+        await SaveCharacterMaterialOverride();
+        _log.Success("Material", $"'{row.Name}' now has its own material ({materialPath}) on {shader.Name}. "
+            + "Change its shader and parameters here - the list offers the shaders a character can be drawn with.");
+    }
+
     /// <summary>The window is about to show something that is not a champion skin. The skin's materials
     /// leave with the skin - the same rule the inspector applies when another asset is selected.</summary>
     private void ForgetPreviewSkin()

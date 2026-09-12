@@ -10,6 +10,7 @@ using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Skeletons;
 using ReyEngine.Formats.Vfx;
 
+using System.Threading.Tasks;
 namespace ReyEngine.App.ViewModels;
 
 /// <summary>
@@ -30,12 +31,37 @@ public sealed partial class SubmeshToggleViewModel : ObservableObject
     [ObservableProperty] private string _materialName = "";
     public bool HasMaterial => MaterialName.Length > 0;
     partial void OnMaterialNameChanged(string value) => OnPropertyChanged(nameof(HasMaterial));
+
+    /// <summary>M703: this submesh has a material of ITS OWN - a materialOverride entry naming one -
+    /// rather than drawing from the skin's default block. A shader can only be changed on a material that
+    /// exists, and Riot's scenery characters ship none at all.</summary>
+    [ObservableProperty] private bool _hasOwnMaterial;
+    public bool CanAddMaterial => !HasOwnMaterial && AddMaterial is not null && !Busy;
+    partial void OnHasOwnMaterialChanged(bool value) => OnPropertyChanged(nameof(CanAddMaterial));
+    [ObservableProperty] private bool _busy;
+    partial void OnBusyChanged(bool value) => OnPropertyChanged(nameof(CanAddMaterial));
+
+    /// <summary>Host hook: author a material for this submesh and select it.</summary>
+    public Func<SubmeshToggleViewModel, Task>? AddMaterial;
+
+    [RelayCommand]
+    private async Task AddMaterialForSubmesh()
+    {
+        if (AddMaterial is not { } add || HasOwnMaterial) return;
+        Busy = true;
+        try { await add(this); }
+        finally { Busy = false; }
+    }
     public Action? Changed;
     partial void OnIsVisibleChanged(bool value) => Changed?.Invoke();
 }
 
 public sealed partial class MeshPreviewViewModel : ObservableObject
 {
+    /// <summary>M703: host hook - author a material for a submesh that has none. Set once by the host and
+    /// handed to every row, so a row created later is wired too.</summary>
+    public Func<SubmeshToggleViewModel, Task>? AddSubmeshMaterial;
+
     [ObservableProperty] private string _title = "";
     [ObservableProperty] private string _stats = "";
     [ObservableProperty] private MeshAsset? _mesh;
@@ -183,6 +209,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         {
             var t = new SubmeshToggleViewModel { Index = Submeshes.Count, Name = string.IsNullOrEmpty(s.Material) ? $"submesh {Submeshes.Count}" : s.Material };
             t.Changed = RebuildSubmeshVisibility;
+            t.AddMaterial = AddSubmeshMaterial;   // M703
             Submeshes.Add(t);
         }
         HasSubmeshes = Submeshes.Count > 1;

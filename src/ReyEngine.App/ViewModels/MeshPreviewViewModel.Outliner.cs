@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 
+using System;
 namespace ReyEngine.App.ViewModels;
 
 /// <summary>
@@ -48,7 +49,13 @@ public sealed partial class MeshPreviewViewModel
     public void RefreshOutliner()
     {
         foreach (var row in Submeshes)
+        {
             row.MaterialName = HasMaterialEditor ? MaterialFor(row.Name)?.Name ?? "" : "";
+            // M703: its OWN material, not the skin default it falls back to - only the first can have
+            // its shader changed, and only the second is what a character with no materials shows.
+            row.HasOwnMaterial = HasMaterialEditor && MaterialEditor.Materials.Any(m =>
+                m.Model.Submeshes.Any(sub => sub.Equals(row.Name, StringComparison.OrdinalIgnoreCase)));
+        }
         if (SelectedSubmesh is { } selected && !Submeshes.Contains(selected)) SelectedSubmesh = null;
     }
 }

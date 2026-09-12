@@ -127,7 +127,7 @@
                          Background="Transparent" BorderThickness="0">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:SubmeshToggleViewModel">
-                      <Grid ColumnDefinitions="Auto,*" Margin="0,1">
+                      <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,1">
                         <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}" Padding="0" MinWidth="0"
                                   VerticalAlignment="Center" ToolTip.Tip="Show / hide this submesh" />
                         <StackPanel Grid.Column="1" Margin="6,0,0,0">
@@ -135,6 +135,12 @@
                           <TextBlock Text="{Binding MaterialName}" FontSize="9" IsVisible="{Binding HasMaterial}"
                                      Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
+                        <!-- M703: a submesh with no material of its own can be given one, which is what
+                             makes its shader changeable at all. -->
+                        <Button Grid.Column="2" Classes="icon" Content="+ material" FontSize="9" Padding="6,1"
+                                VerticalAlignment="Center" IsVisible="{Binding CanAddMaterial}"
+                                Command="{Binding AddMaterialForSubmeshCommand}"
+                                ToolTip.Tip="Author a material for this submesh, starting from its current texture, and select it - then its shader can be changed here" />
                       </Grid>
                     </DataTemplate>
                   </ListBox.ItemTemplate>
