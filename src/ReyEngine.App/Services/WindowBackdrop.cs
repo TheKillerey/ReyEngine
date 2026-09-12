@@ -21,7 +21,8 @@ namespace ReyEngine.App.Services;
 /// live in whichever windows are open.
 ///
 /// The bitmap is decoded once per path and shared by every window's brush; a changed path decodes the
-/// new file and lets the old bitmap go with its last brush.</summary>
+/// new file and lets the old bitmap go with its last brush. M690: an animated GIF goes through one
+/// shared <see cref="GifPlayer"/> instead, whose frames every host's brush follows.</summary>
 public static class WindowBackdrop
 {
     private static bool _installed;
@@ -56,21 +57,30 @@ public static class WindowBackdrop
         if (spec is null || string.IsNullOrWhiteSpace(spec.Path)) return null;
         var bitmap = BitmapFor(spec.Path);
         if (bitmap is null) return null;
-        return new ImageBrush(bitmap)
-        {
-            Opacity = Math.Clamp(spec.Opacity, 0, 1),
-            Stretch = spec.Stretch switch
-            {
-                1 => Stretch.Uniform,
-                2 => Stretch.Fill,
-                3 => Stretch.None,
-                _ => Stretch.UniformToFill,
-            },
-            TileMode = spec.Stretch == 3 ? TileMode.Tile : TileMode.None,
-            AlignmentX = AlignmentX.Center,
-            AlignmentY = AlignmentY.Center,
-        };
+        return Configure(new ImageBrush(bitmap), spec);
     }
+
+    /// <summary>Opacity, stretch, tiling and centring from the spec - the same for a still and for every
+    /// frame of a GIF.</summary>
+    public static ImageBrush Configure(ImageBrush brush, ThemeService.BackdropSpec spec)
+    {
+        brush.Opacity = Math.Clamp(spec.Opacity, 0, 1);
+        brush.Stretch = spec.Stretch switch
+        {
+            1 => Stretch.Uniform,
+            2 => Stretch.Fill,
+            3 => Stretch.None,
+            _ => Stretch.UniformToFill,
+        };
+        brush.TileMode = spec.Stretch == 3 ? TileMode.Tile : TileMode.None;
+        brush.AlignmentX = AlignmentX.Center;
+        brush.AlignmentY = AlignmentY.Center;
+        return brush;
+    }
+
+    /// <summary>Is this a file the GIF player should have? Only by extension; a still GIF falls back to
+    /// the bitmap path when the player finds one frame.</summary>
+    public static bool IsGif(string? path) => path is not null && path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase);
 
     private static string? _cachedPath;
     private static DateTime _cachedStamp;
@@ -99,6 +109,8 @@ public static class WindowBackdrop
     public sealed class Host : Panel
     {
         public Border Layer { get; } = new Border { IsHitTestVisible = false };
+        private GifPlayer? _gif;
+        private ImageBrush? _gifBrush;
 
         public Host() => Children.Add(Layer);
 
@@ -112,6 +124,7 @@ public static class WindowBackdrop
         protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
         {
             ThemeService.BackdropChanged -= OnBackdropChanged;
+            DropGif();
             base.OnDetachedFromVisualTree(e);
         }
 
@@ -121,6 +134,34 @@ public static class WindowBackdrop
             else Dispatcher.UIThread.Post(() => Apply(spec));
         }
 
-        private void Apply(ThemeService.BackdropSpec? spec) => Layer.Background = BrushFor(spec);
+        private void Apply(ThemeService.BackdropSpec? spec)
+        {
+            DropGif();
+            // M690: an animated GIF is a shared player whose frames this brush follows
+            if (spec is not null && IsGif(spec.Path) && GifPlayer.Shared(spec.Path) is { } player)
+            {
+                _gif = player;
+                player.FrameChanged += OnGifFrame;
+                player.Acquire();
+                _gifBrush = Configure(new ImageBrush(player.Current), spec);
+                Layer.Background = _gifBrush;
+                return;
+            }
+            Layer.Background = BrushFor(spec);
+        }
+
+        private void OnGifFrame()
+        {
+            if (_gif is not null && _gifBrush is not null) _gifBrush.Source = _gif.Current;
+        }
+
+        private void DropGif()
+        {
+            if (_gif is null) return;
+            _gif.FrameChanged -= OnGifFrame;
+            _gif.Release();
+            _gif = null;
+            _gifBrush = null;
+        }
     }
 }
