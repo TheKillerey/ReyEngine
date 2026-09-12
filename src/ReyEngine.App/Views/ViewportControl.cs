@@ -1769,7 +1769,14 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             var spawns = sim.Emitters[e].TakeChildSpawns();
             if (spawns.Count == 0) continue;
-            if (e >= perEmitter.Count || perEmitter[e] is not { } childItems || childItems.Count == 0) continue;
+            // M708: the child list is indexed by AUTHORED emitter, and sim.Emitters is only the visual
+            // subset - SetSystem drops every emitter IsVisual refuses. Indexing it by the simulator's own
+            // position handed an emitter the CHILDREN OF A DIFFERENT ONE as soon as anything before it was
+            // dropped, which on a real map is most systems. BindEmitterAssets a few lines up has remapped
+            // by reference since M180; this loop was the copy that never did.
+            int authored = Services.VfxPlaybackSim.AuthoredIndex(item.System, sim.Emitters[e].Def);
+            if (authored < 0 || authored >= perEmitter.Count) continue;
+            if (perEmitter[authored] is not { } childItems || childItems.Count == 0) continue;
             foreach (var sp in spawns)
             {
                 if (_childSims.Count >= MaxLiveChildSims) return;
