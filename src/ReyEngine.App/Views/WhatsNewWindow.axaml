@@ -1,0 +1,58 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.WhatsNewWindow"
+        Title="What's new"
+        Width="640" Height="580"
+        MinWidth="480" MinHeight="360"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="BorderOnly"
+        Background="{DynamicResource ReyBgBrush}"
+        Foreground="{DynamicResource ReyTextBrush}"
+        FontFamily="Inter, Segoe UI, sans-serif">
+
+  <!-- M689: the What's New list. The same registry the menu glows read (NewFeatures.Shipping), newest
+       release first; a row is NEW for exactly the reason its control glows, and "Got it" is the one
+       acknowledgement that puts every glow out - the command existed since M593 with nothing to call it. -->
+  <DockPanel>
+    <local:ReyTitleBar DockPanel.Dock="Top" />
+    <Grid Margin="26,18,26,20" RowDefinitions="Auto,Auto,*,Auto">
+      <TextBlock Grid.Row="0" Classes="settingsTitle" Text="WHAT'S NEW" />
+      <TextBlock Grid.Row="1" x:Name="Intro" Classes="settingsDesc" TextWrapping="Wrap" Margin="0,2,0,0" />
+
+      <ScrollViewer Grid.Row="2" Margin="0,12,0,12">
+        <ItemsControl x:Name="Rows">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:WhatsNewRow">
+              <Panel>
+                <!-- a release header -->
+                <TextBlock Text="{Binding Title}" IsVisible="{Binding IsHeader}" FontSize="11" FontWeight="Bold"
+                           LetterSpacing="1" Margin="0,10,0,4" Foreground="{DynamicResource ReyAccentBrush}" />
+                <!-- a feature; glows while unacknowledged, like the control it belongs to -->
+                <Border IsVisible="{Binding !IsHeader}" Classes.newFeature="{Binding IsNew}"
+                        Background="{DynamicResource ReyPanelAltBrush}" BorderBrush="{DynamicResource ReyBorderBrush}"
+                        BorderThickness="1" CornerRadius="4" Padding="10,6" Margin="0,2">
+                  <Grid ColumnDefinitions="Auto,*">
+                    <Border Grid.Column="0" Classes="badge new" VerticalAlignment="Center" Margin="0,0,10,0" IsVisible="{Binding IsNew}">
+                      <TextBlock Text="NEW" FontSize="9" FontWeight="Bold" />
+                    </Border>
+                    <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="11.5" TextWrapping="Wrap" VerticalAlignment="Center" />
+                  </Grid>
+                </Border>
+              </Panel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+
+      <Grid Grid.Row="3" ColumnDefinitions="Auto,*,Auto,Auto">
+        <Button Grid.Column="0" Classes="tool" Content="🌐 Release notes" Click="OnOpenReleases"
+                ToolTip.Tip="Every release's full notes on GitHub" />
+        <Button Grid.Column="2" Classes="tool" Content="Close" Click="OnClose" />
+        <Button Grid.Column="3" x:Name="GotIt" Classes="primary" Content="Got it" Click="OnGotIt" Margin="8,0,0,0" Padding="18,6"
+                ToolTip.Tip="Mark this release's features as seen; the highlighted menu entries stop glowing" />
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

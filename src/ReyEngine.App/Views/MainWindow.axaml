@@ -224,6 +224,10 @@
       <MenuItem Header="_Help">
         <MenuItem Header="Preferences…" Command="{Binding OpenSettingsCommand}" InputGesture="Ctrl+," />
         <Separator />
+        <!-- M689: the list behind the glows, and the one place that puts them out. Glows itself while
+             anything is unacknowledged, so the entry is findable exactly when it has something to say. -->
+        <MenuItem Header="What's New…" Click="OnShowWhatsNew" Classes.newFeature="{Binding HasNewFeatures}"
+                  ToolTip.Tip="Every feature by release, with the ones this install has not acknowledged marked; Got it stops the highlighted menu entries glowing." />
         <MenuItem Header="Setup Wizard…" Click="OnShowSetupWizard" />
         <MenuItem Header="Check for Updates…" Click="OnCheckUpdates" />
         <MenuItem Header="About ReyEngine…" Click="OnShowAbout" />
@@ -684,6 +688,7 @@
                       <CheckBox IsChecked="{Binding ShowSoundIcons}" Content="🔊 Audio placements" FontSize="11"
                                 ToolTip.Tip="Show an icon at each MapAudio placement" />
                       <CheckBox IsChecked="{Binding ShowPropIcons}" Content="🧍 Mobs and animated props" FontSize="11"
+                                Classes.newFeature="{Binding NewFeature[props-animated]}"
                                 ToolTip.Tip="Show mob / animated-prop icons" />
                       <CheckBox IsChecked="{Binding ShowParticles}" Content="✧ Particle systems" FontSize="11"
                                 IsVisible="{Binding HasParticles}"

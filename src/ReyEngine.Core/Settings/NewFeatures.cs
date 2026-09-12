@@ -35,7 +35,15 @@ public static class NewFeatures
     /// <para>What is NOT here is the point of the list — see the class remarks. Internal work, research,
     /// renderer plumbing and anything unfinished stays out, however large it was.</para>
     /// </summary>
-    public static IReadOnlyList<NewFeature> All { get; private set; } = Shipping;
+    public static IReadOnlyList<NewFeature> All => _registry ?? Shipping;
+
+    /// <summary>M689: the registry a test swapped in, or null for the shipping list. This used to be an
+    /// auto-property initialised from <see cref="Shipping"/> - which is declared BELOW it, so C#'s
+    /// textual static-initialisation order set it to null in every real process. Every IsNew() threw,
+    /// Avalonia swallowed the throw as a binding error, and no menu entry ever glowed between 0.4.0
+    /// and 0.4.4. The tests never saw it because each test class calls SetRegistry first. A headless
+    /// run of the What's New window - a fresh process with nothing reset - is what caught it.</summary>
+    private static IReadOnlyList<NewFeature>? _registry;
 
     /// <summary>The list this build actually ships, kept separate from <see cref="All"/> so it stays
     /// inspectable after a test has swapped the registry out — <see cref="SetRegistry"/> mutates static
@@ -70,11 +78,12 @@ public static class NewFeatures
         // on: the first two arrive by themselves, the other two live inside windows of their own.
         new("blender-addon",    "0.4.4", "Install the Blender add-on from here — every Blender on this PC, one click"),
         new("look",             "0.4.4", "Preferences — eight palettes, an accent of your own, a picture behind the editor, and how updates arrive"),
+        new("props-animated",   "0.4.4", "Overlays — placed mobs and props draw on Riot's shaders, animated and lit by the map, and open in the Character Editor"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
     /// the shipping list happens to contain.</summary>
-    public static void SetRegistry(IReadOnlyList<NewFeature> features) => All = features;
+    public static void SetRegistry(IReadOnlyList<NewFeature> features) => _registry = features;
 
     /// <summary>
     /// Should <paramref name="featureId"/> be highlighted for a user whose newest acknowledged release is

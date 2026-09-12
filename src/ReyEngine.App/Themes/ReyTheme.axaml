@@ -603,6 +603,13 @@
     <Setter Property="BorderBrush" Value="{DynamicResource ReyAccent2Brush}" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>
+  <!-- M689: CheckBox paints through Border#PART_Border, which spans the box and its label (measured with
+       UiProbe dump CheckBox), so the glow frames the whole row like a menu entry. -->
+  <Style Selector="CheckBox.newFeature /template/ Border#PART_Border">
+    <Setter Property="BoxShadow" Value="0 0 7 0 #8B7CF7" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ReyAccent2Brush}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
   <!-- TabItem is a HeaderedContentControl, not a Border - it has no BoxShadow of its own, so the glow
        goes on its template root the same way the ColorView tab styles below pierce theirs. -->
   <Style Selector="TabItem.newFeature /template/ Border#PART_LayoutRoot">

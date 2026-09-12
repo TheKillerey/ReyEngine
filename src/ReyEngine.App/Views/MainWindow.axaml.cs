@@ -488,6 +488,13 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     private void OnShowAbout(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => new AboutWindow().ShowDialog(this);
 
+    /// <summary>M689: Help ▸ What's New… - the registry's list, and "Got it" as the one acknowledgement.</summary>
+    private void OnShowWhatsNew(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm) return;
+        new WhatsNewWindow(vm.NewFeature, () => vm.DismissNewFeaturesCommand.Execute(null)).ShowDialog(this);
+    }
+
     private async void OnCheckUpdates(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         var r = await ReyEngine.App.Services.UpdateService.CheckAsync();
