@@ -36,10 +36,14 @@
 
     <!-- one product on the machine: a newer MSI replaces the older one in place, the same version
          reinstalls over itself (the updater may retry a download), an older one is refused. The old
-         product is removed AFTER the new files are in (afterInstallExecute): an upgrade the in-app
-         updater runs unattended must leave the previous version in place when it fails, and the default
-         schedule leaves neither. Same-version reinstalls raise ICE61, suppressed in the project. -->
-    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallExecute"
+         product is removed BEFORE the new files go in (afterInstallValidate, Windows Installer's own
+         default). M684 scheduled it after, so a failed unattended upgrade would keep the old version -
+         and v0.4.5 then registered itself over v0.4.4 without replacing one file: with the old product
+         still present at InstallFiles, the installer's file-versioning rule kept every file whose
+         version was not higher, and every release carried FileVersion 0.1.7.0. The workflow now versions
+         the assemblies from the tag as well; this schedule is the guarantee that does not depend on it.
+         Same-version reinstalls raise ICE61, suppressed in the project. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallValidate"
                   DowngradeErrorMessage="A newer version of ReyEngine is already installed. Uninstall it first to go back." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 

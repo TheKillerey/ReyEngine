@@ -80,6 +80,28 @@ public sealed class InstallerPackageTests
         Assert.Contains("a.Name.EndsWith(\"win-x64.zip\", OIC)", applier);
     }
 
+    /// <summary>M691: every release's assemblies must carry that release's FILE version, and the dev
+    /// build's version must not drift from the app's again - v0.4.0 through v0.4.5 all shipped
+    /// FileVersion 0.1.7.0, which is what let a same-versioned upgrade keep the old files.</summary>
+    [Fact]
+    public void TheAssembliesAreVersionedFromTheTagAndTheDevVersionFollowsTheApp()
+    {
+        string? yml = Source(".github", "workflows", "release.yml");
+        string? props = Source("Directory.Build.props");
+        if (yml is null || props is null) return;
+        // the publish step derives the version from the tag and passes it to every assembly
+        int publish = yml.IndexOf("dotnet publish src/ReyEngine.App/ReyEngine.App.csproj", StringComparison.Ordinal);
+        Assert.True(publish > 0);
+        Assert.Contains("$version = $env:TAG.TrimStart('v')", yml.Substring(0, publish));
+        Assert.Contains("-p:Version=$version", yml.Substring(publish, 400));
+        // and refuses to ship an exe whose file version is not the tag's
+        Assert.Contains("VersionInfo.FileVersion -ne \"$version.0\"", yml);
+        // dev builds: Directory.Build.props carries the same version as AppInfo
+        var m = Regex.Match(props, "<Version>([0-9.]+)</Version>");
+        Assert.True(m.Success, "Directory.Build.props has no <Version>");
+        Assert.Equal(ReyEngine.App.AppInfo.Version, m.Groups[1].Value);
+    }
+
     [Fact]
     public void TheMsiHandOverIsPassiveAndKeepsTheFolder()
     {
@@ -100,10 +122,12 @@ public sealed class InstallerPackageTests
         Assert.True(m.Success);
         var ices = m.Groups[1].Value.Split(';', StringSplitOptions.RemoveEmptyEntries).OrderBy(x => x).ToArray();
         Assert.Equal(new[] { "ICE38", "ICE61", "ICE64", "ICE91" }, ices);
-        // the old product goes AFTER the new files are in, so a failed unattended upgrade keeps the old one
+        // the old product goes BEFORE the new files: with it still present at InstallFiles, the installer's
+        // file-versioning rule kept every same-versioned file, and v0.4.5 left v0.4.4's files on disk
         string? wxs = Source("installer", "Package.wxs");
         Assert.NotNull(wxs);
-        Assert.Contains("Schedule=\"afterInstallExecute\"", wxs);
+        Assert.Contains("Schedule=\"afterInstallValidate\"", wxs);
+        Assert.DoesNotContain("Schedule=\"afterInstallExecute\"", wxs);
         Assert.Contains("AllowSameVersionUpgrades=\"yes\"", wxs);
         // the launch target is a plain property the custom action formats at click time
         Assert.Contains("<Property Id=\"WixShellExecTarget\" Value=\"[INSTALLFOLDER]ReyEngine.App.exe\" />", wxs);

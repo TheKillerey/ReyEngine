@@ -22,7 +22,9 @@ public sealed record NewFeature(string Id, string Version, string Label);
 /// </summary>
 public static class NewFeatures
 {
-    /// <summary>The release whose highlights are currently on offer. Bump alongside the app version.</summary>
+    /// <summary>The release whose highlights are currently on offer. Bumped when a release ADDS entries -
+    /// a fix-only release (0.4.6) leaves it, so the What's New list keeps its newest header and nothing
+    /// glows for a release that changed no entry point.</summary>
     public const string CurrentVersion = "0.4.5";
 
     /// <summary>

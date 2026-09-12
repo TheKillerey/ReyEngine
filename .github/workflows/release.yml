@@ -39,12 +39,20 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # M691: every assembly carries the release's version as its FILE version. Windows Installer
+      # replaces a versioned file only when the new version is higher; every release until v0.4.5
+      # shipped FileVersion 0.1.7.0 (Directory.Build.props, never bumped), so the v0.4.5 MSI
+      # registered itself and left v0.4.4's files on disk.
       - name: Publish (self-contained win-x64)
         shell: pwsh
         run: |
+          $version = $env:TAG.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "tag '$env:TAG' is not vX.Y.Z; assemblies and the MSI need a numeric version" }
           dotnet publish src/ReyEngine.App/ReyEngine.App.csproj `
             -c Release -r win-x64 --self-contained true `
-            -o publish/win-x64 --nologo
+            -o publish/win-x64 --nologo -p:Version=$version
+          $exe = Get-Item publish/win-x64/ReyEngine.App.exe
+          if ($exe.VersionInfo.FileVersion -ne "$version.0") { throw "published exe carries FileVersion $($exe.VersionInfo.FileVersion), expected $version.0" }
 
       - name: Package zip
         id: package
