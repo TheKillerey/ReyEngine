@@ -199,10 +199,31 @@ public sealed class MaterialDocument
 
                 // M590: `texture` is String on older content and WadChunkLink on newer - measured
                 // across a champion wad it is genuinely BOTH, so neither form may be assumed.
-                if (Field(smp.Properties, "texture") is { } defTex && BinTexturePath.Is(defTex))
+                // M705: the skin's OWN block is what a character with no material draws from, so its
+                // settings are the ones that matter - and only its diffuse was ever shown, which left the
+                // rest unreachable. Measured over 25 champion WADs (2,230 blocks): selfIllumination on
+                // 2,217, reflectionFresnelColor on 2,054, skinScale on 1,783, brushAlphaOverride on 287,
+                // reflectionOpacityDirect on 177, reflectionFresnel on 169, reflectionMap on 111,
+                // glossTexture on 91, emissiveTexture on 58, castShadows on 32, fresnel/fresnelColor on 13.
+                var skinSlots = new List<TextureSlot>();
+                var skinSettings = new List<MaterialParameter>();
+                foreach (var (nameHash, value) in smp.Properties)
+                {
+                    string field = resolve(nameHash) ?? $"0x{nameHash:x8}";
+                    // what this view already represents elsewhere: the mesh and rig it points at, and the
+                    // per-submesh overrides, which are the other rows of this very list
+                    if (field is "skeleton" or "simpleSkin" or "materialOverride" or "material") continue;
+                    if (BinTexturePath.Is(value)) skinSlots.Add(new TextureSlot(field, value, null, resolveWadPath));
+                    else if (BinValueEditor.KindOf(value) != BinValueKind.ReadOnly) skinSettings.Add(new MaterialParameter(field, value));
+                }
+                // the diffuse first, because it is the one every skin has and the one people look for
+                skinSlots.Sort((a, b) => a.SamplerName == "texture" ? -1 : b.SamplerName == "texture" ? 1
+                    : string.Compare(a.SamplerName, b.SamplerName, StringComparison.OrdinalIgnoreCase));
+                skinSettings.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+                if (skinSlots.Count > 0 || skinSettings.Count > 0)
                     materials.Add(new MaterialBinding(
                         "(skin default texture)", "SkinMeshDataProperties", Array.Empty<string>(), isDefault: true,
-                        new List<TextureSlot> { new("texture", defTex, null, resolveWadPath) }, new List<MaterialParameter>()));
+                        skinSlots, skinSettings) { SettingsStruct = smp });
 
                 // The default material applies to every submesh not covered by an override.
                 if (Field(smp.Properties, "material") is BinTreeObjectLink defMat) defaultMaterialHash = defMat.Value;
@@ -526,15 +547,22 @@ public sealed class MaterialBinding
     /// when the user adds the first macro, keeping untouched documents byte-exact.</summary>
     internal BinTreeObject? MaterialObject { get; init; }
 
+    /// <summary>M705: the struct this binding's settings live in when there is no StaticMaterialDef object -
+    /// the skin's own <c>skinMeshProperties</c>. It is a write target like the object is, so a field the
+    /// block omits can be added to it the same way.</summary>
+    internal BinTreeStruct? SettingsStruct { get; init; }
+
     /// <summary>M368: this material's own class hash (StaticMaterialDef in practice), for looking the
     /// declared schema up in the meta-class database. 0 for the inline/skin-default bindings, which have no
     /// StaticMaterialDef object behind them.</summary>
-    public uint ClassHash => MaterialObject?.ClassHash ?? 0;
+    public uint ClassHash => MaterialObject?.ClassHash ?? SettingsStruct?.ClassHash ?? 0;
 
     /// <summary>M368: the property hashes this material actually carries. Anything the class declares that
     /// is NOT in here is running on the game's authored default.</summary>
     public IReadOnlyCollection<uint> PresentHashes =>
-        MaterialObject is { } o ? o.Properties.Keys.ToList() : Array.Empty<uint>();
+        MaterialObject is { } o ? o.Properties.Keys.ToList()
+        : SettingsStruct is { } st ? st.Properties.Keys.ToList()   // M705
+        : Array.Empty<uint>();
 
     /// <summary>
     /// M507: container fields written with the wrong wire form. The client SKIPS these entirely, so the
@@ -578,7 +606,7 @@ public sealed class MaterialBinding
     /// <summary>M370: whether a schema field can be written here at all. Same structural precondition as
     /// <see cref="CanEditSwitches"/> - the inline and skin-default bindings have no StaticMaterialDef object
     /// behind them - but named for this feature so the intent is readable at the call site.</summary>
-    public bool CanAddSchemaField => MaterialObject is not null;
+    public bool CanAddSchemaField => MaterialObject is not null || SettingsStruct is not null;
 
     /// <summary>M370: write a field this material omits, at the value the schema says the game already
     /// uses. Adding the DEFAULT is what makes it safe to offer - the bin gains a property but nothing
@@ -586,12 +614,15 @@ public sealed class MaterialBinding
     /// Refuses rather than guesses; see <see cref="ReyEngine.Formats.Meta.MetaDefaultProperty"/>.</summary>
     public bool TryAddDefaultProperty(uint nameHash, string fieldType, string? defaultJson, out string? reason)
     {
-        if (MaterialObject is not { } obj)
+        // M705: the skin's own block is a write target too - it is where a character with no material
+        // keeps its settings, and the point of adding a field is to be able to set it.
+        var target = MaterialObject?.Properties ?? (SettingsStruct?.Properties as IDictionary<uint, BinTreeProperty>);
+        if (target is null)
         {
-            reason = "This binding has no StaticMaterialDef object to write to.";
+            reason = "This binding has nothing to write the field to.";
             return false;
         }
-        if (obj.Properties.ContainsKey(nameHash))
+        if (target.ContainsKey(nameHash))
         {
             reason = "This material already carries that field.";
             return false;
@@ -599,7 +630,7 @@ public sealed class MaterialBinding
         if (!ReyEngine.Formats.Meta.MetaDefaultProperty.TryCreate(nameHash, fieldType, defaultJson,
                 out var prop, out reason))
             return false;
-        obj.Properties[nameHash] = prop!;
+        target[nameHash] = prop!;
         _schemaPropertyAdded = true;
         return true;
     }
