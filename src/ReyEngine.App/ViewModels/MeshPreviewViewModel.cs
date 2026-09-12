@@ -971,7 +971,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     partial void OnSelectedVfxChanged(VfxSystemItemViewModel? value)
     {
-        if (value is null || !_vfxDefs.TryGetValue(value.Hash, out var def)) { if (_eventBundle is null) Playback = null; return; }
+        OnPropertyChanged(nameof(Rig));   // M715: the rig is only live while a system is picked by hand
+        if (value is null || !_vfxDefs.TryGetValue(value.Hash, out var def))
+        {
+            VfxRoleLink = null; RigNote = "";
+            if (_eventBundle is null) Playback = null;
+            return;
+        }
         _eventPlaybackActive = false; _eventBundle = null; _activeEvent = null;   // manual pick replaces an event
         // M116: _tar systems play ONLY on the target dummy — picking one turns the dummy on.
         if (IsTargetVfxName(def.Name) && !TargetDummyEnabled) { TargetDummyEnabled = true; return; }   // re-enters via ReplaySelectedOrClip
@@ -984,8 +990,112 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         var placement = anchor != System.Numerics.Vector3.Zero
             ? VfxCastFrame.Toward(anchor, CharacterPosition, anchor)
             : VfxCastFrame.Toward(anchor, target, anchor);
-        Playback = new VfxPlayback(new[] { BuildItem(def, placement) });
+
+        // M715: what the game says this system is for. M713 reads it in the particle editor and can only
+        // stand a bone-attached effect still, because that window has no champion. This one IS the
+        // champion: a system the skin hangs on a bone is hung on that bone here, which is the half of the
+        // reading that could not be carried until now.
+        var link = _vfxRoles.GetValueOrDefault(def.PathHash);
+        VfxRoleLink = link;
+        string? bone = null;
+        if (link is not null)
+        {
+            if (link.Role == ReyEngine.Formats.Characters.VfxSystemRole.Bone && link.Bone is { Length: > 0 } b
+                && Skeleton is not null)
+                bone = b;
+            else
+            {
+                var rig = link.Rig(Rig ?? new ReyEngine.Formats.Vfx.VfxPreviewRig());
+                RigMode = rig.Mode;
+                RigSpeed = rig.Speed;
+            }
+            RigNote = link.Why;
+        }
+        else
+        {
+            var guess = ReyEngine.Formats.Vfx.VfxRigNaming.For(def.Name);
+            RigMode = guess.Mode;
+            RigSpeed = ReyEngine.Formats.Vfx.VfxRigDefaults.Speed;
+            RigNote = guess.Why;
+        }
+
+        var item = BuildItem(def, placement);
+        Playback = new VfxPlayback(new[] { bone is null ? item : item with { AttachBone = bone } });
+        OnPropertyChanged(nameof(Rig));
     }
 
     [RelayCommand] private void StopVfx() => SelectedVfx = null;
+
+    // ================================================================ M715: the rig, for the manual pick
+    //
+    // Only the manual CHAMPION VFX pick stands still in this window. Everything else already moves better
+    // than a rig could: a cast composite flies its missile over the real distance at the ability's own
+    // authored speed, with the real aim and the real cast delay, and a clip event rides an animated bone
+    // on a real skeleton. So Rig is null unless a system is picked by hand, and the viewport's rig loop
+    // skips anything carrying a bone or a travel destination.
+    //
+    // The settings duplicate ParticleEditorViewModel's, which is glue rather than logic - both build the
+    // same VfxPreviewRig record and both read VfxSystemLink.Rig. Worth folding into one small view model
+    // when a third host wants it.
+
+    /// <summary>M715: what the game says each of this skin's systems is for, by system hash. Supplied by
+    /// the host, which owns the champion's other bins.</summary>
+    private IReadOnlyDictionary<uint, ReyEngine.Formats.Characters.VfxSystemLink> _vfxRoles =
+        new Dictionary<uint, ReyEngine.Formats.Characters.VfxSystemLink>();
+
+    public void SetVfxRoles(IReadOnlyDictionary<uint, ReyEngine.Formats.Characters.VfxSystemLink>? roles) =>
+        _vfxRoles = roles ?? new Dictionary<uint, ReyEngine.Formats.Characters.VfxSystemLink>();
+
+    [ObservableProperty] private ReyEngine.Formats.Vfx.VfxRigMode _rigMode;
+    [ObservableProperty] private double _rigHeight;
+    [ObservableProperty] private double _rigSpeed = ReyEngine.Formats.Vfx.VfxRigDefaults.Speed;
+    [ObservableProperty] private bool _rigReplay;
+    [ObservableProperty] private bool _rigStopMidRun;
+    [ObservableProperty] private string _rigNote = "";
+    [ObservableProperty] private ReyEngine.Formats.Characters.VfxSystemLink? _vfxRoleLink;
+    public bool VfxRoleIsAuthored => VfxRoleLink is not null;
+
+    /// <summary>The rig the viewport carries, or null when something better is driving - a cast composite,
+    /// a clip event, or nothing picked at all.</summary>
+    public ReyEngine.Formats.Vfx.VfxPreviewRig? Rig => SelectedVfx is null
+        ? null
+        : new(RigMode, (float)RigHeight, Speed: (float)RigSpeed,
+              Replay: RigReplay, StopMidRun: RigStopMidRun);
+
+    public bool IsRigStill
+    {
+        get => RigMode == ReyEngine.Formats.Vfx.VfxRigMode.Still;
+        set { if (value) RigMode = ReyEngine.Formats.Vfx.VfxRigMode.Still; }
+    }
+    public bool IsRigBurst
+    {
+        get => RigMode == ReyEngine.Formats.Vfx.VfxRigMode.Burst;
+        set { if (value) RigMode = ReyEngine.Formats.Vfx.VfxRigMode.Burst; }
+    }
+    public bool IsRigMissile
+    {
+        get => RigMode == ReyEngine.Formats.Vfx.VfxRigMode.Missile;
+        set { if (value) RigMode = ReyEngine.Formats.Vfx.VfxRigMode.Missile; }
+    }
+    public bool IsRigTrail
+    {
+        get => RigMode == ReyEngine.Formats.Vfx.VfxRigMode.Trail;
+        set { if (value) RigMode = ReyEngine.Formats.Vfx.VfxRigMode.Trail; }
+    }
+
+    partial void OnRigModeChanged(ReyEngine.Formats.Vfx.VfxRigMode value)
+    {
+        if (value == ReyEngine.Formats.Vfx.VfxRigMode.Burst) RigReplay = true;
+        OnPropertyChanged(nameof(IsRigStill));
+        OnPropertyChanged(nameof(IsRigBurst));
+        OnPropertyChanged(nameof(IsRigMissile));
+        OnPropertyChanged(nameof(IsRigTrail));
+        OnPropertyChanged(nameof(Rig));
+    }
+    partial void OnRigHeightChanged(double value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRigSpeedChanged(double value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRigReplayChanged(bool value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRigStopMidRunChanged(bool value) => OnPropertyChanged(nameof(Rig));
+    partial void OnVfxRoleLinkChanged(ReyEngine.Formats.Characters.VfxSystemLink? value) =>
+        OnPropertyChanged(nameof(VfxRoleIsAuthored));
 }

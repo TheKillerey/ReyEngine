@@ -187,3 +187,43 @@ returns nothing, silently, which is the M590 failure shape.
 Still unread: `ParticleEventData` (56,380 keys), the largest bone population, which lives in the animation
 bins this does not open.
 
+---
+
+# M715 - the rig in the champion window, and the bone rig at last
+
+The champion window plays VFX five ways and four of them already move better than a rig could. A cast
+composite flies its missile over the real distance at the ability's authored speed, with the real aim, the
+real cast delay and a return phase; a clip event rides an animated bone on a real skeleton; the attack
+cycle does windup then flight then hit. A rig offering a straight line at a flat speed would be a
+regression on every one of them.
+
+**One thing in that window stands still**: the manual CHAMPION VFX pick, which sets no motion of any kind.
+That pick also binds none of the playback controls, so it loops forever and its teardown is never visible.
+That is what the rig is for here, and the panel only appears while a system is picked.
+
+Two guards make it safe rather than merely scoped. The viewport's rig loop already skipped an item with a
+travel destination; it now skips one with a bone as well, because the bone re-anchor runs in the same frame
+and two owners of one transform means the later one wins. And the rig's pose is composed with the item's
+own placement instead of the world origin - the particle editor places at the origin so nothing changes
+there, but this window anchors at the caster or at the target dummy, and a missile has to fly from where
+the effect actually is.
+
+## The half of M713 that could not be carried before
+
+M713 reads three things out of a champion's bins: the spell that flies an effect, the spell that plays one
+where it lands, and the bone a skin hangs one on. The particle editor can act on the first and can only
+stand the other two still, because it has no champion.
+
+This window **is** the champion. A picked system whose skin hangs it on a bone is now hung on that bone,
+through the same `AttachBone` both renderers have honoured since M86. `idleParticlesEffects` carries 23,372
+of those keys and the buff-gated `PersistentEffectConditions` another 10,553, with a bone named in over
+93% of records - an effect like Ahri's R eye glow lands on `L_Eye` where the game puts it, rather than at
+her feet.
+
+## Still not carried
+
+`ParticleEventData`, the clip particle events - 56,380 keys, the largest bone-attached population of all.
+They live in the animation bins, which neither the particle editor nor the role reader opens. The champion
+window already plays them through its own clip path, so the gap is in what the ROLE reader can say about a
+system, not in what the window can show.
+

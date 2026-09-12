@@ -1349,7 +1349,16 @@ public sealed class ViewportControl : OpenGlControlBase
                 foreach (var (item, sim) in _particleSimCache)
                 {
                     if (item.TravelTo is not null) continue;
-                    sim.SetWorldTransform(rig.Pose(phase));
+                    // M715: a system pinned to a bone is carried by the skeleton, and the re-anchor for
+                    // that runs in the same frame as this loop. Rigging it would mean two owners of one
+                    // transform and the later one winning, which on a champion is the rig dragging a
+                    // clip's effect off the hand it belongs on.
+                    if (item.AttachBone is not null) continue;
+                    // M715: the rig's motion is relative to where the item was placed, not to the world
+                    // origin. The particle editor places at the origin so this is exactly what it always
+                    // was; the champion window anchors at the caster or the dummy, and a missile there has
+                    // to fly from where the effect actually is.
+                    sim.SetWorldTransform(rig.Pose(phase) * Matrix4x4.CreateTranslation(item.WorldPos));
                 }
                 // A missile stops emitting where it lands, and any rig can be asked to stop half way, so
                 // the teardown is visible without holding the Stop button down. Once per run, not per frame.

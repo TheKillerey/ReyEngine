@@ -11411,6 +11411,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     ? FindAnimations(entry, ownAnms)
                     : Enumerable.Empty<AnimationEntryViewModel>());
                 MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
+                // M715: and what the game says each of them is for - the same three-bin walk M713 does for
+                // the particle editor, over the champion this window has just loaded.
+                MeshPreview.SetVfxRoles(BuildParticleRoles(entry.IsResolved ? entry.Path : null));
                 MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry));   // M95c: authored VO lines
                 // M663: the FULL clip list, not the by-file one - see LoadSubmeshRules for what the by-file
                 // view drops.

@@ -118,7 +118,10 @@ public sealed class ParticleMaskStageTests
         // goes in as a placement matrix rather than a point).
         Assert.Contains("items.Add(BuildItem(def, atDummy", text);                                  // clip events
         Assert.Contains("BuildItem(def, VfxCastFrame.Toward(at, faceToward, at)) with", text);     // spell composite
-        Assert.Contains("Playback = new VfxPlayback(new[] { BuildItem(def, placement) });", text); // manual pick
+        // M715: the manual pick now sets one thing of its own on top - a bone, when the skin says the
+        // effect hangs on one - which is the same shape the composite above uses.
+        Assert.Contains("var item = BuildItem(def, placement);", text);                            // manual pick
+        Assert.Contains("item with { AttachBone = bone }", text);
     }
 
     [Fact]

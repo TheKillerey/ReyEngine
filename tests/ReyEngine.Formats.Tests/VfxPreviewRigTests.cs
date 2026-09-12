@@ -154,7 +154,9 @@ public sealed class VfxPreviewRigTests
     {
         string? viewport = Source("src", "ReyEngine.App", "Views", "ViewportControl.cs");
         Assert.NotNull(viewport);
-        Assert.Contains("sim.SetWorldTransform(rig.Pose(phase));", viewport);
+        // M715: composed with the item's own placement. The particle editor places at the origin, so
+        // this is exactly what it always was; the champion window anchors at the caster or the dummy.
+        Assert.Contains("rig.Pose(phase) * Matrix4x4.CreateTranslation(item.WorldPos)", viewport);
         // a map placement that travels of its own accord is not the preview's to move
         Assert.Contains("if (item.TravelTo is not null) continue;", viewport);
         // replay owns the cycle when it is on, so the auto-stop cycle does not restart the run underneath it
