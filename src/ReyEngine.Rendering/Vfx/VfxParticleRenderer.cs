@@ -350,6 +350,7 @@ public sealed class VfxParticleRenderer
 
         bool depthTest = _gl.IsEnabled(EnableCap.DepthTest);
         _gl.Enable(EnableCap.DepthTest);
+        _depthTestOff = false;                // M711: the per-emitter override starts from this state
         _gl.DepthMask(false);                 // additive/alpha particles never write depth
         _gl.Disable(EnableCap.CullFace);
         _gl.Enable(EnableCap.Blend);
@@ -372,6 +373,8 @@ public sealed class VfxParticleRenderer
         foreach (var es in sim.Emitters.OrderBy(static e => ReyEngine.Formats.Vfx.VfxDrawOrder.KeyFor(e.Def)))
         {
             if (es.InstanceCount == 0) continue;
+            // M711: before the branch, so the mesh and ribbon paths get it too.
+            ApplyDepthTest(es.Def);
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
             if (es.MeshVao != 0) { if (_meshProgram != 0) RenderMeshEmitter(es, viewProj, camPos); continue; }
             // M183 (2.5): beams draw a ribbon between two fixed endpoints. Placed BEFORE the trail branch,
@@ -522,6 +525,7 @@ public sealed class VfxParticleRenderer
         ClearStencil();
         _gl.DepthMask(true);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        if (_depthTestOff) { _gl.Enable(EnableCap.DepthTest); _depthTestOff = false; }
         if (!depthTest) _gl.Disable(EnableCap.DepthTest);
         _gl.BindVertexArray(0);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
@@ -566,6 +570,28 @@ public sealed class VfxParticleRenderer
     /// that carries a stencil mode at all, which takes that count to zero. The invariant this paragraph
     /// describes is therefore still the one the draw order maintains, and it is maintained deliberately
     /// rather than by luck.</summary>
+    /// <summary>M711: the depth test is per emitter, not per frame.
+    ///
+    /// <para><c>miscRenderFlags</c> bit 0 is the engine's DISABLE_ZBUFFER, and an emitter carrying it draws
+    /// over everything rather than being occluded by it. 613,808 emitters in the installed game set it -
+    /// two in five - and until now every particle here tested depth unconditionally, so a ground decal
+    /// authored to paint over the terrain it lies on was cut into by that terrain instead.</para>
+    ///
+    /// <para>Only the TEST moves. The depth WRITE stays off for every particle, which it already was: the
+    /// engine takes the write from the blend mode and every blended mode has it off.</para>
+    ///
+    /// <para>Guarded on the current state rather than set every emitter, because the flag is homogeneous
+    /// inside most systems and a redundant glEnable is a driver call for nothing.</para></summary>
+    private bool _depthTestOff;
+
+    private void ApplyDepthTest(ReyEngine.Formats.Vfx.VfxEmitterDefinition def)
+    {
+        bool off = ReyEngine.Formats.Vfx.VfxMiscRenderFlags.DisablesDepthTest(def);
+        if (off == _depthTestOff) return;
+        if (off) _gl.Disable(EnableCap.DepthTest); else _gl.Enable(EnableCap.DepthTest);
+        _depthTestOff = off;
+    }
+
     private void ApplyStencil(ReyEngine.Formats.Vfx.VfxEmitterDefinition def)
     {
         switch (def.StencilMode)

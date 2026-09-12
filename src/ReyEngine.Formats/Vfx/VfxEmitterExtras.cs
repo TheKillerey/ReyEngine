@@ -57,10 +57,17 @@ namespace ReyEngine.Formats.Vfx;
 public sealed record VfxEmitterExtras
 {
     // ---- render state ------------------------------------------------------------------------------
-    /// <summary>484,286 occurrences. Values 1 (480,922), 5, 3, 4, 2 - only bits 0-2 ever set. Meaning UNKNOWN.
-    /// M259 measured it as the constant 1 in 99.3%, and its declared default is 0 - so unlike the flags in
-    /// the class remarks this one really does carry almost nothing, and ranking the unread fields by
-    /// frequency puts it third from the top for no gain.</summary>
+    /// <summary>
+    /// A three-bit field, and M711 settled the first bit: <c>0x1</c> is the engine's DISABLE_ZBUFFER and
+    /// the emitter draws with the depth test off. See <see cref="VfxMiscRenderFlags"/>, which owns the bit
+    /// names and the predicate; read it through there rather than masking by hand.
+    ///
+    /// <para>The old note here said the field "really does carry almost nothing" because it is the constant
+    /// 1 in 99.3% of cases. That was a histogram over the emitters that AUTHOR it, and it hid the real
+    /// shape: 615,284 of 1,581,956 emitters author the field and 613,808 of those set bit 0, so two in five
+    /// emitters in the game draw without a depth test. The other 61% omit the field and take the declared
+    /// default of 0, which is the test left on.</para>
+    /// </summary>
     public int? MiscRenderFlags { get; init; }
     /// <summary>341,316. Values 3 (310,104), 1, 5, 4, 0. Meaning UNKNOWN; likely a draw-priority bucket.</summary>
     public int? Importance { get; init; }
@@ -219,7 +226,8 @@ public static class VfxParkedEmitterFields
     /// <see cref="HashAlgorithms.Fnv1a"/>, which lowercases, so the spelling here is display-only.</summary>
     public static readonly IReadOnlyList<string> Names = new[]
     {
-        "miscRenderFlags", "importance", "depthBiasFactors", "renderPhaseOverride", "SortEmittersByPos",
+        // M711: miscRenderFlags is gone from here - bit 0 decides the depth test now.
+        "importance", "depthBiasFactors", "renderPhaseOverride", "SortEmittersByPos",
         // M709: isGroundLayer is gone from here - it decides draw order now, and a field that changes the
         // picture must not carry a badge saying the viewport will not change.
         "WriteAlphaOnly", "doesCastShadow", "colorblindVisibility", "StencilReferenceId",

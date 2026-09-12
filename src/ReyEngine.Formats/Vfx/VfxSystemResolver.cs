@@ -197,6 +197,9 @@ public static class VfxSystemResolver
     // and the PF() helper it used to be read through is a method, which reflection cannot see. Removing the
     // parked entry without this would swap one false note for another.
     private static readonly uint F_isGroundLayer       = HashAlgorithms.Fnv1a("isGroundLayer");
+    // M711: same reason - miscRenderFlags bit 0 now decides the depth test, so the field leaves the parked
+    // table and has to be declared here for the preview-coverage reflection to see it.
+    private static readonly uint F_miscRenderFlags     = HashAlgorithms.Fnv1a("miscRenderFlags");
     private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
     // M185 (2.15) the Linger curve set. Class VfxLingerDefinitionData = 0x9b19f2b5.
     private static readonly uint F_linger              = HashAlgorithms.Fnv1a("Linger");
@@ -971,7 +974,7 @@ public static class VfxSystemResolver
     {
         var e = new VfxEmitterExtras
         {
-            MiscRenderFlags              = GetU8(p, PF("miscRenderFlags")),
+            MiscRenderFlags              = GetU8(p, F_miscRenderFlags),
             Importance                   = GetU8(p, PF("importance")),
             DepthBiasFactors             = GetVec2(p, PF("depthBiasFactors")),
             RenderPhaseOverride          = GetU8(p, PF("renderPhaseOverride")),

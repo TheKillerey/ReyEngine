@@ -150,3 +150,73 @@ not weakened**; the set to read is 3,899 emitters rather than 2,035.
 
 Detail and raw output: `bit2-tft-skybox.md` / `bit2-tft-skybox-data.txt`. Harness modes: `bit2`, `bit2x`,
 `skyname`, `meshsky`.
+
+---
+
+# M711 - answered, from outside the files
+
+The question above was asked of the corpus and the corpus could not answer it. The answer came from
+somewhere else: ltk-manager's particle renderer names the bits from the engine's own symbol
+`ParticleSystem::MISC_RENDER_FLAG`, and derives one piece of render state from one of them.
+
+| bit | engine name | what it does |
+| --- | --- | --- |
+| `0x1` | `DISABLE_ZBUFFER` | the emitter draws with the depth test off |
+| `0x2` | `PROJECTED` | named and read by nothing, theirs or ours |
+| `0x4` | `DISABLE_FOW` | the fog of war, which this editor does not draw |
+
+Their `fragmentTests` is the whole of it: `depthTest: (miscRenderFlags & 0x1) === 0`. The depth WRITE comes
+from the blend mode, the blending comes from the blend mode, and the draw order is a separate key. So one
+bit, one piece of state. Their plan claims behaviour for the other two and their renderer implements
+neither, so those are asserted rather than readable and are not ported.
+
+## The premise above was wrong a second way
+
+"It is the constant 1, with 3,364 exceptions" is true and it is a statement about the emitters that AUTHOR
+the field. Re-measured over 1,581,956 emitters:
+
+| | count | share of all emitters |
+| --- | ---: | ---: |
+| author the field | 615,284 | 38.9% |
+| of those, bit 0 set | 613,808 | 38.8% |
+| omit it entirely | 966,672 | 61.1% |
+
+So it is not a flag that everything sets. It is a flag two emitters in five set, and the 99% figure was
+counting only the ones that had already set something. Nothing improbable is left to explain.
+
+Absence means the declared default, 0, and that is verified rather than assumed. The meta database declares
+the field U8 with default 0, and Riot's writer omits a property equal to its class default - tested on this
+exact class, seven fields, 2.9 million authored occurrences, and not one of them ever writes its own
+declared default, including the three whose default is not zero (`importance` 2, `renderPhaseOverride` 7,
+`meshRenderFlags` 1).
+
+## The corpus agrees, now that it knows what to look for
+
+Bit 0 rides on 38.8% of emitters overall. Where it clusters is the check:
+
+| partner | bit 0 set | reading |
+| --- | ---: | --- |
+| `isGroundLayer` | 81.7% (vs 27.0% without) | a decal coincident with the terrain must paint over it |
+| `stencilMode` 1-3 | 58% to 68% | a masked shape is composited, not depth-sorted |
+| distortion | 57.2% | heat haze warps what is already drawn |
+| soft particles | **24.6%** (vs 39.8% without) | anti-correlated - these CONSUME the depth buffer |
+| `blendMode` 1 vs 4 | 39.9% vs 39.6% | flat, so it is not a re-encoding of the blend mode |
+
+It is also a genuine per-emitter field rather than a file vintage: 44.9% of systems mix authors with
+omitters, and 1,476 emitters set another bit while leaving bit 0 clear, which a constant-writer could not
+produce.
+
+## What it cost
+
+Wiring it changes the depth state of roughly two in five drawn emitters, 598,551 of them reachable, over
+109,890 systems. Its largest single cohort is the ground layer (272,346), which M709 has just reordered -
+so the two land on the same population and their effects compound.
+
+## What the corpus still cannot say
+
+The reading's authority is outside the files. ltk-manager cites no binary, no version and no tool for any
+of its engine readings, and the one screen case that names DISABLE_ZBUFFER -
+`AurelionSol_Skin11_E_ExecuteZone_ChildParticle` - is the case M709 diagnosed as a display-list ordering
+fault, where the flag was an attribute of the emitter rather than the cause. Five independent correlations
+point the right way and nothing refutes it. That is the strongest statement the data supports.
+

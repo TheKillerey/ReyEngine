@@ -303,6 +303,11 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// byte-identical behaviour.</summary>
     public bool WritesDepth { get; set; } = true;
 
+    /// <summary>M711: false for a particle whose <c>miscRenderFlags</c> carries the engine's DISABLE_ZBUFFER
+    /// bit - it draws over everything instead of being occluded. Only the test moves; the write is already
+    /// off for every particle through <see cref="WritesDepth"/>. Everything else leaves this true.</summary>
+    public bool TestsDepth { get; set; } = true;
+
     /// <summary>Address mode for the material's ordinary texture samplers. Explicit clamp samplers and
     /// comparison samplers still take precedence when the shader declares them.</summary>
     public PreviewSamplerAddress SamplerAddress { get; set; }
@@ -629,6 +634,8 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     /// <summary>M266: the same state with DepthWriteMask.Zero, selected per material by
     /// <see cref="PreviewMaterial.WritesDepth"/>. Particles need it; nothing else does.</summary>
     private ComPtr<ID3D11DepthStencilState> _depthStateNoWrite;
+    /// <summary>M711: neither tested nor written - the DISABLE_ZBUFFER particle.</summary>
+    private ComPtr<ID3D11DepthStencilState> _depthStateNoTest;
 
     /// <summary>The scene. One entry for the single-shader bench, one per submesh for a loaded model.</summary>
     private readonly List<PreviewMaterial> _materials = new();
@@ -3607,8 +3614,7 @@ float4 psmain(VOut i) : SV_Target
         _ctx.OMSetBlendState(cutoutProp && _blendOpaque.Handle is not null ? _blendOpaque
                 : mat.Additive && _blendAdditive.Handle is not null ? _blendAdditive : _blend,
             stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
-        _ctx.OMSetDepthStencilState(
-            mat.WritesDepth || _depthStateNoWrite.Handle is null ? _depthState : _depthStateNoWrite, 0);
+        _ctx.OMSetDepthStencilState(DepthStateFor(mat), 0);
 
         // M295: a prop material may draw only ONE SUBMESH of a shared geometry, because a prop's submeshes
         // each carry their own diffuse. Particles leave these at 0 and get the whole buffer, as before.
@@ -3691,6 +3697,15 @@ float4 psmain(VOut i) : SV_Target
     /// <summary>The view bound for a sampler, by the names Riot's shaders declare. Matching on a PREFIX
     /// would be wrong here: "TEXTURE" is a prefix of "TEXTUREMULT", so a prefix test can hand back the
     /// multiply texture when the diffuse was wanted, silently, on exactly the emitters that author both.</summary>
+    /// <summary>M711: which of the three depth states this material draws with. One chooser, because the two
+    /// draw sites had hand-copied the two-state expression and a third state would have been added to one of
+    /// them.</summary>
+    private ComPtr<ID3D11DepthStencilState> DepthStateFor(PreviewMaterial mat)
+    {
+        if (!mat.TestsDepth && _depthStateNoTest.Handle is not null) return _depthStateNoTest;
+        return mat.WritesDepth || _depthStateNoWrite.Handle is null ? _depthState : _depthStateNoWrite;
+    }
+
     private ComPtr<ID3D11ShaderResourceView> BoundTexture(PreviewMaterial mat, string sampler)
     {
         if (mat.Textures.TryGetValue(sampler + "__TX", out var a) && a.Handle is not null) return a;
@@ -4248,6 +4263,16 @@ float4 psmain(VOut i) : SV_Target
         ComPtr<ID3D11DepthStencilState> dsn = default;
         _device.CreateDepthStencilState(in dsdNoWrite, ref dsn);
         _depthStateNoWrite = dsn;
+
+        // M711: no test and no write, for an emitter carrying the engine's DISABLE_ZBUFFER bit. It is the
+        // no-write state with the test switched off rather than a third independent description, so the two
+        // can never drift apart on the comparison function.
+        var dsdNoTest = dsdNoWrite;
+        dsdNoTest.DepthEnable = 0;
+        _depthStateNoTest.Dispose();
+        ComPtr<ID3D11DepthStencilState> dsnt = default;
+        _device.CreateDepthStencilState(in dsdNoTest, ref dsnt);
+        _depthStateNoTest = dsnt;
     }
 
     // ---------------------------------------------------------------- constants
@@ -5195,8 +5220,7 @@ float4 psmain(VOut i) : SV_Target
             // M266: and so is the depth WRITE, for the same reason. A particle quad tests against the map
             // but must not deposit depth, or the next additive quad behind it is rejected and the map is
             // occluded by something the artist authored as transparent.
-            _ctx.OMSetDepthStencilState(
-                mat.WritesDepth || _depthStateNoWrite.Handle is null ? _depthState : _depthStateNoWrite, 0);
+            _ctx.OMSetDepthStencilState(DepthStateFor(mat), 0);
 
             if (mat.PipelineId != lastPipeline) { PipelineSwitches++; lastPipeline = mat.PipelineId; }
             _ctx.IASetInputLayout(mat.Layout);
@@ -5612,7 +5636,7 @@ float4 psmain(VOut i) : SV_Target
         foreach (var state in _authoredBlendStates.Values) state.Dispose();
         _authoredBlendStates.Clear();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
-        _blendAdditive.Dispose(); _depthStateNoWrite.Dispose();
+        _blendAdditive.Dispose(); _depthStateNoWrite.Dispose(); _depthStateNoTest.Dispose();
         _ctx.Dispose(); _device.Dispose();
         _d3d?.Dispose();
     }

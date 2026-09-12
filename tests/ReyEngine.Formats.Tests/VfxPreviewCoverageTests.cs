@@ -84,6 +84,9 @@ public class VfxPreviewCoverageTests
     // default one. It was parked from M193 to M708 because its polarity was readable and its meaning was
     // not; a measurement of the running game settled the meaning.
     [InlineData("isGroundLayer")]
+    // M711: bit 0 of miscRenderFlags is the engine's DISABLE_ZBUFFER and now decides the depth test. It was
+    // parked from M193 to M710 as "meaning UNKNOWN".
+    [InlineData("miscRenderFlags")]
     public void RenderedFieldsAreNotBadged(string field) =>
         Assert.True(VfxPreviewCoverage.IgnoredNote(H(field)) is null,
             $"'{field}' IS rendered but got badged - over-badging trains the user to ignore the badge");
@@ -132,7 +135,9 @@ public class VfxPreviewCoverageTests
     public void TheTwoNotesAreDistinguishable()
     {
         // "we parse it and do nothing" and "we never look at it" are different promises to the user.
-        var parked = VfxPreviewCoverage.IgnoredNote(H("miscRenderFlags"));
+        // M711: the probe moved off miscRenderFlags, which left the parked table when bit 0 started
+        // deciding the depth test. `importance` is the largest field still genuinely parked.
+        var parked = VfxPreviewCoverage.IgnoredNote(H("importance"));
         var neverRead = VfxPreviewCoverage.IgnoredNote(H("Filtering"));
         Assert.NotNull(parked);
         Assert.NotNull(neverRead);

@@ -199,6 +199,10 @@ public static class VfxD3D11EmitterPipeline
         // The D3D11 renderer's single depth state writes unconditionally, so without this an additive quad
         // punches a hole in the map behind it.
         mat.WritesDepth = false;
+        // M711: the engine's DISABLE_ZBUFFER bit. An emitter carrying it draws over everything instead of
+        // being occluded by it - 613,808 emitters in the installed game, and until now every one of them
+        // tested depth here.
+        mat.TestsDepth = !ReyEngine.Formats.Vfx.VfxMiscRenderFlags.DisablesDepthTest(e);
         // Say WHICH rule decided it. On a texture-decided mode the integer alone does not explain the
         // result, and "blend: additive (blendMode 2)" read on its own looks like a bug in the table.
         log.AppendLine($"     blend: {(mat.Additive ? "additive" : "alpha")} (blendMode {e.BlendMode}"
