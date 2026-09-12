@@ -75,7 +75,8 @@ public sealed class UpdateFlowTests
         // nothing chosen: the installer's default when one wrote it, else ask
         string unset = UpdateService.EffectiveMode("");
         Assert.Equal(UpdateService.InstallerAutoUpdateDefault switch { true => "auto", _ => "ask" }, unset);
-        Assert.Equal(UpdateService.ModeAsk, UpdateService.EffectiveMode("nonsense"));
+        // an unknown mode is "nothing chosen" too - on a machine where the MSI wrote AutoUpdate=1 that is auto
+        Assert.Equal(unset, UpdateService.EffectiveMode("nonsense"));
 
         Assert.Equal(1, UpdateService.IndexOfMode("auto"));
         Assert.Equal(0, UpdateService.IndexOfMode("whatever"));
