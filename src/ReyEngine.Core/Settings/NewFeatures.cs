@@ -23,7 +23,7 @@ public sealed record NewFeature(string Id, string Version, string Label);
 public static class NewFeatures
 {
     /// <summary>The release whose highlights are currently on offer. Bump alongside the app version.</summary>
-    public const string CurrentVersion = "0.4.4";
+    public const string CurrentVersion = "0.4.5";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -79,6 +79,9 @@ public static class NewFeatures
         new("blender-addon",    "0.4.4", "Install the Blender add-on from here — every Blender on this PC, one click"),
         new("look",             "0.4.4", "Preferences — eight palettes, an accent of your own, a picture behind the editor, and how updates arrive"),
         new("props-animated",   "0.4.4", "Overlays — placed mobs and props draw on Riot's shaders, animated and lit by the map, and open in the Character Editor"),
+        // 0.4.5. The list itself is the entry point; the GIF backdrop lives inside Preferences, whose
+        // entry above already glows for the look.
+        new("whats-new",        "0.4.5", "Help ▸ What's New — every feature by release, and the one Got it that stops the highlights"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever

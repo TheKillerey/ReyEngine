@@ -80,7 +80,7 @@ public sealed class SmallThingsTests
         var window = Source("src", "ReyEngine.App", "Views", "WhatsNewWindow.axaml.cs");
         var theme = Source("src", "ReyEngine.App", "Themes", "ReyTheme.axaml");
         if (xaml is null || code is null || window is null || theme is null) return;
-        Assert.Contains("Header=\"What's New…\" Click=\"OnShowWhatsNew\" Classes.newFeature=\"{Binding HasNewFeatures}\"", xaml);
+        Assert.Contains("Header=\"What's New…\" Click=\"OnShowWhatsNew\" Classes.newFeature=\"{Binding NewFeature[whats-new]}\"", xaml);
         Assert.Contains("new WhatsNewWindow(vm.NewFeature, () => vm.DismissNewFeaturesCommand.Execute(null))", code);
         Assert.Contains("_acknowledge?.Invoke();", window);
         // the Overlays checkbox glows for the props work, through the part the template paints
