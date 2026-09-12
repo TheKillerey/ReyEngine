@@ -93,6 +93,31 @@ public static class VfxPlaybackSim
         return px;
     }
 
+    /// <summary>The pool key the UNNAMED sprite is cached under. Leading space for the same reason
+    /// <see cref="SoftDotKey"/> has one: no real asset path can collide with it.</summary>
+    public const string UnnamedKey = " vfx:unnamed";
+
+    /// <summary>
+    /// <para>M707: what the engine binds on the base slot of an emitter that names NO texture - a 1x1
+    /// TRANSPARENT BLACK. Such an emitter therefore draws nothing of its own.</para>
+    ///
+    /// <para>This is not the same case as <see cref="SoftDot"/>, and conflating the two is the bug it
+    /// fixes. A soft dot says "you asked for a texture and the editor could not find it" - a failure worth
+    /// seeing. An emitter that authors no texture path at all has not failed at anything: the engine reads
+    /// the absent field as a transparent texel and the emitter contributes nothing. Substituting a visible
+    /// placeholder there invents particles Riot never draws, and binding nothing at all is worse still,
+    /// because the unbound stand-in in BOTH renderers is an opaque 1x1 WHITE - the hard white card
+    /// reported on Ahri_Skin89_E_mis.</para>
+    /// </summary>
+    public static byte[] Unnamed() => new byte[4];
+
+    /// <summary>Is this pool key one of the two stand-ins rather than a real asset?
+    ///
+    /// <para>Stated once because a guard that names one of them by hand is a guard the next one slips past:
+    /// the mesh and ribbon paths refused the soft dot by literal comparison, and the transparent texel
+    /// walked straight through both until this existed.</para></summary>
+    public static bool IsStandIn(string? key) => key == SoftDotKey || key == UnnamedKey;
+
     /// <summary>
     /// <para>Everything <c>ViewportControl.BindEmitterAssets</c> does that changes what the SIMULATOR
     /// computes, as opposed to which GL handle it binds: the sprite aspect and the CPU-sampled colour

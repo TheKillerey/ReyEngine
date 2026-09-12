@@ -292,6 +292,11 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// scene mesh. Set by anything that rewrites its vertices every frame - particles today.</summary>
     public bool UsesDynamicMesh { get; set; }
 
+    /// <summary>M707: the base (TEXTURE) slot holds the engine's 1x1 transparent texel because the emitter
+    /// names no texture - neither a real sprite nor a placeholder. Only the heat-haze pass has to know: its
+    /// "ships no diffuse" test was a null handle, and a bound transparent texel is not null.</summary>
+    public bool BaseTextureIsUnnamed { get; set; }
+
     /// <summary>M266: false for particles. GL runs them with the depth TEST on and the depth MASK off
     /// (VfxParticleRenderer.cs:350-351); the single global depth state here writes depth unconditionally, so
     /// without this an additive quad occludes the map behind it. Everything else leaves this true and gets
@@ -3904,6 +3909,12 @@ float4 psmain(VOut i) : SV_Target
         // output alpha from the normal map, and a heat-haze diffuse is routinely a deliberate blank whose
         // alpha carries no information. An emitter that ships no diffuse gets the opaque white stand-in,
         // which is the tint's identity and leaves the refraction untinted.
+        // M707: an emitter that names NO texture draws nothing at all. The engine binds a transparent texel
+        // on its base slot, and the OpenGL viewport's heat-haze masks by that texel's alpha and so shows
+        // nothing either. Tinting the refraction by it here would paint a BLACK smear instead, because this
+        // pass takes its output alpha from the normal map and would keep it. The white identity below still
+        // stands for the case it was written for: a slot with nothing bound on it at all.
+        if (mat.BaseTextureIsUnnamed) return false;
         var diffuse = BoundTexture(mat, "TEXTURE");
         if (diffuse.Handle is null) diffuse = _white;
 

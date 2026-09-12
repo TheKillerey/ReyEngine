@@ -79,6 +79,11 @@ public static class VfxD3D11EmitterPipeline
         /// substitutes, and what stops an unresolved emitter drawing as an opaque white card.</summary>
         public static Sprite Fallback => new(VfxPlaybackSim.SoftDotKey, null);
 
+        /// <summary>M707: the base slot of an emitter that names no texture - the engine's 1x1 transparent
+        /// black, drawing nothing. Distinct from <see cref="Fallback"/> on purpose: nothing failed here, so
+        /// nothing is shown, and it is not counted as an unresolved sprite.</summary>
+        public static Sprite Unnamed => new(VfxPlaybackSim.UnnamedKey, null);
+
         /// <summary>A sprite the caller has already decoded - the map viewport's case, where the view-model
         /// resolved every emitter's texture before playback even started.</summary>
         public static Sprite Decoded(TextureImage image, string key) => new(key, () => image);
@@ -405,6 +410,20 @@ public static class VfxD3D11EmitterPipeline
 
         if (sprite.Open is null)
         {
+            // M707: two different "there are no pixels" cases, and they must not draw the same. The unnamed
+            // key is an emitter that authored no texture - the engine's transparent texel, drawing nothing.
+            // The soft-dot key is a texture the editor was asked for and could not find, which is shown.
+            if (sprite.Key == VfxPlaybackSim.UnnamedKey)
+            {
+                renderer.SetTexture(mat, slotName, sprite.Key, VfxPlaybackSim.Unnamed(), 1, 1);
+                // The heat-haze pass tints the refracted scene by this texture's RGB, and its "this emitter
+                // ships no diffuse" identity was a NULL HANDLE test. A transparent texel is a bound handle,
+                // so without this flag the identity stops firing and the tint collapses to black - a black
+                // smear exactly where the engine and the OpenGL viewport both draw nothing.
+                if (sampler == "TEXTURE") mat.BaseTextureIsUnnamed = true;
+                log.AppendLine($"     {sampler} -> {slotName}  [names no texture: 1x1 transparent]");
+                return slotName;
+            }
             renderer.SetTexture(mat, slotName, sprite.Key, VfxPlaybackSim.SoftDot(SoftDotSize),
                 SoftDotSize, SoftDotSize);
             log.AppendLine($"     {sampler} -> {slotName}  [soft-dot fallback]");
@@ -417,7 +436,19 @@ public static class VfxD3D11EmitterPipeline
             try { img = sprite.Open(); }
             catch (Exception ex) { log.AppendLine($"     {sampler}: FAILED {ex.Message}"); return null; }
         }
-        if (img is null) return null;   // the callback already said why; nothing bound = the renderer's stand-in
+        if (img is null)
+        {
+            // M707: the BASE stage may not be left unbound. An unbound slot is filled by this renderer's own
+            // StandIn with an opaque 1x1 WHITE - the hard white card the preview window drew for a texture
+            // it could not read - while the other two hosts show the soft dot for that same case. Every
+            // other stage does stay unbound on purpose: white is the neutral factor for a multiply, a
+            // palette or an erosion mask, so leaving it there changes nothing.
+            if (sampler != "TEXTURE") return null;   // the callback already said why
+            renderer.SetTexture(mat, slotName, VfxPlaybackSim.SoftDotKey,
+                VfxPlaybackSim.SoftDot(SoftDotSize), SoftDotSize, SoftDotSize);
+            log.AppendLine($"     {sampler} -> {slotName}  [unreadable: soft-dot fallback]");
+            return slotName;
+        }
 
         renderer.SetTexture(mat, slotName, sprite.Key, img.Rgba, img.Width, img.Height);
         log.AppendLine($"     {sampler} -> {slotName} ({img.Width}x{img.Height})");

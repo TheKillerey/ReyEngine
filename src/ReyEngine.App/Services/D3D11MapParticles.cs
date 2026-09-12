@@ -197,6 +197,11 @@ public sealed class D3D11MapParticles
     public int SkippedMeshEmitters { get; private set; }
     public int SkippedBeamTrailEmitters { get; private set; }
     public int UnresolvedSprites { get; private set; }
+    /// <summary>M707: emitters that name no base texture at all. Not a failure - the engine binds a
+    /// transparent texel on that slot and the emitter draws nothing - but counted and reported all the
+    /// same, because "the effect is missing" and "the effect was never drawn" look identical on screen
+    /// and only the build report can tell them apart.</summary>
+    public int UnnamedSprites { get; private set; }
     public string BuildReport { get; private set; } = "";
 
     /// <summary>Exactly the materials this driver added to the renderer, and nothing else.
@@ -295,7 +300,7 @@ public sealed class D3D11MapParticles
         _active.Clear();
         _activeSet.Clear();
         Placements = ActivePlacements = LiveParticles = QuadsRequested = 0;
-        SlicesTruncated = SkippedMeshEmitters = SkippedBeamTrailEmitters = UnresolvedSprites = 0;
+        SlicesTruncated = SkippedMeshEmitters = SkippedBeamTrailEmitters = UnresolvedSprites = UnnamedSprites = 0;
 
         var pb = _playback;
         if (pb is null || pb.Items.Count == 0) { BuildReport = "no playback"; return; }
@@ -409,6 +414,9 @@ public sealed class D3D11MapParticles
         if (UnresolvedSprites > 0)
             head.AppendLine($"   {N(UnresolvedSprites)} emitter sprite(s) unresolved - drawn with the shared "
                             + "soft dot, the same substitute the OpenGL viewport makes");
+        if (UnnamedSprites > 0)
+            head.AppendLine($"   {N(UnnamedSprites)} emitter(s) name no texture at all - given the engine's "
+                            + "transparent texel and drawing nothing, which is what the game draws for them");
         if (failedPipelines > 0) head.AppendLine($"   {N(failedPipelines)} emitter(s) produced no pipeline:");
         head.AppendLine();
         foreach (var (_, s) in systems.OrderByDescending(kv => kv.Value.Placements).Take(12))
@@ -450,10 +458,19 @@ public sealed class D3D11MapParticles
             return VfxD3D11EmitterPipeline.Sprite.Decoded(img,
                 stage.Path?.ToLowerInvariant() ?? $"vfx:{item.System.PathHash:x8}:{idx}:{sampler}");
 
-        // The diffuse stage always gets something. GL substitutes its soft dot whenever the resolved image is
-        // null - authored path or not - and D3D11's own stand-in is an opaque 1x1 white, which turns an
-        // unresolved sprite into a solid card instead of a dim placeholder.
-        if (sampler == "TEXTURE") { UnresolvedSprites++; return VfxD3D11EmitterPipeline.Sprite.Fallback; }
+        // The diffuse stage always gets something, because D3D11's stand-in for an unbound slot is an opaque
+        // 1x1 WHITE and that turns a missing sprite into a solid card. WHICH something depends on why it is
+        // missing (M707), and until then both cases took the soft dot:
+        //   - the emitter names no texture at all -> the engine's 1x1 transparent black. Nothing failed and
+        //     nothing draws, which is exactly what the game does with it.
+        //   - the emitter names one the editor could not resolve -> the soft dot, a placeholder that says as
+        //     much, and the only one of the two worth counting as unresolved.
+        if (sampler == "TEXTURE")
+        {
+            if (def.NamesNoTexture) { UnnamedSprites++; return VfxD3D11EmitterPipeline.Sprite.Unnamed; }
+            UnresolvedSprites++;
+            return VfxD3D11EmitterPipeline.Sprite.Fallback;
+        }
 
         // Every other stage is optional: nothing bound, exactly as GL leaves the handle at 0.
         return null;
@@ -576,7 +593,9 @@ public sealed class D3D11MapParticles
         // An untextured mesh emitter draws NOTHING rather than taking the renderer's opaque-white stand-in.
         // A white 1x1 stretched over a door-sized mesh is a huge solid card, which is worse than an absent
         // effect; the GL host refuses the same case for the same stated reason (ViewportControl.cs:1451-1456).
-        if (ResolveSprite("TEXTURE", item, def) is not { } sprite || sprite.Key == VfxPlaybackSim.SoftDotKey)
+        // M707: asked of the stand-in SET, not of one key by name. Both stand-ins mean "no real sprite",
+        // and a mesh or a ribbon is far too large a surface to hand either one.
+        if (ResolveSprite("TEXTURE", item, def) is not { } sprite || VfxPlaybackSim.IsStandIn(sprite.Key))
         {
             sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: mesh primitive with no texture - not drawn");
             return false;
@@ -740,7 +759,9 @@ public sealed class D3D11MapParticles
         VfxParticleSimulator.EmitterState es, VfxEmitterDefinition def,
         VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb)
     {
-        if (ResolveSprite("TEXTURE", item, def) is not { } sprite || sprite.Key == VfxPlaybackSim.SoftDotKey)
+        // M707: asked of the stand-in SET, not of one key by name. Both stand-ins mean "no real sprite",
+        // and a mesh or a ribbon is far too large a surface to hand either one.
+        if (ResolveSprite("TEXTURE", item, def) is not { } sprite || VfxPlaybackSim.IsStandIn(sprite.Key))
         {
             sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: {(def.Beam is not null ? "beam" : "trail")} with no texture - not drawn");
             return false;

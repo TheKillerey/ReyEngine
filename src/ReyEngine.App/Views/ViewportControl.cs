@@ -459,6 +459,9 @@ public sealed class ViewportControl : OpenGlControlBase
     private Vector3 _lastAudioCamPos = new(float.MaxValue, 0, 0);
     private bool _particlePlaybackDirty;
     private uint _softDotTex;
+    // M707: the engine's answer to an emitter that names no texture - 1x1 transparent black. Uploaded
+    // beside the soft dot, and re-uploaded with it, because ClearTextures owns and deletes both.
+    private uint _unnamedTex;
     private readonly System.Diagnostics.Stopwatch _particleClock = new();
 
     /// <summary>
@@ -787,6 +790,7 @@ public sealed class ViewportControl : OpenGlControlBase
             var particles = new VfxParticleRenderer();
             particles.Initialize(_gl);
             _softDotTex = particles.UploadTexture(SoftDot(64), 64, 64);
+            _unnamedTex = particles.UploadTexture(Services.VfxPlaybackSim.Unnamed(), 1, 1);
             _particleRenderer = particles;
         }
         catch (Exception ex)
@@ -1638,7 +1642,16 @@ public sealed class ViewportControl : OpenGlControlBase
             for (int i = 0; i < item.System.Emitters.Count; i++)
                 if (ReferenceEquals(item.System.Emitters[i], es.Def)) { idx = i; break; }
             var img = idx >= 0 && idx < item.EmitterTextures.Count ? item.EmitterTextures[idx] : null;
-            if (img is null) es.Texture = _softDotTex;
+            // M707: WHICH stand-in depends on why there is no image. An emitter that names no texture takes
+            // the engine's transparent texel and so draws nothing; one whose named texture would not resolve
+            // keeps the soft dot, because that is an editor failure and worth seeing. Both took the dot
+            // before.
+            //
+            // The population is far smaller than it sounds. 23,006 emitters in the installed game name no
+            // base texture, but the simulator only runs the ones IsVisual admits, so what reaches this line
+            // is the ~240 that author a multiply texture or a distortion map and no base - and those are
+            // exactly the ones that were showing a dot the game never draws.
+            if (img is null) es.Texture = es.Def.NamesNoTexture ? _unnamedTex : _softDotTex;
             else
             {
                 if (!_particleTextureCache.TryGetValue(img, out var tex))
@@ -1736,6 +1749,14 @@ public sealed class ViewportControl : OpenGlControlBase
                 // Keep the emitter dormant until its authored mesh texture can be resolved.
                 es.Texture = 0;
             }
+            else if (es.Def.NamesNoTexture && (es.Def.Beam is not null || es.Def.Trail is not null))
+            {
+                // M707: a beam or trail that names no texture is refused here as well, the way the D3D11
+                // host refuses it (D3D11MapParticles.BuildRibbonSlice). Leaving it drawable would assemble
+                // and upload a ribbon every frame to show a transparent one, and the two renderers must not
+                // disagree about whether the emitter is there.
+                es.Texture = 0;
+            }
         }
     }
 
@@ -1784,8 +1805,10 @@ public sealed class ViewportControl : OpenGlControlBase
         // natively (texture and mesh uploads), and the last line before a fault is the diagnosis.
         Log?.Invoke("Viewport", $"particle upload: {pb.Items.Count} item(s)");
 
-        // Upload every unique sprite once (shared across placements of the same system) + a soft-dot fallback.
+        // Upload every unique sprite once (shared across placements of the same system) + the two stand-ins:
+        // a soft dot for a texture that would not resolve, and a transparent texel for one never named.
         _softDotTex = _particleRenderer.UploadTexture(SoftDot(64), 64, 64);
+        _unnamedTex = _particleRenderer.UploadTexture(Services.VfxPlaybackSim.Unnamed(), 1, 1);
 
         foreach (var item in pb.Items)
         {

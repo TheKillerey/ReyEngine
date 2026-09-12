@@ -236,6 +236,20 @@ public sealed record VfxEmitterDefinition(
     /// not 0", which on a freshly cleared buffer fails everywhere and deletes the emitter outright.</summary>
     int StencilRef = -1)
 {
+    /// <summary>M707: this emitter authors NO base texture path at all.
+    ///
+    /// The distinction a renderer needs is "never asked for one" against "asked for one that did not
+    /// arrive", and only the second is a failure. Absence is authored - the .bin simply carries no
+    /// texturePath - and the engine answers it with a 1x1 transparent black on the base sampler, so the
+    /// emitter draws nothing. A path that IS written and cannot be read is the editor's own problem, and
+    /// the editor says so with a placeholder rather than pretending the emitter was empty.
+    ///
+    /// <para>IsNullOrEmpty rather than IsNullOrWhiteSpace, deliberately: the engine reads only the empty
+    /// string as absent, and <see cref="IsVisual"/> next door already uses that test. Two predicates over
+    /// one field that disagree about "   " would put an emitter on the draw path under one and off it
+    /// under the other, which is a bug that only ever appears on somebody's hand-edited bin.</para></summary>
+    public bool NamesNoTexture => string.IsNullOrEmpty(TexturePath);
+
     /// <summary>Does this emitter produce anything drawable (has a texture and isn't disabled)?</summary>
     public bool IsVisual => !Disabled && (!string.IsNullOrEmpty(TexturePath) ||
         !string.IsNullOrEmpty(TextureMultPath) || !string.IsNullOrEmpty(MeshPath) ||

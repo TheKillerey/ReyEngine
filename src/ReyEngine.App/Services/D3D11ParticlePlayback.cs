@@ -119,6 +119,14 @@ public sealed class D3D11ParticlePlayback
             ReyEngine.Formats.Meshes.VfxMeshAnimation? meshAnim = null;
             if (e.IsMeshPrimitive)
             {
+                // M707: the other two hosts refuse an untextured mesh emitter - a stand-in stretched over a
+                // door-sized mesh is a huge card and worse than an absent effect - and this window did not,
+                // so the three disagreed about whether the emitter exists.
+                if (DecodeByPath("TEXTURE", e, sb) is not { } meshSprite || VfxPlaybackSim.IsStandIn(meshSprite.Key))
+                {
+                    sb.AppendLine("     mesh primitive with no texture - not drawn");
+                    continue;
+                }
                 var decoded = DecodeMesh(e, sb);
                 if (decoded is null) { sb.AppendLine("     mesh primitive: no usable mesh - not drawn"); continue; }
                 geometryId = _renderer.CreateMeshGeometry(decoded.Positions, decoded.Uvs,
@@ -224,7 +232,17 @@ public sealed class D3D11ParticlePlayback
             "DISTORTION" => e.Distortion?.NormalMapTexturePath,
             _ => null,
         };
-        if (string.IsNullOrWhiteSpace(path)) return null;
+        // M707: an unauthored BASE texture is not "no stage". Returning null here bound nothing, and an
+        // unbound slot is filled by this renderer's own StandIn with an opaque 1x1 WHITE - the hard white
+        // card this window drew for an emitter that names no texture. The engine puts a transparent texel
+        // there instead, so the emitter draws nothing. The other stages do stay unbound, because white is
+        // the neutral factor for a multiply, a palette or an erosion mask and changes nothing - that is our
+        // renderer's convenience and not a reading of the engine, which compiles those stages out entirely.
+        //
+        // IsNullOrEmpty, matching VfxEmitterDefinition.NamesNoTexture: a path of blanks IS a named texture,
+        // and takes the read below, which fails and lands on the soft dot like any other unreadable one.
+        if (string.IsNullOrEmpty(path))
+            return sampler == "TEXTURE" ? VfxD3D11EmitterPipeline.Sprite.Unnamed : null;
 
         string key = path.ToLowerInvariant();
         // Deferred: the pipeline probes the texture pool by this key first, so a repeat play of the same
