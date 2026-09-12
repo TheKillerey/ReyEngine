@@ -149,6 +149,11 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         Cards.Add(new ParticleEmitterCardViewModel(value.Entry, this));   // M188 (3.5): the system's own fields
         foreach (var e in value.Entry.Emitters)
             Cards.Add(new ParticleEmitterCardViewModel(e, this));
+        // M712: open on what the name suggests. It is a guess and it says so - the reliable answer is the
+        // spell record that names the system as its missile, which this window does not read yet.
+        var guess = ReyEngine.Formats.Vfx.VfxRigNaming.For(value.Entry.Name);
+        RigMode = guess.Mode;
+        RigNote = guess.Why;
         RebuildPlayback();
     }
 
@@ -227,7 +232,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         var meshes = ResolveMeshes?.Invoke(def);
         Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes,
             multTexs, distortionTexs, colorTexs, erosionTexs, paletteTexs,
-            emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def)) });
+            emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def))
+            { Seed = RigSeed } });   // M712: the rig's run, rather than one derived from where it stands
     }
 
     /// <summary>M185 (2.15): stop emitting and let the Linger curves play out. Riot's shutdown stage is
@@ -241,6 +247,76 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     /// play every cycle without the user pressing Stop. On by default: an effect whose only fade lives in
     /// its Linger curves otherwise looks like it never ends.</summary>
     [ObservableProperty] private bool _autoStop = true;
+
+    // ================================================================ M712: the rig
+    //
+    // The file says nothing about where an effect goes - a system definition describes emitters, and what
+    // makes one a missile is the spell that flies it. So the preview parked everything at the origin, which
+    // shows a missile as a puff standing still and a trail with nothing to trail behind. The rig is the
+    // reader's answer to "what is this standing in for", opened on a guess from the system's own name.
+    //
+    // Mode, height and the two toggles are NOT on the playback item: they reach the viewport as a styled
+    // property, so dragging the height does not rebuild the playback and re-upload every sprite. The seed
+    // is the exception - a simulator's random stream is fixed when it is built - so changing it rebuilds,
+    // which is what Restart already does.
+
+    [ObservableProperty] private ReyEngine.Formats.Vfx.VfxRigMode _rigMode;
+    [ObservableProperty] private double _rigHeight = ReyEngine.Formats.Vfx.VfxRigDefaults.Height;
+    [ObservableProperty] private bool _rigReplay;
+    [ObservableProperty] private bool _rigStopMidRun;
+    [ObservableProperty] private int _rigSeed = ReyEngine.Formats.Vfx.VfxRigDefaults.Seed;
+    /// <summary>Why the rig opened where it did. Shown, because a guess the user cannot see is a guess they
+    /// cannot correct.</summary>
+    [ObservableProperty] private string _rigNote = "";
+
+    /// <summary>What the viewport carries the system with. Rebuilt from the four settings above, so a
+    /// binding on it updates the moment any of them moves.</summary>
+    public ReyEngine.Formats.Vfx.VfxPreviewRig Rig => new(
+        RigMode, (float)RigHeight,
+        Replay: RigReplay, StopMidRun: RigStopMidRun);
+
+    // One bool per segment over the enum, which is how a segmented control binds in this codebase. The
+    // setter assigns only on true so clicking the segment that is already down does not clear it.
+    public bool IsRigStill
+    {
+        get => RigMode == ReyEngine.Formats.Vfx.VfxRigMode.Still;
+        set { if (value) RigMode = ReyEngine.Formats.Vfx.VfxRigMode.Still; }
+    }
+    public bool IsRigBurst
+    {
+        get => RigMode == ReyEngine.Formats.Vfx.VfxRigMode.Burst;
+        set { if (value) RigMode = ReyEngine.Formats.Vfx.VfxRigMode.Burst; }
+    }
+    public bool IsRigMissile
+    {
+        get => RigMode == ReyEngine.Formats.Vfx.VfxRigMode.Missile;
+        set { if (value) RigMode = ReyEngine.Formats.Vfx.VfxRigMode.Missile; }
+    }
+    public bool IsRigTrail
+    {
+        get => RigMode == ReyEngine.Formats.Vfx.VfxRigMode.Trail;
+        set { if (value) RigMode = ReyEngine.Formats.Vfx.VfxRigMode.Trail; }
+    }
+
+    partial void OnRigModeChanged(ReyEngine.Formats.Vfx.VfxRigMode value)
+    {
+        // Burst is Still that starts over, so picking it turns Replay on - otherwise the segment reads as
+        // doing nothing at all, which is the shape of a dead control.
+        if (value == ReyEngine.Formats.Vfx.VfxRigMode.Burst) RigReplay = true;
+        OnPropertyChanged(nameof(IsRigStill));
+        OnPropertyChanged(nameof(IsRigBurst));
+        OnPropertyChanged(nameof(IsRigMissile));
+        OnPropertyChanged(nameof(IsRigTrail));
+        OnPropertyChanged(nameof(Rig));
+    }
+    partial void OnRigHeightChanged(double value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRigReplayChanged(bool value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRigStopMidRunChanged(bool value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRigSeedChanged(int value) => RebuildPlayback();
+
+    /// <summary>A different run of the same system. The seed is the whole of a run's randomness, so this is
+    /// the only way to see the effect play differently without editing it.</summary>
+    [RelayCommand] private void RerollSeed() => RigSeed = unchecked(RigSeed * 1103515245 + 12345) & 0x7fffffff;
 
     [RelayCommand] private void Restart() { Stopped = false; RebuildPlayback(); }
     [RelayCommand] private void TogglePause() => Paused = !Paused;

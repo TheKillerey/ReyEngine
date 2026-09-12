@@ -134,6 +134,15 @@ public sealed class ViewportControl : OpenGlControlBase
     /// pressing anything, then restart once the last particle has gone.</summary>
     public static readonly StyledProperty<bool> ParticleAutoStopProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticleAutoStop));
+    /// <summary>M712: how the preview carries the system - still, bursting, flying or circling. Null leaves
+    /// it where its placement put it, which is what every host but the particle editor wants.
+    ///
+    /// <para>A styled property rather than a field on the playback item, because the height and the mode
+    /// are dragged on a slider: putting them on the item would rebuild the whole playback, re-uploading
+    /// every sprite, on each tick of the drag. The seed is the one rig setting that does live on the item,
+    /// because a simulator's random stream is fixed at construction.</para></summary>
+    public static readonly StyledProperty<ReyEngine.Formats.Vfx.VfxPreviewRig?> ParticleRigProperty =
+        AvaloniaProperty.Register<ViewportControl, ReyEngine.Formats.Vfx.VfxPreviewRig?>(nameof(ParticleRig));
     public static readonly StyledProperty<Vector3?> FocusPointProperty =
         AvaloniaProperty.Register<ViewportControl, Vector3?>(nameof(FocusPoint));
     public static readonly StyledProperty<IReadOnlyList<TextureImage?>?> ModelTexturesProperty =
@@ -372,6 +381,15 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool ParticlePaused { get => GetValue(ParticlePausedProperty); set => SetValue(ParticlePausedProperty, value); }
     public bool ParticleStopped { get => GetValue(ParticleStoppedProperty); set => SetValue(ParticleStoppedProperty, value); }
     public bool ParticleAutoStop { get => GetValue(ParticleAutoStopProperty); set => SetValue(ParticleAutoStopProperty, value); }
+    public ReyEngine.Formats.Vfx.VfxPreviewRig? ParticleRig
+    {
+        get => GetValue(ParticleRigProperty);
+        set => SetValue(ParticleRigProperty, value);
+    }
+    /// <summary>M712: seconds since this rig run began, and the simulators already stopped by the rig so a
+    /// stop is not re-issued every frame.</summary>
+    private float _rigElapsed;
+    private readonly HashSet<VfxParticleSimulator> _rigStopped = new(ReferenceEqualityComparer.Instance);
     /// <summary>M186: seconds since this auto-stop cycle began. Reset when the cycle restarts.</summary>
     private float _autoStopElapsed;
     public bool ShowBones { get => GetValue(ShowBonesProperty); set => SetValue(ShowBonesProperty, value); }
@@ -1319,6 +1337,37 @@ public sealed class ViewportControl : OpenGlControlBase
                         * Matrix4x4.CreateTranslation(pos));
                 }
 
+            // M712: the rig. It carries the whole system along a path the file does not describe - a
+            // missile flies, a trail circles, a burst starts over - by re-anchoring every simulator the
+            // same way bone attachment and missile travel already do. A placement that travels of its own
+            // accord is left alone: the map's own missiles are not the preview's to move.
+            if (dt > 0f && ParticleRig is { } rig && _particleSims.Count > 0)
+            {
+                _rigElapsed += dt;
+                float span = _particleSims.Max(static s => s.NaturalDuration);
+                float phase = rig.Phase(_rigElapsed, span);
+                foreach (var (item, sim) in _particleSimCache)
+                {
+                    if (item.TravelTo is not null) continue;
+                    sim.SetWorldTransform(rig.Pose(phase));
+                }
+                // A missile stops emitting where it lands, and any rig can be asked to stop half way, so
+                // the teardown is visible without holding the Stop button down. Once per run, not per frame.
+                if (rig.StopAt(span) is { } stopAt && phase >= stopAt)
+                    foreach (var psim in _particleSims)
+                        if (_rigStopped.Add(psim)) psim.Stop();
+                // Replay owns the cycle when it is on, so the auto-stop cycle below stands down rather
+                // than restarting the run underneath it at a different moment.
+                if (rig.Replay && _rigElapsed >= rig.RunLength(span))
+                {
+                    foreach (var psim in _particleSims) psim.Reset();
+                    _childSims.Clear();
+                    _rigStopped.Clear();
+                    _rigElapsed = 0f;
+                    _autoStopElapsed = 0f;
+                }
+            }
+
             // M185 (2.15): the Stop action. Applied here rather than at build time so the linger phase
             // plays out live, and idempotently so holding the toggle does not re-trigger it.
             if (ParticleStopped)
@@ -1333,7 +1382,7 @@ public sealed class ViewportControl : OpenGlControlBase
             // The restart waits on the particle count rather than on a timer, so a long linger window is
             // never cut off mid-fade. Manual Stop takes precedence: while the user holds it, this does not
             // restart underneath them.
-            else if (ParticleAutoStop && _particleSims.Count > 0)
+            else if (ParticleAutoStop && ParticleRig is not { Replay: true } && _particleSims.Count > 0)
             {
                 bool anyStopped = _particleSims.Any(static s => s.IsStopped);
                 if (!anyStopped)
@@ -1799,6 +1848,8 @@ public sealed class ViewportControl : OpenGlControlBase
         _autoStopElapsed = 0f;   // M186: a rebuilt playback starts its cycle over
         _particleSimCache.Clear(); _warmedParticleSims.Clear(); _particleWarmup.Clear();   // M694
         _travelElapsed.Clear();
+        _rigElapsed = 0f;               // M712: a rebuilt playback starts its run over
+        _rigStopped.Clear();
         _expiredTravelSims.Clear();
         _particleTextureCache.Clear();
         _particleCubemapCache.Clear();

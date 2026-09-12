@@ -27,7 +27,7 @@ public static class VfxPlaybackSim
     {
         if (item.System.Emitters.Count == 0) return null;
         // A stable placement-specific seed prevents every repeated torch/brazier from animating in lockstep.
-        int seed = HashCode.Combine(item.System.PathHash,
+        int seed = item.Seed ?? HashCode.Combine(item.System.PathHash,
             BitConverter.SingleToInt32Bits(item.Transform.M41),
             BitConverter.SingleToInt32Bits(item.Transform.M42),
             BitConverter.SingleToInt32Bits(item.Transform.M43));

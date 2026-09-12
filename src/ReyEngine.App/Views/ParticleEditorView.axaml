@@ -252,10 +252,56 @@
                                      ParticleSpeed="{Binding Speed}"
                                      ParticlePaused="{Binding Paused}"
                                      ParticleStopped="{Binding Stopped}"
-                                     ParticleAutoStop="{Binding AutoStop}" />
+                                     ParticleAutoStop="{Binding AutoStop}"
+                                     ParticleRig="{Binding Rig}" />
               <Border x:Name="PreviewInput" Background="Transparent" />
               <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                          Margin="6,4" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
+              <!-- M712: the rig. The file does not say where an effect goes, so the reader says it here.
+                   Over the viewport rather than in the toolbar, and AFTER PreviewInput so it takes clicks
+                   instead of orbiting the camera underneath it. -->
+              <Border Classes="card" Padding="10" CornerRadius="6" Margin="8" MinWidth="240"
+                      HorizontalAlignment="Right" VerticalAlignment="Top">
+                <StackPanel Spacing="5">
+                  <TextBlock Text="RIG" FontSize="10" FontWeight="Bold"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <TextBlock Text="How the preview carries this system" FontSize="9" Opacity="0.55"
+                             TextWrapping="Wrap" />
+                  <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="2">
+                    <UniformGrid Columns="4">
+                      <ToggleButton Classes="vp" Content="Still" IsChecked="{Binding IsRigStill}"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    ToolTip.Tip="It stays where it is put - a buff, an aura, a ground indicator." />
+                      <ToggleButton Classes="vp" Content="Burst" IsChecked="{Binding IsRigBurst}"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    ToolTip.Tip="Still, but the whole run starts over as soon as it ends." />
+                      <ToggleButton Classes="vp" Content="Missile" IsChecked="{Binding IsRigMissile}"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    ToolTip.Tip="It flies in a straight line and stops emitting where it lands." />
+                      <ToggleButton Classes="vp" Content="Trail" IsChecked="{Binding IsRigTrail}"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    ToolTip.Tip="It circles, so a trail or a ribbon has a path to lay itself along." />
+                    </UniformGrid>
+                  </Border>
+                  <TextBlock Text="{Binding RigNote}" FontSize="9" Opacity="0.5" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding RigHeight, StringFormat='Height   {0:0} u'}" FontSize="10"
+                             Opacity="0.7" Margin="0,4,0,0" />
+                  <Slider Minimum="0" Maximum="600" Value="{Binding RigHeight}"
+                          ToolTip.Tip="How far off the ground the whole rig sits. A champion is 200 units tall." />
+                  <StackPanel Orientation="Horizontal" Spacing="5">
+                    <ToggleButton Classes="vp" Content="Replay" IsChecked="{Binding RigReplay}"
+                                  ToolTip.Tip="Start the run over when it ends." />
+                    <ToggleButton Classes="vp" Content="Stop mid-run" IsChecked="{Binding RigStopMidRun}"
+                                  ToolTip.Tip="Stop emitting halfway through, so the teardown plays without holding Stop." />
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="5">
+                    <TextBlock Text="Seed" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
+                    <TextBox Text="{Binding RigSeed}" Width="72" FontSize="10" />
+                    <Button Classes="tool" Content="↻" Command="{Binding RerollSeedCommand}"
+                            ToolTip.Tip="A different run of the same effect." />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
             </Grid>
           </Border>
         </Grid>

@@ -58,6 +58,15 @@ public sealed record VfxPlaybackItem(
     /// skinned frame — clip particle events ride their bone like in-game.</summary>
     public string? AttachBone { get; init; }
 
+    /// <summary>M712: the random stream this playing of the system runs on, or null for the one derived
+    /// from where it stands.
+    ///
+    /// <para>The derived seed is a hash of the system and its position, which is right for a map - two
+    /// placements of one effect must not flicker in lockstep - and wrong for a preview, because moving the
+    /// rig's height would then silently re-roll the randomness. Two knobs on one wire. An explicit seed
+    /// separates them, and it is what lets a reader say "the run with seed 1337" and mean it.</para></summary>
+    public int? Seed { get; init; }
+
     /// <summary>M91: seconds after playback start before this system begins simulating — clip events
     /// fire at their authored StartFrame instead of all at clip start.</summary>
     public float StartDelay { get; init; }
