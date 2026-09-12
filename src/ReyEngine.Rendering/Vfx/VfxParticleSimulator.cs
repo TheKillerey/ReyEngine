@@ -581,12 +581,26 @@ public sealed class VfxParticleSimulator
             p.Rot += p.RotVel * dt;
             // M174 (1.9): rotation0 is an IntegratedValueVector3 - it accumulates rather than setting an
             // absolute angle, so it is integrated here alongside RotVel rather than sampled into Rot.
-            // 52,647 emitters. Only Z drives the billboard spin; X/Y matter for mesh primitives, which
-            // read BirthRotation, so they are left alone until that path grows over-life support.
+            //
+            // M714 moves it from lane Z to lane X, which is the lane this accumulator was already seeded
+            // and driven from. The old note said "only Z drives the billboard spin" and the two lines
+            // above it contradict that: Rot starts at birthRotation0.X and RotVel is
+            // birthRotationalVelocity0.X. One accumulator cannot take its birth angle from one lane and
+            // its over-life rate from another; that was an inconsistency of ours, not a reading of Riot's.
+            //
+            // The engine agrees with the seed rather than with the old accumulation. A complex emitter's
+            // camera quad rolls by the FIRST euler angle - lane 0 - and a legacy simple emitter's scalar
+            // roll lands in that same lane on the way in (VfxSystemResolver.ScalarRotationCurve), so both
+            // kinds arrive here already normalised onto X.
+            //
+            // The exposure, measured: 58,986 emitters author rotation0, and by live lane that is X 17,551,
+            // Y 28,476, Z 11,886. 11,799 author X and no Z, so they start spinning; 7,000 author Z and no
+            // X, so they stop. It is a real change in both directions and the smaller lane is the one
+            // being given up. What settles it is that the seed and the rate now come from one place.
             if (linger?.Rotation is { } lingerRot)
-                p.Rot += lingerRot.Sample(lingerT).Z * (MathF.PI / 180f) * dt;
+                p.Rot += lingerRot.Sample(lingerT).X * (MathF.PI / 180f) * dt;
             else if (d.RotationOverLife is { } rotCurve)
-                p.Rot += rotCurve.Sample(particleT).Z * (MathF.PI / 180f) * dt;
+                p.Rot += rotCurve.Sample(particleT).X * (MathF.PI / 180f) * dt;
             s.Particles[i] = p;
         }
 

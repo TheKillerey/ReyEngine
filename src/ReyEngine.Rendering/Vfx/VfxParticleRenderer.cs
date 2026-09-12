@@ -744,6 +744,7 @@ public sealed class VfxParticleRenderer
     private int _muPaletteTex, _muPaletteMixer, _muPaletteV, _muHasPalette;   // M641
     private int _muErosionTex, _muErosionParams, _muErosionMixer, _muHasErosion, _muErosionDrive;   // M641
     private int _muAlphaRef;   // M641
+    private int _muDepthPushPull;   // M714
     private int _muReflCube, _muReflFresnel, _muReflDirect, _muReflGlancing, _muReflTint, _muHasRefl;   // M181
     private uint _whiteTex;
 
@@ -865,6 +866,7 @@ public sealed class VfxParticleRenderer
             _muHasErosion = _gl.GetUniformLocation(_meshProgram, "uHasErosion");
             _muErosionDrive = _gl.GetUniformLocation(_meshProgram, "uErosionDrive");
             _muAlphaRef = _gl.GetUniformLocation(_meshProgram, "uAlphaRef");
+            _muDepthPushPull = _gl.GetUniformLocation(_meshProgram, "uMeshDepthPushPull");   // M714
         }
         if (_whiteTex == 0) _whiteTex = UploadTexture(new byte[] { 255, 255, 255, 255 }, 1, 1);
     }
@@ -1020,6 +1022,9 @@ public sealed class VfxParticleRenderer
             _gl.ActiveTexture(TextureUnit.Texture0);
         }
         _gl.Uniform1(_muAlphaRef, es.Def.AlphaRef / 255f);
+        // M714: 14,451 mesh-primitive emitters author a push and 92.5% of them author it negative, which
+        // is a mesh asking to be pulled toward the eye so it wins the depth test against what it lies on.
+        _gl.Uniform1(_muDepthPushPull, es.Def.DepthPushPull);
         _gl.Uniform3(_muPlacementRight, es.PlacementRight.X, es.PlacementRight.Y, es.PlacementRight.Z);
         _gl.Uniform3(_muPlacementUp, es.PlacementUp.X, es.PlacementUp.Y, es.PlacementUp.Z);
         _gl.Uniform3(_muPlacementForward, es.PlacementForward.X, es.PlacementForward.Y, es.PlacementForward.Z);
@@ -1444,6 +1449,7 @@ layout(location=1) in vec2 aUv;
 layout(location=2) in vec3 aNormal;
 uniform mat4 uViewProj;
 uniform vec3 uCamPosMesh;
+uniform float uMeshDepthPushPull;   // M714
 uniform vec4 uFresnelColor;
 uniform float uFresnelPower;
 uniform int uHasFresnel;
@@ -1482,6 +1488,15 @@ void main(){
     vec3 e = rotateEuler(aPos * uScale, uMeshEuler);
     vec3 local = vec3(e.x * c - e.z * s, e.y, e.x * s + e.z * c);
     vec3 p = uPlacementRight * local.x + uPlacementUp * local.y + uPlacementForward * local.z + uWorldPos;
+    // M714: the same push the quad path has had since M175, because Riot's mesh_vs computes it too -
+    // lines 106-110 of that blob are the identical five instructions, which ParticleShading.DepthPushPull
+    // already transcribes for the D3D11 side. Our two renderers disagreed about this: the D3D11 path runs
+    // Riot's own mesh_vs and so has always pushed, and this one never did.
+    if (uMeshDepthPushPull != 0.0) {
+        vec3 away = p - uCamPosMesh;
+        float len = length(away);
+        if (len > 1e-4) p += (away / len) * uMeshDepthPushPull;
+    }
     gl_Position = uViewProj * vec4(p, 1.0);
     // M178 (2.12): the fresnel rim. DECODED from particlesystem/mesh_vs permutation REFLECTIVE:
     //     f    = saturate(dot(-V, N));  term = 1 - pow(f, vFresnel.w);  out = term * vFresnel.rgb

@@ -124,3 +124,60 @@ Three particle hosts, and only two of them had a draw order at all.
 - `isUniformScale` and `useNavmeshMask` are consumed by the renderer today and still sit in the parked-field
   table, so the editor badges them as having no effect. Nothing in the suite catches that; the guard that
   would is worth building.
+
+---
+
+# M714 - the depth push, and the lane a billboard rolls on
+
+The fourth reading in the series, and the first where we already had the answer.
+
+## The push was ours first
+
+ltk-manager's 2.47 corrects two of their own earlier readings: the quad vertex shader computes
+`P + normalize(P - vCamera) * k`, per corner along its own ray, and a positive `k` pushes **away** from the
+eye. Their 2.42 had missed the normalisation and their 2.37 had the direction backwards.
+
+M175 decoded the same five instructions out of `quad_vs` - 12 to 16 - and shipped exactly that, with the
+sign stated, years before. Nothing in the quad path changed. The corroboration runs the other way too:
+our own census of 61,588 authored values found 74.6% negative with a median of -5, which is a decal asking
+to be pulled toward the eye so it wins against the ground it lies on.
+
+## What it did find: our two renderers disagreed about meshes
+
+Riot's `mesh_vs` computes the identical five instructions - lines 106 to 110 - and our own
+`ParticleShading.DepthPushPull` has transcribed them since the Direct3D 11 particle path was built. That
+path runs Riot's shader, so it has always pushed a mesh. The OpenGL mesh vertex shader never did.
+
+| | quad | mesh | ribbon |
+| --- | --- | --- | --- |
+| OpenGL, before | pushes | **does not** | does not |
+| Direct3D 11 | pushes | pushes | does not |
+| ltk-manager | pushes | does not | does not |
+
+14,451 mesh-primitive emitters author a push, 92.5% of them negative, with a median of -50. The OpenGL
+mesh path now pushes. Ribbons are left alone on both sides: 2.37 says which of the mesh and ribbon shaders
+read it is not attested, 2.47 attests the mesh and says nothing new about the ribbon.
+
+## And an inconsistency of our own, in the roll
+
+The reading's second half is that a complex camera quad rolls on lane 0 - `birthRotation0.x` - where the
+reference renderer had been reading lane 2. We never had that bug: the simulator has seeded the roll from
+lane X since M640, and a legacy simple emitter's scalar roll is normalised into the same lane when it is
+read, so both kinds of emitter arrive already agreeing.
+
+What we did have is one accumulator fed from two lanes. `Rot` starts at `birthRotation0.X` and its rate is
+`birthRotationalVelocity0.X`, and then the over-life `rotation0` curve was sampled on **Z**. An old note
+said "only Z drives the billboard spin", and the two lines above it said otherwise. That is now lane X
+throughout.
+
+The exposure, measured over the installed game: 58,986 emitters author `rotation0`, and by live lane that
+is X 17,551, Y 28,476, Z 11,886. 11,799 author X and no Z, so they start spinning; 7,000 author Z and no
+X, so they stop. It changes the picture in both directions and the smaller lane is the one given up. What
+settles it is that the birth angle and the rate now come from one place.
+
+**What was NOT done, and why.** A blanket switch of the *seed* from lane X to lane Z would be a disaster:
+of 377,875 camera quads authoring `birthRotation0`, 294,624 have X live and Z zero and would stop rolling,
+against 11,803 that would start. Those 11,803 Z-only camera quads are a real authored cohort - 7,404
+systems, 175 archives, round angles of 90, 180, 360 - that we render with no roll at all, and nothing in
+the bins says which reading they want. Recorded, not guessed at.
+
