@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Text;
@@ -58,6 +59,12 @@ public sealed class D3D11MapProps
         /// <summary>M680: per placement, the lightgrid's cube where it stands (null = the stand-in).</summary>
         public readonly List<float[]?> Ambient = new();
         public float[]? LightGridScale;
+        // M694: the pose scratch and the outputs, reused frame after frame - the materials hold the
+        // palette array by reference and see each frame's values in place
+        public readonly PoseBuffer Pose = new();
+        public Matrix4x4[]? Palette;
+        public float[]? SkinPositions, SkinNormals;
+        public float LastPoseTime = float.NegativeInfinity;
     }
     private readonly List<PropGeom> _geoms = new();
     private readonly HashSet<string> _textureKeys = new(StringComparer.Ordinal);
@@ -71,6 +78,10 @@ public sealed class D3D11MapProps
     /// <summary>M676: how many of the prop meshes draw through Riot's own shaders.</summary>
     public int RiotShaderMeshes { get; private set; }
     public string Report { get; private set; } = "";
+    /// <summary>M694: what the last <see cref="Tick"/> cost, and what it did.</summary>
+    public double LastTickMs { get; private set; }
+    public int PosedThisFrame { get; private set; }
+    public int NearMeshes { get; private set; }
 
     /// <summary>Drop every material, texture, and geometry this driver owns.</summary>
     public void Clear()
@@ -282,27 +293,54 @@ public sealed class D3D11MapProps
     /// stopwatch, so pausing the DX11 viewport pauses props with everything else. GL uses a dedicated
     /// stopwatch there - a deliberate divergence, noted rather than hidden.</para>
     /// </summary>
-    public void Tick(float seconds, bool playing)
+    /// <summary>
+    /// Pose every animated prop mesh that is worth posing this frame.
+    ///
+    /// <para>M694: a mesh is posed only when a placement of it is within the particle gate's distance of
+    /// the camera and, for an idle, no more often than 30 Hz (<see cref="PropAnimationGate"/>); the pose
+    /// scratch and the palette are reused, so a frame allocates nothing here. On the jade map the 21
+    /// animated skins cost 0.8 ms and 355 KB of garbage per frame before; the palette is the same array
+    /// the materials already hold, filled in place.</para>
+    /// </summary>
+    public void Tick(float seconds, bool playing, Vector3 cameraPosition, float gateDistanceSq)
     {
-        if (!playing) return;
+        var clock = Stopwatch.StartNew();
+        PosedThisFrame = 0;
+        NearMeshes = 0;
+        if (!playing) { LastTickMs = 0; return; }
+        // world space is unmirrored and the flip lives in the view matrix, so the camera is mirrored to
+        // compare - the same vector the particle gate tests against
+        var mirroredCam = new Vector3(-cameraPosition.X, cameraPosition.Y, cameraPosition.Z);
         foreach (var g in _geoms)
         {
             var m = g.Mesh;
             if (!m.CanAnimate) continue;
+            bool near = PropAnimationGate.AnyNear(g.Instances, mirroredCam, gateDistanceSq);
+            if (near) NearMeshes++;
+            if (!PropAnimationGate.ShouldPose(g.LastPoseTime, seconds, m.PoseSource is not null, near)) continue;
             // M636: a driven mesh (the playground actor) supplies its own clip and time; a prop idles.
             var (clip, time) = m.PoseAt(seconds);
             try
             {
                 if (g.RiotGeometryId >= 0)
                 {
-                    var palette = BonePalette.Build(m.Skeleton!, clip, time);
-                    foreach (var mat in g.Materials) mat.BonePalette = palette;
-                    continue;
+                    g.Palette = BonePalette.Build(m.Skeleton!, clip, time, g.Pose, g.Palette);
+                    foreach (var mat in g.Materials) mat.BonePalette = g.Palette;
                 }
-                var frame = SkinnedMeshAnimator.Skin(m.SknMesh!, m.Skeleton!, clip, time);
-                _renderer.UpdateMeshGeometryPositions(g.GeometryId, frame.Positions);
+                else
+                {
+                    var index = SkeletonIndex.For(m.Skeleton!);
+                    SkeletonPose.ComputeSkin(index, clip, time, g.Pose);
+                    int n = m.SknMesh!.VertexCount * 3;
+                    if (g.SkinPositions is null || g.SkinPositions.Length < n) { g.SkinPositions = new float[n]; g.SkinNormals = new float[n]; }
+                    SkinnedMeshAnimator.Deform(m.SknMesh!, index, g.Pose, g.SkinPositions, g.SkinNormals!);
+                    _renderer.UpdateMeshGeometryPositions(g.GeometryId, g.SkinPositions);
+                }
+                g.LastPoseTime = seconds;
+                PosedThisFrame++;
             }
             catch { /* a bad clip must not take the frame down; the prop simply stays in bind pose */ }
         }
+        LastTickMs = clock.Elapsed.TotalMilliseconds;
     }
 }

@@ -174,7 +174,7 @@ public sealed class PropRiotShaderTests
 
         Assert.Contains("_renderer.CreateRiotMeshGeometry(scene.Mesh)", driver);
         Assert.Contains("Dx11CharacterScene.CommitSlices(_renderer, scene, mat =>", driver);
-        Assert.Contains("BonePalette.Build(m.Skeleton!, clip, time)", driver);
+        Assert.Contains("BonePalette.Build(m.Skeleton!, clip, time, g.Pose, g.Palette)", driver);   // M694: the reused palette
         // the way to a scene is set BEFORE the prop set, whose setter loads with it
         int prepare = window.IndexOf("_dx11.PreparePropScene ??= vm.PreparePropDx11Scene;", StringComparison.Ordinal);
         int props = window.IndexOf("_dx11.PropMeshes = vm.CurrentPropMeshes;", StringComparison.Ordinal);

@@ -4,26 +4,17 @@ using ReyEngine.Formats.Skeletons;
 namespace ReyEngine.Formats.Animation;
 
 /// <summary>
-/// M615: the per-bone skinning matrices a GPU skinned shader needs, indexed the way the vertices index
-/// them.
+/// The GPU skinning palette: one matrix per influence slot, InverseBind * Global at the clip's time.
 ///
-/// <para>The CPU skinner in <see cref="SkinnedMeshAnimator"/> already computes exactly these — it just
-/// consumes them immediately and throws them away, transforming every vertex on the CPU. A GPU path
-/// needs the same matrices handed over as an array instead.</para>
-///
-/// <para>The indexing is the part that is easy to get wrong. A vertex's BLENDINDICES do NOT name joints:
-/// they name slots in the skeleton's <c>Influences</c> table, which then names the joint. So the palette
-/// is built per influence SLOT, not per joint — building it per joint would produce a palette that is
-/// correct, complete, and indexed by something the vertices never refer to, which shows up as a mesh
-/// exploded across the scene rather than as an obvious failure.</para>
+/// <para>M694: built on <see cref="SkeletonPose"/> - the skeleton's index is cached on the skeleton and
+/// the scratch lives in a caller-owned <see cref="PoseBuffer"/>, so a driver that poses the same skin every
+/// frame allocates nothing after the first. The parameterless <see cref="Build(SkeletonAsset, AnimationClip?, float)"/>
+/// keeps its old shape (a fresh array each call) for the callers that want one.</para>
 /// </summary>
 public static class BonePalette
 {
-    /// <summary>League caps a skinned draw at 256 bones and the shipped BonesCB is sized for it.</summary>
     public const int MaxBones = 256;
 
-    /// <summary>The bind pose — every matrix identity. What a palette must contain for a mesh to render
-    /// exactly as authored.</summary>
     public static Matrix4x4[] Bind(int count)
     {
         var palette = new Matrix4x4[Math.Clamp(count, 1, MaxBones)];
@@ -31,13 +22,28 @@ public static class BonePalette
         return palette;
     }
 
-    /// <summary>
-    /// The skinning matrices for one instant of a clip, indexed by influence slot.
-    /// </summary>
-    /// <param name="clip">Null for the bind pose, which is a legitimate thing to ask for — it is what a
-    /// character with no animation selected should show.</param>
+    /// <summary>A fresh palette for <paramref name="clip"/> at <paramref name="time"/>.</summary>
     public static Matrix4x4[] Build(SkeletonAsset skeleton, AnimationClip? clip, float time) =>
-        BuildWithSegments(skeleton, clip, time, wantSegments: false).Palette;
+        Build(skeleton, clip, time, new PoseBuffer(), null);
+
+    /// <summary>
+    /// The palette into <paramref name="reuse"/> when it is the right length (the array handed back IS
+    /// the one filled, so a material that holds it sees every frame's values), else a new one.
+    /// <paramref name="scratch"/> is the caller's pose buffer, reused across frames.
+    /// </summary>
+    public static Matrix4x4[] Build(SkeletonAsset skeleton, AnimationClip? clip, float time, PoseBuffer scratch, Matrix4x4[]? reuse)
+    {
+        var index = SkeletonIndex.For(skeleton);
+        if (skeleton.Joints.Count == 0)
+        {
+            if (reuse is { Length: 1 }) { reuse[0] = Matrix4x4.Identity; return reuse; }
+            return Bind(1);
+        }
+        SkeletonPose.ComputeSkin(index, clip, time, scratch);
+        var palette = reuse is not null && reuse.Length == index.PaletteLength ? reuse : new Matrix4x4[index.PaletteLength];
+        FillPalette(index, scratch, palette);
+        return palette;
+    }
 
     /// <summary>
     /// M619: the palette AND the bone segments, from one walk of the skeleton.
@@ -51,118 +57,59 @@ public static class BonePalette
     public static (Matrix4x4[] Palette, float[] Segments) BuildWithSegments(
         SkeletonAsset skeleton, AnimationClip? clip, float time, bool wantSegments = true)
     {
-        var pose = new Dictionary<uint, (Quaternion Rotation, Vector3 Translation, Vector3 Scale)>();
-        if (clip is not null)
-            try { clip.Evaluate(time, pose); }
-            catch { /* a clip that will not evaluate falls back to the bind pose, as the CPU skinner does */ }
-
         var joints = skeleton.Joints;
         if (joints.Count == 0) return (Bind(1), Array.Empty<float>());
 
-        int maxId = 0;
-        foreach (var j in joints) maxId = Math.Max(maxId, j.Id);
-
-        var byId = new Dictionary<int, SkinJoint>(joints.Count);
-        foreach (var j in joints) byId[j.Id] = j;
-
-        var global = new Matrix4x4[maxId + 1];
-        var done = new bool[maxId + 1];
-
-        Matrix4x4 Global(int id)
-        {
-            if ((uint)id > maxId || !byId.TryGetValue(id, out var j)) return Matrix4x4.Identity;
-            if (done[id]) return global[id];
-            done[id] = true;                                  // guard against cycles, as the CPU skinner does
-
-            var local = pose.TryGetValue(j.AnimHash, out var trs)
-                ? Compose(trs.Translation, trs.Rotation, trs.Scale)
-                : j.LocalTransform;
-
-            global[id] = j.ParentId >= 0 && byId.ContainsKey(j.ParentId) ? local * Global(j.ParentId) : local;
-            return global[id];
-        }
-
-        var skin = new Matrix4x4[maxId + 1];
-        Array.Fill(skin, Matrix4x4.Identity);
-        foreach (var j in joints) skin[j.Id] = j.InverseBindTransform * Global(j.Id);
-
-        // Indexed by influence slot, because that is what a vertex's BLENDINDICES holds. A skeleton with
-        // no influence table indexes joints directly — the same fallback the CPU skinner uses.
-        var influences = skeleton.Influences;
-        int count = influences.Count > 0 ? influences.Count : maxId + 1;
-        var palette = new Matrix4x4[Math.Clamp(count, 1, MaxBones)];
-
-        for (int slot = 0; slot < palette.Length; slot++)
-        {
-            int jointId = influences.Count > 0 ? influences[slot] : slot;
-            palette[slot] = (uint)jointId <= maxId ? skin[jointId] : Matrix4x4.Identity;
-        }
+        var index = SkeletonIndex.For(skeleton);
+        var scratch = new PoseBuffer();
+        SkeletonPose.ComputeSkin(index, clip, time, scratch);
+        var palette = new Matrix4x4[index.PaletteLength];
+        FillPalette(index, scratch, palette);
 
         if (!wantSegments) return (palette, Array.Empty<float>());
+        return (palette, Segments(index, scratch));
+    }
 
-        // One line per joint that has a parent, exactly the pairs the GL overlay draws.
+    /// <summary>One line per joint that has a parent, exactly the pairs the GL overlay draws.</summary>
+    public static float[] Segments(SkeletonIndex index, PoseBuffer scratch)
+    {
+        var joints = index.Skeleton.Joints;
         var segments = new List<float>(joints.Count * 6);
         foreach (var j in joints)
         {
-            if (j.ParentId < 0 || !byId.ContainsKey(j.ParentId)) continue;
-            var a = Global(j.Id).Translation;
-            var b = Global(j.ParentId).Translation;
+            if (j.ParentId < 0 || (uint)j.ParentId >= (uint)index.ById.Length || index.ById[j.ParentId] is null) continue;
+            var a = SkeletonPose.GlobalOf(scratch, j.Id).Translation;
+            var b = SkeletonPose.GlobalOf(scratch, j.ParentId).Translation;
             segments.Add(a.X); segments.Add(a.Y); segments.Add(a.Z);
             segments.Add(b.X); segments.Add(b.Y); segments.Add(b.Z);
         }
-        return (palette, segments.ToArray());
+        return segments.ToArray();
     }
 
-    /// <summary>
-    /// M630: the animated GLOBAL transform of every joint, by name — what a bone-attached particle rides.
-    ///
-    /// <para>The GL path gets these from <see cref="SkinnedMeshAnimator.Skin"/> as a by-product of
-    /// transforming every vertex on the CPU. A GPU-skinned path has no such by-product, and this is the
-    /// same walk of the joints the palette already does — global, NOT the skinning matrix: a particle is
-    /// placed at the bone, it is not a vertex being moved from its bind pose.</para>
-    /// </summary>
+    /// <summary>Indexed by influence slot, because that is what a vertex's BLENDINDICES holds. A skeleton
+    /// with no influence table indexes joints directly - the same fallback the CPU skinner uses.</summary>
+    private static void FillPalette(SkeletonIndex index, PoseBuffer scratch, Matrix4x4[] palette)
+    {
+        var influences = index.Skeleton.Influences;
+        var skin = scratch.Skin;
+        for (int slot = 0; slot < palette.Length; slot++)
+        {
+            int jointId = influences.Count > 0 ? influences[slot] : slot;
+            palette[slot] = (uint)jointId <= (uint)index.MaxId ? skin[jointId] : Matrix4x4.Identity;
+        }
+    }
+
     public static IReadOnlyDictionary<string, Matrix4x4> Globals(
         SkeletonAsset skeleton, AnimationClip? clip, float time)
     {
-        var pose = new Dictionary<uint, (Quaternion Rotation, Vector3 Translation, Vector3 Scale)>();
-        if (clip is not null)
-            try { clip.Evaluate(time, pose); }
-            catch { /* bind pose, as everywhere else here */ }
-
         var joints = skeleton.Joints;
         var globals = new Dictionary<string, Matrix4x4>(joints.Count, StringComparer.OrdinalIgnoreCase);
         if (joints.Count == 0) return globals;
-
-        int maxId = 0;
-        foreach (var j in joints) maxId = Math.Max(maxId, j.Id);
-        var byId = new Dictionary<int, SkinJoint>(joints.Count);
-        foreach (var j in joints) byId[j.Id] = j;
-
-        var global = new Matrix4x4[maxId + 1];
-        var done = new bool[maxId + 1];
-
-        Matrix4x4 Global(int id)
-        {
-            if ((uint)id > maxId || !byId.TryGetValue(id, out var j)) return Matrix4x4.Identity;
-            if (done[id]) return global[id];
-            done[id] = true;
-
-            var local = pose.TryGetValue(j.AnimHash, out var trs)
-                ? Compose(trs.Translation, trs.Rotation, trs.Scale)
-                : j.LocalTransform;
-
-            global[id] = j.ParentId >= 0 && byId.ContainsKey(j.ParentId) ? local * Global(j.ParentId) : local;
-            return global[id];
-        }
-
+        var index = SkeletonIndex.For(skeleton);
+        var scratch = new PoseBuffer();
+        SkeletonPose.ComputeSkin(index, clip, time, scratch);
         // By NAME, and case-insensitively, because that is how a ParticleEventData names its bone.
-        foreach (var j in joints) globals[j.Name] = Global(j.Id);
+        foreach (var j in joints) globals[j.Name] = SkeletonPose.GlobalOf(scratch, j.Id);
         return globals;
     }
-
-    /// <summary>Same composition the CPU skinner uses, kept identical so the two paths cannot drift.</summary>
-    private static Matrix4x4 Compose(Vector3 translation, Quaternion rotation, Vector3 scale) =>
-        Matrix4x4.CreateScale(scale)
-        * Matrix4x4.CreateFromQuaternion(rotation)
-        * Matrix4x4.CreateTranslation(translation);
 }

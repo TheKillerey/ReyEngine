@@ -65,6 +65,12 @@ public sealed class D3D11MapParticles
     private readonly List<(VfxPlaybackItem Item, VfxParticleSimulator Sim)> _active = new();
     private readonly HashSet<VfxParticleSimulator> _activeSet = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VfxParticleSimulator> _wanted = new(ReferenceEqualityComparer.Instance);
+    // M694: systems entering the gate are warmed a few per frame; a system is active once it is warm
+    private readonly ParticleWarmupQueue _warmup = new();
+    private readonly HashSet<VfxParticleSimulator> _warmed = new(ReferenceEqualityComparer.Instance);
+    private readonly List<VfxParticleSimulator> _readyScratch = new();
+    public int WarmupPending => _warmup.Pending;
+    public double LastWarmupMs => _warmup.LastPumpMs;
 
     private List<Slice> _slices = new();
     private readonly Dictionary<VfxEmitterDefinition, Slice> _byEmitter =
@@ -285,6 +291,7 @@ public sealed class D3D11MapParticles
         _byEmitter.Clear();
         _noPipeline.Clear();
         _sims.Clear();
+        _warmed.Clear(); _warmup.Clear();   // M694: a rebuilt set warms from scratch
         _active.Clear();
         _activeSet.Clear();
         Placements = ActivePlacements = LiveParticles = QuadsRequested = 0;
@@ -825,30 +832,30 @@ public sealed class D3D11MapParticles
             if (_sims.TryGetValue(item, out var sim)) _wanted.Add(sim);
         }
 
-        bool changed = _wanted.Count != _active.Count;
-        if (!changed)
-            foreach (var (_, sim) in _active)
-                if (!_wanted.Contains(sim)) { changed = true; break; }
-        if (!changed) { ActivePlacements = _active.Count; return; }
+        // M694: a system that just entered the gate is queued and warmed under the frame budget (M536's
+        // pre-warm, M595's fill duration - unchanged, only no longer all in one frame), and joins the
+        // active set once warm. One that leaves before its turn is forgotten.
+        foreach (var (_, sim) in _sims)
+        {
+            bool wanted = _wanted.Contains(sim);
+            if (!wanted) { _warmed.Remove(sim); _warmup.Remove(sim); }
+            else if (!_warmed.Contains(sim) && !_warmup.IsPending(sim)) _warmup.Enqueue(sim);
+        }
+        _readyScratch.Clear();
+        _warmup.Pump(_readyScratch);
+        foreach (var sim in _readyScratch) _warmed.Add(sim);
 
+        bool changed = false;
+        int wantedWarm = 0;
         foreach (var sim in _wanted)
-            if (!_activeSet.Contains(sim))
-            {
-                sim.Reset();
-                // M536: and then run it up to steady state. Resetting alone showed a placement PART-FILLED
-                // - env_bats needs a full 10-second particle lifetime to reach its authored 150, so a
-                // glance showed about 30 and the map read as far sparser than the game renders it. The
-                // conversion was right; this preview was under-reporting it, which is worse than an
-                // obviously wrong preview because it invites tuning against a number that is not real.
-                // M595: FillDuration, not NaturalDuration. The latter is the preview's auto-stop cycle
-                // and is capped at 30 s, which silently truncated the warm-up of every slower system.
-                sim.PreWarm(sim.FillDuration);
-            }
+            if (_warmed.Contains(sim)) { wantedWarm++; if (!_activeSet.Contains(sim)) changed = true; }
+        if (wantedWarm != _active.Count) changed = true;
+        if (!changed) { ActivePlacements = _active.Count; return; }
 
         _active.Clear();
         _activeSet.Clear();
         foreach (var (item, sim) in _sims)
-            if (_wanted.Contains(sim)) { _active.Add((item, sim)); _activeSet.Add(sim); }
+            if (_wanted.Contains(sim) && _warmed.Contains(sim)) { _active.Add((item, sim)); _activeSet.Add(sim); }
         ActivePlacements = _active.Count;
     }
 

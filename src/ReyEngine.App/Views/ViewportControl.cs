@@ -433,8 +433,24 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly Dictionary<TextureImage, uint> _particleTextureCache = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<VfxParticleSimulator.EmitterState, VfxMeshAnimation> _particleMeshAnimations = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<VfxParticleSimulator> _wantedParticleSims = new(ReferenceEqualityComparer.Instance);
+    // M694
+    private readonly Services.ParticleWarmupQueue _particleWarmup = new();
+    private readonly HashSet<VfxParticleSimulator> _warmedParticleSims = new(ReferenceEqualityComparer.Instance);
+    private readonly List<VfxParticleSimulator> _readyParticleSims = new();
     private readonly List<(VfxParticleSimulator.EmitterState Es, VfxMeshAnimation Anim)> _animatedMeshEmitters = new(); // M48
     private readonly List<(int Geo, PropMesh Mesh)> _animatedPropGeoms = new();   // M54: prop idle animations
+    // M694: per animated geometry, the pose scratch and the deformed vertices, reused every frame; the
+    // placements per geometry, for the near gate; the meshes due this frame
+    private sealed class GlPropAnim
+    {
+        public readonly PoseBuffer Pose = new();
+        public SkeletonIndex? Index;
+        public float[]? Pos, Nrm;
+        public float LastPoseTime = float.NegativeInfinity;
+    }
+    private readonly Dictionary<int, GlPropAnim> _propAnims = new();
+    private readonly Dictionary<int, List<Matrix4x4>> _propGeoInstances = new();
+    private readonly List<(int Geo, PropMesh Mesh, GlPropAnim Anim)> _duePropAnims = new();
     private readonly System.Diagnostics.Stopwatch _propAnimClock = new();
 
     /// <summary>M56: fired (on the UI thread) when the camera has moved ~100+ world units — drives
@@ -1185,13 +1201,33 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             if (!_propAnimClock.IsRunning) _propAnimClock.Start();
             float t = (float)_propAnimClock.Elapsed.TotalSeconds;
+            // M694: the near + 30 Hz gate decides which meshes are due; their poses are evaluated here (the
+            // clip evaluator is not known to be thread-safe), the vertex pass - 16 ms of one core for the
+            // jade map's 21 skins - runs on every core, and the uploads come back to this thread.
+            float gateSq = Services.VfxPlaybackSim.MaxDistanceSquared(_camera.Distance);
+            _duePropAnims.Clear();
             foreach (var (geo, pm) in _animatedPropGeoms)
             {
+                if (!_propAnims.TryGetValue(geo, out var anim)) _propAnims[geo] = anim = new GlPropAnim();
+                bool near = !_propGeoInstances.TryGetValue(geo, out var placements)
+                            || Services.PropAnimationGate.AnyNear(placements, _lastCamPos, gateSq);
+                if (!Services.PropAnimationGate.ShouldPose(anim.LastPoseTime, t, pm.PoseSource is not null, near)) continue;
                 // M636: a driven mesh (the playground actor) supplies its own clip and time; a prop idles.
                 var (clip, time) = pm.PoseAt(t);
-                var frame = SkinnedMeshAnimator.Skin(pm.SknMesh!, pm.Skeleton!, clip, time);
-                _meshRenderer.UpdatePropGeometryVertices(geo, frame.Positions, frame.Normals);
+                anim.Index = SkeletonIndex.For(pm.Skeleton!);
+                SkeletonPose.ComputeSkin(anim.Index, clip, time, anim.Pose);
+                int n = pm.SknMesh!.VertexCount * 3;
+                if (anim.Pos is null || anim.Pos.Length < n) { anim.Pos = new float[n]; anim.Nrm = new float[n]; }
+                anim.LastPoseTime = t;
+                _duePropAnims.Add((geo, pm, anim));
             }
+            if (_duePropAnims.Count > 1)
+                System.Threading.Tasks.Parallel.ForEach(_duePropAnims,
+                    new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) },
+                    d => SkinnedMeshAnimator.Deform(d.Mesh.SknMesh!, d.Anim.Index!, d.Anim.Pose, d.Anim.Pos!, d.Anim.Nrm!));
+            else
+                foreach (var d in _duePropAnims) SkinnedMeshAnimator.Deform(d.Mesh.SknMesh!, d.Anim.Index!, d.Anim.Pose, d.Anim.Pos!, d.Anim.Nrm!);
+            foreach (var d in _duePropAnims) _meshRenderer.UpdatePropGeometryVertices(d.Geo, d.Anim.Pos!, d.Anim.Nrm!);
             RequestAnimationFrame();
         }
         else if (_propAnimClock.IsRunning) _propAnimClock.Reset();
@@ -1554,6 +1590,7 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_meshRenderer is null) return;
         _meshRenderer.ClearProps();
         _animatedPropGeoms.Clear();   // M54: rebuilt with the geometries
+        _propAnims.Clear(); _propGeoInstances.Clear();   // M694
         var set = PropMeshes;
         if (set is null || set.Instances.Count == 0) return;
 
@@ -1580,6 +1617,8 @@ public sealed class ViewportControl : OpenGlControlBase
                 if (inst.Mesh.CanAnimate) _animatedPropGeoms.Add((handle, inst.Mesh));   // M54 idle playback
             }
             _meshRenderer.AddPropInstance(handle, inst.Transform);
+            if (!_propGeoInstances.TryGetValue(handle, out var placements)) _propGeoInstances[handle] = placements = new List<Matrix4x4>();
+            placements.Add(inst.Transform);   // M694: for the near gate
         }
     }
 
@@ -1730,7 +1769,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _particleSims.Clear();
         _childSims.Clear();
         _autoStopElapsed = 0f;   // M186: a rebuilt playback starts its cycle over
-        _particleSimCache.Clear();
+        _particleSimCache.Clear(); _warmedParticleSims.Clear(); _particleWarmup.Clear();   // M694
         _travelElapsed.Clear();
         _expiredTravelSims.Clear();
         _particleTextureCache.Clear();
@@ -1783,19 +1822,28 @@ public sealed class ViewportControl : OpenGlControlBase
             if (_particleSimCache.TryGetValue(item, out var sim)) wanted.Add(sim);
         }
 
-        bool changed = _particleSims.Count != wanted.Count || _particleSims.Any(sim => !wanted.Contains(sim));
-        if (!changed) return;
+        // M694: a system that just entered the gate is queued and warmed under the frame budget (M595's
+        // warm-up, no longer all in one frame), and is active once warm. One that leaves before its turn
+        // is forgotten. The frame keeps pumping while anything is still warming.
+        foreach (var sim in _particleSimCache.Values)
+        {
+            bool isWanted = wanted.Contains(sim);
+            if (!isWanted) { _warmedParticleSims.Remove(sim); _particleWarmup.Remove(sim); }
+            else if (!_warmedParticleSims.Contains(sim) && !_particleWarmup.IsPending(sim)) _particleWarmup.Enqueue(sim);
+        }
+        _readyParticleSims.Clear();
+        _particleWarmup.Pump(_readyParticleSims);
+        foreach (var sim in _readyParticleSims) _warmedParticleSims.Add(sim);
+        if (_particleWarmup.Pending > 0) RequestAnimationFrame();
+
+        bool changed = false;
+        int wantedWarm = 0;
         foreach (var sim in wanted)
-            if (!_particleSims.Contains(sim, ReferenceEqualityComparer.Instance))
-            {
-                sim.Reset();
-                // M595: warm up on camera entry exactly as the D3D11 path has since M536. This one never
-                // did, so the two viewports disagreed about how full the same map was, and a slow emitter
-                // (Jade's lillypad: 0.05/s, 100 s lifetime) drew nothing at all for the first 20 seconds.
-                sim.PreWarm(sim.FillDuration);
-            }
+            if (_warmedParticleSims.Contains(sim)) { wantedWarm++; if (!_particleSims.Contains(sim, ReferenceEqualityComparer.Instance)) changed = true; }
+        if (wantedWarm != _particleSims.Count) changed = true;
+        if (!changed) return;
         _particleSims.Clear();
-        _particleSims.AddRange(wanted);
+        foreach (var sim in wanted) if (_warmedParticleSims.Contains(sim)) _particleSims.Add(sim);
         RebuildActiveParticleAnimations();
     }
 

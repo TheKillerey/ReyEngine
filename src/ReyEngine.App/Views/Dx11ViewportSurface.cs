@@ -232,6 +232,10 @@ public sealed class Dx11ViewportSurface : IDisposable
 
     private CaptureRequest? _capture;
 
+    /// <summary>M694: the two CPU phases a frame spends before drawing, for the status line.</summary>
+    public double PropsMs { get; private set; }
+    public double ParticlesMs { get; private set; }
+
     /// <summary>M607: fly the LIVE viewport along a shot while scrubbing. Same override as a capture but
     /// on the wall clock, so the preview is the frame that would be exported rather than an orbit camera
     /// approximating it - which is the only way roll is visible before the sequence comes back.</summary>
@@ -488,7 +492,11 @@ public sealed class Dx11ViewportSurface : IDisposable
         // M295: prop idle animations, off the SAME clock as everything else in this viewport - so pausing
         // pauses props too. GL drives these from a dedicated stopwatch; that divergence is deliberate and
         // noted here rather than left to be discovered.
-        Props?.Tick(t, PlayPropAnimations);
+        var propClock = Stopwatch.StartNew();
+        Props?.Tick(t, PlayPropAnimations,
+            _capture?.Position ?? PreviewPose?.Position ?? camera.Position,
+            ReyEngine.App.Services.VfxPlaybackSim.MaxDistanceSquared(camera.Distance));   // M694: near + 30 Hz gate
+        PropsMs = propClock.Elapsed.TotalMilliseconds;
 
         _renderer.SetBoneLines(BoneLines);   // M619
         _renderer.SetDummyLines(DummyLines); // M628
@@ -591,9 +599,11 @@ public sealed class Dx11ViewportSurface : IDisposable
         {
             var particleView = _capture?.View ?? PreviewPose?.ViewMatrix ?? camera.View;
             if (settings.MirrorX) particleView = Matrix4x4.CreateScale(-1f, 1f, 1f) * particleView;
+            var particleClock = Stopwatch.StartNew();
             Particles.Tick(ParticleDelta(t), particleView,
                 particleView * settings.SuppliedProjection!.Value,
                 _capture?.Position ?? PreviewPose?.Position ?? camera.Position, camera.Distance);
+            ParticlesMs = particleClock.Elapsed.TotalMilliseconds;   // M694: the phase the status line names
             ParticleStatus = Particles.FrameReport();
             // Surface the BUILD report too, but only when it names a failure. It records unresolved
             // sprites, emitters whose permutation would not resolve, and a missing shader TOC - and it

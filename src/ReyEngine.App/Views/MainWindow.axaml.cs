@@ -460,7 +460,12 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         // M500: and the SAME rect the image is stretched over, so what is drawn and what is picked agree.
         Viewport.SyncPickMatrices(surface.Width, surface.Height);
         // M263: the toolbar shows the frame cost and nothing else.
-        vm.Dx11ViewportStatus = _dx11.HasScene ? $"{_dx11.LastFrameMs:F2} ms" : "no scene";
+        // M694: and where the CPU part of it went - the prop poses and the particle step - plus how many
+        // systems are still warming up after a camera move
+        vm.Dx11ViewportStatus = _dx11.HasScene
+            ? $"{_dx11.LastFrameMs:F2} ms · props {_dx11.PropsMs:F1} · particles {_dx11.ParticlesMs:F1}"
+              + (_dx11.Particles is { WarmupPending: > 0 } warming ? $" · warming {warming.WarmupPending}" : "")
+            : "no scene";
 
         // ...and everything that used to be on the toolbar is still one hover away. M255's unbound report
         // in particular: an unbound constant reads as zero, and zero is black for anything the shader
