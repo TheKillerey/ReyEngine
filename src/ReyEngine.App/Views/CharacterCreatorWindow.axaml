@@ -1,0 +1,131 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.CharacterCreatorWindow"
+        x:DataType="vm:CharacterCreatorViewModel"
+        Title="Character Creator"
+        Width="860" Height="700"
+        MinWidth="640" MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="BorderOnly"
+        Background="{DynamicResource ReyBgBrush}"
+        Foreground="{DynamicResource ReyTextBrush}"
+        FontFamily="Inter, Segoe UI, sans-serif">
+
+  <!-- M697: an old character folder becomes a map prop. The folder is read for its mesh, skeleton,
+       clips and texture, each file's era is shown beside it, the outdated ones are upgraded on Create,
+       the three bins are written in the shape of Riot's own scenery props, and the prop is placed. -->
+  <DockPanel>
+    <local:ReyTitleBar DockPanel.Dock="Top" />
+
+    <!-- the bottom bar: status and the one button -->
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="20,10">
+      <Grid ColumnDefinitions="*,Auto,Auto">
+        <TextBlock Grid.Column="0" Text="{Binding Status}" FontSize="10.5" TextWrapping="Wrap" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <CheckBox Grid.Column="1" Content="Also place it at the gizmo" IsChecked="{Binding AlsoPlace}" IsVisible="{Binding CanPlace}"
+                  Margin="12,0" VerticalAlignment="Center" FontSize="11"
+                  ToolTip.Tip="Add a placement of the new character to the open map, at the gizmo (or the map centre), idling with its idle clip" />
+        <Button Grid.Column="2" x:Name="CreateButton" Classes="primary" Content="{Binding CreateLabel}" Command="{Binding CreateCharacterCommand}"
+                IsEnabled="{Binding CanCreate}" Padding="18,7" />
+      </Grid>
+    </Border>
+
+    <ScrollViewer>
+      <Grid Margin="26,18,26,16" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+        <TextBlock Grid.Row="0" Classes="settingsTitle" Text="CHARACTER CREATOR" />
+        <TextBlock Grid.Row="1" Classes="settingsDesc" TextWrapping="Wrap" Margin="0,2,0,12"
+                   Text="Turn an old character folder - its .skn, .skl, animations and texture, from any patch - into a prop this map can place. Files in an outdated form are brought to today's (skn 4.1, the format-token rig, anm v5); the three bins the game needs are written the way Riot's own scenery props are. Placed props are scenery: they draw and animate and nothing can target them." />
+
+        <!-- the folder -->
+        <Border Grid.Row="2" Classes="card" Margin="0,0,0,10">
+          <StackPanel Spacing="8">
+            <TextBlock Text="CHARACTER FOLDER" Classes="cardTitle" />
+            <Grid ColumnDefinitions="*,Auto,Auto">
+              <TextBox Grid.Column="0" Text="{Binding Folder}" PlaceholderText="e.g. D:\OldPatch\assets\characters\annie\skins\base" FontSize="11" />
+              <Button Grid.Column="1" Content="Browse…" Command="{Binding BrowseFolderCommand}" Margin="8,0,0,0" Padding="12,4" />
+              <Button Grid.Column="2" Content="Rescan" Command="{Binding RescanCommand}" Margin="6,0,0,0" Padding="12,4" />
+            </Grid>
+            <TextBlock Text="{Binding Summary}" FontSize="10.5" TextWrapping="Wrap" IsVisible="{Binding HasScan}"
+                       Foreground="{DynamicResource ReyAccent2Brush}" />
+            <TextBlock Text="{Binding Problems}" FontSize="10.5" TextWrapping="Wrap" IsVisible="{Binding HasProblems}"
+                       Foreground="{DynamicResource ReyErrorBrush}" />
+            <TextBlock Text="{Binding Warnings}" FontSize="10.5" TextWrapping="Wrap" IsVisible="{Binding HasWarnings}"
+                       Foreground="{DynamicResource ReyWarningBrush}" />
+          </StackPanel>
+        </Border>
+
+        <!-- the character -->
+        <Border Grid.Row="3" Classes="card" Margin="0,0,0,10" IsVisible="{Binding HasScan}">
+          <StackPanel Spacing="8">
+            <TextBlock Text="CHARACTER" Classes="cardTitle" />
+            <Grid ColumnDefinitions="Auto,220,Auto,90,Auto,*" RowDefinitions="Auto,Auto">
+              <TextBlock Grid.Column="0" Text="Name" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <TextBox Grid.Column="1" Text="{Binding Name}" FontSize="11"
+                       ToolTip.Tip="The character key: its folder under data/characters and assets/characters, and its object paths. Letters, digits and underscores." />
+              <TextBlock Grid.Column="2" Text="Scale" FontSize="11" VerticalAlignment="Center" Margin="18,0,10,0" />
+              <NumericUpDown Grid.Column="3" Value="{Binding SkinScale}" Minimum="0.01" Maximum="100" Increment="0.1" FormatString="0.##" FontSize="11"
+                             ToolTip.Tip="skinScale - the game scales the whole model by it (Riot's camps use 0.8 to 1.1, the Yonkey 6)" />
+              <TextBlock Grid.Column="4" Text="Texture" FontSize="11" VerticalAlignment="Center" Margin="18,0,10,0" />
+              <ComboBox Grid.Column="5" ItemsSource="{Binding Textures}" SelectedItem="{Binding SelectedTexture}" FontSize="11" HorizontalAlignment="Stretch"
+                        ToolTip.Tip="The diffuse the skin draws with. A .dds, .tga or .png is converted to .tex." />
+              <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="5" Text="{Binding NameProblem}" FontSize="10" Margin="0,4,0,0"
+                         IsVisible="{Binding HasNameProblem}" Foreground="{DynamicResource ReyErrorBrush}" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- the clips -->
+        <Border Grid.Row="4" Classes="card" Margin="0,0,0,10" IsVisible="{Binding HasScan}">
+          <StackPanel Spacing="6">
+            <TextBlock Text="ANIMATIONS" Classes="cardTitle" />
+            <TextBlock Classes="settingsDesc" TextWrapping="Wrap"
+                       Text="Each .anm becomes a clip of the character's animation graph under the name here. Loop is set for idles, runs and walks; the placed prop plays its Idle1 (else the first idle). A clip that moves none of this skeleton's joints is left out at Create." />
+            <ItemsControl ItemsSource="{Binding Clips}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:CharacterClipRowViewModel">
+                  <Grid ColumnDefinitions="Auto,190,Auto,*,Auto" Margin="0,2">
+                    <CheckBox Grid.Column="0" IsChecked="{Binding Include}" Margin="0,0,8,0" ToolTip.Tip="Include this clip in the graph" />
+                    <TextBox Grid.Column="1" Text="{Binding Name}" FontSize="11" />
+                    <CheckBox Grid.Column="2" Content="Loop" IsChecked="{Binding Loop}" Margin="12,0,12,0" FontSize="11" />
+                    <TextBlock Grid.Column="3" Text="{Binding FileName}" FontSize="10.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource ReyTextDimBrush}" ToolTip.Tip="{Binding Note}" />
+                    <TextBlock Grid.Column="4" Classes="mono" Text="{Binding Format}" FontSize="10" VerticalAlignment="Center" Margin="10,0,0,0" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- every file, with its era -->
+        <Border Grid.Row="5" Classes="card" IsVisible="{Binding HasScan}">
+          <StackPanel Spacing="6">
+            <TextBlock Text="FILES" Classes="cardTitle" />
+            <ItemsControl ItemsSource="{Binding Files}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:CharacterImportRowViewModel">
+                  <Grid ColumnDefinitions="78,*,Auto,Auto" Margin="0,2">
+                    <Border Grid.Column="0" Classes="badge" IsVisible="{Binding IsUsed}" HorizontalAlignment="Left" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Role}" FontSize="8.5" FontWeight="Bold" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="6,0,0,0" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding FileName}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding Note}" FontSize="9.5" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Classes="mono" Text="{Binding Format}" FontSize="10" VerticalAlignment="Center" Margin="10,0"
+                               Foreground="{DynamicResource ReyAccentBrush}" />
+                    <TextBlock Grid.Column="3" Classes="mono" Text="{Binding Size}" FontSize="10" VerticalAlignment="Center" MinWidth="64" TextAlignment="Right"
+                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+      </Grid>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

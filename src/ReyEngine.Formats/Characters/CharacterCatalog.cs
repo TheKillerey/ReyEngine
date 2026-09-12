@@ -71,13 +71,17 @@ public static class CharacterCatalog
     /// <param name="championName">The WAD's champion name, used to tell the champion apart from the pets
     /// that ship beside it. Pass null to mark every character a companion.</param>
     public static IReadOnlyList<CharacterEntry> Characters(WadArchive archive, string? championName)
+        => Characters(archive.Entries.Where(e => e.IsResolved).Select(e => e.Path), championName);
+
+    /// <summary>M697: the same listing over resolved paths rather than one archive - the editor's mounts
+    /// are several archives and a folder at once, and the map's own package is where a prop comes from.</summary>
+    public static IReadOnlyList<CharacterEntry> Characters(IEnumerable<string> resolvedPaths, string? championName)
     {
         var skinsByCharacter = new Dictionary<string, List<CharacterSkinRef>>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var entry in archive.Entries)
+        foreach (var resolved in resolvedPaths)
         {
-            if (!entry.IsResolved) continue;
-            string path = entry.Path.Replace('\\', '/');
+            string path = resolved.Replace('\\', '/');
             if (!path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) continue;
 
             // data/characters/<name>/skins/<file>.bin — and only that shape. A champion WAD also holds
@@ -90,6 +94,8 @@ public static class CharacterCatalog
 
             if (!skinsByCharacter.TryGetValue(parts[2], out var list))
                 skinsByCharacter[parts[2]] = list = new List<CharacterSkinRef>();
+            // mounts can carry the same bin twice (a project override over its WAD); list it once
+            if (list.Any(s => s.BinPath.Equals(path, StringComparison.OrdinalIgnoreCase))) continue;
             list.Add(new CharacterSkinRef(CharacterSkinReader.NumberFromBinPath(path), path));
         }
 

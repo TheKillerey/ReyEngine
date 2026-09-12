@@ -117,6 +117,10 @@
         <MenuItem Header="Character Editor…" Command="{Binding OpenCharacterBrowserCommand}"
                   Classes.newFeature="{Binding NewFeature[character-editor]}"
                   ToolTip.Tip="Pick a champion, a character and a skin, preview it on either renderer and edit its materials - one window." />
+        <MenuItem Header="Add prop to map…" Command="{Binding OpenAddPropCommand}"
+                  ToolTip.Tip="Place a character this map's package already carries - a camp, a turret, anything you imported - as scenery at the gizmo. It draws and animates; nothing in game can target it." />
+        <MenuItem Header="Import character folder…" Command="{Binding OpenCharacterCreatorCommand}"
+                  ToolTip.Tip="Turn an old character folder - its .skn, .skl, animations and texture, from any patch - into a prop this map can place. Outdated files are brought to today's form and the bins the game needs are written for you." />
         <MenuItem Header="Cinematic Capture…" Command="{Binding OpenCinematicCaptureCommand}"
                   Classes.newFeature="{Binding NewFeature[cinematic]}"
                   ToolTip.Tip="Fly a camera through the map on keyframes and export the move as a numbered PNG sequence. Every frame is rendered at a fixed time step, so the result is smooth whatever the viewport is running at, and identical on every run. Renders through the Direct3D 11 viewport." />

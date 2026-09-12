@@ -650,6 +650,8 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             vm.ShowMeshPreviewWindow = () => ShowMeshPreview(vm);         // M50
             vm.ShowAddMeshWindow = ShowAddMesh;                           // M123
             vm.ShowWorkshopWindow = ShowWorkshop;
+            vm.ShowCharacterCreatorWindow = ShowCharacterCreator;        // M697
+            vm.ShowAddPropWindow = ShowAddProp;                          // M697
             vm.ShowLightBakeWindow = () => ShowLightBake(vm);             // M158
             vm.ShowTextureImportWindow = async ivm =>                     // M392
             {
@@ -897,6 +899,26 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         _addMeshWindow = new AddMeshWindow { DataContext = vm };
         _addMeshWindow.Closed += (_, _) => _addMeshWindow = null;
         _addMeshWindow.Show(this);
+    }
+
+    // M697: the Character Creator - one at a time, like the Workshop it sits beside.
+    private CharacterCreatorWindow? _characterCreatorWindow;
+    private void ShowCharacterCreator(ViewModels.CharacterCreatorViewModel vm)
+    {
+        _characterCreatorWindow?.Close();
+        _characterCreatorWindow = new CharacterCreatorWindow { DataContext = vm };
+        _characterCreatorWindow.Closed += (_, _) => _characterCreatorWindow = null;
+        _characterCreatorWindow.Show(this);
+    }
+
+    // M697: Add prop to map - the character list of the open package.
+    private AddPropWindow? _addPropWindow;
+    private void ShowAddProp(ViewModels.AddPropViewModel vm)
+    {
+        _addPropWindow?.Close();
+        _addPropWindow = new AddPropWindow { DataContext = vm };
+        _addPropWindow.Closed += (_, _) => _addPropWindow = null;
+        _addPropWindow.Show(this);
     }
 
     private WorkshopWindow? _workshopWindow;

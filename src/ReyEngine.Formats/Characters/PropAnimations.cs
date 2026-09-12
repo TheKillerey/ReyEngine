@@ -1,6 +1,10 @@
 using ReyEngine.Formats.Skeletons;
 using ReyEngine.Formats.Vfx;
 
+using LeagueToolkit.Core.Meta.Properties;
+using ReyEngine.Core.Hashing;
+using ReyEngine.Formats.Meta;
+
 namespace ReyEngine.Formats.Characters;
 
 /// <summary>
@@ -44,6 +48,54 @@ public static class PropAnimations
             }
         }
         return clips;
+    }
+
+    /// <summary>
+    /// M697: the clip NAMES the skin's graph declares - what a placement's <c>IdleAnimationName</c> has
+    /// to match, which is not the same list as <see cref="ResolveClips"/>.
+    ///
+    /// <para>That list is for PLAYING a clip, so it drops every entry without an .anm behind it. The
+    /// Golem's graph is exactly why the two must not be confused: its "Idle1" is a SelectorClipData that
+    /// picks between two bored idles, so it has no file of its own and never appears there, while the
+    /// entries that do appear are hash-named atomics whose display name is their file name. Writing one
+    /// of those into a placement names a clip the game cannot find, and the prop stands still.</para>
+    ///
+    /// <para>Only names the hash database resolves are returned: a clip the placement cannot spell is a
+    /// clip it cannot ask for.</para>
+    /// </summary>
+    public static IReadOnlyList<string> GraphClipNames(byte[] skinBin, Func<string, byte[]?> readByPath,
+        Func<uint, string?> resolveBinName)
+    {
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<string> deps;
+        try { deps = VfxSystemResolver.ExtractDependencies(skinBin); }
+        catch { return names; }
+
+        uint clipDataMap = HashAlgorithms.Fnv1a("mClipDataMap");
+        foreach (string dep in deps)
+        {
+            if (!dep.Contains("/animations/", OIC)) continue;
+            byte[]? graph;
+            try { graph = readByPath(dep); } catch { graph = null; }
+            if (graph is null) continue;
+            try
+            {
+                foreach (var o in SafeBinTree.Parse(graph).Objects.Values)
+                {
+                    if (!o.Properties.TryGetValue(clipDataMap, out var mapProp) || mapProp is not System.Collections.IEnumerable entries) continue;
+                    foreach (var kv in entries)
+                    {
+                        var key = kv.GetType().GetProperty("Key")?.GetValue(kv);
+                        uint hash = key switch { BinTreeHash h => h.Value, BinTreeU32 u => u.Value, _ => 0u };
+                        if (hash == 0) continue;
+                        if (resolveBinName(hash) is { Length: > 0 } name && seen.Add(name)) names.Add(name);
+                    }
+                }
+            }
+            catch { /* an unreadable graph contributes nothing */ }
+        }
+        return names;
     }
 
     /// <summary>A clip table from loose .anm files, for a skin whose graph is missing - the pre-M679 view,

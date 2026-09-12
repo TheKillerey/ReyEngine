@@ -1,0 +1,73 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
+        x:Class="ReyEngine.App.Views.AddPropWindow"
+        x:DataType="vm:AddPropViewModel"
+        Title="Add prop"
+        Width="720" Height="520"
+        MinWidth="560" MinHeight="380"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="BorderOnly"
+        Background="{DynamicResource ReyBgBrush}"
+        Foreground="{DynamicResource ReyTextBrush}"
+        FontFamily="Inter, Segoe UI, sans-serif">
+
+  <!-- M697: place a character the map's package already carries as scenery. The list is paths only;
+       the skin you pick is read for its mesh, its clips and its object path. A character made by the
+       Character Creator shows up here as soon as it is staged. -->
+  <DockPanel>
+    <local:ReyTitleBar DockPanel.Dock="Top" />
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
+            BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="18,10">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Text="{Binding Status}" FontSize="10.5" TextWrapping="Wrap" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <Button Grid.Column="1" x:Name="AddButton" Classes="primary" Content="Add at the gizmo"
+                Command="{Binding AddPropCommand}" IsEnabled="{Binding CanAdd}" Padding="18,7" Margin="12,0,0,0"
+                ToolTip.Tip="Add a scenery placement of this skin to the open map, at the gizmo (or the map centre)" />
+      </Grid>
+    </Border>
+
+    <Grid Margin="20,16,20,12" ColumnDefinitions="260,*" RowDefinitions="Auto,*">
+      <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Classes="settingsDesc" TextWrapping="Wrap" Margin="0,0,0,10"
+                 Text="Every character this map's package carries. A placed prop is scenery: it draws and animates, and nothing in game can target it." />
+
+      <DockPanel Grid.Row="1" Grid.Column="0" Margin="0,0,14,0">
+        <TextBox DockPanel.Dock="Top" Text="{Binding Search}" PlaceholderText="Search characters" FontSize="11" Margin="0,0,0,6" />
+        <ListBox ItemsSource="{Binding Characters}" SelectedItem="{Binding SelectedCharacter}" Background="Transparent">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:PropCharacterRowViewModel">
+              <StackPanel Spacing="1" Margin="0,2">
+                <TextBlock Text="{Binding Name}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+
+      <StackPanel Grid.Row="1" Grid.Column="1" Spacing="10">
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <TextBlock Text="SKIN AND IDLE" Classes="cardTitle" />
+            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Skin" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0" />
+              <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding Skins}" SelectedItem="{Binding SelectedSkin}"
+                        HorizontalAlignment="Stretch" FontSize="11" />
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Idle" FontSize="11" VerticalAlignment="Center" Margin="0,8,10,0" />
+              <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Clips}" SelectedItem="{Binding SelectedClip}"
+                        HorizontalAlignment="Stretch" FontSize="11" Margin="0,8,0,0"
+                        ToolTip.Tip="The clip the placement plays. Riot's own scenery props name Idle1." />
+            </Grid>
+            <TextBlock Text="{Binding Detail}" FontSize="10" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock Text="{Binding Problem}" FontSize="10.5" TextWrapping="Wrap" IsVisible="{Binding HasProblem}"
+                       Foreground="{DynamicResource ReyErrorBrush}" />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </Grid>
+  </DockPanel>
+</Window>

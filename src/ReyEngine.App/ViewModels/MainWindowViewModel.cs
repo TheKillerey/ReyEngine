@@ -2614,8 +2614,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>The write half of asset staging, shared by the modern and legacy paths.</summary>
+    /// <param name="overwrite">M697: replace a file the project already has at that path. Off for every
+    /// Workshop import - an imported texture must never clobber the user's own edit of it - and on for
+    /// the Character Creator, which authored every path it writes and would otherwise report success
+    /// while leaving the previous attempt's bins in place.</param>
     private (int Written, IReadOnlyList<string> Missing) WriteStagedAssets(
-        IReadOnlyList<(string Path, byte[] Bytes)> sources, WadAssetEntry destinationMap, List<string> missing)
+        IReadOnlyList<(string Path, byte[] Bytes)> sources, WadAssetEntry destinationMap, List<string> missing,
+        bool overwrite = false)
     {
         int written = 0;
         foreach (var (path, bytes) in sources)
@@ -2629,7 +2634,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 string file = Path.GetFullPath(Path.Combine(baseDir, path.Replace('/', Path.DirectorySeparatorChar)));
                 if (!file.StartsWith(baseDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 { missing.Add(path); continue; }
-                if (File.Exists(file)) continue;
+                if (!overwrite && File.Exists(file)) continue;
                 Directory.CreateDirectory(Path.GetDirectoryName(file)!);
                 File.WriteAllBytes(file, bytes);
                 if (!Project.ProjectFolders.Contains(folder, StringComparer.OrdinalIgnoreCase)) Project.ProjectFolders.Add(folder);
@@ -2638,7 +2643,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 continue;
             }
 
-            if (_overrides.TryGet(hash, out var existing) && File.Exists(existing.OverrideFile)) continue;
+            if (!overwrite && _overrides.TryGet(hash, out var existing) && File.Exists(existing.OverrideFile)) continue;
             string stored = ProjectWorkspace.StoreOverrideBytes(Project, hash, bytes, Path.GetExtension(path));
             _overrides.Set(new ProjectAssetOverride
             {
