@@ -98,6 +98,43 @@ public sealed class ShaderFamilyTests
         foreach (var used in editor.UsedShaders) Assert.Contains(used, editor.KnownShaders);
     }
 
+    [Fact]
+    public void LoadingAMaterialThatIsAlreadyOnTheWrongFamilySaysSo()
+    {
+        // M702: a file can arrive carrying a shader from any earlier tool, and the client's report for it
+        // is a missing shader constant with nothing drawn - which is very hard to trace back to a material.
+        string wad = Path.Combine(Champions, "Aatrox.wad.client");
+        if (!File.Exists(wad)) return;
+        HashDatabase db;
+        try { db = new HashSyncService().LoadLocal(_ => { }); } catch { return; }
+        using var archive = WadArchive.Open(wad, new WadPathResolver(db));
+        ulong hash = HashAlgorithms.WadPath("data/characters/aatrox/skins/skin0.bin");
+        if (!archive.TryGetEntry(hash, out var entry)) return;
+        byte[] bin = archive.Extract(hash);
+        var doc = MaterialDocument.Parse(bin, h => db.TryGetBinName(h, out var n) ? n : null,
+            h => db.TryGetPath(h, out var p) ? p : null);
+
+        var warnings = new List<string>();
+        var editor = new MaterialEditorViewModel { Warn = warnings.Add };
+        editor.SetCatalog(Catalogue());
+        editor.Load(doc, entry, bin);
+        Assert.Empty(warnings);   // a shipped skin is on its own family throughout
+
+        // put one of its materials on a map shader, the way a picker offering all 350 used to allow
+        var victim = editor.Materials.First(m => m.CanChangeShader);
+        editor.ChangeShader(victim, "Shaders/StaticMesh/DefaultEnv");
+        Assert.Contains("Missing shader constant", victim.ShaderChangeStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(warnings, w => w.Contains("Missing shader constant", StringComparison.OrdinalIgnoreCase));
+
+        // and it is reported again the next time that file is opened
+        warnings.Clear();
+        var reopened = new MaterialEditorViewModel { Warn = warnings.Add };
+        reopened.SetCatalog(Catalogue());
+        reopened.Load(MaterialDocument.Parse(editor.Serialize()!, h => db.TryGetBinName(h, out var n) ? n : null,
+            h => db.TryGetPath(h, out var p) ? p : null), entry, bin);
+        Assert.Contains(warnings, w => w.Contains("Missing shader constant", StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>A catalogue holding both families, so the filter has something to remove.</summary>
     private static ShaderCatalog Catalogue() => new()
     {

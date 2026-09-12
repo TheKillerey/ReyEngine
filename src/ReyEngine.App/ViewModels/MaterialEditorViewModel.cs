@@ -1751,6 +1751,12 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         Search = ""; OnlyUnresolved = false;
         BuildShaderIndex();   // M52: shader -> sampler-set map for the shader selector
         RefreshShaderDefs();  // M103: match each material against the catalogue
+        // M702: say so on LOAD when a material is already on a shader its draw path cannot feed. The
+        // client reports that as a missing shader constant and draws nothing, which is a hard thing to
+        // trace back to a material - and a file can arrive here carrying one from any earlier tool.
+        foreach (var m in Materials)
+            if (ShaderFamilies.Warning(m.Model.RenderShader, Kind) is { } wrongFamily)
+                Warn?.Invoke($"{m.Name}: {wrongFamily}");
         UpdateUnresolved();
         Summary = $"{(Kind == MaterialSourceKind.ChampionSkin ? "Champion" : "Map")} — {Materials.Count} material(s)";
         // Explicit: Search/OnlyUnresolved were just assigned their existing values above, so their
