@@ -429,6 +429,22 @@ public sealed partial class MapContentViewModel : ViewModelBase
     public int ParticleCount => ParticleGroups.Sum(g => g.Placements.Count);
 
     /// <summary>Placed animated props / characters grouped by character (M38).</summary>
+    /// <summary>
+    /// M700: is there anything for "Save to Mod" to write? One predicate, on the content itself.
+    ///
+    /// <para>It used to be written out by hand at each of the seven places that raise the flag, and most
+    /// of those copies counted only particles, or particles and sounds. A moved PROP was therefore saved
+    /// by nothing: the copy at the end of a gizmo drag recomputed the flag without props, so the button
+    /// went straight back to disabled. This is the same set the save itself acts on - including the rule
+    /// that a sound derived from a particle system is written with that system rather than on its own -
+    /// so the button cannot offer work the save will then decline.</para>
+    /// </summary>
+    public bool HasPlacementEdits =>
+        AllParticles.Any(v => v.HasEdits)
+        || Sounds.Any(v => v.HasEdits && !v.Sound.FromParticleSystem)
+        || AllProps.Any(v => v.HasEdits)
+        || Probes.Any(v => v.HasEdits);
+
     public ObservableCollection<AnimatedPropGroupViewModel> PropGroups { get; } = new();
     /// <summary>Placed cubemap reflection probes (M38).</summary>
     public ObservableCollection<CubemapProbeViewModel> Probes { get; } = new();

@@ -227,7 +227,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedParticleNode is not { } node) return;
         // Choosing the placement's CURRENT system clears the edit rather than recording a no-op re-link.
         node.EditedSystemHash = value is null || value.Hash == node.Placement.SystemHash ? 0u : value.Hash;
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits) || MapContent.Sounds.Any(s => s.IsMoved);
+        RefreshPlacementDirtyFlag();   // M700
         RebuildParticlePlayback();
     }
 
@@ -1284,10 +1284,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 break;
         }
 
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits)
-            || MapContent.Sounds.Any(v => v.HasEdits)
-            || MapContent.AllProps.Any(v => v.HasEdits)
-            || MapContent.Probes.Any(v => v.HasEdits);
+        RefreshPlacementDirtyFlag();   // M700
         UpdateParticleMarkers();
         UpdatePlaceableMarkers();
         RebuildParticlePlayback();
@@ -1668,7 +1665,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         node.Offset = target - node.Placement.Position;
         SelectedParticleMarker = node.CurrentPosition;
         UpdateParticleMarkers();
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits);
+        RefreshPlacementDirtyFlag();   // M700
         RebuildParticlePlayback();   // M36: follow the moved particle if it's playing
         _log.Info("Particles", $"Moved '{node.Name}' to ({target.X:0.#}, {target.Y:0.#}, {target.Z:0.#}).");
     }
@@ -1698,7 +1695,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
         MapContent.AddParticlePlacement(copy);
         SelectedParticleNode = copy;
-        HasParticleMoves = true;
+        RefreshPlacementDirtyFlag();   // M700
         UpdateParticleMarkers();
         RebuildParticlePlayback();
         _log.Info("Particles", $"Duplicated '{node.Placement.Name}'. Save to Mod writes it into the .bin.");
@@ -1715,7 +1712,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedParticleMarker = node.CurrentPosition;
         GizmoPivot = node.CurrentPosition;
         UpdateParticleMarkers();
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits);
+        RefreshPlacementDirtyFlag();   // M700
         RebuildParticlePlayback();
     }
 
@@ -1786,8 +1783,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 RefreshPropInstanceTransforms();
                 break;
         }
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits) || MapContent.Sounds.Any(v => v.IsMoved)
-                           || MapContent.AllProps.Any(v => v.HasEdits);   // M699
+        RefreshPlacementDirtyFlag();   // M700
     }
 
     public void DragSelectedPlacementTo(System.Numerics.Vector3 absoluteOffset)
@@ -1850,7 +1846,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public void EndPlacementDrag()
     {
-        HasParticleMoves = MapContent.AllParticles.Any(v => v.HasEdits) || MapContent.Sounds.Any(s => s.IsMoved);
+        RefreshPlacementDirtyFlag();   // M700
         // M76: push the whole drag as ONE undo step (no-op when nothing actually changed).
         if (_placementDragTarget is { } target)
         {
@@ -10667,6 +10663,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("MapGeo", ex.Message); }
     }
 
+    /// <summary>
+    /// M700: the one definition of "this map has placement edits to save".
+    ///
+    /// <para>It gates both the Save to Mod button and the two save-everything paths, and it was written
+    /// out by hand in seven places - most of which counted only particles, or particles and sounds. A prop
+    /// move was therefore saved by nothing at all: EndPlacementDrag recomputed the flag WITHOUT props at
+    /// the end of every drag, so the button went straight back to disabled and the whole-project save
+    /// skipped placements. The predicate below is the one SaveParticleMoves actually acts on, including
+    /// the rule that a sound derived from a particle system is saved with that system rather than on its
+    /// own, so the button cannot promise work the save will then refuse to do.</para>
+    /// </summary>
+    private void RefreshPlacementDirtyFlag() => HasParticleMoves = MapContent.HasPlacementEdits;
+
     /// <summary>Persist the moved particles into the map's .materials.bin override (M35).</summary>
     [RelayCommand]
     private async Task SaveParticleMoves()
@@ -10685,7 +10694,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (derivedSounds > 0)
             _log.Info("Sounds", $"{derivedSounds} moved sound(s) follow their particle system and are saved with it.");
         if (moved.Count == 0 && movedSounds.Count == 0 && editedProps.Count == 0 && editedProbes.Count == 0)
-        { _log.Info("Map Content", "No placement edits to save."); return; }
+        { _log.Info("Map Content", "No placement edits to save."); return; }   // M700: MapContent.HasPlacementEdits is this set
         foreach (var prop in editedProps.Where(p => !string.IsNullOrWhiteSpace(p.EditedSkin)
                      && !p.EffectiveSkin.Equals(p.Prop.Skin, StringComparison.OrdinalIgnoreCase)))
         {
