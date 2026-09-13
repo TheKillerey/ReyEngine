@@ -259,11 +259,13 @@ float4 psmain(VOut i) : SV_Target
         // winding would drop half of them depending on which way the camera faces. Set explicitly because
         // the draw loop may have just bound the back-face-culling state for the previous material.
         _ctx.RSSetState(_raster);
-        // Depth test on, writes off - the state every particle in this renderer already draws under, and
-        // the state GL's ribbons inherit from its particle path.
-        _ctx.OMSetDepthStencilState(_depthStateNoWrite, 0);
+        // M720: through the one depth chooser, so a NONE ribbon writes depth and an M711 no-test ribbon stops
+        // testing - both were hard-coded to test-and-no-write here - and through the particle blend state.
+        _ctx.OMSetDepthStencilState(DepthStateFor(mat), 0);
         var factor = stackalloc float[4] { 0f, 0f, 0f, 0f };
-        _ctx.OMSetBlendState(mat.Additive ? _blendAdditive : _blend, factor, 0xFFFFFFFF);
+        var ribbonState = mat.ParticleBlend is { } ribbonBlend ? ParticleBlendState(ribbonBlend) : default;
+        _ctx.OMSetBlendState(ribbonState.Handle is not null ? ribbonState : mat.Additive ? _blendAdditive : _blend,
+            factor, 0xFFFFFFFF);
 
         _ctx.Draw((uint)geom.VertexCount, 0);
         RibbonDraws++;

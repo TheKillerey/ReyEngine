@@ -414,7 +414,12 @@ public sealed class D3D11MapParticles
         // This host shares one slice per emitter DEFINITION across every placement of it - that sharing is
         // the whole reason the map can carry thousands of placements - so it cannot sort per placement
         // without multiplying the draw count by the placement count. It sorts across the map instead.
-        foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyFor(e.Def)))
+        //
+        // M720: and so it takes only the first two keys. The blend rank and the render-flags byte order
+        // emitters inside one system; across a map they would pull every NONE emitter of a pass ahead of
+        // every other system's ADD, because the engine key that keeps systems apart - their position - is one
+        // neither renderer has. Registration order, which is system by system, breaks the tie instead.
+        foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyAcrossSystems(e.Def)))
             _renderer.AddMaterial(pending.Mat);
         _pending.Clear();
 
@@ -424,7 +429,7 @@ public sealed class D3D11MapParticles
         //
         // OrderBy is stable; List.Sort is not, and an unstable sort here would reshuffle same-key emitters
         // from frame to frame, which for additive draws IS the image.
-        _slices = _slices.OrderBy(static s => VfxDrawOrder.KeyFor(s.Def)).ToList();
+        _slices = _slices.OrderBy(static s => VfxDrawOrder.KeyAcrossSystems(s.Def)).ToList();
         foreach (var sl in _slices) _liveBySlice.Add(sl.Live);
         if (_ranges.Length < _slices.Count) _ranges = new PackedRange[_slices.Count];
 

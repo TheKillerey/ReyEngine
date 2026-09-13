@@ -1,5 +1,7 @@
 # M260 - Q1: blend modes 6/7/8, and an anchor result that was not asked for
 
+> **Superseded by M720** (`vfx-blend-modes.md`). The anchor result below was right: the engine names the enum ParticleSystem::BLEND_MODE, 0 ADD 1 ALPHA 2 SUBTRACT 3 NONE 4 ALPHAADD 5 PREMULTIPLIEDALPHA 6 MIN 7 MAX 8 TARGETALPHA, and every clean column of this census lines up with those names. Both renderers now draw with that table.
+
 Q1 asked what each `blendMode` integer means, and modes 6/7/8 specifically - they fall off the end of the
 shipped guess `IsAdditive(m) => m is 1 or 3 or 4 or 5`. The plan expected the texture-authoring census to
 "at least bound them". It bounds them, and it also contradicts the mapping on the modes nobody asked about.

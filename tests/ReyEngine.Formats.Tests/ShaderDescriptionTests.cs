@@ -96,13 +96,19 @@ public class ShaderDescriptionTests
     // is a change-detector, not evidence. The evidence lives in Mode_2_is_decided_by_the_sprite below and
     // in VfxShaderFlags' comment; what this one is FOR is pinning the fallback, because a silent change to
     // the unknown-sprite case would otherwise be invisible.
-    [InlineData(0, BlendKind.Alpha)]
-    [InlineData(1, BlendKind.Additive)]
+    //
+    // M720: the rows are the engine's enum now - 0 ADD and 4 ALPHAADD add, 3 NONE is opaque, the rest blend
+    // over what is behind them - and 6, 7 and 8 are in the enum rather than past a table.
+    [InlineData(0, BlendKind.Additive)]
+    [InlineData(1, BlendKind.Alpha)]
     [InlineData(2, BlendKind.Alpha)]
-    [InlineData(3, BlendKind.Additive)]
+    [InlineData(3, BlendKind.Opaque)]
     [InlineData(4, BlendKind.Additive)]
-    [InlineData(5, BlendKind.Additive)]
-    public void Riot_blend_modes_map_as_both_renderers_already_assume(int mode, BlendKind expected)
+    [InlineData(5, BlendKind.Alpha)]
+    [InlineData(6, BlendKind.Alpha)]
+    [InlineData(7, BlendKind.Alpha)]
+    [InlineData(8, BlendKind.Alpha)]
+    public void Riot_blend_modes_map_by_the_engines_enum(int mode, BlendKind expected)
     {
         Assert.Equal(expected, StateDescription.BlendFromRiotMode(mode));
         Assert.True(StateDescription.IsBlendModeUnderstood(mode));
@@ -175,11 +181,12 @@ public class ShaderDescriptionTests
     [InlineData(6)]
     [InlineData(7)]
     [InlineData(8)]
-    public void Modes_past_the_table_are_reported_as_not_understood(int mode)
+    public void Modes_six_to_eight_are_in_the_engines_enum(int mode)
     {
-        // 258 emitters use these. They still get a blend so something draws, but a caller can mark the
-        // result approximate rather than presenting a guess as fact.
-        Assert.False(StateDescription.IsBlendModeUnderstood(mode));
+        // M720: MIN, MAX and TARGETALPHA. They fell off the end of the pre-M720 table; they are part of
+        // ParticleSystem::BLEND_MODE, so nothing past 8 is left to flag - and nothing past 8 is authored.
+        Assert.True(StateDescription.IsBlendModeUnderstood(mode));
+        Assert.False(StateDescription.IsBlendModeUnderstood(9));
     }
 
     [Fact]

@@ -209,6 +209,8 @@ public static class VfxSystemResolver
     // M711: same reason - miscRenderFlags bit 0 now decides the depth test, so the field leaves the parked
     // table and has to be declared here for the preview-coverage reflection to see it.
     private static readonly uint F_miscRenderFlags     = HashAlgorithms.Fnv1a("miscRenderFlags");
+    // M720: WriteAlphaOnly decides that an emitter writes no colour.
+    private static readonly uint F_writeAlphaOnly      = HashAlgorithms.Fnv1a("WriteAlphaOnly");
     // M717: uvMode 2 is the engine's LOCK_ALPHA, which routes a non-mesh emitter to a shader that
     // compiles no erosion and no soft fade - so the field decides a permutation and leaves the parked
     // table, and the preview-coverage reflection has to be able to see its hash.
@@ -410,7 +412,9 @@ public static class VfxSystemResolver
             TimeBeforeFirstEmission: GetF32(p, F_timeBefore) ?? 0f,
             IsSingleParticle: GetBool(p, F_isSingle),
             Disabled: GetBool(p, F_disabled),
-            BlendMode: GetU8(p, F_blendMode) ?? 1,
+            // M720: absent is the declared default, 0 - ADD, which Riot's writer therefore never writes (0 of
+            // 1,581,956). It read as 1 from M36, a value the engine's enum calls ALPHA.
+            BlendMode: GetU8(p, F_blendMode) ?? 0,
             BirthScale: birthScale,
             ScaleOverLife: scaleOverLife,
             BirthColor: birthColor,
@@ -456,7 +460,12 @@ public static class VfxSystemResolver
             ColorLookUpTypeX: GetU8(p, F_colorLookUpX),
             ColorLookUpTypeY: GetU8(p, F_colorLookUpY),
             Pass: GetI16(p, F_pass) ?? 0,
-            AlphaRef: GetU8(p, F_alphaRef) ?? 0,
+            // M720: absent is the declared default, 5 (meta.db.json; the reference renderer reads 5 too). It
+            // mattered little while every mode weighed the colour by alpha, and decides what draws now that
+            // ADD is ONE,ONE and NONE does not blend: the test is the only thing that drops a zero-alpha
+            // texel there. BIN writes an explicit 0 on 391,078 emitters, which a writer that omitted a
+            // default of 0 would not do.
+            AlphaRef: GetU8(p, F_alphaRef) ?? 5,
             ColorLookUpScale: GetVec2(p, F_colorLookUpScales) ?? Vector2.One,
             ColorLookUpOffset: GetVec2(p, F_colorLookUpOffsets) ?? Vector2.Zero,
             VelocityOverLife: ReadCurve3(p, F_velocity),
@@ -1006,7 +1015,7 @@ public static class VfxSystemResolver
             DepthBiasFactors             = GetVec2(p, PF("depthBiasFactors")),
             RenderPhaseOverride          = GetU8(p, PF("renderPhaseOverride")),
             SortEmittersByPos            = GetBoolOrNull(p, PF("SortEmittersByPos")),
-            WriteAlphaOnly               = GetBoolOrNull(p, PF("WriteAlphaOnly")),
+            WriteAlphaOnly               = GetBoolOrNull(p, F_writeAlphaOnly),   // M720
             DoesCastShadow               = GetBoolOrNull(p, PF("doesCastShadow")),
             IsGroundLayer                = GetBoolOrNull(p, F_isGroundLayer),
             ColorblindVisibility         = GetU8(p, PF("colorblindVisibility")),

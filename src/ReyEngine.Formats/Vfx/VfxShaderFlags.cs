@@ -59,7 +59,8 @@ public static class VfxShaderFlags
             Set("MASKED", "useNavmeshMask is set");
 
         // ALPHA_TEST — only meaningful with a non-zero cutoff. BIN writes alphaRef as an explicit 0 on
-        // 391,078 emitters, so "authored" does not imply "enabled"; the VALUE is what decides.
+        // 391,078 emitters, so "authored" does not imply "enabled"; the VALUE is what decides. M720: and an
+        // absent alphaRef is the declared default 5, so most emitters compile the test.
         if (e.AlphaRef > 0)
             Set("ALPHA_TEST", $"alphaRef = {e.AlphaRef}");
 
@@ -69,6 +70,11 @@ public static class VfxShaderFlags
 
     /// <summary>
     /// <para>Whether this emitter's <c>blendMode</c> means additive, ignoring its texture.</para>
+    ///
+    /// <para><b>M720: this is the pre-M720 table, kept for an A/B and nothing else.</b> Both renderers draw
+    /// with <see cref="VfxBlend"/>, the engine's own enum, and consult this only under
+    /// <c>VfxBlendOptions.EngineModes = false</c>. What follows is its history, and the history is why it
+    /// lost: every claim in it was read off our own renderer's screen.</para>
     ///
     /// <para><b>This is a guess, and deliberately the same guess the GL renderer already makes</b> so the two
     /// previews cannot disagree. The integer→blend-state table is not in shipped data: <c>shaders.bin</c>

@@ -99,6 +99,8 @@ public class VfxPreviewCoverageTests
     [InlineData("uvScrollClampMult")]
     [InlineData("ParticleIntegratedUvScrollMult")]
     [InlineData("emitterUvScrollRateMult")]
+    // M720: WriteAlphaOnly decides that an emitter writes no colour.
+    [InlineData("WriteAlphaOnly")]
     public void RenderedFieldsAreNotBadged(string field) =>
         Assert.True(VfxPreviewCoverage.IgnoredNote(H(field)) is null,
             $"'{field}' IS rendered but got badged - over-badging trains the user to ignore the badge");

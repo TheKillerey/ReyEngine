@@ -353,7 +353,7 @@ public sealed class D3D11ParticlePlayback
         if (_clamped > 0)
             sb.AppendLine($"CLAMPED: {_clamped} particle(s) over the {MaxQuads} quad ceiling were not drawn this frame");
         foreach (var sl in _slices)
-            sb.AppendLine($"   [{sl.EmitterIndex}] {sl.Name,-34} {sl.Quads,6} quads   {(sl.Material.Additive ? "additive" : "alpha")}");
+            sb.AppendLine($"   [{sl.EmitterIndex}] {sl.Name,-34} {sl.Quads,6} quads   {sl.Material.ParticleBlend?.Describe() ?? (sl.Material.Additive ? "additive" : "alpha")}");
         return sb.ToString();
     }
 

@@ -301,6 +301,7 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// (VfxParticleRenderer.cs:350-351); the single global depth state here writes depth unconditionally, so
     /// without this an additive quad occludes the map behind it. Everything else leaves this true and gets
     /// byte-identical behaviour.</summary>
+    /// <remarks>M720: false for every particle mode but NONE, which is the one the engine writes depth for.</remarks>
     public bool WritesDepth { get; set; } = true;
 
     /// <summary>
@@ -342,8 +343,6 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// should get, because culling on a guess is worse than not culling.</summary>
     public (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)? Bounds { get; set; }
 
-    /// <summary>M232: draw this material with additive blending rather than straight alpha. Set from the
-    /// emitter's blendMode; see VfxShaderFlags for how that integer is read and what is still a guess.</summary>
     /// <summary>M354: the material's authored cullEnable - true means Riot marked this surface
     /// single-sided and the game culls its back faces. Default false keeps every existing caller
     /// (particles, props, champion skins) exactly as it was; only the map builder sets it.</summary>
@@ -354,7 +353,17 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// pre-M363 behaviour, which is a fade neutralised to fully visible rather than anything broken.</summary>
     public bool NeedsSceneDepth { get; set; }
 
+    /// <summary>M232: the material adds to what is behind it. Since M720 a particle's real state is
+    /// <see cref="ParticleBlend"/>; this summary survives for the non-particle paths and the shadow test.</summary>
     public bool Additive { get; set; }
+
+    /// <summary>M720: a particle emitter's blend, from the engine's own enum (VfxBlend). Non-null takes
+    /// precedence over <see cref="Additive"/> at every particle draw site; null is every non-particle material.</summary>
+    public ReyEngine.Formats.Vfx.VfxBlendState? ParticleBlend { get; set; }
+
+    /// <summary>M720: cSoftParticleControl for this emitter's mode - three distinct vectors over nine modes,
+    /// and the shared constant-buffer key splits on it. Null falls back to the pre-M720 additive/alpha pair.</summary>
+    public Vector4? ParticleSoftControl { get; set; }
 
     /// <summary>M282: non-null makes this a heat-haze draw - the renderer replaces the material's own
     /// shaders with the distortion pipeline and refracts the scene behind the quad instead of shading it.
@@ -865,6 +874,9 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
 
     /// <summary>M232: the additive blend state, selected per material by <see cref="PreviewMaterial.Additive"/>.</summary>
     private ComPtr<ID3D11BlendState> _blendAdditive;
+    /// <summary>M720: particle blend states, built once per distinct state and kept for the device's life.</summary>
+    private readonly Dictionary<(bool Enabled, ReyEngine.Formats.Vfx.VfxBlendFactor Src, ReyEngine.Formats.Vfx.VfxBlendFactor Dst,
+        ReyEngine.Formats.Vfx.VfxBlendOp Op, bool WritesColor), ComPtr<ID3D11BlendState>> _particleBlendStates = new();
     private readonly Dictionary<(MaterialBlendFactor Src, MaterialBlendFactor Dst), ComPtr<ID3D11BlendState>>
         _authoredBlendStates = new();
 
@@ -3632,7 +3644,9 @@ float4 psmain(VOut i) : SV_Target
         _ctx.PSSetSamplers(0, 1, ref samp);
 
         bool cutoutProp = mat.MeshModels is not null && mat.MeshAlphaCutoff > 0;
+        var meshParticleState = mat.ParticleBlend is { } meshBlend ? ParticleBlendState(meshBlend) : default;   // M720
         _ctx.OMSetBlendState(cutoutProp && _blendOpaque.Handle is not null ? _blendOpaque
+                : meshParticleState.Handle is not null ? meshParticleState
                 : mat.Additive && _blendAdditive.Handle is not null ? _blendAdditive : _blend,
             stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
         _ctx.OMSetDepthStencilState(DepthStateFor(mat), 0);
@@ -3965,8 +3979,11 @@ float4 psmain(VOut i) : SV_Target
         // Straight alpha, never additive - see PreviewMaterial.DistortionStrength for why the authored
         // blendMode must not reach this draw. Depth is tested but not written, as for every particle.
         _ctx.OMSetBlendState(_blend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        // M720: still never a depth write, whatever the mode - but the M711 test flag reaches heat haze now,
+        // as it reaches every other particle draw.
         _ctx.OMSetDepthStencilState(
-            _depthStateNoWrite.Handle is not null ? _depthStateNoWrite : _depthState, 0);
+            !mat.TestsDepth && _depthStateNoTest.Handle is not null ? _depthStateNoTest
+            : _depthStateNoWrite.Handle is not null ? _depthStateNoWrite : _depthState, 0);
 
         _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
 
@@ -4167,6 +4184,50 @@ float4 psmain(VOut i) : SV_Target
         _authoredBlendStates[key] = state;
         return state;
     }
+
+    /// <summary>
+    /// M720: the device state for one particle blend. The colour factors and equation are the mode's. The
+    /// alpha lane is Zero, One with an Add equation and alpha is masked out of the write besides: this target
+    /// is read back into a premultiplied bitmap, so a particle that lowered its alpha would show the window
+    /// through, and under MIN or MAX the factors that pin the lane are ignored - only the mask holds there.
+    /// </summary>
+    private ComPtr<ID3D11BlendState> ParticleBlendState(ReyEngine.Formats.Vfx.VfxBlendState st)
+    {
+        var key = (st.Enabled, st.Src, st.Dst, st.Op, st.WritesColor);
+        if (_particleBlendStates.TryGetValue(key, out var existing)) return existing;
+
+        var desc = new BlendDesc();
+        desc.RenderTarget[0] = new RenderTargetBlendDesc
+        {
+            BlendEnable = st.Enabled,
+            SrcBlend = D3DBlend(st.Src), DestBlend = D3DBlend(st.Dst),
+            BlendOp = st.Op switch
+            {
+                ReyEngine.Formats.Vfx.VfxBlendOp.Min => BlendOp.Min,
+                ReyEngine.Formats.Vfx.VfxBlendOp.Max => BlendOp.Max,
+                _ => BlendOp.Add,
+            },
+            SrcBlendAlpha = Blend.Zero, DestBlendAlpha = Blend.One, BlendOpAlpha = BlendOp.Add,
+            RenderTargetWriteMask = st.WritesColor
+                ? (byte)(ColorWriteEnable.Red | ColorWriteEnable.Green | ColorWriteEnable.Blue)
+                : (byte)0,
+        };
+        ComPtr<ID3D11BlendState> state = default;
+        if (_device.CreateBlendState(in desc, ref state) < 0) return default;
+        _particleBlendStates[key] = state;
+        return state;
+    }
+
+    private static Blend D3DBlend(ReyEngine.Formats.Vfx.VfxBlendFactor factor) => factor switch
+    {
+        ReyEngine.Formats.Vfx.VfxBlendFactor.Zero => Blend.Zero,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.SrcAlpha => Blend.SrcAlpha,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.InvSrcAlpha => Blend.InvSrcAlpha,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.InvSrcColor => Blend.InvSrcColor,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.DestAlpha => Blend.DestAlpha,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.InvDestAlpha => Blend.InvDestAlpha,
+        _ => Blend.One,
+    };
 
     private void UpdateStates(PreviewSettings s)
     {
@@ -4590,7 +4651,7 @@ float4 psmain(VOut i) : SV_Target
                     // whose emitter authored no widths; a real emitter's own values arrive through
                     // mat.Params, which is consulted before this switch.
                     "CSOFTPARTICLEPARAMS" => Vec(ParticleShading.NeutralSoftParams),
-                    "CSOFTPARTICLECONTROL" => Vec(ParticleShading.SoftControl(mat is { Additive: true })),
+                    "CSOFTPARTICLECONTROL" => Vec(mat.ParticleSoftControl ?? ParticleShading.SoftControl(mat is { Additive: true })),
                     // M363: derived from the live projection now, rather than the neutral placeholder that
                     // stood here while nothing sampled depth. Feeds two reciprocals, so DepthConversionFrom
                     // falls back to that same placeholder rather than ever returning a zero component - a
@@ -5188,7 +5249,12 @@ float4 psmain(VOut i) : SV_Target
             // the same reason the colour copy is lazy - most frames contain no soft particle at all, and a
             // full-target copy is not free. Here in the draw loop rather than before it, so the snapshot
             // holds the opaque geometry that has already drawn and none of the particles that have not.
-            if (mat.NeedsSceneDepth && !depthCaptured) { CaptureDepthCopy(); depthCaptured = true; }
+            //
+            // M720: or on the first particle that WRITES depth, whichever comes first. A NONE emitter writes
+            // depth, and one drawn ahead of the first soft particle would otherwise land in the snapshot and
+            // fade soft particles against a particle mesh. GL copies depth before any particle draws.
+            if ((mat.NeedsSceneDepth || mat.ParticleBlend is { WritesDepth: true }) && !depthCaptured)
+            { CaptureDepthCopy(); depthCaptured = true; }
 
             // M282: heat haze takes a pipeline of its own. Handled before any of the ordinary material
             // state below, because none of it applies - different shaders, different layout, different
@@ -5228,7 +5294,12 @@ float4 psmain(VOut i) : SV_Target
             // M232: blend is per MATERIAL, not per frame. Particle emitters in one system routinely mix
             // additive and straight-alpha passes, so binding one state before the loop cannot represent
             // them. Non-particle materials leave Additive false and get exactly the previous behaviour.
-            if (mat.Additive && _blendAdditive.Handle is not null)
+            // M720: a particle material carries the engine's own state for its mode; the two older answers
+            // below remain for everything that is not a particle.
+            var particleState = mat.ParticleBlend is { } particleBlend ? ParticleBlendState(particleBlend) : default;
+            if (particleState.Handle is not null)
+                _ctx.OMSetBlendState(particleState, factor, 0xFFFFFFFF);
+            else if (mat.Additive && _blendAdditive.Handle is not null)
                 _ctx.OMSetBlendState(_blendAdditive, factor, 0xFFFFFFFF);
             else if (s.AlphaBlend && mat.UsesAuthoredColorBlend)
             {
@@ -5454,7 +5525,10 @@ float4 psmain(VOut i) : SV_Target
     private string SharedCbKey(DxbcConstantBuffer cb, PreviewMaterial mat)
         => cb.Name + "#" + cb.AllocationSize
            + (ParticleStyleProjection(mat) ? "#vp" : "#proj")
-           + (mat.Additive ? "#add" : "");
+           // M720: on the soft-fade selector itself, which nine blend modes reduce to three of.
+           + (mat.ParticleSoftControl is { } softControl
+               ? "#sc" + (int)softControl.X + (int)softControl.Y + (int)softControl.Z + (int)softControl.W
+               : mat.Additive ? "#add" : "");
 
     private ComPtr<ID3D11Buffer> ResolveCb(PreviewMaterial mat, DxbcConstantBuffer cb,
         Dictionary<int, ComPtr<ID3D11Buffer>> own, PreviewSettings s,
@@ -5669,6 +5743,8 @@ float4 psmain(VOut i) : SV_Target
         _comparisonLessEqual.Dispose();
         foreach (var state in _authoredBlendStates.Values) state.Dispose();
         _authoredBlendStates.Clear();
+        foreach (var state in _particleBlendStates.Values) state.Dispose();   // M720
+        _particleBlendStates.Clear();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _blendAdditive.Dispose(); _depthStateNoWrite.Dispose(); _depthStateNoTest.Dispose();
         _linearMirror.Dispose();

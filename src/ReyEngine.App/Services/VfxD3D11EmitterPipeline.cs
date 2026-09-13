@@ -168,7 +168,7 @@ public static class VfxD3D11EmitterPipeline
         // and refracts the scene behind the quad. Decided HERE rather than after BuildMaterial so the state
         // description below is honest: distortion is always straight alpha, and a pipeline cache keyed on a
         // blend the draw will not use would hand this material's shaders to an additive emitter later.
-        bool isDistortion = e.Distortion is { NormalMapTexturePath.Length: > 0 };
+        bool isDistortion = VfxBlend.IsDistortion(e);   // M720: the one definition GL now shares
 
         // M242: describe the variant and the state so the pipeline cache has an honest key. Emitters
         // sharing a permutation AND a blend now share one set of shader objects; a system where every
@@ -177,11 +177,14 @@ public static class VfxD3D11EmitterPipeline
         // Riot authors heat haze blendMode=1, which reads as additive - and additive on top of an already
         // bright refracted sample is exactly what turns it into a white blob. GL overrides the authored
         // mode back to alpha for these (VfxParticleRenderer.cs:398-402); so does this.
-        bool additive = !isDistortion && VfxShaderFlags.IsAdditive(e.BlendMode, texHasAlpha);
+        // M720: the engine's blend enum (VfxBlend), with the pre-M720 table behind VfxBlendOptions.EngineModes.
+        var blendOptions = VfxBlend.Options;
+        var blend = VfxBlend.StateFor(e, texHasAlpha, blendOptions);
+        bool additive = blend.AddsToTarget;
         var vsDesc = new ShaderDescription(tocs.VsName, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, defines, vs);
         var psDesc = new ShaderDescription(tocs.PsName, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, defines, ps);
         var stateDesc = StateDescription.Particle(
-            additive ? BlendKind.Additive : BlendKind.Alpha, e.AlphaRef / 255f);
+            !blend.Enabled ? BlendKind.Opaque : additive ? BlendKind.Additive : BlendKind.Alpha, e.AlphaRef / 255f);
 
         // indexCount MUST be 0, not -1. It means "draw nothing until a Tick assigns this material a range";
         // -1 means "the whole buffer", which on the first frame draws every quad in the shared dynamic
@@ -190,25 +193,26 @@ public static class VfxD3D11EmitterPipeline
         if (mat is null) { log.AppendLine($"       pipeline failed: {rep.Error}"); return null; }
 
         mat.Additive = additive;
-        // Particles never write depth, so they are never reordered - the authored emitter order is the
-        // composite the artist built.
+        mat.ParticleBlend = blend;
+        mat.ParticleSoftControl = VfxBlend.SoftControl(e, blendOptions);
+        // Never reordered by the pipeline sort - the authored emitter order is the composite the artist
+        // built. M720: that holds for a depth-writing NONE emitter too; the blended draws around it still
+        // depend on submission order, so "writes depth" does not make it order-free here.
         mat.SortableByPipeline = false;
         // M264: these quads live in the dynamic buffer, not the static scene mesh.
         mat.UsesDynamicMesh = true;
         // GL runs particles with the depth TEST on and the depth MASK off (VfxParticleRenderer.cs:350-351).
         // The D3D11 renderer's single depth state writes unconditionally, so without this an additive quad
         // punches a hole in the map behind it.
-        mat.WritesDepth = false;
+        mat.WritesDepth = blend.WritesDepth;   // M720: false for every mode but NONE (2.17)
         // M711: the engine's DISABLE_ZBUFFER bit. An emitter carrying it draws over everything instead of
         // being occluded by it - 613,808 emitters in the installed game, and until now every one of them
         // tested depth here.
         mat.TestsDepth = !ReyEngine.Formats.Vfx.VfxMiscRenderFlags.DisablesDepthTest(e);
-        // Say WHICH rule decided it. On a texture-decided mode the integer alone does not explain the
-        // result, and "blend: additive (blendMode 2)" read on its own looks like a bug in the table.
-        log.AppendLine($"     blend: {(mat.Additive ? "additive" : "alpha")} (blendMode {e.BlendMode}"
-            + (e.BlendMode is 2 or 3 && texHasAlpha is { } ha
-                ? $", sprite {(ha ? "uses" : "ignores")} alpha -> {(ha ? "alpha" : "additive")})"
-                : ")"));
+        // Say WHICH rule decided it, in the engine's own words (M720): "additive" and "alpha" are two answers
+        // for nine modes, and a two-word log would mislead the next bisect.
+        log.AppendLine($"     blend: {blend.Describe()} - blendMode {e.BlendMode}: {blend.Why}"
+            + (VfxBlend.Premultiplies(e, blendOptions) ? "; colour premultiplied on the CPU" : ""));
 
         // The sprite. TEXTURE__TX is the name quad_ps declares for it.
         string? baseSlot = BindTexture(renderer, mat, ps, "TEXTURE", sprites, log, texImage);
@@ -314,7 +318,7 @@ public static class VfxD3D11EmitterPipeline
                         targetKey: PreviewMaterial.DistortionNormalKey);
             bool bound = mat.HasTexture(PreviewMaterial.DistortionNormalKey);
             log.AppendLine($"     distortion: strength {e.Distortion.Strength:0.###}, mode {e.Distortion.Mode}"
-                + $", blend forced to alpha (authored {e.BlendMode})"
+                + $", blend forced to alpha (authored {VfxBlend.ModeOf(e.BlendMode)})"
                 + (bound ? "" : " - NORMAL MAP UNRESOLVED, emitter will not draw"));
         }
 

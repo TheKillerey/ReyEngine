@@ -34,7 +34,7 @@ public sealed class VfxParticleRenderer
     private bool _ready;
     private readonly List<uint> _ownedTextures = new();
     /// <summary>M117c: per uploaded texture, whether its alpha channel varies (any pixel below ~1.0).
-    /// Drives the mode-3 blend split — see <see cref="IsAdditiveFor"/>.</summary>
+    /// Consulted only by the legacy blend table, under VfxBlendOptions.EngineModes = false - see <see cref="ApplyBlend"/>.</summary>
     private readonly Dictionary<uint, bool> _texHasAlpha = new();
     private uint _sceneTexture;
     private int _sceneWidth, _sceneHeight;
@@ -360,6 +360,7 @@ public sealed class VfxParticleRenderer
         _gl.Disable(EnableCap.CullFace);
         _gl.Enable(EnableCap.Blend);
         _gl.BlendEquation(GLEnum.FuncAdd);
+        _gl.ColorMask(true, true, true, false);   // M720: no particle writes destination alpha
 
         // M174 (1.3): draw in authored `pass` order. 1,114,110 emitters (79.7%) carry `pass`, with 2,913
         // distinct values across the full I16 range, and until now it was discarded entirely - so layered
@@ -392,7 +393,8 @@ public sealed class VfxParticleRenderer
             // M177 (2.5): trail emitters draw a ribbon through the particle's own motion history.
             if (es.Def.Trail is not null) { RenderTrailEmitter(es, viewProj, camPos); continue; }
             if (es.Texture == 0) continue;
-            bool isDistortion = es.Def.Distortion is not null;
+            // M720: one definition with the Direct3D 11 recipe - a block that names a normal map.
+            bool isDistortion = ReyEngine.Formats.Vfx.VfxBlend.IsDistortion(es.Def);
             if (isDistortion && (es.DistortionTexture == 0 || _sceneTexture == 0)) continue;
 
             int floats = es.InstanceCount * Stride;
@@ -410,11 +412,9 @@ public sealed class VfxParticleRenderer
                 }
             }
 
-            // Distortion replaces the covered scene sample through its normal-map mask; Riot's authored
-            // blendMode=1 must not make that refracted sample additive (which would turn heat haze white).
-            if (isDistortion) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-            else if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
-            else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            // M720: the emitter's own blend mode, from the table both renderers read. Distortion still draws
+            // straight alpha whatever the mode - VfxBlend.StateFor answers that case first.
+            ApplyBlend(es.Def, es.Texture);
 
             // M174 (1.6): only a ZERO divisor is nonsense (95 emitters). Negative components (2,293 quad
             // emitters) and sub-1 components (390) are authored deliberately and were being clamped to 1,
@@ -470,15 +470,19 @@ public sealed class VfxParticleRenderer
             }
             // M175 (2.2): soft particles. The resolver has already dropped configurations that would fade
             // to nothing at every distance, so reaching here means the stage does something visible.
-            bool hasSoft = depthReady && d2.SoftParticle is not null;
+            // M720: and not under LOCK_ALPHA on a quad, whose quad_ps_fixedalphauv has no soft axis - the
+            // D3D11 define set has dropped it since M717, and the per-mode fade below made it visible here.
+            bool hasSoft = depthReady && d2.SoftParticle is not null
+                && !ReyEngine.Formats.Vfx.VfxPrimitiveSupport.DrawsFixedAlphaUv(d2.Extras?.UvMode, d2.PrimitiveClass);
             _gl.Uniform1(_uHasSoft, hasSoft ? 1 : 0);
             if (hasSoft)
             {
                 var sp = d2.SoftParticle!.PackParams();
                 _gl.Uniform4(_uSoftParams, sp.X, sp.Y, sp.Z, sp.W);
-                // cSoftParticleControl: leave RGB alone, scale alpha by the fade. What Riot actually feeds
-                // this is not recoverable from the bytecode - see VfxSoftParticle's remarks.
-                _gl.Uniform4(_uSoftControl, 1f, 0f, 0f, 1f);
+                // cSoftParticleControl, per blend mode (M720): an ADD particle's alpha is one after the
+                // premultiply and ONE,ONE ignores it, so its fade has to land in rgb. See VfxBlend.SoftControl.
+                var softControl = ReyEngine.Formats.Vfx.VfxBlend.SoftControl(d2, ReyEngine.Formats.Vfx.VfxBlend.Options);
+                _gl.Uniform4(_uSoftControl, softControl.X, softControl.Y, softControl.Z, softControl.W);
             }
 
             // M175 (2.6): palette recolour, bound to texture unit 6.
@@ -555,6 +559,11 @@ public sealed class VfxParticleRenderer
         ClearStencil();
         _gl.DepthMask(true);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        // M720: a NONE emitter turned blending off, a MIN or MAX one changed the equation, and the loop
+        // masked alpha out of the write - none of it may leak into what draws next.
+        _gl.Enable(EnableCap.Blend);
+        _gl.BlendEquation(GLEnum.FuncAdd);
+        _gl.ColorMask(true, true, true, true);
         if (_depthTestOff) { _gl.Enable(EnableCap.DepthTest); _depthTestOff = false; }
         if (!depthTest) _gl.Disable(EnableCap.DepthTest);
         _gl.BindVertexArray(0);
@@ -693,9 +702,41 @@ public sealed class VfxParticleRenderer
     /// keeps it honest - the Kayn sprites that motivated "2 → alpha" measure 99.6-100% alpha-varied
     /// and still render alpha. See VfxShaderFlags.IsAdditive(int, bool?).
     /// </summary>
-    private bool IsAdditiveFor(int blendMode, uint texture) =>
-        VfxShaderFlags.IsAdditive(blendMode,
+    ///
+    /// <para><b>M720: everything above is the legacy table's history.</b> An emitter now blends with the
+    /// engine's own mode through <see cref="ReyEngine.Formats.Vfx.VfxBlend"/>, and the sprite's alpha is
+    /// consulted only when that table is switched off for an A/B.</para>
+    private void ApplyBlend(ReyEngine.Formats.Vfx.VfxEmitterDefinition def, uint texture)
+    {
+        var st = ReyEngine.Formats.Vfx.VfxBlend.StateFor(def,
             _texHasAlpha.TryGetValue(texture, out var hasAlpha) ? hasAlpha : null);
+        if (st.Enabled) _gl.Enable(EnableCap.Blend); else _gl.Disable(EnableCap.Blend);
+        // The colour factors are the mode's; the alpha lane is Zero, One and alpha is masked out of the write
+        // besides, because this framebuffer's alpha reaches the window and a particle must not lower it.
+        _gl.BlendFuncSeparate(GlFactor(st.Src), GlFactor(st.Dst), BlendingFactor.Zero, BlendingFactor.One);
+        // SEPARATE, or MIN and MAX take the alpha equation too - and under MIN or MAX the factors that pin
+        // the alpha lane are ignored altogether.
+        _gl.BlendEquationSeparate(st.Op switch
+        {
+            ReyEngine.Formats.Vfx.VfxBlendOp.Min => GLEnum.Min,
+            ReyEngine.Formats.Vfx.VfxBlendOp.Max => GLEnum.Max,
+            _ => GLEnum.FuncAdd,
+        }, GLEnum.FuncAdd);
+        _gl.ColorMask(st.WritesColor, st.WritesColor, st.WritesColor, false);
+        // NONE writes depth (2.17); every other mode leaves it, as every particle did before M720.
+        _gl.DepthMask(st.WritesDepth);
+    }
+
+    private static BlendingFactor GlFactor(ReyEngine.Formats.Vfx.VfxBlendFactor factor) => factor switch
+    {
+        ReyEngine.Formats.Vfx.VfxBlendFactor.Zero => BlendingFactor.Zero,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.SrcAlpha => BlendingFactor.SrcAlpha,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.InvSrcAlpha => BlendingFactor.OneMinusSrcAlpha,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.InvSrcColor => BlendingFactor.OneMinusSrcColor,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.DestAlpha => BlendingFactor.DstAlpha,
+        ReyEngine.Formats.Vfx.VfxBlendFactor.InvDestAlpha => BlendingFactor.OneMinusDstAlpha,
+        _ => BlendingFactor.One,
+    };
 
     /// <summary>M184 (2.10): Riot's texture-address enum, read off their OWN named shared samplers in
     /// assets/shaders/shareddata.bin - Wrap_No_Mip / CharacterWrap / EnvironmentWrap write 0, and the
@@ -1085,8 +1126,7 @@ public sealed class VfxParticleRenderer
             _gl.BindTexture(TextureTarget.Texture2D, es.TextureMult);
             _gl.ActiveTexture(TextureUnit.Texture0);
         }
-        if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
-        else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        ApplyBlend(es.Def, es.Texture);   // M720
         // M47c: mesh particles animate by SCROLLING their texture along the mesh UVs (waterfall flow) -
         // matches Riot's particle-system shader (Scrolling_Rate cbuffer + birthUvScrollRate data).
         var scroll = es.Def.UvScrollRate * es.Age;
@@ -1256,8 +1296,7 @@ public sealed class VfxParticleRenderer
         _gl.UniformMatrix4(_tuViewProj, 1, false, in viewProj.M11);
         _gl.Uniform1(_tuTex, 0);
         _gl.Uniform1(_tuAlphaRef, es.Def.AlphaRef / 255f);
-        if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
-        else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        ApplyBlend(es.Def, es.Texture);   // M720
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, es.Texture);
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(k / TrailStride));
@@ -1458,8 +1497,7 @@ public sealed class VfxParticleRenderer
         _gl.UniformMatrix4(_tuViewProj, 1, false, in viewProj.M11);
         _gl.Uniform1(_tuTex, 0);
         _gl.Uniform1(_tuAlphaRef, es.Def.AlphaRef / 255f);
-        if (IsAdditiveFor(es.Def.BlendMode, es.Texture)) _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
-        else _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        ApplyBlend(es.Def, es.Texture);   // M720
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, es.Texture);
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(k / TrailStride));

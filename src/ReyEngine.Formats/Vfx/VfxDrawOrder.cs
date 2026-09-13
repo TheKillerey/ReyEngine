@@ -13,12 +13,22 @@ namespace ReyEngine.Formats.Vfx;
 /// the default one, and <c>pass</c> orders emitters inside a list only. Before this, both of our renderers
 /// sorted on <c>pass</c> alone and a ground-layer emitter authored high drew on top of everything.</para>
 ///
-/// <para><b>Two of the five keys, deliberately.</b> Key 3 is a rank indexed by the blend mode, and our
-/// blend table disagrees with the engine's on the most common value: <see cref="VfxShaderFlags.IsAdditive"/>
-/// treats mode 1 as additive where the engine's enum calls it ALPHA, and its own doc comment calls our
-/// table a guess. Porting a key that indexes a table we know to be wrong would be worse than not porting
-/// it, so keys 3 and 4 wait on the blend-mode reading. Key 5 is the authored index, which we already get
-/// for free: every caller uses <c>OrderBy</c>, a STABLE sort, over a list still in authored order.</para>
+/// <para><b>All five keys since M720.</b> M709 ported two: key 3 is a rank indexed by the blend mode, and
+/// until M720 our blend table read mode 1 as additive where the engine's enum calls it ALPHA. With the enum
+/// in (<see cref="VfxBlend"/>), key 3 is <see cref="VfxBlend.DrawRank"/> and key 4 the whole
+/// <c>miscRenderFlags</c> byte. Key 5 is the authored index, which we get for free: every caller uses
+/// <c>OrderBy</c>, a STABLE sort, over a list still in authored order. Keys 3 and 4 reach stencil emitters
+/// too, as the engine's comparator does - which separates 3 reachable testers from their writers in our GL
+/// emulation (Map22 TFT6_ESports_Screen_Lose, Diana_Skin76_R_ExplosionChild, Velkoz_Skin04_W_Turret), against
+/// the 49 the ground-layer promotion would have cost. They reorder 34,997 of 198,195 reachable system
+/// occurrences.</para>
+///
+/// <para><b>Not across systems.</b> The engine's comparator compares the system's position between keys 2
+/// and 3, which neither renderer implements. Inside one simulator that key is constant and can be left out;
+/// across a whole map it cannot, because keys 3 and 4 would then pull every NONE emitter of a pass ahead of
+/// every other system's ADD. The Direct3D 11 map host sorts across the map, so it takes
+/// <see cref="KeyAcrossSystems"/>, the first two keys, and leaves registration order - which is system by
+/// system - to break the tie.</para>
 ///
 /// <para><b>Scope: one system.</b> Both of our renderers order the emitters of a single simulator, and so
 /// does the reference renderer - a child system's emitters rank after the whole of their parent's, and two
@@ -70,11 +80,26 @@ public static class VfxDrawOrder
     public static bool IsGroundLayer(VfxEmitterDefinition e) =>
         e.Extras?.IsGroundLayer == true && e.StencilMode == 0;
 
-    /// <summary>The sort key, smallest first: the layer, then the authored pass. Use with a STABLE sort -
-    /// the authored order is the tiebreak, which is the engine's fifth key.</summary>
-    public static (int Layer, int Pass) KeyFor(VfxEmitterDefinition e, bool groundLayerFirst) =>
-        (groundLayerFirst && IsGroundLayer(e) ? 0 : 1, e.Pass);
+    /// <summary>The sort key inside one system, smallest first: the layer, the authored pass, the blend
+    /// rank, the render-flags byte. Use with a STABLE sort - the authored order is the tiebreak, which is the
+    /// engine's fifth key. Under the legacy blend table keys 3 and 4 are neutral, as they were before M720.</summary>
+    public static (int Layer, int Pass, int BlendRank, int MiscFlags) KeyFor(
+        VfxEmitterDefinition e, bool groundLayerFirst, VfxBlendOptions blend) =>
+        (groundLayerFirst && IsGroundLayer(e) ? 0 : 1,
+         e.Pass,
+         blend.EngineModes ? VfxBlend.DrawRank(e.BlendMode) : 0,
+         blend.EngineModes ? (e.Extras?.MiscRenderFlags ?? 0) & 0xFF : 0);
 
-    /// <summary>The sort key under the current <see cref="GroundLayerFirst"/> setting.</summary>
-    public static (int Layer, int Pass) KeyFor(VfxEmitterDefinition e) => KeyFor(e, GroundLayerFirst);
+    /// <summary>The sort key under the current blend options.</summary>
+    public static (int Layer, int Pass, int BlendRank, int MiscFlags) KeyFor(VfxEmitterDefinition e, bool groundLayerFirst) =>
+        KeyFor(e, groundLayerFirst, VfxBlend.Options);
+
+    /// <summary>The sort key under the current <see cref="GroundLayerFirst"/> setting and blend options.</summary>
+    public static (int Layer, int Pass, int BlendRank, int MiscFlags) KeyFor(VfxEmitterDefinition e) =>
+        KeyFor(e, GroundLayerFirst, VfxBlend.Options);
+
+    /// <summary>M720: the key for a host that sorts emitters of many systems in one list - the first two
+    /// keys only; see the class remarks for why the other two cannot cross systems.</summary>
+    public static (int Layer, int Pass) KeyAcrossSystems(VfxEmitterDefinition e) =>
+        (GroundLayerFirst && IsGroundLayer(e) ? 0 : 1, e.Pass);
 }

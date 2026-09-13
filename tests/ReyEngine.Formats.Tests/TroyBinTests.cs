@@ -363,17 +363,22 @@ public class TroyBinTests
         Assert.Equal(2, result.Assets.Count(a => a.SourcePath.Contains("color-")));
     }
 
-    /// <summary>Written explicitly rather than left to the game's default for an absent field. M117
-    /// established 1/3/4/5 as the additive family, and legacy sprites are additive glows on black.</summary>
+    /// <summary>M720: a legacy sprite is an additive glow on black, and the engine's additive mode is 0 -
+    /// the declared default, which Riot's writer omits. The fallback wrote 1 until M720, which M117 read as
+    /// additive and the engine's enum calls ALPHA. Resolving the converted bin also pins the resolver's two
+    /// declared defaults end to end: blendMode 0, and alphaRef 5.</summary>
     [Fact]
-    public void BlendModeIsWrittenExplicitlyAsAdditive()
+    public void BlendModeIsLeftAtTheEnginesAdditiveDefault()
     {
         byte[] raw = Build(new[] { "glow", "DATA/Particles/glow.dds" });
         Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
 
         var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
-        Assert.Equal(1, Assert.IsType<BinTreeU8>(FindEmitterProperty(result.BinBytes, "blendMode")).Value);
-        Assert.Equal(1, VfxSystemResolver.ExtractAll(result.BinBytes).Values.Single().Emitters[0].BlendMode);
+        Assert.Null(FindEmitterProperty(result.BinBytes, "blendMode"));
+        var emitter = VfxSystemResolver.ExtractAll(result.BinBytes).Values.Single().Emitters[0];
+        Assert.Equal(0, emitter.BlendMode);
+        Assert.Equal(VfxBlendMode.Add, VfxBlend.ModeOf(emitter.BlendMode));
+        Assert.Equal(5, emitter.AlphaRef);
     }
 
     // ---- mesh particles ------------------------------------------------------------------------

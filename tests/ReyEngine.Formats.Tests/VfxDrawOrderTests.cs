@@ -197,7 +197,8 @@ public sealed class VfxDrawOrderTests
         // never the picture - see MapParticleDrawOrderTests.
         string? map = Source("src", "ReyEngine.App", "Services", "D3D11MapParticles.cs");
         Assert.NotNull(map);
-        Assert.Contains("_pending.OrderBy(static e => VfxDrawOrder.KeyFor(e.Def))", map);
+        // M720: the map host sorts across systems, so it takes the first two keys only
+        Assert.Contains("_pending.OrderBy(static e => VfxDrawOrder.KeyAcrossSystems(e.Def))", map);
     }
 
     [Fact]

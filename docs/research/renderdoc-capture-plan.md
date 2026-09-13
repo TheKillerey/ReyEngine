@@ -200,6 +200,9 @@ flip cancels as predicted; if they differ, one is upside down and the diff will 
 mismatch band.
 
 **Q1 (blend modes)** - DONE (M260), and it did not go as expected. Extending the census to 6/7/8 did
+
+> **M720:** which integer is which is settled from the reference renderer's reading, meta.db's default, the M260 census and the shipped shader bytecode (`vfx-blend-modes.md`). A capture would now confirm only the factor each mode indexes.
+
 bound them (none is additive), but calibrating against modes 0-5 showed the shipped mapping is close
 to inverted on the modes that carry the population. The census cannot settle the integer-to-state
 table itself, so this promotes Q1 to a capture question rather than retiring it.

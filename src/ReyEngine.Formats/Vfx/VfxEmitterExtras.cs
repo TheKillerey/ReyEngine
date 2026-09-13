@@ -245,7 +245,8 @@ public static class VfxParkedEmitterFields
         "importance", "depthBiasFactors", "renderPhaseOverride", "SortEmittersByPos",
         // M709: isGroundLayer is gone from here - it decides draw order now, and a field that changes the
         // picture must not carry a badge saying the viewport will not change.
-        "WriteAlphaOnly", "doesCastShadow", "colorblindVisibility", "StencilReferenceId",
+        // M720: WriteAlphaOnly is gone from here - the engine writes no colour for it, and neither do we.
+        "doesCastShadow", "colorblindVisibility", "StencilReferenceId",
         "falloffTexture", "modulationFactor", "censorModulateValue", "sliceTechniqueRange", "isTexturePixelated",
         "isUniformScale", "isLocalOrientation", "particleIsLocalOrientation", "IsEmitterSpace",
         "isRotationEnabled", "hasPostRotateOrientation", "postRotateOrientationAxis", "rotationOverride",

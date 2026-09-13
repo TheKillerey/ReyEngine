@@ -89,12 +89,19 @@ public readonly record struct StateDescription(
     /// at least consistent with their art; mode 7's 20 textures use four different conventions and cannot
     /// be assigned one.</para>
     /// </summary>
-    public static BlendKind BlendFromRiotMode(int blendMode) =>
-        blendMode is 1 or 3 or 4 or 5 ? BlendKind.Additive : BlendKind.Alpha;
+    /// <remarks>M720: now the engine's enum through <see cref="ReyEngine.Formats.Vfx.VfxBlend"/>. ADD and
+    /// ALPHAADD add to the target, NONE is opaque, and everything else blends over it. Still on no render
+    /// path - the renderers read the full state from VfxBlend - and still only a cache-key summary.</remarks>
+    public static BlendKind BlendFromRiotMode(int blendMode) => ReyEngine.Formats.Vfx.VfxBlend.ModeOf(blendMode) switch
+    {
+        ReyEngine.Formats.Vfx.VfxBlendMode.Add or ReyEngine.Formats.Vfx.VfxBlendMode.AlphaAdd => BlendKind.Additive,
+        ReyEngine.Formats.Vfx.VfxBlendMode.None => BlendKind.Opaque,
+        _ => BlendKind.Alpha,
+    };
 
     /// <summary>True when this state is one the mapping above actually decided, rather than falling off
     /// the end of it. Lets a caller flag a draw as approximate instead of rendering it silently wrong.</summary>
-    public static bool IsBlendModeUnderstood(int blendMode) => blendMode is >= 0 and <= 5;
+    public static bool IsBlendModeUnderstood(int blendMode) => blendMode is >= 0 and <= 8;   // M720: the whole enum
 
     public override string ToString() =>
         $"{Blend}, depth {(DepthTest ? "test" : "off")}{(DepthWrite ? "+write" : "")}, "

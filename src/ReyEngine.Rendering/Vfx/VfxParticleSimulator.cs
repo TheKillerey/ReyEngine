@@ -864,6 +864,14 @@ public sealed class VfxParticleSimulator
             // rather than overwriting it.
             if (placementTint != Vector4.One) col *= placementTint;
 
+            // M720 (2.49): ADD and SUBTRACT weigh the colour by its own alpha here and write an alpha of one.
+            // Riot's particle shaders never weigh colour by alpha (2,553 permutations checked) and ONE,ONE
+            // ignores it, so the CPU is the only place a fading additive particle fades. HERE, before the
+            // gradient below, because the engine samples particleColorTexture per pixel: the gradient's
+            // alpha must still reach the output alpha and the alpha test rather than scale the colour. Every
+            // draw path reads these slots, so this one line reaches both renderers and every channel.
+            if (VfxBlend.Premultiplies(d, VfxBlend.Options)) col = VfxBlend.Premultiply(col);
+
             // M68: modulate by the particleColorTexture gradient. U is the colour-over-life axis (age); V is a
             // per-particle variant selector. This is what colours emitters that leave birthColor/color unset
             // (all the Jade fire/ember/glow systems) — without it they render white.

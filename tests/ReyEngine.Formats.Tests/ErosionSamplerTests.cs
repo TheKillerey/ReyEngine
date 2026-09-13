@@ -156,8 +156,9 @@ public sealed class ErosionSamplerTests
     {
         string? gl = Source("src", "ReyEngine.Rendering", "Vfx", "VfxParticleRenderer.cs");
         Assert.NotNull(gl);
-        // twice: the quad gate and the mesh gate, both through the one helper rather than a copied test
-        Assert.Equal(2, gl!.Split("VfxPrimitiveSupport.DrawsFixedAlphaUv(").Length - 1);
+        // the quad erosion gate and the mesh erosion gate, both through the one helper rather than a copied
+        // test - and since M720 the quad's soft-fade gate, which quad_ps_fixedalphauv has no axis for either
+        Assert.Equal(3, gl!.Split("VfxPrimitiveSupport.DrawsFixedAlphaUv(").Length - 1);
 
         string? flags = Source("src", "ReyEngine.Formats", "Vfx", "VfxShaderFlags.cs");
         Assert.NotNull(flags);

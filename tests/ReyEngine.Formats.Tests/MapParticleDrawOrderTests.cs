@@ -42,7 +42,7 @@ public sealed class MapParticleDrawOrderTests
         // exactly one AddMaterial in the whole driver, and it is the sorted flush. More than one means a
         // channel has slipped back out of the order.
         Assert.Equal(1, src.Split("_renderer.AddMaterial(").Length - 1);
-        Assert.Contains("foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyFor(e.Def)))", src);
+        Assert.Contains("foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyAcrossSystems(e.Def)))", src);   // M720
         Assert.Contains("_renderer.AddMaterial(pending.Mat);", src);
     }
 
@@ -52,7 +52,7 @@ public sealed class MapParticleDrawOrderTests
         string src = Driver();
         // the slice list takes the SAME key as the registration. Pack thins the last slices first, and
         // "last" is only meaningful if it means the same thing the frame draws last.
-        Assert.Contains("_slices = _slices.OrderBy(static s => VfxDrawOrder.KeyFor(s.Def)).ToList();", src);
+        Assert.Contains("_slices = _slices.OrderBy(static s => VfxDrawOrder.KeyAcrossSystems(s.Def)).ToList();", src);   // M720
         Assert.DoesNotContain("_slices.OrderBy(static s => s.Def.Pass)", src);
     }
 

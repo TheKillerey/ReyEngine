@@ -624,11 +624,10 @@ public static class TroyBinConverter
             new BinTreeString(H("emitterName"), note.EmitterName),
             ValueFloat("rate", DefaultRate),
             ValueFloat("particleLifetime", DefaultLifetime),
-            // STATED ASSUMPTION, not a recovered value: legacy sprites are additive glows on black, and
-            // M117 established 1/3/4/5 as the additive family. The original per-emitter blend lives in
-            // the undecoded body. Written explicitly so the result does not depend on whatever the game
-            // defaults an absent blendMode to.
-            new BinTreeU8(H("blendMode"), 1),
+            // M720: NO blendMode. The assumption stands - legacy sprites are additive glows on black, and the
+            // original per-emitter blend lives in the undecoded body - but the value written for it was 1,
+            // read under M117's guess as additive. The engine's enum calls 1 ALPHA, and its additive mode is
+            // 0, the declared default, which Riot's writer omits rather than writes (0 of 1,581,956).
         };
 
         // See ConvertDecoded: NO primitive is the camera-facing billboard, which is what a legacy sprite

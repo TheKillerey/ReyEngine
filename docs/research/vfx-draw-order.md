@@ -40,6 +40,9 @@ Keys 1 and 2. Key 5 we already had: every call site uses a stable `OrderBy` over
 order, which is the same tiebreak.
 
 Keys 3 and 4 are deliberately not ported. Key 3 indexes a rank table by the blend mode, and our blend table
+
+> **M720:** ported, now that the blend table is the engine's (`vfx-blend-modes.md`). Keys 3 and 4 apply inside one system, reordering 34,997 of 198,195 reachable system occurrences; the Direct3D 11 map host, which sorts across systems, keeps the first two keys.
+
 disagrees with the engine's on the most common value: `VfxShaderFlags.IsAdditive` treats mode 1 as additive
 where the engine's enum calls it ALPHA, and our own doc comment calls our table a guess. Porting a key that
 indexes a table we know to be wrong is worse than not porting it. The corpus favours the engine's enum, for
