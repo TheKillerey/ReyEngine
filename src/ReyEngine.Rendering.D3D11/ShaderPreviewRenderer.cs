@@ -303,6 +303,16 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// byte-identical behaviour.</summary>
     public bool WritesDepth { get; set; } = true;
 
+    /// <summary>
+    /// M717: per-slot address mode, by sampler name, in Riot's own enum - 0 Wrap, 1 Clamp, 2 Mirror.
+    ///
+    /// <para><see cref="ClampedSamplers"/> answers "this slot is a lookup table", which is a yes or no.
+    /// A stage that carries an AUTHORED address mode needs all three answers, and the erosion map is the
+    /// first: its coordinate is the base texture's own atlas position with the scroll added, so it leaves
+    /// the map constantly and what happens there is the artist's choice. Null leaves every slot on the
+    /// material's own mode, which is what everything but the erosion still does.</para></summary>
+    public Dictionary<string, int>? SlotAddress { get; set; }
+
     /// <summary>M711: false for a particle whose <c>miscRenderFlags</c> carries the engine's DISABLE_ZBUFFER
     /// bit - it draws over everything instead of being occluded. Only the test moves; the write is already
     /// off for every particle through <see cref="WritesDepth"/>. Everything else leaves this true.</summary>
@@ -625,6 +635,11 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     private int _width, _height;
 
     private ComPtr<ID3D11SamplerState> _linearWrap, _linearClampU, _linearClampV, _linearClamp, _comparison;
+    /// <summary>M717: the third of Riot's three address modes. Their enum is 0 Wrap, 1 Clamp, 2 Mirror -
+    /// measured off their own named shared samplers in M184 - and the erosion map's declared default is
+    /// the mirror, which four fifths of the emitters that author an erosion take by leaving the field
+    /// out. Until this state existed every one of them sampled as a wrap.</summary>
+    private ComPtr<ID3D11SamplerState> _linearMirror;
     /// <summary>M465: the comparison sampler used while a real shadow map is bound. See CreateStaticStates
     /// for why the pair exists rather than one state.</summary>
     private ComPtr<ID3D11SamplerState> _comparisonLessEqual;
@@ -740,6 +755,12 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         ComPtr<ID3D11SamplerState> s4 = default;
         _device.CreateSamplerState(in sd, ref s4);
         _linearClamp = s4;
+
+        // M717: the mirror, for a slot that asks for it by its own authored address mode.
+        sd.AddressU = sd.AddressV = sd.AddressW = TextureAddressMode.Mirror;
+        ComPtr<ID3D11SamplerState> sMirror = default;
+        _device.CreateSamplerState(in sd, ref sMirror);
+        _linearMirror = sMirror;
 
         // M254: a COMPARISON sampler, for the shadow lookups.
         //
@@ -5530,11 +5551,24 @@ float4 psmain(VOut i) : SV_Target
             var st = smp.IsComparisonSampler ? (_shadowFrame is null ? _comparison : _comparisonLessEqual)
                 : smp.Name.StartsWith("Clamp", StringComparison.OrdinalIgnoreCase) ? _linearClamp
                 : mat.ClampedSamplers is { } clamped && clamped.Contains(smp.Name) ? _linearClamp
+                // M717: and a slot that authored its own address mode takes it, whatever the material's is.
+                : mat.SlotAddress is { } perSlot && perSlot.TryGetValue(smp.Name, out int mode)
+                    ? AuthoredSampler(mode)
                 : MaterialSampler(mat.SamplerAddress);
             if (pixel) _ctx.PSSetSamplers(smp.BindPoint, 1, ref st);
             else _ctx.VSSetSamplers(smp.BindPoint, 1, ref st);
         }
     }
+
+    /// <summary>M717: Riot's address enum. 3 is folded to the mirror rather than to a border mode: neither
+    /// this repo nor the renderer the reading came from has measured what it means, they read it as a
+    /// border and we read it as a mirror, and it is 599 emitters either way.</summary>
+    private ComPtr<ID3D11SamplerState> AuthoredSampler(int mode) => mode switch
+    {
+        0 => _linearWrap,
+        1 => _linearClamp,
+        _ => _linearMirror.Handle is not null ? _linearMirror : _linearWrap,
+    };
 
     private ComPtr<ID3D11SamplerState> MaterialSampler(PreviewSamplerAddress address) => address switch
     {
@@ -5637,6 +5671,7 @@ float4 psmain(VOut i) : SV_Target
         _authoredBlendStates.Clear();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _blendAdditive.Dispose(); _depthStateNoWrite.Dispose(); _depthStateNoTest.Dispose();
+        _linearMirror.Dispose();
         _ctx.Dispose(); _device.Dispose();
         _d3d?.Dispose();
     }

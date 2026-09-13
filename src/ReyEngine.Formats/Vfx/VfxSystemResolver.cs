@@ -113,6 +113,8 @@ public static class VfxSystemResolver
     private static readonly uint F_emitterLinger   = HashAlgorithms.Fnv1a("emitterLinger");
     // M174 (2.1) alpha erosion. Field 0xc4663005 on the emitter; struct class 0x5e842b9b.
     private static readonly uint F_alphaErosion    = HashAlgorithms.Fnv1a("alphaErosionDefinition");
+    // M717: which way the erosion sampler wraps. Declared default 2; authored 62,848 times.
+    private static readonly uint F_erosionAddress = HashAlgorithms.Fnv1a("erosionMapAddressMode");
     private static readonly uint F_erosionMap      = HashAlgorithms.Fnv1a("erosionMapName");
     private static readonly uint F_erosionMixer    = HashAlgorithms.Fnv1a("erosionMapChannelMixer");
     private static readonly uint F_erosionDrive    = HashAlgorithms.Fnv1a("erosionDriveCurve");
@@ -200,6 +202,10 @@ public static class VfxSystemResolver
     // M711: same reason - miscRenderFlags bit 0 now decides the depth test, so the field leaves the parked
     // table and has to be declared here for the preview-coverage reflection to see it.
     private static readonly uint F_miscRenderFlags     = HashAlgorithms.Fnv1a("miscRenderFlags");
+    // M717: uvMode 2 is the engine's LOCK_ALPHA, which routes a non-mesh emitter to a shader that
+    // compiles no erosion and no soft fade - so the field decides a permutation and leaves the parked
+    // table, and the preview-coverage reflection has to be able to see its hash.
+    private static readonly uint F_uvMode              = HashAlgorithms.Fnv1a("uvMode");
     private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
     // M185 (2.15) the Linger curve set. Class VfxLingerDefinitionData = 0x9b19f2b5.
     private static readonly uint F_linger              = HashAlgorithms.Fnv1a("Linger");
@@ -407,6 +413,7 @@ public static class VfxSystemResolver
             NumFrames: GetU16(p, F_numFrames) ?? 1,
             RandomStartFrame: GetBool(p, F_randomStart),
             IsMeshPrimitive: isMesh,
+            PrimitiveClass: primClass,   // M717
             MeshPath: meshPath,
             UvScrollRate: ReadValueVec2(Get(p, F_birthUvScroll)) ?? Vector2.Zero,
             MeshSkeletonPath: meshSkl,
@@ -750,7 +757,9 @@ public static class VfxSystemResolver
             mapPath, mixer, drive.Value,
             ReadScalar(ep, F_erosionSlice),
             ReadScalar(ep, F_erosionFeatherIn),
-            ReadScalar(ep, F_erosionFeatherOut));
+            ReadScalar(ep, F_erosionFeatherOut),
+            // M717: -1 when absent, and the caller turns that into the declared default of 2 (mirror).
+            (int?)GetU8(ep, F_erosionAddress) ?? -1);
     }
 
     /// <summary>M175 (2.2): the soft-particle fade. See VfxSoftParticle for the decoded and validated
@@ -1018,7 +1027,7 @@ public static class VfxSystemResolver
             OffsetLifeScalingSymmetryMode= GetU8(p, PF("offsetLifeScalingSymmetryMode")),
 
             TexAddressModeBase           = GetU8(p, PF("texAddressModeBase")),
-            UvMode                       = GetU8(p, PF("uvMode")),
+            UvMode                       = GetU8(p, F_uvMode),
             UvParallaxScale              = GetF32(p, PF("uvParallaxScale")),
         };
         // An emitter that authored none of them gets null rather than a record full of nulls, so callers

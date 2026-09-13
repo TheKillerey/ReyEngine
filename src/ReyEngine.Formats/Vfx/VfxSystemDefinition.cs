@@ -234,7 +234,18 @@ public sealed record VfxEmitterDefinition(
     /// instead (86 distinct hashes, not resolved here). Collapsing absent to 0 would make every one of
     /// those a test against 0 - harmless for mode 2, but mode 3 would then be "draw where the stencil is
     /// not 0", which on a freshly cleared buffer fails everywhere and deletes the emitter outright.</summary>
-    int StencilRef = -1)
+    int StencilRef = -1,
+    /// <summary>
+    /// M717: the class hash of the emitter's <c>primitive</c> struct, or 0 when it authors none - which is
+    /// itself an answer, because <c>VfxPrimitiveCameraQuad</c> is the class default and is written zero
+    /// times in 1,581,956 emitters.
+    ///
+    /// <para>Kept because <see cref="IsMeshPrimitive"/> cannot answer "what kind is this". It is true for
+    /// a <c>VfxPrimitiveMesh</c> AND for an attached mesh that names a file, and false for an attached
+    /// mesh carrying only a submesh mask - which is the right reading for "does this draw geometry" and
+    /// the wrong one for every question about the emitter's kind. Three booleans that do not partition
+    /// sent every census that needed the kind back to the raw tree.</para></summary>
+    uint PrimitiveClass = 0)
 {
     /// <summary>M707: this emitter authors NO base texture path at all.
     ///
@@ -285,7 +296,22 @@ public sealed record VfxAlphaErosion(
     VfxCurveF Drive,
     float SliceWidth,
     float FeatherIn,
-    float FeatherOut)
+    float FeatherOut,
+    /// <summary>
+    /// M717: <c>erosionMapAddressMode</c>, which decides what the sampler does where the coordinate runs
+    /// off the map - and it runs off constantly, because the erosion is read at the base texture's own
+    /// atlas coordinate and that coordinate carries the scroll.
+    ///
+    /// <para>Riot's address enum, the same one <c>PaletteTextureAddressMode</c> uses and measured the same
+    /// way in M184 off their NAMED shared samplers: 0 = Wrap, 1 = Clamp, 2 = Mirror. -1 is absent, and
+    /// absent here means the declared default of <b>2</b>, not the clamp a palette falls back to - the two
+    /// fields have different defaults and sharing a fallback would be wrong on 80% of this one.</para>
+    ///
+    /// <para>Measured over the installed game: absent 79.6%, 0 (wrap) 20.1%, 3 at 0.18% and 1 at 0.13%.
+    /// Byte 3 is the one value neither this repo nor ltk-manager has measured - they read it as a border
+    /// mode, we fold it to mirror as the palette does, and 599 emitters are affected either way. Recorded
+    /// rather than settled.</para></summary>
+    int AddressMode = -1)
 {
     /// <summary>Pack into the shader's cAlphaErosionParams.yzw. Absent feathers must degrade to a no-op
     /// edge rather than to zero: a missing leading edge becomes a hard step (large slope), and a missing

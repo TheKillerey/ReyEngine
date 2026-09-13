@@ -87,6 +87,11 @@ public class VfxPreviewCoverageTests
     // M711: bit 0 of miscRenderFlags is the engine's DISABLE_ZBUFFER and now decides the depth test. It was
     // parked from M193 to M710 as "meaning UNKNOWN".
     [InlineData("miscRenderFlags")]
+    // M717: uvMode 2 is the engine's LOCK_ALPHA, and a non-mesh emitter under it compiles neither the
+    // erosion stage nor the soft fade - read off the axis list of Riot's own quad_ps_fixedalphauv.
+    [InlineData("uvMode")]
+    // M717: and the erosion map's own address mode, which both renderers now bind a sampler for.
+    [InlineData("erosionMapAddressMode")]
     public void RenderedFieldsAreNotBadged(string field) =>
         Assert.True(VfxPreviewCoverage.IgnoredNote(H(field)) is null,
             $"'{field}' IS rendered but got badged - over-badging trains the user to ignore the badge");
@@ -116,7 +121,6 @@ public class VfxPreviewCoverageTests
     [InlineData("UseLingerRotation")]
     [InlineData("UseKeyedLingerDrag")]
     [InlineData("UseKeyedLingerAcceleration")]
-    [InlineData("erosionMapAddressMode")]
     [InlineData("uvScaleMult")]
     [InlineData("texAddressModeMult")]
     public void NestedUnreadFieldsAreBadged(string field) =>

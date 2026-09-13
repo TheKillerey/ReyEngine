@@ -89,3 +89,100 @@ position while the list is built by *authored* position. Since the simulator dro
 12,845 of which exist for nothing but spawning children - a spawning emitter read a different emitter's
 child list as soon as anything before it was dropped. Fixed as M708. The deeper question, whether a
 non-visual carrier should be simulated at all so its children spawn, is not answered here.
+
+---
+
+# M717 - the erosion stage, checked against the shipped shaders
+
+Reading 2.50 checks ltk-manager's quad shaders against Riot's own, define by define. It reports three
+things. Two of them we already had, and the checking turned up two gaps of ours instead.
+
+## Already right: the erosion samples where the base texture does
+
+Their bug was reading the erosion map at the layer's own uv **inside** the flipbook cell, so a flipbook
+with an erosion map eroded against the whole atlas every frame. Ours cannot do that: the flipbook division
+happens once, in the vertex shader, and the fragment shader only ever sees the finished atlas coordinate.
+Both the quad and the mesh sample the erosion at exactly the varying the base texture samples at.
+
+Confirmed against Riot's bytecode rather than taken on trust: **128 of 128** `quad_ps` permutations and
+**1,024 of 1,024** `mesh_ps` permutations sample `sAlphaErosionTexture` at a coordinate `TEXTURE` also
+samples at. The reading's own hedge - "TEXCOORD1.xy in most of them, and a register computed from it in
+the rest" - is exactly right, and the "rest" is entirely `mesh_ps` under SCREEN_SPACE_UV, which
+perspective-divides the same interpolant first.
+
+One trap for anyone re-deriving this: comparing the erosion's coordinate against the *first* TEXTURE
+sample makes 120 of 1,024 `mesh_ps` permutations look like they diverge. They do not. Under
+SEPARATE_ALPHA_UV that shader samples TEXTURE twice, the alpha at a separate uv and the rgb at the main
+one, and the erosion sits on the rgb. Compare against the set, not the first.
+
+## Already right: the colour-remap ramp is not built
+
+Every particle fragment shader ends in `PIXEL_COLOR_REMAP_RAMP`. They leave it out as a sampler that
+changes no pixel. We do better and for a measured reason: the Direct3D 11 path binds a 1x1 transparent
+black there, because M221 disassembled the tail and found the stage gated on the sampled ALPHA - so a
+zero-alpha ramp is a true no-op rather than an approximation, and an opaque stand-in would force the
+replacement.
+
+## Gap one: the erosion map has its own address mode, and neither renderer honoured it
+
+`erosionMapAddressMode` was never parsed. The coordinate reaches the sampler as the base texture's atlas
+position **with the scroll added**, so it leaves the map constantly, and what happens there is the artist's
+choice.
+
+| authored | share of the 339,555 emitters with an erosion map |
+| --- | ---: |
+| absent, meaning the declared default 2 (mirror) | 79.6% |
+| 0 (wrap) | 20.1% |
+| 3 | 0.18% |
+| 1 (clamp) | 0.13% |
+
+OpenGL bound no sampler object to that slot, so it took the texture object's `GL_REPEAT`. Direct3D 11 took
+the material-wide mode, also a wrap. So four fifths of the corpus was sampling as a wrap where the field
+says mirror. The OpenGL fix extends the per-slot sampler mechanism M635 built for the palette; the
+Direct3D 11 side gains its third address state, because until now the renderer had wrap and clamp and no
+mirror at all.
+
+Byte 3 is the one value nobody has measured. ltk-manager reads it as a border mode and we fold it to the
+mirror as the palette does. 599 emitters either way, and it is recorded rather than settled.
+
+## Gap two: the LOCK_ALPHA bundle compiles neither erosion nor fade
+
+`uvMode` 2 is the engine's `LOCK_ALPHA`. On anything that is not a mesh, the client draws that emitter
+through `quad_ps_fixedalphauv` - and that shader ships **64 permutations over exactly six axes**:
+ALPHA_TEST, COLORPALETTE_COLORBLIND, DISABLE_FOW, MASKED, MULT_PASS and PALETTIZE_TEXTURES. There is no
+ALPHA_EROSION axis and no SOFT_PARTICLES axis in its table of contents at all, so those two stages cannot
+compile for it however much the emitter authors. Read off the shipped cache, not inferred.
+
+We built the define set from struct presence alone and never asked. The population, measured:
+
+| | all | reachable |
+| --- | ---: | ---: |
+| author `uvMode` | 49,975 | 47,798 |
+| of those, mode 2 | 39,385 | 37,555 |
+| mode 2 and **not** a mesh | 20,502 | 19,652 |
+| of those, authoring an erosion | 1,604 | 1,582 |
+| of those, authoring soft particles | 1,998 | 1,949 |
+| **either stage - what changes** | **3,458** | **3,390** |
+
+The parked note for `uvMode` said 35,694 authors and 27,229 twos. Both were about 40% low, measured on an
+earlier patch. The field leaves the parked table, since mode 2 now decides which shader an emitter
+compiles.
+
+**The mesh exclusion is doing real work, not describing a coincidence.** 18,883 LOCK_ALPHA emitters *are*
+meshes, and they carry more erosion than the non-mesh side does - 2,941 against 1,604, on a smaller base.
+A rule that took the erosion away from LOCK_ALPHA generally would delete a stage from 2,941 emitters
+Riot's `mesh_ps` demonstrably still compiles: that shader carries SEPARATE_ALPHA_UV and ALPHA_EROSION
+together across all 1,024 of its permutations. The asymmetry is in Riot's shader set.
+
+**Half the feature, and it says so.** The bundle also draws the locked alpha differently - the whole
+texture at the quad's own corner rather than the flipbook cell. We drop the two stages and do not do that,
+which is the half with a shader table of contents behind it. The other half is unbuilt and recorded.
+
+## While measuring, two side effects worth keeping
+
+The emitter model now carries the primitive's class hash. `IsMeshPrimitive` could not answer "what kind is
+this" - it is true for a mesh and for an attached mesh that names a file, and false for an attached mesh
+carrying only a submesh mask, which is the right reading for "does this draw geometry" and the wrong one
+for every question about kind. Three booleans that do not partition had sent every census that needed the
+kind back to the raw tree.
+

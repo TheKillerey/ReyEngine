@@ -33,6 +33,29 @@ public static class VfxPrimitiveSupport
     /// individual emitter rather than of the class - so it gets its own sentence.</summary>
     private static readonly uint AttachedMesh = HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
 
+    private static readonly uint Mesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");
+
+    /// <summary>
+    /// M717: this emitter is drawn by the client through <c>quad_ps_fixedalphauv</c>, which compiles
+    /// neither the alpha-erosion stage nor the soft-particle fade.
+    ///
+    /// <para>Read off Riot's own shader cache rather than inferred: that shader ships 64 permutations over
+    /// exactly ALPHA_TEST, COLORPALETTE_COLORBLIND, DISABLE_FOW, MASKED, MULT_PASS and PALETTIZE_TEXTURES.
+    /// There is no ALPHA_EROSION axis and no SOFT_PARTICLES axis in its table of contents at all, so an
+    /// emitter routed to it cannot erode and cannot fade however much it authors.</para>
+    ///
+    /// <para>The condition is <c>uvMode</c> 2 - LOCK_ALPHA in the engine's own UV_MODE enum, where 0 is
+    /// the default, 1 screen space, and 3 to 5 the three local-space modes - on anything that is not a
+    /// mesh. The mesh kinds keep their erosion because Riot's <c>mesh_ps</c> carries its own
+    /// SEPARATE_ALPHA_UV axis that coexists with ALPHA_EROSION across 1,024 shipped permutations, so the
+    /// asymmetry is in the shader set rather than a convenience.</para>
+    /// </summary>
+    public static bool DrawsFixedAlphaUv(int? uvMode, uint primitiveClass) =>
+        uvMode == LockAlphaUvMode && primitiveClass != Mesh && primitiveClass != AttachedMesh;
+
+    /// <summary>The engine's <c>UV_MODE.lockAlpha</c>. 0 is the default and is written zero times.</summary>
+    public const int LockAlphaUvMode = 2;
+
     /// <summary>League does not render this one at all. Worth its own note: falling back to a billboard
     /// here does not degrade the picture, it INVENTS geometry the game never draws.</summary>
     private static readonly uint NonRenderable = HashAlgorithms.Fnv1a("VfxPrimitiveNonRenderable");

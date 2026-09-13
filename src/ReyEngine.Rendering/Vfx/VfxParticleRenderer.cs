@@ -429,7 +429,10 @@ public sealed class VfxParticleRenderer
             // The IsDegenerate check is the guard described on VfxAlphaErosion: under the INFERRED
             // parameter packing, 16% of erosion emitters evaluate to a mask of zero everywhere, which
             // would erase them. Skipping those keeps them looking exactly as they did before M174.
-            bool hasErosion = es.ErosionTexture != 0 && d2.AlphaErosion is { IsDegenerate: false };
+            // M717: and not when the client would route this emitter to quad_ps_fixedalphauv, which has no
+            // erosion axis. One question, asked of the same helper the define set asks.
+            bool hasErosion = es.ErosionTexture != 0 && d2.AlphaErosion is { IsDegenerate: false }
+                && !ReyEngine.Formats.Vfx.VfxPrimitiveSupport.DrawsFixedAlphaUv(d2.Extras?.UvMode, d2.PrimitiveClass);
             _gl.Uniform1(_uHasErosion, hasErosion ? 1 : 0);
             if (hasErosion)
             {
@@ -437,6 +440,14 @@ public sealed class VfxParticleRenderer
                 var yzw = ero.PackYzw();
                 _gl.ActiveTexture(TextureUnit.Texture5);
                 _gl.BindTexture(TextureTarget.Texture2D, es.ErosionTexture);
+                // M717: the erosion map has its OWN address mode, and until now it took whatever the
+                // texture object was created with - GL_REPEAT for everything ViewportControl uploads. The
+                // coordinate reaches here as the base texture's atlas position WITH the scroll added, so
+                // it leaves [0,1] on any scrolling emitter and what happens there is the authored mode's
+                // business. A sampler object rather than texture state for the reason M635 gives on the
+                // palette: one GL texture is shared across all five particle slots, so per-texture state
+                // cannot express two slots wanting different modes.
+                _gl.BindSampler(5, ErosionSampler(d2.AlphaErosion?.AddressMode ?? -1));
                 _gl.Uniform1(_uErosionTex, 5);
                 // .x is unused: the drive arrives per particle through the instance attribute, exactly
                 // as Riot's quad path does it.
@@ -541,6 +552,7 @@ public sealed class VfxParticleRenderer
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _gl.ActiveTexture(TextureUnit.Texture6);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.BindSampler(5, 0);   // M717: the erosion slot's, released with the palette's
         _gl.BindSampler(6, 0);
         _gl.ActiveTexture(TextureUnit.Texture0);
     }
@@ -673,6 +685,12 @@ public sealed class VfxParticleRenderer
     /// of the ramp at both extremes, which is the visible bug this fixes. Mode 3 has no core GLES 3.0
     /// equivalent under either candidate reading (Border or MirrorOnce), so it falls back to mirrored
     /// repeat - the identity is unresolved but has no implementation consequence.</summary>
+    /// <summary>M717: the same shared samplers, for a slot whose ABSENT value means mirror rather than
+    /// clamp. The erosion map's declared default is 2, and 79.6% of the emitters that author an erosion
+    /// leave the field out - so falling back to the palette's clamp would be the wrong answer for four
+    /// fifths of them.</summary>
+    private uint ErosionSampler(int addressMode) => PaletteSampler(addressMode < 0 ? 2 : addressMode);
+
     private uint PaletteSampler(int addressMode)
     {
         int idx = addressMode switch { 0 => 0, 1 => 1, 2 => 2, 3 => 2, _ => 1 };   // absent -> clamp
@@ -1008,7 +1026,10 @@ public sealed class VfxParticleRenderer
             _gl.Uniform1(_muPaletteV, pal.RowV);
             _gl.ActiveTexture(TextureUnit.Texture0);
         }
-        bool meshHasErosion = es.ErosionTexture != 0 && es.Def.AlphaErosion is { IsDegenerate: false };
+        // M717: a mesh keeps its erosion under LOCK_ALPHA - Riot's mesh_ps carries SEPARATE_ALPHA_UV and
+        // ALPHA_EROSION together - so this one asks the same helper and the helper says yes.
+        bool meshHasErosion = es.ErosionTexture != 0 && es.Def.AlphaErosion is { IsDegenerate: false }
+            && !ReyEngine.Formats.Vfx.VfxPrimitiveSupport.DrawsFixedAlphaUv(es.Def.Extras?.UvMode, es.Def.PrimitiveClass);
         _gl.Uniform1(_muHasErosion, meshHasErosion ? 1 : 0);
         if (meshHasErosion)
         {
@@ -1016,6 +1037,7 @@ public sealed class VfxParticleRenderer
             var yzw = ero.PackYzw();
             _gl.ActiveTexture(TextureUnit.Texture5);
             _gl.BindTexture(TextureTarget.Texture2D, es.ErosionTexture);
+            _gl.BindSampler(5, ErosionSampler(es.Def.AlphaErosion?.AddressMode ?? -1));   // M717
             _gl.Uniform1(_muErosionTex, 5);
             _gl.Uniform4(_muErosionParams, 0f, yzw.X, yzw.Y, yzw.Z);   // .x is the per-particle drive, set below
             _gl.Uniform4(_muErosionMixer, ero.ChannelMixer.X, ero.ChannelMixer.Y, ero.ChannelMixer.Z, ero.ChannelMixer.W);

@@ -33,11 +33,17 @@ public static class VfxShaderFlags
         void Set(string name, string reason) { d[name] = "1"; reasons.Add($"{name}  <- {reason}"); }
 
         // ALPHA_EROSION — the dissolve stage. 307,050 emitters (22.0%) author this struct.
-        if (e.AlphaErosion is not null)
+        // M717: an emitter the client routes to quad_ps_fixedalphauv compiles neither of these two stages,
+        // whatever it authors - that shader's table of contents has no axis for either. Gating them here
+        // rather than at each renderer keeps one answer: the D3D11 path picks a permutation from this set
+        // and the OpenGL one branches on the same question.
+        bool fixedAlphaUv = VfxPrimitiveSupport.DrawsFixedAlphaUv(e.Extras?.UvMode, e.PrimitiveClass);
+
+        if (e.AlphaErosion is not null && !fixedAlphaUv)
             Set("ALPHA_EROSION", "alphaErosionDefinition is present");
 
         // SOFT_PARTICLES — depth-fade against the scene. 95,671 emitters (6.8%).
-        if (e.SoftParticle is not null)
+        if (e.SoftParticle is not null && !fixedAlphaUv)
             Set("SOFT_PARTICLES", "softParticleParams is present");
 
         // PALETTIZE_TEXTURES — RGB remapped through a gradient strip. 43,621 emitters (3.1%).

@@ -190,7 +190,11 @@ public sealed class MeshStageParityTests
 
         // ...and the C# side actually feeds them, including the per-particle drive inside the draw loop.
         Assert.Contains("bool meshHasPalette = es.PaletteTexture != 0 && es.Def.Palette is not null;", gl);
-        Assert.Contains("bool meshHasErosion = es.ErosionTexture != 0 && es.Def.AlphaErosion is { IsDegenerate: false };", gl);
+        // M717: and not when the client would route this emitter to quad_ps_fixedalphauv - which for a
+        // MESH it never does, so the helper answers no here and the stage survives. The gate is written
+        // anyway so one question is asked in both paths rather than two that can drift.
+        Assert.Contains("bool meshHasErosion = es.ErosionTexture != 0 && es.Def.AlphaErosion is { IsDegenerate: false }", gl);
+        Assert.Contains("VfxPrimitiveSupport.DrawsFixedAlphaUv(es.Def.Extras?.UvMode, es.Def.PrimitiveClass)", gl);
         Assert.Contains("if (meshHasErosion) _gl.Uniform1(_muErosionDrive, es.Instances[o + 18]);", gl);
         Assert.Contains("_gl.BindSampler(6, PaletteSampler(es.Def.PaletteAddressMode));", gl);
     }

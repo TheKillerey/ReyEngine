@@ -225,6 +225,15 @@ public static class VfxD3D11EmitterPipeline
         {
             string? slot = BindTexture(renderer, mat, ps, "sAlphaErosionTexture", sprites, log);
 
+        // M717: the erosion map's own address mode. This slot took the material-wide one until now, which
+        // is a wrap, and the field's declared default is a MIRROR that four fifths of the corpus takes by
+        // leaving it out. The coordinate is the base texture's atlas position with the scroll added, so it
+        // runs off the map on any scrolling emitter and the difference shows.
+        if (slot is not null && e.AlphaErosion is { } erosionAddress)
+            (mat.SlotAddress ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase))
+                [slot.Replace("__TX", "__SMP", StringComparison.OrdinalIgnoreCase)] =
+                    erosionAddress.AddressMode < 0 ? 2 : erosionAddress.AddressMode;
+
             // Two conditions, and both are load-bearing.
             //
             // The map must really be BOUND: against the renderer's white stand-in the erosion texel reads

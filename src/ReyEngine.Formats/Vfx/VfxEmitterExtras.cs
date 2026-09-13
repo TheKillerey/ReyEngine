@@ -201,7 +201,21 @@ public sealed record VfxEmitterExtras
     /// <summary>71,374. Unity TextureWrapMode: 0=Wrap, 1=Clamp, 2=Mirror (M175). The renderer applies the
     /// PALETTE address mode but not this one.</summary>
     public int? TexAddressModeBase { get; init; }
-    /// <summary>35,694. Values 2 (27,229), 1, 3, 4, 5. Meaning UNKNOWN.</summary>
+    /// <summary>
+    /// M717: where a layer's coordinates come from, in the engine's own UV_MODE enum - 0 default, 1 screen
+    /// space, <b>2 LOCK_ALPHA</b>, 3 to 5 the three local-space modes. Mode 2 on anything that is not a mesh
+    /// routes the emitter to <c>quad_ps_fixedalphauv</c>, which ships 64 permutations and carries no
+    /// ALPHA_EROSION axis and no SOFT_PARTICLES axis at all - so neither stage compiles for it, however much
+    /// it authors. Ask <see cref="VfxPrimitiveSupport.DrawsFixedAlphaUv"/> rather than reading the number.
+    ///
+    /// <para>49,975 emitters author it, 39,385 of them mode 2, and mode 0 is written zero times - it is the
+    /// declared default, omitted as Riot's writer omits every default. An older note here said 35,694 and
+    /// 27,229; both were about 40% low, measured on an earlier patch.</para>
+    ///
+    /// <para>What the LOCKED ALPHA itself does is NOT built: the bundle also draws the alpha from the whole
+    /// texture at the quad's own corner rather than from the flipbook cell. Dropping the two stages without
+    /// that is half the feature, and it is the half with a shader table of contents behind it.</para>
+    /// </summary>
     public int? UvMode { get; init; }
     /// <summary>1,442.</summary>
     public float? UvParallaxScale { get; init; }
@@ -240,7 +254,8 @@ public static class VfxParkedEmitterFields
         "directionVelocityScale", "directionVelocityMinScale", "emissionMeshName", "emissionMeshScale",
         "useEmissionMeshNormalForBirth", "doesLifetimeScale", "offsetLifetimeScaling",
         "offsetLifeScalingSymmetryMode",
-        "texAddressModeBase", "uvMode", "uvParallaxScale",
+        // M717: uvMode is gone from here - mode 2 decides which shader an emitter compiles.
+        "texAddressModeBase", "uvParallaxScale",
     };
 
     /// <summary>The same set by hash, for <see cref="VfxPreviewCoverage"/> and the resolver.</summary>
