@@ -1,10 +1,12 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using ReyEngine.App.ViewModels;
 
 namespace ReyEngine.App.Views;
 
-/// <summary>M46 Particle Editor view. Code-behind only forwards pointer input on the preview
-/// surface to the embedded viewport camera (LMB orbit · MMB pan · wheel zoom).</summary>
+/// <summary>M46 Particle Editor view. Code-behind forwards pointer input on the preview surface to the
+/// embedded viewport camera (LMB orbit · MMB pan · wheel zoom), and the curve graph's commits to the
+/// selected row (M718).</summary>
 public partial class ParticleEditorView : UserControl
 {
     private bool _lmb, _mmb;
@@ -17,7 +19,17 @@ public partial class ParticleEditorView : UserControl
         PreviewInput.PointerMoved += OnMoved;
         PreviewInput.PointerReleased += OnReleased;
         PreviewInput.PointerWheelChanged += OnWheel;
+
+        // M718: the graph commits through the same row methods the key list uses, so a drag, a double-click
+        // and a Delete each take exactly one EditCurve, as a typed value and an Apply click do
+        CurveGraph.KeyMoved += (index, time, components) => CurveRow()?.SetKey(index, time, components);
+        CurveGraph.KeyAdded += (time, components) => CurveRow()?.AddKey(time, components);
+        CurveGraph.KeyRemoved += index => CurveRow()?.DeleteKey(index);
+        CurveFit.Click += (_, _) => CurveGraph.FitView();
     }
+
+    /// <summary>The row the graph shows: its Times and Channels are bound to SelectedProperty.</summary>
+    private ParticlePropertyRowViewModel? CurveRow() => (DataContext as ParticleEditorViewModel)?.SelectedProperty;
 
     private void OnPressed(object? sender, PointerPressedEventArgs e)
     {

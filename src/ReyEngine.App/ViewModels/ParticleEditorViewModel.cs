@@ -15,7 +15,7 @@ namespace ReyEngine.App.ViewModels;
 
 /// <summary>
 /// M46 Particle Editor (Particle-Town style): tree of systems/emitters, emitter module cards, a property
-/// inspector with safe primitive editing, a read-only curve display, and a live billboard preview.
+/// inspector with safe primitive editing, a curve editor (M718), and a live billboard preview.
 /// Backed by <see cref="ParticleDocument"/> (live BinTree); edits re-serialize + re-extract the playable
 /// definitions so the preview updates immediately. Saving goes through the project-override pipeline.
 /// </summary>
@@ -185,7 +185,10 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
 
     /// <summary>M190 (3.6): run a curve mutation, then do exactly what a scalar edit does - mark the
     /// document dirty, re-serialize, re-extract, and rebuild the preview - so an edited curve is visible
-    /// in the viewport straight away rather than only after a reload.</summary>
+    /// in the viewport straight away rather than only after a reload.
+    /// <para>M718: this is the expensive path - map22.bin takes about three seconds through the parse - so
+    /// it runs once per user action. The curve graph drags a copy and calls it on release, never per
+    /// pointer move.</para></summary>
     internal void EditCurve(ParticlePropertyRowViewModel row, Action mutate)
     {
         if (Document is null) return;
@@ -593,7 +596,7 @@ public sealed partial class ParticlePropertyRowViewModel : ObservableObject
     public void Refresh() { CurrentText = Prop.CurrentText; EditText = Prop.CurrentText; }
 
     /// <summary>Re-read the keys from the property after an edit, and repaint the curve. The arrays are
-    /// replaced rather than mutated, so CurvePreview's AffectsRender picks the change up.</summary>
+    /// replaced rather than mutated, so CurveEditor's AffectsRender picks the change up.</summary>
     public void RefreshCurve()
     {
         RebuildCurveKeys();
@@ -625,7 +628,7 @@ public sealed partial class ParticlePropertyRowViewModel : ObservableObject
         float mid = t.Length > 1 ? (t[0] + t[^1]) * 0.5f : t[0] + 0.5f;
         var comps = new float[ch.Length];
         for (int c = 0; c < ch.Length; c++) comps[c] = ch[c][0];
-        _owner.EditCurve(this, () => Prop.AddCurveKey(mid, comps));
+        AddKey(mid, comps);
     }
 
     internal void ApplyKey(int index, string timeText, string valueText)
@@ -638,10 +641,23 @@ public sealed partial class ParticlePropertyRowViewModel : ObservableObject
         var comps = new float[want];
         for (int i = 0; i < want; i++)
             comps[i] = float.Parse(parts[i].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture);
-        _owner.EditCurve(this, () => Prop.SetCurveKey(index, time, comps));
+        SetKey(index, time, comps);
     }
 
-    internal void DeleteKey(int index) => _owner.EditCurve(this, () => Prop.RemoveCurveKey(index));
+    // M718: the three commits the curve graph makes - the same EditCurve the key list takes, and ONE per
+    // user action. The graph drags a copy of the keys and calls SetKey once, on release; calling it per
+    // pointer move would re-serialize the bin and rebuild the preview at the pointer's rate.
+
+    /// <summary>Overwrite one key - a finished drag, or a typed value.</summary>
+    public void SetKey(int index, float time, float[] components) =>
+        _owner.EditCurve(this, () => Prop.SetCurveKey(index, time, components));
+
+    /// <summary>Insert a key, placed in time order by the document.</summary>
+    public void AddKey(float time, float[] components) =>
+        _owner.EditCurve(this, () => Prop.AddCurveKey(time, components));
+
+    /// <summary>Remove one key. The document refuses the last one, and the refusal shows as the row's error.</summary>
+    public void DeleteKey(int index) => _owner.EditCurve(this, () => Prop.RemoveCurveKey(index));
 
     [RelayCommand] private void Select() => _owner.SelectRow(this);
 }

@@ -267,14 +267,26 @@
               <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="CURVE EDITOR (over particle lifetime)" />
               <!-- M190 (3.6): the keys are editable, in the list to the right of the plot -->
               <Grid ColumnDefinitions="*,4,210">
-                <Grid Grid.Column="0">
-                  <views:CurvePreview Times="{Binding SelectedProperty.CurveTimes, FallbackValue={x:Null}}"
-                                      Channels="{Binding SelectedProperty.CurveChannels, FallbackValue={x:Null}}"
-                                      Margin="6" />
-                  <TextBlock Text="Select a property with a curve (name shows '+ curve')" FontSize="10" Opacity="0.4"
-                             HorizontalAlignment="Center" VerticalAlignment="Center"
-                             IsVisible="{Binding SelectedProperty.HasCurve, FallbackValue=True, Converter={x:Static BoolConverters.Not}}" />
-                </Grid>
+                <!-- M718: the graph edits. A drag moves a copy of the keys and commits ONCE, on release;
+                     a read-only bin draws its keys as rings that cannot be picked up. -->
+                <DockPanel Grid.Column="0">
+                  <DockPanel DockPanel.Dock="Bottom" Margin="6,0,6,3">
+                    <Button x:Name="CurveFit" DockPanel.Dock="Right" Classes="tool" Content="Fit" FontSize="9" Padding="6,1"
+                            ToolTip.Tip="Fit the view to the channels shown (F)" />
+                    <TextBlock FontSize="9" Opacity="0.4" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                               Text="drag a key · double-click adds · Del removes · Shift holds an axis · wheel zooms (Ctrl time, Shift value) · RMB pans · channel chips: click hides, Ctrl-click solos" />
+                  </DockPanel>
+                  <Grid>
+                    <views:CurveEditor x:Name="CurveGraph"
+                                       Times="{Binding SelectedProperty.CurveTimes, FallbackValue={x:Null}}"
+                                       Channels="{Binding SelectedProperty.CurveChannels, FallbackValue={x:Null}}"
+                                       IsEditable="{Binding SelectedProperty.CanEditCurve, FallbackValue=False}"
+                                       Margin="6" />
+                    <TextBlock Text="Select a property with a curve (name shows '+ curve')" FontSize="10" Opacity="0.4"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                               IsVisible="{Binding SelectedProperty.HasCurve, FallbackValue=True, Converter={x:Static BoolConverters.Not}}" />
+                  </Grid>
+                </DockPanel>
                 <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
                 <DockPanel Grid.Column="2" IsVisible="{Binding SelectedProperty.HasCurve, FallbackValue=False}">
                   <DockPanel DockPanel.Dock="Top" Margin="4,3">
