@@ -70,8 +70,24 @@ public sealed class ParticleEditorLayoutTests
         int input = view.IndexOf("x:Name=\"PreviewInput\"", StringComparison.Ordinal);
         Assert.True(viewport > 0 && input > viewport, "PreviewInput must be layered after the viewport");
 
-        // and the rig panel came along with the viewport it belongs to
+        // and the viewport still reads the rig, wherever its panel sits (M721: in DETAILS)
         Assert.Contains("ParticleRig=\"{Binding Rig}\"", view);
         Assert.Contains("FROM THE SPELL RECORD", view);
+    }
+
+    [Fact]
+    public void TheRigSitsInTheDetailsColumnNotOverTheView()
+    {
+        // M721: laid over the 3D view it covered most of the bottom row's preview at any usable height, and
+        // the camera could not be orbited underneath it. It is docked at the foot of DETAILS instead.
+        string view = View();
+        int details = view.IndexOf("Text=\"DETAILS\"", StringComparison.Ordinal);
+        int rig = view.IndexOf("IsChecked=\"{Binding IsRigStill}\"", StringComparison.Ordinal);
+        int curve = view.IndexOf("Text=\"CURVE EDITOR (over particle lifetime)\"", StringComparison.Ordinal);
+        int viewport = view.IndexOf("x:Name=\"PreviewViewport\"", StringComparison.Ordinal);
+        Assert.True(details > 0 && rig > details && rig < curve && rig < viewport,
+            "the rig panel belongs in the details column, before the bottom row");
+        Assert.Contains("<Border DockPanel.Dock=\"Bottom\" BorderBrush=\"{DynamicResource ReyBorderBrush}\"", view);
+        Assert.DoesNotContain("HorizontalAlignment=\"Right\" VerticalAlignment=\"Top\"", view);
     }
 }

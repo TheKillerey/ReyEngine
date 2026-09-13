@@ -219,6 +219,68 @@
         <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}">
           <DockPanel>
             <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="DETAILS" />
+            <!-- M712: the rig. The file does not say where an effect goes, so the reader says it here.
+                 M721: at the foot of DETAILS, not over the 3D view. Over the view it covered most of
+                 the bottom row's preview at any usable height and the camera could not be used under
+                 it; docked here it is always in reach and the whole view is the viewport's. -->
+            <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource ReyBorderBrush}"
+                    BorderThickness="0,1,0,0" Padding="10,8,10,10">
+              <StackPanel Spacing="5">
+                <TextBlock Text="RIG" FontSize="10" FontWeight="Bold"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBlock Text="How the preview carries this system" FontSize="9" Opacity="0.55"
+                           TextWrapping="Wrap" />
+                <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="2">
+                  <UniformGrid Columns="4">
+                    <ToggleButton Classes="vp" Content="Still" IsChecked="{Binding IsRigStill}"
+                                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                  ToolTip.Tip="It stays where it is put - a buff, an aura, a ground indicator." />
+                    <ToggleButton Classes="vp" Content="Burst" IsChecked="{Binding IsRigBurst}"
+                                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                  ToolTip.Tip="Still, but the whole run starts over as soon as it ends." />
+                    <ToggleButton Classes="vp" Content="Missile" IsChecked="{Binding IsRigMissile}"
+                                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                  ToolTip.Tip="It flies in a straight line and stops emitting where it lands." />
+                    <ToggleButton Classes="vp" Content="Trail" IsChecked="{Binding IsRigTrail}"
+                                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                  ToolTip.Tip="It circles, so a trail or a ribbon has a path to lay itself along." />
+                  </UniformGrid>
+                </Border>
+                <!-- M713: which of the two the reader is looking at. The game's own wiring names about
+                     56% of systems; the rest fall back to M712's name guess and say so. -->
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <Border Classes="badge" IsVisible="{Binding RoleIsAuthored}">
+                    <TextBlock Text="FROM THE SPELL RECORD" FontSize="8" />
+                  </Border>
+                  <Border Classes="badge"
+                          IsVisible="{Binding RoleIsAuthored, Converter={x:Static BoolConverters.Not}}">
+                    <TextBlock Text="GUESSED FROM THE NAME" FontSize="8" />
+                  </Border>
+                </StackPanel>
+                <TextBlock Text="{Binding RigNote}" FontSize="9" Opacity="0.5" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding RigSpeed, StringFormat='Speed   {0:0} u/s'}" FontSize="10"
+                           Opacity="0.7" Margin="0,4,0,0" IsVisible="{Binding IsRigMissile}" />
+                <Slider Minimum="100" Maximum="6000" Value="{Binding RigSpeed}"
+                        IsVisible="{Binding IsRigMissile}"
+                        ToolTip.Tip="How fast the missile flies. Riot's own speeds run from about 1,200 to 3,000, with a median of 1,750." />
+                <TextBlock Text="{Binding RigHeight, StringFormat='Height   {0:0} u'}" FontSize="10"
+                           Opacity="0.7" Margin="0,4,0,0" />
+                <Slider Minimum="0" Maximum="600" Value="{Binding RigHeight}"
+                        ToolTip.Tip="How far off the ground the whole rig sits. A champion is 200 units tall." />
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <ToggleButton Classes="vp" Content="Replay" IsChecked="{Binding RigReplay}"
+                                ToolTip.Tip="Start the run over when it ends." />
+                  <ToggleButton Classes="vp" Content="Stop mid-run" IsChecked="{Binding RigStopMidRun}"
+                                ToolTip.Tip="Stop emitting halfway through, so the teardown plays without holding Stop." />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <TextBlock Text="Seed" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding RigSeed}" Width="72" FontSize="10" />
+                  <Button Classes="tool" Content="↻" Command="{Binding RerollSeedCommand}"
+                          ToolTip.Tip="A different run of the same effect." />
+                </StackPanel>
+              </StackPanel>
+            </Border>
             <ScrollViewer VerticalScrollBarVisibility="Auto">
               <StackPanel Margin="10" Spacing="6" IsVisible="{Binding SelectedProperty, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <TextBlock Text="{Binding SelectedProperty.Name, FallbackValue=''}" FontSize="13" FontWeight="Bold" TextWrapping="Wrap" />
@@ -337,67 +399,6 @@
               <Border x:Name="PreviewInput" Background="Transparent" />
               <TextBlock Text="LMB orbit · MMB pan · wheel zoom" FontSize="9" Opacity="0.35"
                          Margin="6,4" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" />
-              <!-- M712: the rig. The file does not say where an effect goes, so the reader says it here.
-                   Over the viewport rather than in the toolbar, and AFTER PreviewInput so it takes clicks
-                   instead of orbiting the camera underneath it. -->
-              <Border Classes="card" Padding="10" CornerRadius="6" Margin="8" MinWidth="240"
-                      HorizontalAlignment="Right" VerticalAlignment="Top">
-                <StackPanel Spacing="5">
-                  <TextBlock Text="RIG" FontSize="10" FontWeight="Bold"
-                             Foreground="{DynamicResource ReyTextDimBrush}" />
-                  <TextBlock Text="How the preview carries this system" FontSize="9" Opacity="0.55"
-                             TextWrapping="Wrap" />
-                  <Border Background="{DynamicResource ReyPanelAltBrush}" CornerRadius="4" Padding="2">
-                    <UniformGrid Columns="4">
-                      <ToggleButton Classes="vp" Content="Still" IsChecked="{Binding IsRigStill}"
-                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                                    ToolTip.Tip="It stays where it is put - a buff, an aura, a ground indicator." />
-                      <ToggleButton Classes="vp" Content="Burst" IsChecked="{Binding IsRigBurst}"
-                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                                    ToolTip.Tip="Still, but the whole run starts over as soon as it ends." />
-                      <ToggleButton Classes="vp" Content="Missile" IsChecked="{Binding IsRigMissile}"
-                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                                    ToolTip.Tip="It flies in a straight line and stops emitting where it lands." />
-                      <ToggleButton Classes="vp" Content="Trail" IsChecked="{Binding IsRigTrail}"
-                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                                    ToolTip.Tip="It circles, so a trail or a ribbon has a path to lay itself along." />
-                    </UniformGrid>
-                  </Border>
-                  <!-- M713: which of the two the reader is looking at. The game's own wiring names about
-                       56% of systems; the rest fall back to M712's name guess and say so. -->
-                  <StackPanel Orientation="Horizontal" Spacing="4">
-                    <Border Classes="badge" IsVisible="{Binding RoleIsAuthored}">
-                      <TextBlock Text="FROM THE SPELL RECORD" FontSize="8" />
-                    </Border>
-                    <Border Classes="badge"
-                            IsVisible="{Binding RoleIsAuthored, Converter={x:Static BoolConverters.Not}}">
-                      <TextBlock Text="GUESSED FROM THE NAME" FontSize="8" />
-                    </Border>
-                  </StackPanel>
-                  <TextBlock Text="{Binding RigNote}" FontSize="9" Opacity="0.5" TextWrapping="Wrap" />
-                  <TextBlock Text="{Binding RigSpeed, StringFormat='Speed   {0:0} u/s'}" FontSize="10"
-                             Opacity="0.7" Margin="0,4,0,0" IsVisible="{Binding IsRigMissile}" />
-                  <Slider Minimum="100" Maximum="6000" Value="{Binding RigSpeed}"
-                          IsVisible="{Binding IsRigMissile}"
-                          ToolTip.Tip="How fast the missile flies. Riot's own speeds run from about 1,200 to 3,000, with a median of 1,750." />
-                  <TextBlock Text="{Binding RigHeight, StringFormat='Height   {0:0} u'}" FontSize="10"
-                             Opacity="0.7" Margin="0,4,0,0" />
-                  <Slider Minimum="0" Maximum="600" Value="{Binding RigHeight}"
-                          ToolTip.Tip="How far off the ground the whole rig sits. A champion is 200 units tall." />
-                  <StackPanel Orientation="Horizontal" Spacing="5">
-                    <ToggleButton Classes="vp" Content="Replay" IsChecked="{Binding RigReplay}"
-                                  ToolTip.Tip="Start the run over when it ends." />
-                    <ToggleButton Classes="vp" Content="Stop mid-run" IsChecked="{Binding RigStopMidRun}"
-                                  ToolTip.Tip="Stop emitting halfway through, so the teardown plays without holding Stop." />
-                  </StackPanel>
-                  <StackPanel Orientation="Horizontal" Spacing="5">
-                    <TextBlock Text="Seed" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
-                    <TextBox Text="{Binding RigSeed}" Width="72" FontSize="10" />
-                    <Button Classes="tool" Content="↻" Command="{Binding RerollSeedCommand}"
-                            ToolTip.Tip="A different run of the same effect." />
-                  </StackPanel>
-                </StackPanel>
-              </Border>
             </Grid>
             </DockPanel>
           </Border>
