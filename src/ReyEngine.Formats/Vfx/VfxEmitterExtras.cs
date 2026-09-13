@@ -198,8 +198,9 @@ public sealed record VfxEmitterExtras
     public int? OffsetLifeScalingSymmetryMode { get; init; }
 
     // ---- texture -----------------------------------------------------------------------------------
-    /// <summary>71,374. Unity TextureWrapMode: 0=Wrap, 1=Clamp, 2=Mirror (M175). The renderer applies the
-    /// PALETTE address mode but not this one.</summary>
+    /// <summary>M719: the engine's ParticleSystem::TEXTUREADDRESS - 0 WRAP, 1 MIRROR, 2 CLAMP, 3 BORDER - and
+    /// both renderers now bind the base texture's sampler from it (VfxTextureAddress). From M175 to M717 this
+    /// note guessed Unity's order, 2 = Mirror; the engine's name and the corpus both say 2 is the clamp.</summary>
     public int? TexAddressModeBase { get; init; }
     /// <summary>
     /// M717: where a layer's coordinates come from, in the engine's own UV_MODE enum - 0 default, 1 screen
@@ -255,7 +256,8 @@ public static class VfxParkedEmitterFields
         "useEmissionMeshNormalForBirth", "doesLifetimeScale", "offsetLifetimeScaling",
         "offsetLifeScalingSymmetryMode",
         // M717: uvMode is gone from here - mode 2 decides which shader an emitter compiles.
-        "texAddressModeBase", "uvParallaxScale",
+        // M719: texAddressModeBase is gone from here - it binds the base texture's sampler.
+        "uvParallaxScale",
     };
 
     /// <summary>The same set by hash, for <see cref="VfxPreviewCoverage"/> and the resolver.</summary>

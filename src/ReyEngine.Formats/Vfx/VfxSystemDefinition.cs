@@ -52,7 +52,7 @@ public sealed record VfxEmitterDefinition(
     bool RandomStartFrame,
     bool IsMeshPrimitive,           // primitive is a mesh (billboarded only when the mesh can't load)
     string? MeshPath = null,        // M47: VfxPrimitiveMesh -> VfxMeshDefinitionData.mSimpleMeshName (.scb/.sco)
-    Vector2 UvScrollRate = default, // M47c: birthUvScrollRate — mesh particles FLOW by scrolling UVs (waterfalls)
+    Vector2 UvScrollRate = default, // M47c: birthUvScrollRate; M719: cells per second inside the birth ramp on a quad
     string? MeshSkeletonPath = null, // M48: skinned mesh primitive (.skl) — butterflies
     string? MeshAnimationPath = null, // M48: idle animation (.anm) — the wing flap
     VfxSpawnShape? SpawnShape = null,
@@ -68,6 +68,9 @@ public sealed record VfxEmitterDefinition(
     string? TextureMultPath = null,
     Vector2 TextureMultTexDiv = default,
     Vector2 TextureMultUvScrollRate = default,
+    /// <summary>startFrame - M719: added AFTER the run wraps, so a book cycles back to it, and never clamped
+    /// or dropped: under isRandomStartFrame it still lands on top of the random phase, and a single-frame
+    /// emitter over a grid uses it to pick one still cell. See VfxFlipbook.</summary>
     float StartFrame = 0f,
     bool UseTextureAspect = false,
     VfxDistortionDefinition? Distortion = null,
@@ -97,7 +100,7 @@ public sealed record VfxEmitterDefinition(
     // ---- M174 tier 2.3: the UV transform stack ----
     // ReyEngine implemented exactly one term of this (birthUvScrollRate * age). These are the rest, in
     // descending order of how many emitters author them.
-    /// <summary>birthUVOffset - a fixed shift of the sampled UV. 146,833 emitters.</summary>
+    /// <summary>birthUVOffset - where the birth scroll ramp starts, in cells (M719). 146,833 emitters.</summary>
     Vector2 UvOffset = default,
     /// <summary>uvScale - zoom about UvTransformCenter. 135,073 emitters.</summary>
     Vector2 UvScale = default,
@@ -106,7 +109,10 @@ public sealed record VfxEmitterDefinition(
     Vector2 UvScrollIntegrated = default,
     /// <summary>uvRotation, degrees, about UvTransformCenter. 50,439 emitters.</summary>
     float UvRotation = 0f,
-    /// <summary>uvScrollClamp - clamp the final coordinate to [0,1] instead of wrapping. 29,820.</summary>
+    /// <summary>uvScrollClamp - M719: holds the BIRTH RAMP (birthUVOffset + age * birthUvScrollRate) to
+    /// [-1, 1] cells instead of wrapping it; the integrated and emitter scrolls are added after and never
+    /// clamped. It was read as a clamp of the whole coordinate to [0,1] from M174 to M717. 33,939 authors,
+    /// 80% of them meshes.</summary>
     bool UvScrollClamp = false,
     /// <summary>emitterUvScrollRate - scrolls with EMITTER age rather than particle age. 23,890.</summary>
     Vector2 EmitterUvScrollRate = default,
@@ -245,7 +251,16 @@ public sealed record VfxEmitterDefinition(
     /// mesh carrying only a submesh mask - which is the right reading for "does this draw geometry" and
     /// the wrong one for every question about the emitter's kind. Three booleans that do not partition
     /// sent every census that needed the kind back to the raw tree.</para></summary>
-    uint PrimitiveClass = 0)
+    uint PrimitiveClass = 0,
+    /// <summary>M719: the rest of the textureMult layer's translation - birthUVOffsetMult,
+    /// ParticleIntegratedUvScrollMult, emitterUvScrollRateMult and uvScrollClampMult. Its birth scroll rate
+    /// was already read as <see cref="TextureMultUvScrollRate"/>; reading 2.11 builds one ramp per layer
+    /// from the same formula, and running the base through it without the multiplier would have put the two
+    /// layers' scrolls in different units. Constants only, as the base layer's are.</summary>
+    Vector2 TextureMultUvOffset = default,
+    Vector2 TextureMultUvScrollIntegrated = default,
+    Vector2 TextureMultEmitterUvScrollRate = default,
+    bool TextureMultUvScrollClamp = false)
 {
     /// <summary>M707: this emitter authors NO base texture path at all.
     ///

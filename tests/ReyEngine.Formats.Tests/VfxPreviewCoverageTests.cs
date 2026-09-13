@@ -92,6 +92,13 @@ public class VfxPreviewCoverageTests
     [InlineData("uvMode")]
     // M717: and the erosion map's own address mode, which both renderers now bind a sampler for.
     [InlineData("erosionMapAddressMode")]
+    // M719: texAddressModeBase binds the base texture's sampler, in the engine's TEXTUREADDRESS order.
+    [InlineData("texAddressModeBase")]
+    // M719: and the rest of the multiplier's translation, which runs through the same ramp as the base's.
+    [InlineData("birthUVOffsetMult")]
+    [InlineData("uvScrollClampMult")]
+    [InlineData("ParticleIntegratedUvScrollMult")]
+    [InlineData("emitterUvScrollRateMult")]
     public void RenderedFieldsAreNotBadged(string field) =>
         Assert.True(VfxPreviewCoverage.IgnoredNote(H(field)) is null,
             $"'{field}' IS rendered but got badged - over-badging trains the user to ignore the badge");

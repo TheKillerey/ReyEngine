@@ -99,7 +99,9 @@ public sealed class VfxParticleSimulator
         /// <summary>M640: birthScale.z. Meshes scale per axis; quads never read it.</summary>
         public float BirthSizeZ;
         public float Rot, RotVel;
-        public float StartFrame, FrameRate;
+        /// <summary>M719: the random start's phase inside the run, not a cell - the authored startFrame is
+        /// read off the definition and added after the wrap (VfxFlipbook).</summary>
+        public float FramePhase, FrameRate;
         public float ColorRandom;   // M68: stable per-particle 0..1 roll for the colour-gradient variant axis
 
         /// <summary>M177 (2.5): where this particle has been, oldest first, for trail emitters only. Null
@@ -812,9 +814,12 @@ public sealed class VfxParticleSimulator
             BirthRotation = birthRotation * (MathF.PI / 180f),
             Rot = d.IsMeshPrimitive ? 0f : birthRotation.X * (MathF.PI / 180f),
             RotVel = rotVel.X * (MathF.PI / 180f),
-            StartFrame = d.RandomStartFrame && d.NumFrames > 1
-                ? _rng.Next(d.NumFrames)
-                : Math.Clamp(d.StartFrame, 0f, Math.Max(0, d.NumFrames - 1)),
+            // M719: in the SAME place, under the SAME condition, as the whole-cell draw it replaces. Next(n)
+            // and NextDouble() consume one sample each, so the seeded stream every later roll reads from does
+            // not move - and nothing is drawn for an emitter that never drew before.
+            FramePhase = d.RandomStartFrame && d.NumFrames > 1
+                ? VfxFlipbook.RandomPhase(_rng.NextDouble(), d.NumFrames)
+                : 0f,
             FrameRate = d.BirthFrameRate?.SampleBirth(_rng) ?? d.FrameRate ?? 0f,
             ColorRandom = (float)_rng.NextDouble(),
             // M177 (2.5): only trail emitters carry a ribbon buffer.
@@ -891,11 +896,11 @@ public sealed class VfxParticleSimulator
             //
             // 89.7% of flipbook emitters across Map453/11/12/30 are random-start-with-no-rate, so this
             // governs most of them; see docs/research/vfx-support-report.md open question 10.
-            float frame = 0f;
-            if (d.NumFrames > 1)
-                frame = p.FrameRate > 0f
-                    ? MathF.Floor((p.StartFrame + p.Age * p.FrameRate) % d.NumFrames)
-                    : MathF.Floor(p.StartFrame);
+            //
+            // M719: the formula is reading 2.11's - startFrame + fmod(phase + age * rate, numFrames) - and it
+            // runs for every quad, so a single-frame emitter over a grid draws the still cell its startFrame
+            // picks. The M595 rule above survives inside it: no rate, no run.
+            float frame = VfxFlipbook.Frame(d.StartFrame, p.FramePhase, p.Age, p.FrameRate, d.NumFrames);
 
             buf[k++] = p.Pos.X; buf[k++] = p.Pos.Y; buf[k++] = p.Pos.Z;
             float sizeX = p.BirthSize.X * scaleMul.X;

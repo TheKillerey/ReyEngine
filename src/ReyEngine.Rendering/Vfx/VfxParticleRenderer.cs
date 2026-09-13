@@ -22,6 +22,7 @@ public sealed class VfxParticleRenderer
     // M174 (2.3): the UV transform stack.
     private int _uErosionTex, _uErosionParams, _uErosionMixer, _uHasErosion;   // M174 (2.1)
     private int _uUvOffset, _uUvScale, _uUvScrollInt, _uUvRotation, _uUvClamp;
+    private int _uUvOffsetMult, _uUvScrollIntMult, _uEmitterUvScrollMult, _uUvClampMult;   // M719
     private int _uEmitterUvScroll, _uUvFlip, _uUvRotInt, _uUvRotRate, _uUvCenter, _uEmitterAge;
     private int _uDirectionOriented, _uArbitraryQuad;
     private int _uPlacementRight, _uPlacementUp, _uPlacementForward;
@@ -84,6 +85,10 @@ public sealed class VfxParticleRenderer
         _uUvScrollInt = gl.GetUniformLocation(_program, "uUvScrollInt");
         _uUvRotation = gl.GetUniformLocation(_program, "uUvRotation");
         _uUvClamp = gl.GetUniformLocation(_program, "uUvClamp");
+        _uUvOffsetMult = gl.GetUniformLocation(_program, "uUvOffsetMult");
+        _uUvScrollIntMult = gl.GetUniformLocation(_program, "uUvScrollIntMult");
+        _uEmitterUvScrollMult = gl.GetUniformLocation(_program, "uEmitterUvScrollMult");
+        _uUvClampMult = gl.GetUniformLocation(_program, "uUvClampMult");
         _uEmitterUvScroll = gl.GetUniformLocation(_program, "uEmitterUvScroll");
         _uUvFlip = gl.GetUniformLocation(_program, "uUvFlip");
         _uUvRotInt = gl.GetUniformLocation(_program, "uUvRotInt");
@@ -415,12 +420,20 @@ public sealed class VfxParticleRenderer
             // emitters) and sub-1 components (390) are authored deliberately and were being clamped to 1,
             // which silently discarded them. What negative/fractional means in League is UNKNOWN - the
             // shader now divides by the value as authored, which for a negative component mirrors the axis.
+            // M719: the uv translation is inside this divide now, so a negative divisor reverses the scroll
+            // too. The D3D11 descriptor reads any divisor below 1 as 1 - a divergence the image already had.
             _gl.Uniform2(_uTexDiv, es.Def.TexDiv.X == 0 ? 1f : es.Def.TexDiv.X, es.Def.TexDiv.Y == 0 ? 1f : es.Def.TexDiv.Y);
             _gl.Uniform2(_uUvScrollRate, es.Def.UvScrollRate.X, es.Def.UvScrollRate.Y);
             _gl.Uniform1(_uHasTexMult, es.TextureMult != 0 ? 1 : 0);
             var multDiv = es.Def.TextureMultTexDiv;
             _gl.Uniform2(_uTexDivMult, multDiv.X == 0 ? 1f : multDiv.X, multDiv.Y == 0 ? 1f : multDiv.Y);
-            _gl.Uniform2(_uUvScrollRateMult, es.Def.TextureMultUvScrollRate.X, es.Def.TextureMultUvScrollRate.Y);
+            // M719: the multiplier's whole translation, from the one gathering the D3D11 builder reads too.
+            var multLayer = ReyEngine.Formats.Vfx.VfxUvLayer.MultOf(es.Def);
+            _gl.Uniform2(_uUvScrollRateMult, multLayer.BirthScrollRate.X, multLayer.BirthScrollRate.Y);
+            _gl.Uniform2(_uUvOffsetMult, multLayer.Offset.X, multLayer.Offset.Y);
+            _gl.Uniform2(_uUvScrollIntMult, multLayer.IntegratedScrollRate.X, multLayer.IntegratedScrollRate.Y);
+            _gl.Uniform2(_uEmitterUvScrollMult, multLayer.EmitterScrollRate.X, multLayer.EmitterScrollRate.Y);
+            _gl.Uniform1(_uUvClampMult, multLayer.ScrollClamp ? 1 : 0);
             // M174 (1.4): alphaRef is an 0..255 cutoff; the engine confirms it (quad_ps declares ALPHA_TEST
             // and AlphaTestReferenceValue). 34,788 emitters author a non-zero one.
             _gl.Uniform1(_uAlphaRef, es.Def.AlphaRef / 255f);
@@ -528,8 +541,14 @@ public sealed class VfxParticleRenderer
                 _gl.BindTexture(TextureTarget.Texture2D, es.DistortionTexture);
                 _gl.ActiveTexture(TextureUnit.Texture0);
             }
+            // M719: the sprite samples under its own texAddressModeBase. The whole-coordinate clamp is gone
+            // from the vertex shader, and in the engine this is what holds a sprite at its edge. A sampler
+            // object, bound for this draw and released after it, because one GL texture is shared by every
+            // emitter that names it and the ribbons after this loop sample unit 0 too.
+            _gl.BindSampler(0, BaseSampler(es.Def));
             ApplyStencil(es.Def);
             _gl.DrawArraysInstanced(PrimitiveType.TriangleFan, 0, 4, (uint)es.InstanceCount);
+            _gl.BindSampler(0, 0);
         }
 
         // restore reasonable defaults for the next pass
@@ -552,6 +571,7 @@ public sealed class VfxParticleRenderer
         _gl.BindTexture(TextureTarget.Texture2D, 0);
         _gl.ActiveTexture(TextureUnit.Texture6);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
+        _gl.BindSampler(0, 0);   // M719: the base slot's, in case a draw returned early
         _gl.BindSampler(5, 0);   // M717: the erosion slot's, released with the palette's
         _gl.BindSampler(6, 0);
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -690,6 +710,12 @@ public sealed class VfxParticleRenderer
     /// leave the field out - so falling back to the palette's clamp would be the wrong answer for four
     /// fifths of them.</summary>
     private uint ErosionSampler(int addressMode) => PaletteSampler(addressMode < 0 ? 2 : addressMode);
+
+    /// <summary>M719: the base texture's sampler, from texAddressModeBase - which is in the engine's
+    /// TEXTUREADDRESS order (2 is CLAMP), not the sampler order the palette and erosion fields arrive in,
+    /// so it is converted rather than passed through.</summary>
+    private uint BaseSampler(ReyEngine.Formats.Vfx.VfxEmitterDefinition def) =>
+        PaletteSampler(ReyEngine.Formats.Vfx.VfxTextureAddress.SamplerModeOf(def.Extras?.TexAddressModeBase));
 
     private uint PaletteSampler(int addressMode)
     {
@@ -1052,6 +1078,7 @@ public sealed class VfxParticleRenderer
         _gl.Uniform3(_muPlacementForward, es.PlacementForward.X, es.PlacementForward.Y, es.PlacementForward.Z);
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, es.Texture != 0 ? es.Texture : _whiteTex);
+        _gl.BindSampler(0, BaseSampler(es.Def));   // M719: the mesh's texture takes its address mode too
         if (es.TextureMult != 0)
         {
             _gl.ActiveTexture(TextureUnit.Texture1);
@@ -1137,6 +1164,7 @@ public sealed class VfxParticleRenderer
         // M209: culling is scoped to the mesh draw. Billboards and ribbons are two-sided quads, so leaving
         // it on would cull half of them depending on which way the camera faces. FrontFace is left as-is:
         // every other pipeline that culls (ViewportMeshRenderer) sets it per draw.
+        _gl.BindSampler(0, 0);   // M719
         if (cull) _gl.Disable(EnableCap.CullFace);
         _gl.UseProgram(_program);   // back to the billboard program for the next emitter
         _gl.BindVertexArray(_vao);
@@ -1659,6 +1687,11 @@ uniform vec2 uUvCenter;
 uniform float uEmitterAge;
 uniform vec2 uTexDivMult;
 uniform vec2 uUvScrollRateMult;
+uniform vec2 uUvOffsetMult;          // M719: the multiplier's own translation
+uniform vec2 uUvScrollIntMult;
+uniform vec2 uEmitterUvScrollMult;
+uniform int uUvClampMult;
+" + ReyEngine.Formats.Vfx.VfxUvTransform.Glsl + @"
 uniform int uDirectionOriented;
 uniform int uArbitraryQuad;
 uniform vec3 uPlacementRight;
@@ -1722,40 +1755,29 @@ void main(){
     float fx = mod(frame, gridCols);
     float fy = floor(frame / gridCols);
 
-    // ---- M174 (2.3): the UV transform stack ----
-    // Applied to the CELL coordinate, before the atlas frame is added, so rotating or zooming a flipbook
-    // sprite stays inside its own cell instead of sliding into the neighbouring frame.
+    // ---- M174 (2.3), M719: the UV transform stack ----
+    // Applied to the CELL coordinate, before the atlas frame is added. reyUvCell is VfxUvTransform.Glsl,
+    // concatenated in above: the same formula the Direct3D 11 quad builder runs per corner on the CPU, so
+    // the two renderers read one definition rather than two that agree by care.
     //
-    // ORDER IS INFERRED. Riot's own order is not established, so this uses the conventional one:
-    // flip, then scale and rotate about the pivot, then translate. Sub-terms whose semantics the census
-    // could confirm individually are each marked at their use below.
+    // M719 (ltk-manager 2.11, 2.13, 3.4): scale and rotate about the pivot, translate, THEN flip - a flip is
+    // a post-multiply, so a flipped layer's scroll reverses. The translation is the birth ramp
+    // (birthUVOffset + age * birthUvScrollRate) held to [-1, 1] under uvScrollClamp and wrapped into [0, 1)
+    // otherwise, plus the integrated and emitter scrolls, which nothing clamps. The clamp of the WHOLE
+    // coordinate that stood here from M174 is gone; what holds a sprite at its edge is the base texture's
+    // own texAddressModeBase, bound as a sampler object. birthUvScrollRate moved inside the divide with the
+    // ramp, so it is in CELLS per second like the offset it ramps from - inferred from the reading and
+    // quad_vs, not measured.
     float age = aAgeVelX.x;
     // NB: named uvc, not c - this function already has a `float c = cos(rotation)` for the billboard
     // spin, and shadowing it here made every line below a type error.
-    vec2 uvc = vec2(cell.x, 1.0 - cell.y);
-
-    if (uUvFlip.x > 0.5) uvc.x = 1.0 - uvc.x;
-    if (uUvFlip.y > 0.5) uvc.y = 1.0 - uvc.y;
-
-    // uvRotation is a fixed angle; birthUvRotateRate advances with particle age; particleUVRotateRate is
-    // an INTEGRATED value, which for a constant rate is also rate*age - the distinction only matters once
-    // its curve is animated, which this does not yet support.
+    vec2 cellCorner = vec2(cell.x, 1.0 - cell.y);
+    // particleUVRotateRate is INTEGRATED; for the constant rate we read that is also rate * age.
     float uvAngle = uUvRotation + uUvRotRate * age + uUvRotInt * age;
-    uvc -= uUvCenter;
-    uvc *= uUvScale;
-    if (abs(uvAngle) > 0.0001) {
-        float cs = cos(uvAngle), sn = sin(uvAngle);
-        uvc = vec2(uvc.x * cs - uvc.y * sn, uvc.x * sn + uvc.y * cs);
-    }
-    uvc += uUvCenter;
+    vec2 uvc = reyUvCell(cellCorner, age, uEmitterAge, uUvOffset, uUvScrollRate, uUvScrollInt, uEmitterUvScroll,
+        uUvClamp, uUvScale, uvAngle, uUvCenter, uUvFlip);
 
-    // birthUVOffset is a fixed shift; the scroll terms advance with particle age, except
-    // emitterUvScrollRate which advances with EMITTER age.
-    uvc += uUvOffset + uUvScrollInt * age + uEmitterUvScroll * uEmitterAge;
-    if (uUvClamp != 0) uvc = clamp(uvc, vec2(0.0), vec2(1.0));
-
-    vUv = (vec2(fx, fy) + uvc) / vec2(cols, rows)
-        + uUvScrollRate * age;
+    vUv = (vec2(fx, fy) + uvc) / vec2(cols, rows);
     // M174: the multiply stage gets the same treatment.
     // M633: and it now ADVANCES WITH THE FLIPBOOK, which the M174 note recorded as a known defect on the
     // grounds that a multi-cell multiplier atlas stayed on cell 0. Riot's own shader does walk it: quad_vs
@@ -1769,8 +1791,12 @@ void main(){
     float multRows = uTexDivMult.y == 0.0 ? 1.0 : uTexDivMult.y;
     float mfx = mod(frame, max(abs(multCols), 1.0));
     float mfy = floor(frame / max(abs(multCols), 1.0));
-    vUvMult = (vec2(mfx, mfy) + vec2(cell.x, 1.0 - cell.y)) / vec2(multCols, multRows)
-        + uUvScrollRateMult * aAgeVelX.x;
+    // M719: and the multiplier's translation through the same reyUvCell, in ITS cells - quad_vs divides
+    // TEXCOORD1 by the second descriptor exactly as it divides TEXCOORD0 by the first. Its scale, rotation
+    // and flips are not read yet and stand at the identity.
+    vec2 uvcMult = reyUvCell(cellCorner, age, uEmitterAge, uUvOffsetMult, uUvScrollRateMult, uUvScrollIntMult,
+        uEmitterUvScrollMult, uUvClampMult, vec2(1.0), 0.0, vec2(0.5), vec2(0.0));
+    vUvMult = (vec2(mfx, mfy) + uvcMult) / vec2(multCols, multRows);
     vColor = aColor;
     vErosionDrive = aErosionDrive;
 }";

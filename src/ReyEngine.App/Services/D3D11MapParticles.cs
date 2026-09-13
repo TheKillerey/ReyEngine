@@ -1003,16 +1003,14 @@ public sealed class D3D11MapParticles
                     es.PlacementRight, es.PlacementUp, es.PlacementForward);
 
                 // M634: the authored UV scrolls, baked into the vertices because quad_vs has no constant
-                // for them (see ParticleQuadBuilder.UvScroll). The multiplier's matters most: 184 of the
-                // 401 multiplier emitters across eight champions' skin0 VFX author one, and a mask that
-                // is meant to drift stood still here while it moved in the GL viewport and in the game.
-                var scroll = new ParticleQuadBuilder.UvScroll(
-                    es.Def.UvScrollRate, es.Def.TexDiv,
-                    string.IsNullOrEmpty(es.Def.TextureMultPath) ? Vector2.Zero : es.Def.TextureMultUvScrollRate,
-                    es.Def.TextureMultTexDiv);
+                // for them. The multiplier's matters most: 184 of the 401 multiplier emitters across eight
+                // champions' skin0 VFX author one, and a mask that is meant to drift stood still here while
+                // it moved in the GL viewport and in the game.
+                // M719: the whole per-layer transform now, through the factory the preview host uses too.
+                var uvLayers = ParticleQuadBuilder.UvLayers.For(es.Def, es.EmitterAge);
 
                 int n = ParticleQuadBuilder.Append(es.Instances, Math.Min(es.InstanceCount, cap),
-                    verts, ref v, indices, ref idx, right, up, normal, orient, scroll);
+                    verts, ref v, indices, ref idx, right, up, normal, orient, uvLayers);
                 written += n;
                 sliceWritten += n;
             }

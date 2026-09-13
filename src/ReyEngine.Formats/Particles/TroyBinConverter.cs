@@ -295,6 +295,7 @@ public static class TroyBinConverter
             // texDiv grid is picking ONE still cell out of an atlas - FireTorch_Med/Flat takes cell 5 of a
             // 2x3 sheet, LavaCauldron/Surface cell 6 of a 3x3 - and gating it behind IsFlipbook threw that
             // pick away, so 8 of Map2's 43 emitters drew the wrong cell. Riot writes it either way.
+            // M719: and the simulator draws it now - VfxFlipbook stopped gating the start behind numFrames > 1.
             if (e.StartFrame is { } sf && sf > 0) props.Add(new BinTreeU16(H("startFrame"), (ushort)sf));
 
             // ---- M423: motion and spawn volume ---------------------------------------------------

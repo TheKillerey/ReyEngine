@@ -211,7 +211,16 @@ public static class VfxD3D11EmitterPipeline
                 : ")"));
 
         // The sprite. TEXTURE__TX is the name quad_ps declares for it.
-        BindTexture(renderer, mat, ps, "TEXTURE", sprites, log, texImage);
+        string? baseSlot = BindTexture(renderer, mat, ps, "TEXTURE", sprites, log, texImage);
+
+        // M719: the sprite samples under its own texAddressModeBase. Reading 2.11 clamps only the birth ramp,
+        // and in the engine what holds a sprite at its edge is this field - in ParticleSystem::TEXTUREADDRESS,
+        // where 2 is CLAMP, and not the sampler order the erosion slot below receives unremapped. An emitter
+        // that does not author it keeps the material's wrap, which is the field's declared default.
+        if (baseSlot is not null && e.Extras?.TexAddressModeBase is { } baseAddress)
+            (mat.SlotAddress ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase))
+                [baseSlot.Replace("__TX", "__SMP", StringComparison.OrdinalIgnoreCase)] =
+                    ReyEngine.Formats.Vfx.VfxTextureAddress.SamplerModeOf(baseAddress);
         if (!string.IsNullOrEmpty(e.TextureMultPath)) BindTexture(renderer, mat, ps, "TEXTUREMULT", sprites, log);
         // M629: bind the map AND send the parameters that go with it.
         //
@@ -263,7 +272,8 @@ public static class VfxD3D11EmitterPipeline
             string? slot = BindTexture(renderer, mat, ps, "sPalettesTexture", sprites, log);
 
             // M635: the strip is a LOOKUP TABLE, so its sampler clamps - the sprite's own sampler must
-            // keep wrapping for flipbooks and scrolls, which is why this is per slot and not per material.
+            // take its own address mode (M719: texAddressModeBase), which is why this is per slot and not per
+            // material.
             // Under WRAP, u = 0 (every black texel of an additive sprite) filtered the strip's first texel
             // with its last and painted the sprite's whole black field a mid grey: a rectangle. GL has bound
             // a clamp sampler here since M184; the per-slot mechanism this path lacked is

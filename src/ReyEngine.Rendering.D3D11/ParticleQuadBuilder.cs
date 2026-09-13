@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Vfx;
 
 namespace ReyEngine.Rendering.D3D11;
 
@@ -57,21 +58,27 @@ public static class ParticleQuadBuilder
     /// buffers at <paramref name="vertexCursor"/> / <paramref name="indexCursor"/>, advancing both.
     /// Writes nothing and returns 0 if the buffers cannot hold the request.
     /// </summary>
-    /// <summary>M634: the two UV scrolls an emitter authors, baked here because Riot's own vertex shader
-    /// cannot apply them. <c>quad_vs</c>'s whole <c>$Globals</c> is TEXTURE_INFO, TEXTURE_INFO_2 and
-    /// PARTICLE_DEPTH_PUSH_PULL, and TIME is <c>[unused]</c> in all 16 permutations - so a scrolling sprite
-    /// only scrolls if the CPU writes the offset into the vertex, which is what the client does and what the
-    /// GL path has done since M174 (<c>+ uUvScrollRate * age</c>, <c>+ uUvScrollRateMult * age</c>).
+    /// <summary>M634, M719: the uv transform both texture layers take, baked here because Riot's own vertex
+    /// shader cannot apply it. <c>quad_vs</c>'s whole <c>$Globals</c> is TEXTURE_INFO, TEXTURE_INFO_2 and
+    /// PARTICLE_DEPTH_PUSH_PULL, and TIME is <c>[unused]</c> in all 16 permutations - so a sprite only
+    /// scrolls, turns or flips if the CPU writes it into the vertex.
     ///
-    /// <para>The offset is added to the CELL coordinate, so it has to be pre-multiplied by the grid: the
-    /// shader computes <c>(col + u) / cols</c>, and <c>u + s * age * cols</c> lands at <c>s * age</c> in
-    /// texture space - the same final UV GL reaches by adding after its divide. Added raw it would scroll
-    /// at 1/cols of the authored rate on a flipbook, and across into the neighbouring frame at a different
-    /// speed than the rest of the sprite.</para></summary>
-    public readonly record struct UvScroll(Vector2 Primary, Vector2 PrimaryGrid, Vector2 Mult, Vector2 MultGrid)
+    /// <para>M719 replaced M634's scroll-only record. The shader computes <c>(col + u) / cols</c>, so what is
+    /// written into <c>u</c> is in CELLS. M634 pre-multiplied the birth scroll by the grid to land where the
+    /// GL viewport's after-the-divide term did; reading 2.11 builds that scroll into one ramp with the offset
+    /// (which the GL viewport already had in cells) and clamps the ramp to one cell either way, so both are
+    /// cells now and neither renderer multiplies by the grid. That unit is inferred from the reading and the
+    /// shader, not measured against the client.</para>
+    ///
+    /// <para>One definition feeds both renderers: <see cref="VfxUvLayer"/> and <see cref="VfxUvTransform"/>
+    /// live in Formats, and the OpenGL quad vertex shader concatenates the same formula as GLSL.</para></summary>
+    public readonly record struct UvLayers(VfxUvLayer Base, VfxUvLayer Mult, float SystemTime)
     {
-        public static UvScroll None => default;
-        public bool IsNone => Primary == Vector2.Zero && Mult == Vector2.Zero;
+        public static UvLayers None => default;
+
+        /// <summary>Both layers of one emitter at the system's clock, which emitterUvScrollRate runs on.</summary>
+        public static UvLayers For(VfxEmitterDefinition def, float systemTime) =>
+            new(VfxUvLayer.BaseOf(def), VfxUvLayer.MultOf(def), systemTime);
     }
 
     public static int Append(
@@ -80,15 +87,9 @@ public static class ParticleQuadBuilder
         uint[] indices, ref int indexCursor,
         Vector3 right, Vector3 up, Vector3 normal,
         QuadOrientation orientation = default,
-        UvScroll scroll = default)
+        UvLayers uv = default)
     {
         int written = 0;
-        // Per texture-space unit of scroll, how far the CELL coordinate moves - the grid, as TextureInfo
-        // builds it, so the two cannot disagree about what "cols" is.
-        var primaryInfo = TextureInfo(scroll.PrimaryGrid);
-        var multInfo = TextureInfo(scroll.MultGrid);
-        float pCols = primaryInfo[0], pRows = 1f / primaryInfo[2];
-        float mCols = multInfo[0], mRows = 1f / multInfo[2];
         for (int p = 0; p < count; p++)
         {
             int o = p * Stride;
@@ -108,8 +109,6 @@ public static class ParticleQuadBuilder
             float erosion = instances[o + OffErosion];
             // M634: the particle's age, the slot after the frame - GL reads the same float as aAgeVelX.x.
             float age = instances[o + OffFrame + 1];
-            float du0 = scroll.Primary.X * age * pCols, dv0 = scroll.Primary.Y * age * pRows;
-            float du1 = scroll.Mult.X * age * mCols, dv1 = scroll.Mult.Y * age * mRows;
 
             // M238: the three orientation cases, transcribed from the GL vertex shader so the two previews
             // cannot disagree.
@@ -159,8 +158,10 @@ public static class ParticleQuadBuilder
                 vert.Position = pos + basisR * (rx * sx) + basisU * (ry * sy);
                 vert.Normal = basisN;
                 vert.Tangent = new Vector4(basisR, 1f);
-                vert.Uv0 = new Vector4(u + du0, v + dv0, frame, erosion);
-                vert.Uv1 = new Vector2(u + du1, v + dv1);
+                // M719: the corner through each layer's transform, in that layer's own cells.
+                var cell0 = VfxUvTransform.Cell(uv.Base, u, v, age, uv.SystemTime);
+                vert.Uv0 = new Vector4(cell0.X, cell0.Y, frame, erosion);
+                vert.Uv1 = VfxUvTransform.Cell(uv.Mult, u, v, age, uv.SystemTime);
                 vert.Color = colour;
             }
 

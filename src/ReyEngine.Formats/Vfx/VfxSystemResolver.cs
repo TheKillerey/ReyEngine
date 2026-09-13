@@ -69,6 +69,13 @@ public static class VfxSystemResolver
     private static readonly uint F_birthFrameRate= HashAlgorithms.Fnv1a("birthFrameRate");
     private static readonly uint F_frameRate     = HashAlgorithms.Fnv1a("frameRate");
     private static readonly uint F_birthUvScrollMult = HashAlgorithms.Fnv1a("birthUvScrollRateMult");
+    // M719: the rest of the multiplier's translation, which reading 2.11 ramps with the same formula.
+    private static readonly uint F_birthUVOffsetMult = HashAlgorithms.Fnv1a("birthUVOffsetMult");
+    private static readonly uint F_uvScrollClampMult = HashAlgorithms.Fnv1a("uvScrollClampMult");
+    private static readonly uint F_particleUVScrollMult = HashAlgorithms.Fnv1a("ParticleIntegratedUvScrollMult");
+    private static readonly uint F_emitterUvScrollMult = HashAlgorithms.Fnv1a("emitterUvScrollRateMult");
+    // M719: the base texture's own address mode, which now binds its sampler.
+    private static readonly uint F_texAddressModeBase = HashAlgorithms.Fnv1a("texAddressModeBase");
     private static readonly uint F_primitive     = HashAlgorithms.Fnv1a("primitive");
     private static readonly uint F_startFrame    = HashAlgorithms.Fnv1a("startFrame");
     private static readonly uint F_legacySimple  = HashAlgorithms.Fnv1a("LegacySimple");
@@ -370,11 +377,18 @@ public static class VfxSystemResolver
 
         string? textureMultPath = null;
         Vector2 textureMultTexDiv = Vector2.One, textureMultUvScroll = Vector2.Zero;
+        Vector2 textureMultUvOffset = Vector2.Zero, textureMultScrollInt = Vector2.Zero, textureMultEmitterScroll = Vector2.Zero;
+        bool textureMultScrollClamp = false;
         if (Get(p, F_textureMult) is BinTreeStruct textureMult)
         {
             textureMultPath = GetString(textureMult.Properties, F_textureMult);
             textureMultTexDiv = ReadValueVec2(Get(textureMult.Properties, F_texDivMult)) ?? Vector2.One;
             textureMultUvScroll = ReadValueVec2(Get(textureMult.Properties, F_birthUvScrollMult)) ?? Vector2.Zero;
+            // M719
+            textureMultUvOffset = ReadValueVec2(Get(textureMult.Properties, F_birthUVOffsetMult)) ?? Vector2.Zero;
+            textureMultScrollInt = ReadValueVec2(Get(textureMult.Properties, F_particleUVScrollMult)) ?? Vector2.Zero;
+            textureMultEmitterScroll = GetVec2(textureMult.Properties, F_emitterUvScrollMult) ?? Vector2.Zero;
+            textureMultScrollClamp = GetBool(textureMult.Properties, F_uvScrollClampMult);
         }
 
         VfxDistortionDefinition? distortion = null;
@@ -414,6 +428,10 @@ public static class VfxSystemResolver
             RandomStartFrame: GetBool(p, F_randomStart),
             IsMeshPrimitive: isMesh,
             PrimitiveClass: primClass,   // M717
+            TextureMultUvOffset: textureMultUvOffset,   // M719
+            TextureMultUvScrollIntegrated: textureMultScrollInt,
+            TextureMultEmitterUvScrollRate: textureMultEmitterScroll,
+            TextureMultUvScrollClamp: textureMultScrollClamp,
             MeshPath: meshPath,
             UvScrollRate: ReadValueVec2(Get(p, F_birthUvScroll)) ?? Vector2.Zero,
             MeshSkeletonPath: meshSkl,
@@ -1026,7 +1044,7 @@ public static class VfxSystemResolver
             OffsetLifetimeScaling        = GetVec3(p, PF("offsetLifetimeScaling")),
             OffsetLifeScalingSymmetryMode= GetU8(p, PF("offsetLifeScalingSymmetryMode")),
 
-            TexAddressModeBase           = GetU8(p, PF("texAddressModeBase")),
+            TexAddressModeBase           = GetU8(p, F_texAddressModeBase),   // M719: binds the base sampler
             UvMode                       = GetU8(p, F_uvMode),
             UvParallaxScale              = GetF32(p, PF("uvParallaxScale")),
         };
