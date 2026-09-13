@@ -41,10 +41,28 @@
         </DockPanel>
       </Border>
 
-      <Grid ColumnDefinitions="230,4,*,4,290" RowDefinitions="*,4,190">
+      <!-- M716: two rows. The top one is the list, the emitters and the details; the bottom one is
+           the curve editor and the 3D view, both full width. MinWidth and MinHeight on every real
+           pane for the reason MainWindow gives at its own splitters: without them a drag collapses
+           a pane into a layout that cannot be dragged back. -->
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="*" MinHeight="200" />
+          <RowDefinition Height="4" />
+          <RowDefinition Height="300" MinHeight="140" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="230" MinWidth="150" />
+            <ColumnDefinition Width="4" />
+            <ColumnDefinition Width="*" MinWidth="260" />
+            <ColumnDefinition Width="4" />
+            <ColumnDefinition Width="290" MinWidth="200" />
+          </Grid.ColumnDefinitions>
 
         <!-- left: system / emitter tree -->
-        <Border Grid.Column="0" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource ReyPanelBrush}">
+        <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
           <DockPanel>
             <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="SYSTEMS" />
             <!-- M197 (4.5): map VFX bins carry thousands of systems; a flat list is unusable without this -->
@@ -73,11 +91,13 @@
             </ListBox>
           </DockPanel>
         </Border>
-        <GridSplitter Grid.Column="1" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource ReyBorderBrush}" />
+        <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
 
         <!-- center: emitter cards (horizontal, Particle Town style) -->
-        <Border Grid.Column="2" Grid.Row="0" Background="{DynamicResource ReyBgBrush}">
-          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+        <Border Grid.Column="2" Background="{DynamicResource ReyBgBrush}">
+          <DockPanel>
+            <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="EMITTERS" />
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
             <ItemsControl ItemsSource="{Binding Cards}" Margin="6">
               <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
@@ -189,16 +209,62 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
-          </ScrollViewer>
+            </ScrollViewer>
+          </DockPanel>
         </Border>
 
-        <GridSplitter Grid.Column="2" Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
+        <GridSplitter Grid.Column="3" Background="{DynamicResource ReyBorderBrush}" />
 
-        <!-- bottom-center: curve display + preview viewport -->
-        <Grid Grid.Column="2" Grid.Row="2" ColumnDefinitions="*,4,320">
+        <!-- right: property inspector -->
+        <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}">
+          <DockPanel>
+            <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="DETAILS" />
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <StackPanel Margin="10" Spacing="6" IsVisible="{Binding SelectedProperty, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <TextBlock Text="{Binding SelectedProperty.Name, FallbackValue=''}" FontSize="13" FontWeight="Bold" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Border Classes="badge"><TextBlock Text="{Binding SelectedProperty.Module, FallbackValue=''}" FontSize="9" /></Border>
+                  <TextBlock Text="{Binding SelectedProperty.TypeName, FallbackValue=''}" FontSize="10" Opacity="0.6" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock Text="Value" FontSize="10" Opacity="0.7" Margin="0,6,0,0" />
+                <TextBox Text="{Binding SelectedProperty.EditText, Mode=TwoWay}" FontSize="11"
+                         IsEnabled="{Binding SelectedProperty.IsReadOnly, Converter={x:Static BoolConverters.Not}, FallbackValue=False}"
+                         AcceptsReturn="False" />
+                <Button Classes="primary" Content="Apply" HorizontalAlignment="Left"
+                        Command="{Binding ApplyEditCommand}" CommandParameter="{Binding SelectedProperty}"
+                        IsEnabled="{Binding SelectedProperty.IsReadOnly, Converter={x:Static BoolConverters.Not}, FallbackValue=False}" />
+                <TextBlock Text="{Binding SelectedProperty.ErrorText, FallbackValue=''}" FontSize="10"
+                           Foreground="{DynamicResource ReyErrorBrush}" TextWrapping="Wrap"
+                           IsVisible="{Binding SelectedProperty.ErrorText, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}" />
+                <TextBlock Text="{Binding SelectedProperty.ReadOnlyReason, FallbackValue=''}" FontSize="10" Opacity="0.5" TextWrapping="Wrap"
+                           IsVisible="{Binding SelectedProperty.IsReadOnly, FallbackValue=False}" />
+                <!-- M191 (3.7): editable, saved, but not visible in the preview -->
+                <Border Background="{DynamicResource ReyWarningSoftBrush}" BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="1" CornerRadius="3"
+                        Padding="6,4" Margin="0,8,0,0"
+                        IsVisible="{Binding SelectedProperty.IgnoredByPreview, FallbackValue=False}">
+                  <StackPanel Spacing="2">
+                    <TextBlock Text="○ NOT SHOWN IN THE PREVIEW" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource ReyWarningBrush}" />
+                    <TextBlock Text="{Binding SelectedProperty.PreviewNote, FallbackValue=''}" FontSize="10"
+                               Opacity="0.75" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+                <TextBlock FontSize="10" Opacity="0.5" TextWrapping="Wrap" Margin="0,10,0,0"
+                           Text="Vectors: comma-separated (x, y, z). Colours: r, g, b, a (0..1). Edits update the preview immediately; Save Override writes to the project." />
+              </StackPanel>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+        </Grid>
+
+        <GridSplitter Grid.Row="1" Background="{DynamicResource ReyBorderBrush}" />
+
+        <!-- M716: the bottom row, full width - the curve editor beside the 3D view, the shape
+             Cascade has. Both were squeezed into the centre column before, which left the curve
+             plot a third of the window wide and the preview smaller than one emitter card. -->
+        <Grid Grid.Row="2" ColumnDefinitions="*,4,620">
           <Border Grid.Column="0" Background="{DynamicResource ReyPanelBrush}">
             <DockPanel>
-              <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="CURVE (over particle lifetime)" />
+              <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="CURVE EDITOR (over particle lifetime)" />
               <!-- M190 (3.6): the keys are editable, in the list to the right of the plot -->
               <Grid ColumnDefinitions="*,4,210">
                 <Grid Grid.Column="0">
@@ -246,6 +312,8 @@
           </Border>
           <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
           <Border Grid.Column="2" Background="Black">
+            <DockPanel>
+            <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="3D VIEW" />
             <Grid>
               <views:ViewportControl x:Name="PreviewViewport"
                                      ParticlePlayback="{Binding Playback}"
@@ -319,50 +387,9 @@
                 </StackPanel>
               </Border>
             </Grid>
+            </DockPanel>
           </Border>
         </Grid>
-
-        <GridSplitter Grid.Column="3" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource ReyBorderBrush}" />
-
-        <!-- right: property inspector -->
-        <Border Grid.Column="4" Grid.Row="0" Grid.RowSpan="3" Background="{DynamicResource ReyPanelBrush}">
-          <DockPanel>
-            <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="PROPERTY" />
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-              <StackPanel Margin="10" Spacing="6" IsVisible="{Binding SelectedProperty, Converter={x:Static ObjectConverters.IsNotNull}}">
-                <TextBlock Text="{Binding SelectedProperty.Name, FallbackValue=''}" FontSize="13" FontWeight="Bold" TextWrapping="Wrap" />
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Border Classes="badge"><TextBlock Text="{Binding SelectedProperty.Module, FallbackValue=''}" FontSize="9" /></Border>
-                  <TextBlock Text="{Binding SelectedProperty.TypeName, FallbackValue=''}" FontSize="10" Opacity="0.6" VerticalAlignment="Center" />
-                </StackPanel>
-                <TextBlock Text="Value" FontSize="10" Opacity="0.7" Margin="0,6,0,0" />
-                <TextBox Text="{Binding SelectedProperty.EditText, Mode=TwoWay}" FontSize="11"
-                         IsEnabled="{Binding SelectedProperty.IsReadOnly, Converter={x:Static BoolConverters.Not}, FallbackValue=False}"
-                         AcceptsReturn="False" />
-                <Button Classes="primary" Content="Apply" HorizontalAlignment="Left"
-                        Command="{Binding ApplyEditCommand}" CommandParameter="{Binding SelectedProperty}"
-                        IsEnabled="{Binding SelectedProperty.IsReadOnly, Converter={x:Static BoolConverters.Not}, FallbackValue=False}" />
-                <TextBlock Text="{Binding SelectedProperty.ErrorText, FallbackValue=''}" FontSize="10"
-                           Foreground="{DynamicResource ReyErrorBrush}" TextWrapping="Wrap"
-                           IsVisible="{Binding SelectedProperty.ErrorText, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}" />
-                <TextBlock Text="{Binding SelectedProperty.ReadOnlyReason, FallbackValue=''}" FontSize="10" Opacity="0.5" TextWrapping="Wrap"
-                           IsVisible="{Binding SelectedProperty.IsReadOnly, FallbackValue=False}" />
-                <!-- M191 (3.7): editable, saved, but not visible in the preview -->
-                <Border Background="{DynamicResource ReyWarningSoftBrush}" BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="1" CornerRadius="3"
-                        Padding="6,4" Margin="0,8,0,0"
-                        IsVisible="{Binding SelectedProperty.IgnoredByPreview, FallbackValue=False}">
-                  <StackPanel Spacing="2">
-                    <TextBlock Text="○ NOT SHOWN IN THE PREVIEW" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource ReyWarningBrush}" />
-                    <TextBlock Text="{Binding SelectedProperty.PreviewNote, FallbackValue=''}" FontSize="10"
-                               Opacity="0.75" TextWrapping="Wrap" />
-                  </StackPanel>
-                </Border>
-                <TextBlock FontSize="10" Opacity="0.5" TextWrapping="Wrap" Margin="0,10,0,0"
-                           Text="Vectors: comma-separated (x, y, z). Colours: r, g, b, a (0..1). Edits update the preview immediately; Save Override writes to the project." />
-              </StackPanel>
-            </ScrollViewer>
-          </DockPanel>
-        </Border>
       </Grid>
     </DockPanel>
   </Border>
