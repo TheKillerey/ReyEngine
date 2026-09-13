@@ -178,6 +178,10 @@ public sealed class CharacterCreatorTests : IDisposable
         Assert.Contains("CreateCharacter = true,", host);
         Assert.Contains("await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry)", host);
         Assert.Contains("transform.Translation = GizmoPivot ?? map.Center;", host);
+        // M722: and lists every character on the map in the map's own bin, so the game preloads it
+        Assert.Contains("string listed = await RegisterMapCharactersAsync(mapEntry, onMap);", host);
+        Assert.Contains("MapCharacterListWriter.Register(bytes, characters, characters,", host);
+        Assert.Contains("MapBinPathFor(mapEntry.Path)", host);
     }
 
     private static string? Source(params string[] parts)

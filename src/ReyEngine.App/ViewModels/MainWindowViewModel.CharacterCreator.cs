@@ -149,6 +149,12 @@ public sealed partial class MainWindowViewModel
         if (!await SaveMapBinBytesAsync(binEntry, written))
             throw new InvalidOperationException("The edited materials bin could not be saved.");
 
+        // M722: the game preloads only the characters the map's own bin lists; one placed and not listed is
+        // drawn unskinned (a WORLD_MATRIX error and a shader hash miss) and never appears. Every character on
+        // the map is checked, so a prop placed before this existed is registered too.
+        var onMap = MapContent.AllProps.Select(p => p.Prop.CharacterName).Append(character).ToList();
+        string listed = await RegisterMapCharactersAsync(mapEntry, onMap);
+
         // M701: show what was just added. The prop-mesh overlay is off by default, so a placement made
         // with it off is a marker and nothing else - which reads exactly like the placement having failed.
         ShowPropMeshes = true;
@@ -157,6 +163,36 @@ public sealed partial class MainWindowViewModel
         if (MapContent.AllProps.FirstOrDefault(p => p.Prop.Id == id) is { } added) SelectedPropNode = added;
         _log.Success("Props", $"Placed '{placementName}' ({skinPath}) at "
             + $"({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0}).");
-        return $" Placed '{placementName}' at ({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0}).";
+        return $" Placed '{placementName}' at ({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0})." + listed;
+    }
+
+    /// <summary>M722: list every given character in the map's own bin (<c>mapNNN.bin</c>) so the game preloads
+    /// it. The placement is already saved when this runs, so a failure here is reported, not thrown.</summary>
+    private async Task<string> RegisterMapCharactersAsync(Core.Assets.WadAssetEntry mapEntry, IReadOnlyList<string> characters)
+    {
+        string? path = MapBinPathFor(mapEntry.Path);
+        if (path is null || !TryResolveEntry(HashAlgorithms.WadPath(path), out var mapBinEntry))
+        {
+            _log.Warn("Props", $"No map bin at '{path ?? "?"}' - the character could not be added to the map's "
+                + "character lists, so the game will not preload it.");
+            return " The map bin was not found, so it is NOT in the map's character lists.";
+        }
+
+        byte[] bytes = GetAssetBytes(mapBinEntry);
+        byte[]? written = MapCharacterListWriter.Register(bytes, characters, characters, out var added, out uint list, out var error);
+        if (written is null)
+        {
+            _log.Warn("Props", $"{Path.GetFileName(path)}: {error} The game will not preload the placed character.");
+            return " It could NOT be added to the map's character lists.";
+        }
+        if (added.Count == 0) return "";
+        if (!await SaveMapBinBytesAsync(mapBinEntry, written))
+        {
+            _log.Warn("Props", $"{Path.GetFileName(path)} could not be saved - {string.Join(", ", added)} NOT added to the character lists.");
+            return " The map bin could NOT be saved with the character list entry.";
+        }
+        _log.Success("Props", $"Added {string.Join(", ", added.Select(c => "Characters/" + c))} to MapCharacterList "
+            + $"0x{list:x8} in {Path.GetFileName(path)}, so the game preloads it.");
+        return $" Added to the map's character list 0x{list:x8}.";
     }
 }
