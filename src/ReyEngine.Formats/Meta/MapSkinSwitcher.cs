@@ -71,6 +71,14 @@ public sealed record MapSkinContainerCompatibilityResult(
     int RemappedServerPlaceableKeys);
 
 /// <summary>
+/// M730: a source environment given by VALUE rather than by slot - the recorded copy of a MapSkin object (and
+/// its FeatureAudio object, when it has one) taken when a recipe was recorded. A switch from a snapshot routes
+/// the same fields the live switch routes, from an object that need not be in the bin at all, which is what a
+/// recipe needs once Riot vaults the seasonal slot it was recorded from.
+/// </summary>
+public sealed record MapSkinSourceSnapshot(string Name, string? MapContainerLink, BinTreeObject Skin, BinTreeObject? Audio);
+
+/// <summary>
 /// Reads and safely rewires Riot's shipping-map skin slots. A switch copies only the source skin's
 /// environment-loading values to every MapSkin definition, including unregistered aliases, without
 /// adding route fields that the definition did not originally contain. Each definition retains its
@@ -141,6 +149,14 @@ public static class MapSkinSwitcher
     private static readonly uint CharacterField = H("Character");
     private static readonly uint SkinIdField = H("SkinID");
     private static readonly uint[] CharacterSkinFields = { CharacterSkinListField, ObjectSkinFallbacksField };
+
+    // M730: the recipe machinery (MapSkinForceRecipe) reads a bin the way this switch writes it, so it needs the
+    // same classes and fields. Read-only views; the arrays above stay the single definition.
+    public static uint MapSkinClassHash => MapSkinClass;
+    public static uint FeatureAudioClassHash => FeatureAudioClass;
+    public static uint FeatureFieldHash => FeatureField;
+    public static IReadOnlyList<uint> EnvironmentRouteFieldHashes => EnvironmentRouteFields;
+    public static IReadOnlyList<uint> CharacterSkinFieldHashes => CharacterSkinFields;
 
     /// <summary>Read what a MapSkin forces onto characters, from either mechanism.</summary>
     internal static IReadOnlyList<MapSkinCharacterOverride> ReadCharacterSkins(
@@ -220,27 +236,77 @@ public static class MapSkinSwitcher
     /// turret/minion/nexus skins. Off by default - see <see cref="CharacterSkinFields"/> for why these are
     /// not environment fields. A slot that shipped without the field is GIVEN one, which is the one part of
     /// this that Riot's own data has no example of; the result counts those separately so a caller can say so.</param>
+    /// <param name="routeAudio">M730: also give the target's FeatureAudio profile the source's banks and music
+    /// (the default, and what the switcher has always done). A recipe inferred from a bin whose audio was never
+    /// routed replays with this off, so it reproduces that bin rather than adding an edit it never had.</param>
     public static MapSkinSwapResult Switch(
         byte[] shippingBin,
         int mapId,
         uint targetSkinHash,
         uint sourceSkinHash,
         Func<uint, string?>? resolve = null,
-        bool carryCharacterSkins = false)
+        bool carryCharacterSkins = false,
+        bool routeAudio = true)
+        => SwitchCore(shippingBin, mapId, targetSkinHash, sourceSkinHash, null, resolve, carryCharacterSkins, routeAudio);
+
+    /// <summary>
+    /// M730: the same switch from a recorded copy of the source slot instead of a slot in the bin. Every MapSkin
+    /// object in the bin is routed exactly as <see cref="Switch"/> routes it; the only difference is where the
+    /// values come from. For a recipe whose source slot the patch no longer ships.
+    /// </summary>
+    public static MapSkinSwapResult SwitchToSnapshot(
+        byte[] shippingBin,
+        int mapId,
+        uint targetSkinHash,
+        MapSkinSourceSnapshot snapshot,
+        Func<uint, string?>? resolve = null,
+        bool carryCharacterSkins = false,
+        bool routeAudio = true)
+        => SwitchCore(shippingBin, mapId, targetSkinHash, null, snapshot, resolve, carryCharacterSkins, routeAudio);
+
+    private static MapSkinSwapResult SwitchCore(
+        byte[] shippingBin,
+        int mapId,
+        uint targetSkinHash,
+        uint? sourceSkinHash,
+        MapSkinSourceSnapshot? snapshot,
+        Func<uint, string?>? resolve,
+        bool carryCharacterSkins,
+        bool routeAudio)
     {
         var catalog = ReadCatalog(shippingBin, resolve);
         if (BlockReason(mapId, catalog.MapStringId) is { } blocked) throw new InvalidOperationException(blocked);
-        if (targetSkinHash == sourceSkinHash) throw new InvalidOperationException("Choose two different map skins.");
+        if (sourceSkinHash is { } same && targetSkinHash == same) throw new InvalidOperationException("Choose two different map skins.");
 
         var targetInfo = catalog.Skins.FirstOrDefault(s => s.PathHash == targetSkinHash)
             ?? throw new InvalidOperationException("The target is not a registered MapSkin slot.");
-        var sourceInfo = catalog.Skins.FirstOrDefault(s => s.PathHash == sourceSkinHash)
-            ?? throw new InvalidOperationException("The source is not a registered MapSkin slot.");
-        if (sourceInfo.MapContainerLink is null)
-            throw new InvalidOperationException("The source slot has no map container and cannot be forced as an environment.");
 
         var tree = SafeBinTree.Parse(shippingBin);
-        var source = tree.Objects[sourceSkinHash];
+        BinTreeObject source;
+        MapSkinInfo sourceInfo;
+        if (sourceSkinHash is { } liveSource)
+        {
+            sourceInfo = catalog.Skins.FirstOrDefault(s => s.PathHash == liveSource)
+                ?? throw new InvalidOperationException("The source is not a registered MapSkin slot.");
+            if (sourceInfo.MapContainerLink is null)
+                throw new InvalidOperationException("The source slot has no map container and cannot be forced as an environment.");
+            source = tree.Objects[liveSource];
+        }
+        else
+        {
+            // M730: a snapshot stands in for the slot. It carries the slot's own hash, so a stale unregistered
+            // copy of the vaulted slot left in a bin by an earlier merge is routed like every other MapSkin object.
+            var recorded = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
+            if (recorded.MapContainerLink is null)
+                throw new InvalidOperationException("The recorded source environment has no map container and cannot be forced.");
+            source = recorded.Skin;
+            sourceInfo = new MapSkinInfo(-1, recorded.Skin.PathHash,
+                resolve?.Invoke(recorded.Skin.PathHash) ?? $"0x{recorded.Skin.PathHash:x8}",
+                recorded.Name, recorded.MapContainerLink, recorded.Skin.Properties.Count)
+            {
+                CharacterSkins = ReadCharacterSkins(recorded.Skin, resolve),
+            };
+        }
         int changedRouteProperties = 0;
         int characterSkinSlotsRouted = 0, characterSkinSlotsAdded = 0;   // M649
         var routedSkinHashes = new List<uint>();
@@ -297,7 +363,9 @@ public static class MapSkinSwitcher
             if (routedHere > 0) characterSkinSlotsRouted++;
             if (addHere.Count > 0) characterSkinSlotsAdded++;
         }
-        var audio = RouteFeatureAudio(tree, targetInfo, sourceInfo);
+        var audio = routeAudio
+            ? RouteFeatureAudio(tree, targetInfo, sourceInfo, snapshot?.Audio)
+            : (ChangedProperties: 0, TargetHash: (uint?)null, SourceHash: (uint?)null, SourceAudio: (BinTreeObject?)null);
 
         using var output = new MemoryStream(shippingBin.Length);
         tree.Write(output);
@@ -312,7 +380,8 @@ public static class MapSkinSwitcher
         if (!BinPropEquality.PropsEqual(original.Objects[catalog.MapObjectHash].Properties[MapSkinsField],
                 verified.Objects[catalog.MapObjectHash].Properties[MapSkinsField]))
             throw new InvalidDataException("The rewrite changed the mapSkins selection table.");
-        if (!BinPropEquality.ObjectsEqual(original.Objects[sourceSkinHash], verified.Objects[sourceSkinHash]))
+        if (sourceSkinHash is { } liveSourceHash
+            && !BinPropEquality.ObjectsEqual(original.Objects[liveSourceHash], verified.Objects[liveSourceHash]))
             throw new InvalidDataException("The rewrite changed the source MapSkin.");
         foreach (uint skinHash in routedSkinHashes)
             if (!BinPropEquality.ObjectsEqual(tree.Objects[skinHash], verified.Objects[skinHash]))
@@ -327,9 +396,9 @@ public static class MapSkinSwitcher
         var strings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (uint field in EnvironmentRouteFields)
             if (source.Properties.TryGetValue(field, out var property)) CollectStrings(property, strings);
-        if (audio.SourceHash is { } sourceAudioHash)
+        if (audio.SourceAudio is { } sourceAudio)
             foreach (uint field in new[] { BankUnitsField, MusicField })
-                if (original.Objects[sourceAudioHash].Properties.TryGetValue(field, out var property))
+                if (sourceAudio.Properties.TryGetValue(field, out var property))
                     CollectStrings(property, strings);
         return new MapSkinSwapResult(bytes, targetInfo, sourceInfo, changedRouteProperties,
             routedSkinHashes, audio.ChangedProperties, audio.TargetHash, audio.SourceHash,
@@ -431,49 +500,64 @@ public static class MapSkinSwitcher
         return new MapSkinContainerCompatibilityResult(bytes, matched, replacements.Count);
     }
 
-    private static (int ChangedProperties, uint? TargetHash, uint? SourceHash) RouteFeatureAudio(
-        BinTree tree, MapSkinInfo target, MapSkinInfo source)
+    /// <param name="sourceAudioOverride">M730: the recorded source audio profile, when the switch runs from a
+    /// snapshot. Its hash is not in the tree, so <c>SourceHash</c> comes back null and the source-unchanged
+    /// verification is skipped for it; <c>SourceAudio</c> is what the asset preflight reads either way.</param>
+    private static (int ChangedProperties, uint? TargetHash, uint? SourceHash, BinTreeObject? SourceAudio) RouteFeatureAudio(
+        BinTree tree, MapSkinInfo target, MapSkinInfo source, BinTreeObject? sourceAudioOverride)
     {
         var audioObjects = tree.Objects.Where(pair => pair.Value.ClassHash == FeatureAudioClass).ToList();
         var targetAudio = audioObjects.FirstOrDefault(pair =>
             pair.Value.Properties.TryGetValue(FeatureField, out var feature)
             && feature is BinTreeHash hash && hash.Value == H(target.Name));
-        if (targetAudio.Value is null) return (0, null, null);
+        if (targetAudio.Value is null) return (0, null, null, null);
 
-        var sourceAudio = audioObjects.FirstOrDefault(pair =>
-            pair.Value.Properties.TryGetValue(FeatureField, out var feature)
-            && feature is BinTreeHash hash && hash.Value == H(source.Name));
-        if (sourceAudio.Value is null)
+        uint? sourceKey;
+        BinTreeObject sourceAudio;
+        if (sourceAudioOverride is not null)
         {
-            string[] tokens = AudioIdentityTokens(source).ToArray();
-            var scored = audioObjects
-                .Where(pair => pair.Key != targetAudio.Key)
-                .Select(pair => (Pair: pair, Score: AudioScore(pair.Value, tokens)))
-                .Where(candidate => candidate.Score > 0)
-                .OrderByDescending(candidate => candidate.Score)
-                .ToList();
-            if (scored.Count == 0 || scored.Count > 1 && scored[0].Score == scored[1].Score)
-                return (0, null, null);
-            sourceAudio = scored[0].Pair;
+            sourceKey = null;
+            sourceAudio = sourceAudioOverride;
         }
-        if (sourceAudio.Key == targetAudio.Key) return (0, null, null);
+        else
+        {
+            var found = audioObjects.FirstOrDefault(pair =>
+                pair.Value.Properties.TryGetValue(FeatureField, out var feature)
+                && feature is BinTreeHash hash && hash.Value == H(source.Name));
+            if (found.Value is null)
+            {
+                string[] tokens = AudioIdentityTokens(source).ToArray();
+                var scored = audioObjects
+                    .Where(pair => pair.Key != targetAudio.Key)
+                    .Select(pair => (Pair: pair, Score: AudioScore(pair.Value, tokens)))
+                    .Where(candidate => candidate.Score > 0)
+                    .OrderByDescending(candidate => candidate.Score)
+                    .ToList();
+                if (scored.Count == 0 || scored.Count > 1 && scored[0].Score == scored[1].Score)
+                    return (0, null, null, null);
+                found = scored[0].Pair;
+            }
+            if (found.Key == targetAudio.Key) return (0, null, null, null);
+            sourceKey = found.Key;
+            sourceAudio = found.Value;
+        }
 
         int changed = 0;
         foreach (uint field in new[] { BankUnitsField, MusicField })
         {
             bool targetHas = targetAudio.Value.Properties.TryGetValue(field, out var targetProperty);
-            bool sourceHas = sourceAudio.Value.Properties.TryGetValue(field, out var sourceProperty);
+            bool sourceHas = sourceAudio.Properties.TryGetValue(field, out var sourceProperty);
             if (targetHas != sourceHas || targetHas && !BinPropEquality.PropsEqual(targetProperty!, sourceProperty!)) changed++;
         }
         // Keep reporting the selected source on a repeat application. Besides making the operation
         // idempotent, this retains its referenced Wwise banks in the normal asset preflight.
-        if (changed == 0) return (0, targetAudio.Key, sourceAudio.Key);
+        if (changed == 0) return (0, targetAudio.Key, sourceKey, sourceAudio);
 
-        var properties = sourceAudio.Value.Properties.Select(pair => pair.Key == FeatureField
+        var properties = sourceAudio.Properties.Select(pair => pair.Key == FeatureField
             ? BinTreeCloner.Clone(targetAudio.Value.Properties[FeatureField], FeatureField)
             : BinTreeCloner.Clone(pair.Value, pair.Key));
         tree.Objects[targetAudio.Key] = new BinTreeObject(targetAudio.Key, FeatureAudioClass, properties);
-        return (changed, targetAudio.Key, sourceAudio.Key);
+        return (changed, targetAudio.Key, sourceKey, sourceAudio);
     }
 
     private static IEnumerable<string> AudioIdentityTokens(MapSkinInfo skin)

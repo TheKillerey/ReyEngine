@@ -95,6 +95,9 @@
                        Foreground="{DynamicResource ReyAccentBrush}" />
             <TextBlock Text="Example: choose Default - Base_SRX on the left and Milkshake_SRS on the right. The result includes Milkshake visuals, winter music and ambience, while Base_SRX's server-facing shopkeeper identities remain valid."
                        FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <!-- M730: the switch is kept as a recipe, so a patch update repeats it instead of carrying its result. -->
+            <TextBlock Text="Remembered for patch updates: when Riot ships a new patch, ReyEngine does this switch again on the new map bin - map skin slots that did not exist yet included - instead of carrying today's values across. If Riot stops shipping the forced skin, the recorded copy of its environment is applied and the update asks for a look in game."
+                       FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
           </StackPanel>
         </Border>
       </StackPanel>

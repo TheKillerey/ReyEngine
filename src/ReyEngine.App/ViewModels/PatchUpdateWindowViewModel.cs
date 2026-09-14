@@ -83,6 +83,12 @@ public sealed partial class PatchUpdateWindowViewModel : ObservableObject
     public Func<uint, string?>? Resolve;
     public Func<PatchUpdateRunResult, Task>? RunCompleted;
 
+    // M730: recipes. A bin the Map Skin Switcher made is not diffed across the patch: its recorded switch is done
+    // again on the new original (BinRecipeRebase), so slots the patch added are forced too. A host that keeps
+    // recipes sets RecipeFor; a bin without one that looks like a switch gets its recipe inferred and handed back.
+    public Func<string, BinRecipeRecord?>? RecipeFor;
+    public Action<string, BinRecipeRecord>? RecipeInferred;
+
     public async Task InitAsync()
     {
         if (ListPatches is null) return;
@@ -160,6 +166,36 @@ public sealed partial class PatchUpdateWindowViewModel : ObservableObject
                         continue;
                     }
 
+                    // M730: a bin with a recipe is re-DONE on the new original rather than diffed across.
+                    string? recipeFailure = null;
+                    if (ResolveRecipe(row.Rel, mod, old, patch) is { } recipe)
+                    {
+                        row.Status = "re-applying...";
+                        try
+                        {
+                            var rebase = await Task.Run(() => BinRecipeRebase.Rebase(recipe.Recipe, old, mod, newBase, Resolve));
+                            conflicts += rebase.Conflicts;
+                            var recipeParts = new List<string>
+                            {
+                                (recipe.Inferred ? "Recipe read out of the file and remembered for next time: " : "Recorded recipe: ")
+                                + recipe.Recipe.Describe() + ".",
+                            };
+                            recipeParts.AddRange(rebase.Lines);
+                            string status = rebase.MergedRemainder ? "re-applied + merged" : "re-applied";
+                            if (rebase.Conflicts > 0) status += $", {rebase.Conflicts} to review";
+                            pending.Add(new(row, mod, rebase.Bytes, status, string.Join(Environment.NewLine, recipeParts)));
+                            merged++;
+                            continue;
+                        }
+                        catch (Exception ex)
+                        {
+                            // The structural merge still carries the old result; it just cannot force new slots.
+                            recipeFailure = $"The recipe ({recipe.Recipe.Describe()}) could not be re-applied on this patch: {ex.Message} "
+                                            + "The structural merge was used instead, which cannot force slots this patch added.";
+                            conflicts++;
+                        }
+                    }
+
                     row.Status = "merging...";
                     var (mergedBytes, report) = await Task.Run(() => BinThreeWayMerge.Merge(old, mod, newBase, Resolve));
                     conflicts += report.Conflicts;
@@ -167,6 +203,7 @@ public sealed partial class PatchUpdateWindowViewModel : ObservableObject
                     {
                         $"{report.ModAdded} added / {report.ModRemoved} removed / {report.ModModified} modified object(s) carried onto the installed patch ({report.NewBaseObjects} base objects)."
                     };
+                    if (recipeFailure is not null) parts.Insert(0, recipeFailure);
                     parts.AddRange(report.ConflictDetails.Take(3));
                     if (report.ConflictDetails.Count > 3) parts.Add($"... {report.ConflictDetails.Count - 3} more conflict(s)");
                     pending.Add(new(row, mod, mergedBytes,
@@ -244,6 +281,29 @@ public sealed partial class PatchUpdateWindowViewModel : ObservableObject
             Running = false;
             RunFinished = Result?.Success == true;
             if (Result is not null && RunCompleted is not null) await RunCompleted(Result);
+        }
+    }
+
+    private sealed record ResolvedRecipe(MapSkinForceRecipe Recipe, bool Inferred);
+
+    /// <summary>M730: the recorded recipe for a bin, else one inferred from the bin and its old original when the
+    /// bin is a shipping map bin. Only hosts that keep recipes get inference - it hands the recipe back through
+    /// <see cref="RecipeInferred"/>, and a recipe nobody keeps would be re-inferred on every update.</summary>
+    private ResolvedRecipe? ResolveRecipe(string rel, byte[] mod, byte[] old, string patch)
+    {
+        if (RecipeFor is null) return null;
+        try
+        {
+            if (RecipeFor(rel) is { } record && record.Kind == BinRecipeRecord.ForceMapSkinKind)
+                return new ResolvedRecipe(MapSkinForceRecipe.FromRecord(record), false);
+            if (!MapSkinForceRecipe.IsShippingMapBinPath(rel)) return null;
+            if (MapSkinForceRecipe.Infer(mod, old, Resolve) is not { } inferred) return null;
+            RecipeInferred?.Invoke(rel, inferred.ToRecord(rel, patch, "inferred"));
+            return new ResolvedRecipe(inferred, true);
+        }
+        catch (Exception)
+        {
+            return null;   // an unreadable recipe leaves the bin on the structural merge it always had
         }
     }
 

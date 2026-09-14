@@ -68,6 +68,11 @@ public sealed class ReyProject
     /// before. Only a port that actually ran writes this, so a cancelled dialog changes nothing.</para></summary>
     public LegacyPortSettings? LegacyPort { get; set; }
 
+    /// <summary>M730: what the editor did to a project bin, so a Riot patch update can do it again to the new
+    /// original instead of carrying the old result across - see <see cref="BinRecipeRecord"/>. Empty for every
+    /// project saved before this; the updater infers a recipe from such a bin the first time it sees one.</summary>
+    public List<BinRecipeRecord> BinRecipes { get; set; } = new();
+
     /// <summary>M132: pack only known game file types into wads — editor leftovers, notes, PSDs and
     /// other unknown extensions are skipped (each skip is logged). Default on.</summary>
     public bool PackKnownTypesOnly { get; set; } = true;

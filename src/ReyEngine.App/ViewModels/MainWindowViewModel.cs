@@ -14108,6 +14108,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             throw new IOException("The validated shipping bin could not be saved to the project.");
         if (!await SaveGeneratedMapSkinBinAsync(sourceContainerEntry, compatibility.Bytes))
             throw new IOException("The gameplay-compatible source container could not be saved to the project.");
+        // M730: remember WHAT was done, not only the result, so the next Riot patch does it again to the new
+        // original - the slots that patch adds included. Recorded from the ORIGINAL bytes, so the snapshot is the
+        // source slot as Riot shipped it.
+        var recipe = MapSkinForceRecipe.Record(original, request.Map.MapId, request.Target.Info.PathHash,
+            request.Source.Info.PathHash, request.CarryCharacterSkins, ResolveBinName);
+        BinRecipeRecord.Upsert(Project.BinRecipes, recipe.ToRecord(shippingEntry.Path, Project.RiotPatchVersion, "switcher"));
         _overrides.SaveTo(Project);
         ReyProjectService.Save(Project, Project.ProjectFilePath!);
         BuildMounts();
@@ -14148,6 +14154,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             $"Unchanged Riot objects with validator warnings: {preflight.UnrelatedShippingIssues:n0}",
             $"Container validation: {preflight.ContainerLinks:n0} links, {preflight.ContainerAssets:n0} assets, 0 issues",
             $"Backup: {backupDir}",
+            // M730
+            $"Remembered for patch updates: {recipe.Describe()} - every Riot patch re-applies this switch to the new "
+            + "original map bin, slots that patch adds included, instead of carrying today's values across.",
         };
         string? reportWarning = null;
         try { File.WriteAllLines(reportFile, lines); }
@@ -14162,6 +14171,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             + $"Preserved {compatibility.MatchedServerPlaceables:n0} server gameplay identities. "
             + $"Verified {preflight.ShippingLinks + preflight.ContainerLinks:n0} links and "
             + $"{preflight.ShippingAssets + preflight.ContainerAssets:n0} asset references; backup written."
+            + " Remembered for patch updates."
             + (reportWarning is null ? " Report written." : reportWarning);
         Status = message;
         _log.Success("MapSkin", message);
@@ -14270,6 +14280,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             SaveBytes = (entry, bytes) => Active() ? SaveMapBinBytesAsync(entry, bytes) : Task.FromResult(false),
             RunValidate = () => Active() ? ValidateProjectBins() : Task.CompletedTask,
             Resolve = ResolveBinName,
+            // M730: the bins the Map Skin Switcher made are re-done on the new original, not diffed across.
+            RecipeFor = rel => BinRecipeRecord.Find(patchProject.BinRecipes, rel),
+            RecipeInferred = (rel, record) =>
+            {
+                BinRecipeRecord.Upsert(patchProject.BinRecipes, record);
+                patchProject.IsDirty = true;
+                _log.Info("PatchUpdate", $"{rel}: no recipe was recorded for this forced map bin, so one was read out of the file "
+                                         + $"({record.SourceSkin}{(record.CarryCharacterSkins ? ", character skins carried" : "")}) and remembered.");
+            },
         };
 
         string route = $"{patchProject.RiotPatchVersion ?? "unknown"}-to-{targetPatch ?? "unknown"}";
