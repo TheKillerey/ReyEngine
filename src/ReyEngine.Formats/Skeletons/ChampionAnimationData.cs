@@ -7,19 +7,67 @@ namespace ReyEngine.Formats.Skeletons;
 
 /// <summary>One named clip from a champion's animation-graph bin (M85): the .anm it plays plus the
 /// submeshes it shows/hides while playing (SubmeshVisibilityEventData — hashes or literal names).</summary>
+/// <param name="ShowNames">M724: the clip-wide UNION of every visibility event's show list, kept because
+/// callers predating the timeline read it. New code should use <paramref name="VisibilityEvents"/>, which
+/// carries each event's own frame window.</param>
+/// <param name="VisibilityEvents">M724: each SubmeshVisibilityEventData with the window it applies over,
+/// in bin order. A clip that reveals a sword at frame 12 has two events, not one union.</param>
+/// <param name="TickDuration">M724: the clip's authored <c>mTickDuration</c> - seconds per frame for THIS
+/// clip, which outranks the .anm header's own rate when converting an event frame to a time. 0 when the
+/// clip does not author one, in which case the .anm's fps is correct.</param>
 public sealed record AnimClipInfo(string Name, string AnmPath,
     IReadOnlyList<string> ShowNames, IReadOnlyList<string> HideNames,
     IReadOnlyList<uint> ShowHashes, IReadOnlyList<uint> HideHashes,
     IReadOnlyList<AnimParticleEvent>? ParticleEvents = null,
-    IReadOnlyList<AnimSoundEvent>? SoundEvents = null);
+    IReadOnlyList<AnimSoundEvent>? SoundEvents = null,
+    IReadOnlyList<AnimVisibilityEvent>? VisibilityEvents = null,
+    float TickDuration = 0f);
 
 /// <summary>M90: one SoundEventData in a clip — a Wwise event name like Play_sfx_Aatrox_Death3D_cast.</summary>
 public sealed record AnimSoundEvent(string SoundName, float StartFrame, bool IsLoop);
 
+/// <summary>
+/// M724: one SubmeshVisibilityEventData with the frames it covers.
+///
+/// <para>Riot authors these as a running edit, not as a per-frame picture: an event names the submeshes it
+/// turns ON and the ones it turns OFF at its start frame, and that stands until another event says
+/// otherwise. <see cref="EndFrame"/> is -1 when the event authors none, meaning "to the end of the clip".</para>
+/// </summary>
+public sealed record AnimVisibilityEvent(float StartFrame, float EndFrame,
+    IReadOnlyList<string> ShowNames, IReadOnlyList<string> HideNames,
+    IReadOnlyList<uint> ShowHashes, IReadOnlyList<uint> HideHashes);
+
+/// <summary>M724: one entry of a ParticleEventData's <c>mParticleEventDataPairList</c> - the engine spawns
+/// one effect per pair, not one per event. <paramref name="TargetBoneName"/> aims a beam's far end.</summary>
+public sealed record AnimParticleSpawn(string BoneName, uint BoneHash,
+    string TargetBoneName = "", uint TargetBoneHash = 0);
+
 /// <summary>M86: one ParticleEventData in a clip — the VFX it spawns and the bone it rides.
 /// BoneName is empty when the bin only stores a hash the hashtable can't resolve; BoneHash then
 /// carries it, matched against skeleton joints by FNV1a or Elf of the joint name.</summary>
-public sealed record AnimParticleEvent(string EffectName, uint EffectHash, string BoneName, float StartFrame, uint BoneHash = 0);
+/// <param name="EndFrame">M724: <c>mEndFrame</c>, or -1 when unauthored. An effect with an end stops there
+/// instead of emitting until the clip wraps.</param>
+/// <param name="IsLoop">M724: <c>mIsLoop</c> - the effect restarts for as long as the event is live.</param>
+/// <param name="IsKill">
+/// M724: <c>mIsKillEvent</c> - this event STOPS a system rather than starting one.
+///
+/// <para><b>Absent means FALSE here, deliberately, against the schema.</b> The meta schema declares this
+/// Bool with <c>default: true</c> (meta.db.json, <c>0x72a03ff8</c>), so a literal reading makes every event
+/// that omits it a kill event. Measured over five champion wads - Aatrox, Riven, Viego, Jhin, Thresh -
+/// ParticleEventData carries it <b>absent 3,746 times, explicitly false 726 times, and true ZERO times</b>.
+/// Honouring the schema default would therefore suppress 3,746 of 4,472 champion particle events, i.e. most
+/// of every champion's VFX. Riot writes the field explicitly when it means false and never writes true, so
+/// the field is effectively inert on shipped data; we read it for mod bins that do author it. Do not
+/// "correct" this to the schema default without re-running that census.</para>
+/// </param>
+/// <param name="Spawns">M724: every pair the event authors, in order. <paramref name="BoneName"/> /
+/// <paramref name="BoneHash"/> mirror the first for callers written before the list existed.</param>
+public sealed record AnimParticleEvent(string EffectName, uint EffectHash, string BoneName, float StartFrame,
+    uint BoneHash = 0,
+    float EndFrame = -1f,
+    bool IsLoop = false,
+    bool IsKill = false,
+    IReadOnlyList<AnimParticleSpawn>? Spawns = null);
 
 /// <summary>
 /// M85: parses champion animation bins (data/characters/X/animations/skinN.bin) for named clips +
@@ -40,10 +88,17 @@ public static class ChampionAnimationData
     private static readonly uint FSoundName = HashAlgorithms.Fnv1a("mSoundName");
     private static readonly uint FIsLoop = HashAlgorithms.Fnv1a("mIsLoop");
     private static readonly uint FEffectKey = HashAlgorithms.Fnv1a("mEffectKey");
+    /// <summary>M724: the name ParticleEventData actually declares. <c>mParticleName</c> below is kept as a
+    /// second fallback but no animation class declares it, so it has never once matched.</summary>
+    private static readonly uint FEffectName = HashAlgorithms.Fnv1a("mEffectName");
     private static readonly uint FParticleName = HashAlgorithms.Fnv1a("mParticleName");
     private static readonly uint FBoneName = HashAlgorithms.Fnv1a("mBoneName");
+    private static readonly uint FTargetBoneName = HashAlgorithms.Fnv1a("mTargetBoneName");
     private static readonly uint FPairList = HashAlgorithms.Fnv1a("mParticleEventDataPairList");
     private static readonly uint FStartFrame = HashAlgorithms.Fnv1a("mStartFrame");
+    private static readonly uint FEndFrame = HashAlgorithms.Fnv1a("mEndFrame");
+    private static readonly uint FIsKillEvent = HashAlgorithms.Fnv1a("mIsKillEvent");
+    private static readonly uint FTickDuration = HashAlgorithms.Fnv1a("mTickDuration");
     private static readonly uint FInitialHide = HashAlgorithms.Fnv1a("initialSubmeshToHide");
     private static readonly uint FSkinAudio = HashAlgorithms.Fnv1a("skinAudioProperties");
     private static readonly uint FBankUnits = HashAlgorithms.Fnv1a("bankUnits");
@@ -86,54 +141,112 @@ public static class ChampionAnimationData
                     var showH = new List<uint>(); var hideH = new List<uint>();
                     var particles = new List<AnimParticleEvent>();
                     var sounds = new List<AnimSoundEvent>();
+                    var visibility = new List<AnimVisibilityEvent>();
                     if (s.Properties.TryGetValue(FEventMap, out var em) && em is System.Collections.IEnumerable events)
                         foreach (var ekv in events)
                         {
                             if (ekv.GetType().GetProperty("Value")?.GetValue(ekv) is not BinTreeStruct es) continue;
                             if (es.ClassHash == ClassSubmeshVis)
                             {
-                                Collect(es, FShow, showN, showH);
-                                Collect(es, FHide, hideN, hideH);
+                                // M724: each event keeps its OWN lists and window. The clip-wide union below
+                                // is still filled for the callers that predate the timeline, but a clip that
+                                // swaps Sword_A for Sword_B at frame 12 is two edits, and unioning them shows
+                                // both swords for the whole clip - which is what we used to draw.
+                                var eShowN = new List<string>(); var eHideN = new List<string>();
+                                var eShowH = new List<uint>(); var eHideH = new List<uint>();
+                                Collect(es, FShow, eShowN, eShowH);
+                                Collect(es, FHide, eHideN, eHideH);
+                                visibility.Add(new AnimVisibilityEvent(Frame(es, FStartFrame, 0f), Frame(es, FEndFrame, -1f),
+                                    eShowN, eHideN, eShowH, eHideH));
+                                showN.AddRange(eShowN); hideN.AddRange(eHideN);
+                                showH.AddRange(eShowH); hideH.AddRange(eHideH);
                             }
                             else if (es.ClassHash == ClassParticleEvent)
                             {
                                 // M86: effect + bone can each be a string or a hash — capture both forms.
                                 var (fxName, fxHash) = StringOrHash(es, FEffectKey, resolve);
+                                if (fxName.Length == 0 && fxHash == 0) (fxName, fxHash) = StringOrHash(es, FEffectName, resolve);
                                 if (fxName.Length == 0 && fxHash == 0) (fxName, fxHash) = StringOrHash(es, FParticleName, resolve);
+
+                                // M724: every pair, in order - the engine spawns one effect per pair. The
+                                // event may also name the bone itself, which the pair list then refines.
                                 var (bone, boneHash) = StringOrHash(es, FBoneName, resolve);
-                                // real data nests the bone inside mParticleEventDataPairList entries,
-                                // usually as an unresolvable hash — keep the hash even without a name.
-                                if (bone.Length == 0 && boneHash == 0
-                                    && es.Properties.TryGetValue(FPairList, out var pl)
-                                    && pl is BinTreeContainer pairs)
+                                var (tgt, tgtHash) = StringOrHash(es, FTargetBoneName, resolve);
+                                var spawns = new List<AnimParticleSpawn>();
+                                if (es.Properties.TryGetValue(FPairList, out var pl) && pl is BinTreeContainer pairs)
                                     foreach (var pe in pairs.Elements)
                                         if (pe is BinTreeStruct ps2)
                                         {
-                                            (bone, boneHash) = StringOrHash(ps2, FBoneName, resolve);
-                                            if (bone.Length > 0 || boneHash != 0) break;
+                                            var (pb, pbh) = StringOrHash(ps2, FBoneName, resolve);
+                                            var (pt, pth) = StringOrHash(ps2, FTargetBoneName, resolve);
+                                            // a pair that names no bone of its own inherits the event's
+                                            if (pb.Length == 0 && pbh == 0) { pb = bone; pbh = boneHash; }
+                                            if (pt.Length == 0 && pth == 0) { pt = tgt; pth = tgtHash; }
+                                            spawns.Add(new AnimParticleSpawn(pb, pbh, pt, pth));
                                         }
-                                float start = es.Properties.TryGetValue(FStartFrame, out var sf) && sf is BinTreeF32 f ? f.Value : 0f;
+                                // no pairs at all: the event itself is the one spawn (bone may be empty,
+                                // which the viewer reads as "ride the character's own origin")
+                                if (spawns.Count == 0) spawns.Add(new AnimParticleSpawn(bone, boneHash, tgt, tgtHash));
+                                if (bone.Length == 0 && boneHash == 0) { bone = spawns[0].BoneName; boneHash = spawns[0].BoneHash; }
+
+                                float start = Frame(es, FStartFrame, 0f);
+                                float end = Frame(es, FEndFrame, -1f);
+                                bool loop = es.Properties.TryGetValue(FIsLoop, out var pil) && pil is BinTreeBool pb2 && pb2.Value;
+                                bool kill = es.Properties.TryGetValue(FIsKillEvent, out var ik) && ik is BinTreeBool kb && kb.Value;
                                 if (fxName.Length > 0 || fxHash != 0)
-                                    particles.Add(new AnimParticleEvent(fxName, fxHash, bone, start, boneHash));
+                                    particles.Add(new AnimParticleEvent(fxName, fxHash, bone, start, boneHash,
+                                        end, loop, kill, spawns));
                             }
                             else if (es.ClassHash == ClassSoundEvent)
                             {
                                 // M90: Wwise event name (literal string) + optional frame/loop flags.
                                 string snd = es.Properties.TryGetValue(FSoundName, out var sn) && sn is BinTreeString ss ? ss.Value : "";
-                                float sStart = es.Properties.TryGetValue(FStartFrame, out var ssf) && ssf is BinTreeF32 sf2 ? sf2.Value : 0f;
+                                float sStart = Frame(es, FStartFrame, 0f);
                                 bool sLoop = es.Properties.TryGetValue(FIsLoop, out var sl) && sl is BinTreeBool sb && sb.Value;
                                 if (snd.Length > 0) sounds.Add(new AnimSoundEvent(snd, sStart, sLoop));
                             }
                         }
+                    // M724: events come out of a map, whose order is the bin's, not the timeline's.
+                    visibility.Sort((a, b) => a.StartFrame.CompareTo(b.StartFrame));
                     clips.Add(new AnimClipInfo(name, anm, showN, hideN, showH, hideH,
                         particles.Count > 0 ? particles : null,
-                        sounds.Count > 0 ? sounds : null));
+                        sounds.Count > 0 ? sounds : null,
+                        visibility.Count > 0 ? visibility : null,
+                        Frame(s, FTickDuration, 0f)));
                 }
             }
         }
         catch { /* malformed bin — return what we have */ }
         return clips;
     }
+
+    /// <summary>M724: a frame/seconds scalar. Riot authors these as F32, but a whole-numbered frame is
+    /// sometimes written as an integer, and reading only F32 silently turned those into the default.</summary>
+    private static float Frame(BinTreeStruct s, uint field, float fallback) =>
+        s.Properties.TryGetValue(field, out var p)
+            ? p switch
+            {
+                BinTreeF32 f => f.Value,
+                BinTreeU32 u => u.Value,
+                BinTreeI32 i => i.Value,
+                BinTreeU16 u16 => u16.Value,
+                BinTreeI16 i16 => i16.Value,
+                _ => fallback,
+            }
+            : fallback;
+
+    /// <summary>
+    /// M724: the one splitter for <c>initialSubmeshToHide</c> and friends.
+    ///
+    /// <para>Riot writes the list space-separated, but comma- and semicolon-separated ones exist in
+    /// hand-edited mod bins. Four readers used to split it and only two of them accepted commas, so the
+    /// other two produced names with a trailing comma that matched no submesh - the hide silently did
+    /// nothing. One splitter, every caller.</para>
+    /// </summary>
+    public static string[] SplitSubmeshList(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? Array.Empty<string>()
+            : value.Split(new[] { ' ', ',', ';', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
 
     /// <summary>Read a field that may be a literal string or a hash; resolve hashes to names when possible.</summary>
     private static (string Name, uint Hash) StringOrHash(BinTreeStruct s, uint field, Func<uint, string?> resolve)
@@ -168,7 +281,7 @@ public static class ChampionAnimationData
             var bin = SafeBinTree.Parse(skinBin);
             foreach (var o in bin.Objects.Values)
                 if (FindString(o.Properties, FInitialHide) is { Length: > 0 } s)
-                    return s.Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    return SplitSubmeshList(s);
         }
         catch { }
         return Array.Empty<string>();

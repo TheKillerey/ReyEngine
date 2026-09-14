@@ -150,6 +150,22 @@ public partial class MeshPreviewWindow
             }
         }
 
+        // M724: per-submesh visibility, from the SAME list the GL viewport binds (MeshPreviewViewModel
+        // folds initialSubmeshToHide + the clip's visibility timeline + the user's overrides into it).
+        // Pushed every frame rather than at commit because two of those three layers change while the
+        // clip plays; the assignment is a no-op when nothing moved.
+        if (_dx11.HasScene)
+        {
+            var vis = vm.SubmeshVisible;
+            foreach (var m in _dx11.Renderer.Materials)
+            {
+                int i = m.CharacterSubmeshIndex;
+                if (i < 0) continue;                       // particles, props, overlays manage their own
+                bool want = vis is null || i >= vis.Count || vis[i];
+                if (m.Visible != want) m.Visible = want;
+            }
+        }
+
         // The pose for THIS frame, off the same clock the GL path animates with. Null palette leaves the
         // renderer's bind-pose constant in place, which is right for anything unskinned.
         var (palette, bones) = vm.CurrentPose(vm.ShowBones);

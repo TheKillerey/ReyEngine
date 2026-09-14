@@ -142,7 +142,7 @@ public sealed class MaterialDocument
         var hide = new List<string>();
         foreach (var n in new[] { "initialSubmeshToHide", "initialSubmeshShadowsToHide" })
             if (S(n) is { } raw)
-                foreach (var part in raw.Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+                foreach (var part in Skeletons.ChampionAnimationData.SplitSubmeshList(raw))
                     if (n == "initialSubmeshToHide" && !hide.Contains(part, StringComparer.OrdinalIgnoreCase))
                         hide.Add(part);
 

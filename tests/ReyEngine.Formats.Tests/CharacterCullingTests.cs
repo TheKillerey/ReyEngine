@@ -135,7 +135,9 @@ public sealed class CharacterCullingTests
         var text = Source("src", "ReyEngine.App", "Services", "Dx11CharacterScene.cs");
         if (text is null) return;
 
-        Assert.Contains("MaterialProfile Profile);", text);
+        // M724: pinned as "the profile is a slice field" rather than "the record ends with it" - the record
+        // gained a trailing SubmeshIndex, and a guard that breaks on any append guards the wrong thing.
+        Assert.Contains("MaterialProfile Profile,", text);
         Assert.Contains("mat.CullBackFaces = slice.Profile.CullEnabled;", text);
         Assert.Contains("textures, parameters, hidden, usedFallback, b.Profile);", text);
     }

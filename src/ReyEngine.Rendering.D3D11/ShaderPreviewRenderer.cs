@@ -281,6 +281,15 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// what keeps a blanket visibility sweep from stomping particle materials that manage their own.</summary>
     public int MapGroupIndex { get; set; } = -1;
 
+    /// <summary>M724: the CHARACTER submesh this material draws, or -1 for anything that is not a character
+    /// submesh. The exact sibling of <see cref="MapGroupIndex"/> above, and for the same reason: it lets the
+    /// host drive <see cref="Visible"/> from the very same per-submesh array the OpenGL viewport consumes,
+    /// so the two viewports cannot disagree about which pieces of a champion are showing. Before it existed
+    /// the D3D11 character had no runtime visibility channel at all - <see cref="Visible"/> was written once
+    /// at commit from <c>initialSubmeshToHide</c> and never again, so every hide moved only the GL image.
+    /// The -1 default keeps a blanket sweep off particle and prop materials that manage their own.</summary>
+    public int CharacterSubmeshIndex { get; set; } = -1;
+
     /// <summary>M661: the source mapgeo mesh for this group has a negative-determinant (mirrored)
     /// transform. Not derivable here - the merged vertex buffer has every transform baked in and the
     /// per-mesh fact is gone by the time geometry reaches this renderer - so the host publishes it by

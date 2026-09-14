@@ -53,7 +53,52 @@ public sealed partial class SubmeshToggleViewModel : ObservableObject
         finally { Busy = false; }
     }
     public Action? Changed;
-    partial void OnIsVisibleChanged(bool value) => Changed?.Invoke();
+
+    /// <summary>
+    /// M724: the user's own answer for this submesh, or null to follow the skin + animation.
+    ///
+    /// <para><b>Why this is a separate field.</b> The tick used to BE the computed value, so the auto pass
+    /// wrote straight over whatever the user had just clicked - and the auto pass runs on every clip change.
+    /// The visible symptom was a Hide that reverted by itself, which reads as the button doing nothing.
+    /// Now the auto pass writes the computed base through <see cref="ApplyComputed"/> (which does not record
+    /// an override) and the override is re-applied on top of it, so a hand-set tick outlives every clip
+    /// change until it is explicitly cleared.</para>
+    /// </summary>
+    public bool? Override { get; private set; }
+
+    public bool IsOverridden => Override is not null;
+
+    /// <summary>True while the auto pass is writing, so the setter does not mistake it for a user click.</summary>
+    private bool _applying;
+
+    /// <summary>Set the computed (skin + animation) value without recording a user override.</summary>
+    public void ApplyComputed(bool value)
+    {
+        if (IsVisible == value) return;
+        _applying = true;
+        try { IsVisible = value; }
+        finally { _applying = false; }
+    }
+
+    /// <summary>Drop the user's override so this submesh follows the skin + animation again.</summary>
+    public void ClearOverride()
+    {
+        if (Override is null) return;
+        Override = null;
+        OnPropertyChanged(nameof(IsOverridden));
+        Changed?.Invoke();
+    }
+
+    partial void OnIsVisibleChanged(bool value)
+    {
+        // a change that did not come from ApplyComputed is the user speaking, and the user wins
+        if (!_applying)
+        {
+            Override = value;
+            OnPropertyChanged(nameof(IsOverridden));
+        }
+        Changed?.Invoke();
+    }
 }
 
 public sealed partial class MeshPreviewViewModel : ObservableObject
@@ -170,6 +215,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             }
             _lastAnimTime = t;
             AnimationTime = t;
+            // M724: submesh visibility events are a TIMELINE - Kayn swaps forms at frame 114, Riven's
+            // recall hides two pieces at 0 and shows three at 9. Re-folding here is what makes the model
+            // change DURING playback instead of showing the clip's union from the first frame.
+            if (_visSteps.Length > 0 || Submeshes.Any(s => s.IsOverridden)) ApplyAutoVisibility();
             if (_eventPlaybackActive) TickSoundSchedule(t);   // M91: frame-accurate SFX
         };
     }
@@ -328,6 +377,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         }
 
         var items = new List<VfxPlaybackItem>();
+        float frameSeconds = FrameSeconds();   // M724: the CLIP's tick, not just the .anm's fps
         foreach (var ev in clip.ParticleEvents!)
         {
             // primary: the skin bin's ResourceResolver map (effect key → system object), like the game
@@ -838,22 +888,123 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         return null;
     }
 
+    /// <summary>M724: seconds per animation frame for the CLIP - its authored <c>mTickDuration</c> when it
+    /// has one, else the .anm header's own rate. Measured: 223 of Aatrox's 1,353 clips and 132 of Gnar's
+    /// 1,130 author a tick, and it outranks the file's rate, so dividing by fps alone fired their events at
+    /// the wrong moment.</summary>
+    private float FrameSeconds()
+    {
+        if (CurrentClip()?.TickDuration is > 0.0001f and < 1f and { } tick) return tick;
+        return 1f / ClipFps();
+    }
+
+    /// <summary>The graph clip behind the selected animation entry, or null.</summary>
+    private Formats.Skeletons.AnimClipInfo? CurrentClip() =>
+        Animation.SelectedAnimation?.Name is { } anm && _clipsByAnm is not null
+            ? _clipsByAnm.GetValueOrDefault(anm) : null;
+
+    /// <summary>
+    /// M724: the submesh visibility actually rendered, as three layers evaluated at the current animation
+    /// frame.
+    ///
+    /// <para><b>1. the skin.</b> <c>initialSubmeshToHide</c> is the base picture.</para>
+    ///
+    /// <para><b>2. the animation, on a timeline.</b> Each <c>SubmeshVisibilityEventData</c> carries its own
+    /// <c>mStartFrame</c>/<c>mEndFrame</c> and is applied only while the playhead is inside that window, in
+    /// start-frame order, SHOW first then HIDE so hide wins inside one event and a later event beats an
+    /// earlier one. We used to union every event's lists over the whole clip, which is why Kayn's
+    /// <c>Transform_Assassin</c> - two events, showing 2 submeshes and hiding 1 at frame 114 - drew both
+    /// forms at once for the entire clip. Measured: 194 of Aatrox's clips and 78 of Gnar's carry more than
+    /// one visibility event, and 230 of Gnar's events are windowed.</para>
+    ///
+    /// <para><b>3. the user.</b> A hand-set tick is an <see cref="SubmeshToggleViewModel.Override"/>, applied
+    /// last, and it wins over both. That is the whole point: the animation saying "weapon visible" must not
+    /// undo the user having just clicked Hide.</para>
+    ///
+    /// <para>Turning Auto off drops layer 2 only - the skin's base and the user's overrides still stand.</para>
+    /// </summary>
+    /// <summary>One visibility event reduced to this mesh's submeshes: the window, and which submesh
+    /// indices it shows and hides. Name/hash matching happens once per clip, not once per frame.</summary>
+    private readonly record struct VisibilityStep(float Start, float End, bool[] Show, bool[] Hide);
+
+    private VisibilityStep[] _visSteps = Array.Empty<VisibilityStep>();
+    private bool[] _visBase = Array.Empty<bool>();
+    private object? _visBuiltFor;      // the clip the cache belongs to (null = no clip)
+    private int _visBuiltCount = -1;   // the submesh count it was built against
+
+    /// <summary>M724: resolve every name/hash match for the current clip once. The per-frame fold below is
+    /// then pure boolean work - the user asked that the animation runtime not redo what does not change,
+    /// and Matches() hashes a string per submesh per event, which at 60 Hz is exactly that.</summary>
+    private void RebuildVisibilityTimeline()
+    {
+        var clip = CurrentClip();
+        _visBuiltFor = clip;
+        _visBuiltCount = Submeshes.Count;
+
+        _visBase = Submeshes
+            .Select(s => !_initialHide.Any(h => string.Equals(h, s.Name, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+        var steps = new List<VisibilityStep>();
+        var M = (Func<SubmeshToggleViewModel, IReadOnlyList<string>, IReadOnlyList<uint>, bool>)
+            ((s, n, h) => Formats.Skeletons.ChampionAnimationData.Matches(s.Name, n, h));
+
+        if (clip?.VisibilityEvents is { Count: > 0 } events)
+        {
+            foreach (var ev in events)
+                steps.Add(new VisibilityStep(ev.StartFrame, ev.EndFrame,
+                    Submeshes.Select(s => M(s, ev.ShowNames, ev.ShowHashes)).ToArray(),
+                    Submeshes.Select(s => M(s, ev.HideNames, ev.HideHashes)).ToArray()));
+        }
+        else if (clip is not null)
+        {
+            // older bins, and clips whose single event authors no frames: the clip-wide union, one step
+            // covering the whole clip - the pre-M724 behaviour, kept for exactly the data that needs it
+            steps.Add(new VisibilityStep(0f, -1f,
+                Submeshes.Select(s => M(s, clip.ShowNames, clip.ShowHashes)).ToArray(),
+                Submeshes.Select(s => M(s, clip.HideNames, clip.HideHashes)).ToArray()));
+        }
+        _visSteps = steps.ToArray();
+    }
+
     private void ApplyAutoVisibility()
     {
-        if (!AutoSubmeshVisibility || Submeshes.Count == 0) return;
-        var clip = Animation.SelectedAnimation?.Name is { } anm && _clipsByAnm is not null
-            ? _clipsByAnm.GetValueOrDefault(anm) : null;
-        foreach (var s in Submeshes)
+        if (Submeshes.Count == 0) return;
+        var clip = CurrentClip();
+        if (!ReferenceEquals(_visBuiltFor, clip) || _visBuiltCount != Submeshes.Count) RebuildVisibilityTimeline();
+
+        float frame = (float)AnimationTime / MathF.Max(1e-6f, FrameSeconds());
+        for (int i = 0; i < Submeshes.Count; i++)
         {
-            bool visible = !_initialHide.Any(h => string.Equals(h, s.Name, StringComparison.OrdinalIgnoreCase));
-            if (clip is not null)
-            {
-                if (Formats.Skeletons.ChampionAnimationData.Matches(s.Name, clip.HideNames, clip.HideHashes)) visible = false;
-                if (Formats.Skeletons.ChampionAnimationData.Matches(s.Name, clip.ShowNames, clip.ShowHashes)) visible = true;
-            }
-            s.IsVisible = visible;
+            // 1. the skin's own picture
+            bool visible = i < _visBase.Length && _visBase[i];
+
+            // 2. the clip's events, in start order, only while their window contains the playhead
+            if (AutoSubmeshVisibility)
+                foreach (var step in _visSteps)
+                {
+                    if (frame < step.Start) continue;                        // not reached yet
+                    if (step.End >= 0f && frame > step.End) continue;        // already expired
+                    if (i < step.Show.Length && step.Show[i]) visible = true;
+                    if (i < step.Hide.Length && step.Hide[i]) visible = false;
+                }
+
+            // 3. the user's own answer, which outranks both
+            var s = Submeshes[i];
+            s.ApplyComputed(s.Override ?? visible);
         }
     }
+
+    /// <summary>M724: hand every submesh back to the skin + animation. Shown as a button because an
+    /// override is otherwise invisible once set - the tick looks the same either way.</summary>
+    [RelayCommand]
+    private void ResetSubmeshOverrides()
+    {
+        foreach (var s in Submeshes) s.ClearOverride();
+        ApplyAutoVisibility();
+    }
+
+    public bool HasSubmeshOverrides => Submeshes.Any(s => s.IsOverridden);
 
     /// <summary>Populate the animation list (same entries the main window's FindAnimations produces).</summary>
     public void SetAnimations(IEnumerable<AnimationEntryViewModel> animations) => Animation.SetAnimations(animations);

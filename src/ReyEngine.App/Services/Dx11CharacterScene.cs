@@ -29,7 +29,10 @@ public sealed record CharacterSlice(
     /// has carried this on its slice since M279; this one threw it away and gave every submesh the same
     /// hardcoded state, which is why an opaque champion material was alpha-blended and a two-sided one was
     /// indistinguishable from a single-sided one. See <see cref="Commit"/> for what is honoured.</summary>
-    MaterialProfile Profile);
+    MaterialProfile Profile,
+    /// <summary>M724: which mesh submesh this slice draws, so runtime visibility can address it. -1 on a
+    /// slice built by a path that has no per-submesh visibility of its own (map props).</summary>
+    int SubmeshIndex = -1);
 
 /// <summary>Everything the scene needs that does not touch D3D.</summary>
 public sealed class PreparedCharacterScene
@@ -169,8 +172,9 @@ public static class Dx11CharacterScene
             scene.Failures.Add("No shader permutation index: unauthored parameters default to zero, "
                                + "which usually renders the character black.");
 
-        foreach (var sub in mesh.SubMeshes)
+        for (int submeshIndex = 0; submeshIndex < mesh.SubMeshes.Count; submeshIndex++)
         {
+            var sub = mesh.SubMeshes[submeshIndex];
             var binding = MaterialFor(bindings, sub.Material);
             if (binding is null)
             {
@@ -179,7 +183,10 @@ public static class Dx11CharacterScene
             }
 
             var slice = BuildSlice(sub, binding, cache, perms, fallbackShader, scene, sb, state);
-            if (slice is not null) scene.Slices.Add(slice);
+            // M724: the submesh this slice draws, carried so runtime visibility can address it. Without it
+            // the D3D11 character had no way to be told which range to stop drawing, and every hide - the
+            // checkboxes, Show All / None, and every per-clip visibility event - moved only the GL image.
+            if (slice is not null) scene.Slices.Add(slice with { SubmeshIndex = submeshIndex });
         }
 
         // Every distinct texture the scene will ask for, decoded once. Failures are recorded rather than
@@ -260,6 +267,10 @@ public static class Dx11CharacterScene
 
             mat.SortableByPipeline = StateDescription.Geometry.DepthWrite;
             mat.Visible = !slice.Hidden;
+            // M724: which submesh this material is, so the host can drive Visible per frame from the same
+            // array the GL viewport reads. Without it the line above was the only thing that ever set
+            // Visible on a character material.
+            mat.CharacterSubmeshIndex = slice.SubmeshIndex;
 
             // M633: the material's own cullEnable, which this path threw away - every champion submesh drew
             // two-sided, so interior faces showed through and back faces lit that the game never rasterises.

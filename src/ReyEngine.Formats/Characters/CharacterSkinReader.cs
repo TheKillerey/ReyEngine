@@ -97,8 +97,10 @@ public static class CharacterSkinReader
             texture = Path(Get(smp.Properties, FTexture), resolveWad);
 
             // Space-separated in one string, not a list: "Tail_Large Body_Proxy".
+            // M724: through the one splitter, so a comma-separated hand-edited list does not yield names
+            // with a trailing comma that match no submesh.
             if (Get(smp.Properties, FInitialHide) is BinTreeString hide && hide.Value.Length > 0)
-                hidden = hide.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                hidden = Skeletons.ChampionAnimationData.SplitSubmeshList(hide.Value);
 
             if (Get(smp.Properties, FMaterialOverride) is BinTreeContainer list)
                 foreach (var element in list.Elements)

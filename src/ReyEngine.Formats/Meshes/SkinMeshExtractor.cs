@@ -41,10 +41,10 @@ public static class SkinMeshExtractor
         return null;
     }
 
-    /// <summary>initialSubmeshToHide is a space-separated list of submesh names.</summary>
+    /// <summary>initialSubmeshToHide is a space-separated list of submesh names. M724: through the one
+    /// splitter, which also accepts the comma/semicolon forms hand-edited mod bins carry.</summary>
     private static IReadOnlyList<string> ParseHidden(string? s) =>
-        string.IsNullOrWhiteSpace(s) ? Array.Empty<string>()
-        : s.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Skeletons.ChampionAnimationData.SplitSubmeshList(s);
 
     private static BinTreeProperty? Get(IReadOnlyDictionary<uint, BinTreeProperty> p, uint hash)
         => p.TryGetValue(hash, out var v) ? v : null;
