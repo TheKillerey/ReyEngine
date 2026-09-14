@@ -386,7 +386,8 @@ public sealed class MaterialDriverStateTests
 
         string host = File.ReadAllText(Path.Combine(RepoRoot(), "src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.CharacterMaterials.cs"));
         Assert.Contains("var state = MeshPreview.DriverState;", host, StringComparison.Ordinal);
-        Assert.Contains("BuildCharacterDx11Scene(skn, bytes, state)", host, StringComparison.Ordinal);
+        // M728: the rebuild also carries the skin bin, after the state
+        Assert.Contains("BuildCharacterDx11Scene(skn, bytes, state, skinBin)", host, StringComparison.Ordinal);
 
         string load = File.ReadAllText(Path.Combine(RepoRoot(), "src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.Characters.cs"));
         Assert.Contains("driverState: driverState", load, StringComparison.Ordinal);

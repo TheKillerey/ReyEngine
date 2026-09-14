@@ -131,7 +131,8 @@ public sealed class CharacterDx11SurfaceTests
         if (!File.Exists(source)) return;
 
         string text = File.ReadAllText(source);
-        Assert.Contains("BuildCharacterDx11Scene(entry)", text);
+        // M728: the load hands the scene the skin bin it was opened with, so a chroma is not built as its base skin
+        Assert.Contains("BuildCharacterDx11Scene(entry, skinBin: binPath)", text);
         Assert.Contains("MeshPreview.SetDx11Scene(", text);
     }
 

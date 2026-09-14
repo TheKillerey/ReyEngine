@@ -25,6 +25,11 @@ public sealed partial class MainWindowViewModel
     /// for it. Null while the window shows a prop or a legacy map.</summary>
     private WadAssetEntry? _previewSkn;
 
+    /// <summary>M728: the skin BIN the character window is showing. It cannot be worked out from
+    /// <see cref="_previewSkn"/>: a chroma draws its base skin's mesh with a bin of its own, so the mesh's folder
+    /// names the wrong skin. Null with <see cref="_previewSkn"/>.</summary>
+    private string? _previewSkinBin;
+
     /// <summary>Only the newest rebuild lands. A burst of edits starts a burst of off-thread scene builds,
     /// and without this the SLOWEST one would win rather than the LAST one.</summary>
     private int _characterSceneRebuild;
@@ -135,13 +140,16 @@ public sealed partial class MainWindowViewModel
     private void ForgetPreviewSkin()
     {
         _previewSkn = null;
+        _previewSkinBin = null;   // M728
         MeshPreview.MaterialEditor.Clear();
         MeshPreview.ShowMaterials(false);
     }
 
-    /// <summary>The hash of the skin bin that belongs to the previewed .skn, or 0.</summary>
+    /// <summary>The hash of the skin bin the character window is showing, or 0. M728: the bin it was OPENED with
+    /// (<see cref="_previewSkinBin"/>). Worked out from the mesh again, a chroma's material edits were compared
+    /// against its base skin's bin and never previewed.</summary>
     private ulong PreviewSkinBinHash =>
-        _previewSkn is { IsResolved: true } skn && SkinPaths.BinPathForSkn(skn.Path) is { } binPath
+        _previewSkn is not null && _previewSkinBin is { Length: > 0 } binPath
             ? HashAlgorithms.WadPath(binPath)
             : 0;
 
@@ -199,8 +207,9 @@ public sealed partial class MainWindowViewModel
         if (_previewSkn is not { } skn) return;
         byte[]? bytes = binBytes ?? MeshPreview.MaterialEditor.Serialize();
         var state = MeshPreview.DriverState;
+        string? skinBin = _previewSkinBin;   // M728: taken here with the skn, not worked out from it off the UI thread
         int token = ++_characterSceneRebuild;
-        _ = Task.Run(() => BuildCharacterDx11Scene(skn, bytes, state)).ContinueWith(t =>
+        _ = Task.Run(() => BuildCharacterDx11Scene(skn, bytes, state, skinBin)).ContinueWith(t =>
         {
             if (t.IsFaulted)
             {

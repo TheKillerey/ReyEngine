@@ -56,7 +56,13 @@ public sealed class SkinRowViewModel(CharacterSkinRef reference, ClientSkin? cli
     /// <summary>The client name when there is one. Companions and mode-only skins have none, and their
     /// code name lives in the bin - which is not read until the skin is actually selected.</summary>
     public string Name { get; } = client?.DisplayName is { Length: > 0 } n ? n : "Skin " + reference.Number;
-    public string Badge { get; } = client is null ? "" : client.IsBase ? "base" : client.IsLegacy ? "legacy" : "";
+    /// <summary>M728: "chroma" before the rest - a chroma is neither base nor legacy, and without it one listed as a
+    /// bare "Skin 49" beside the skin it recolours.</summary>
+    public string Badge { get; } = client is null ? ""
+        : client.IsChroma ? "chroma"
+        : client.IsBase ? "base"
+        : client.IsLegacy ? "legacy"
+        : "";
 }
 
 /// <summary>

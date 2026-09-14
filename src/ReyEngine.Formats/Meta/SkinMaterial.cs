@@ -35,4 +35,20 @@ public static class SkinPaths
             return null;
         }
     }
+
+    /// <summary>
+    /// M728: the skin bin a preview of this mesh should read - the skin that was CHOSEN when there is one, and
+    /// the bin in the mesh's own folder (<see cref="BinPathForSkn"/>) only when nobody chose.
+    ///
+    /// <para>The folder answer is a guess, and for a chroma it is wrong by construction. A chroma ships no mesh
+    /// of its own: Lillia's <c>skin49.bin</c> names <c>ASSETS/Characters/Lillia/Skins/Skin46/Lillia_Skin46.skn</c>
+    /// and carries its own textures, material instances and particle resolver. Worked out from that path the
+    /// bin is <c>skin46.bin</c>, so the character window showed every chroma as the skin it recolours.</para>
+    /// </summary>
+    /// <param name="chosenBinPath">The skin bin picked in the character browser, or a placement's skin.</param>
+    /// <param name="sknPath">The mesh being previewed, for the fallback.</param>
+    public static string? PreviewBinPath(string? chosenBinPath, string? sknPath) =>
+        !string.IsNullOrWhiteSpace(chosenBinPath) ? chosenBinPath
+        : string.IsNullOrWhiteSpace(sknPath) ? null
+        : BinPathForSkn(sknPath);
 }

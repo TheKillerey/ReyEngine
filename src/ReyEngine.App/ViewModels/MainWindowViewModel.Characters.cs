@@ -68,8 +68,10 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
             { _log.Error("Character", $"{meshPath} is not in {Path.GetFileName(champion.WadPath)}."); return; }
 
             _log.Info("Character", $"{champion.Name} / {character.Name} / {skin.CodeName} — {Path.GetFileName(meshPath)}");
-            _ = LoadMeshPreviewAsync(entry);
-            TryLoadMaterialBin(entry, alsoRawBin: true);
+            // M728: the skin's OWN bin travels with the mesh. Every read below used to work the bin out from the
+            // mesh's folder, and a chroma draws its base skin's mesh - Lillia's skin 49 opened as skin 46.
+            _ = LoadMeshPreviewAsync(entry, skin.BinPath);
+            TryLoadMaterialBin(entry, alsoRawBin: true, skinBin: skin.BinPath);
         }
         catch (Exception ex)
         {
@@ -167,8 +169,11 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     /// <para>Runs off the UI thread as part of loading the skin, because it decodes every texture the
     /// character references. Returns null for anything that is not a character with a skin bin — a prop
     /// has no materials to resolve, and the window falls back to GL rather than showing an empty frame.</para></summary>
+    /// <param name="skinBin">M728: the skin bin the window was opened with. The mesh's folder decides only when
+    /// nobody chose one - a chroma draws its base skin's mesh with a bin of its own.</param>
     private (Services.PreparedCharacterScene? Scene, string Status) BuildCharacterDx11Scene(
-        WadAssetEntry skn, byte[]? binOverride = null, Formats.Materials.MaterialDriverState? driverState = null)
+        WadAssetEntry skn, byte[]? binOverride = null, Formats.Materials.MaterialDriverState? driverState = null,
+        string? skinBin = null)
     {
         if (!skn.IsResolved) return (null, "");
 
@@ -179,7 +184,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
 
         try
         {
-            string? binPath = Formats.Meta.SkinPaths.BinPathForSkn(skn.Path);
+            string? binPath = Formats.Meta.SkinPaths.PreviewBinPath(skinBin, skn.Path);
             // M642: the character editor hands its EDITED bin in; the load path reads the shipped one.
             byte[]? bin = binOverride ?? (binPath is not null && TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)
                 ? ReadAsset(binEntry.PathHash)

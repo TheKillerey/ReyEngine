@@ -1310,9 +1310,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (SelectedPropNode is not { } node) return;
         string skin = node.EffectiveSkin;
+        // M728: the placement's own skin bin - read here for the mesh, and handed on with it below
+        string skinBin = "data/" + skin.ToLowerInvariant() + ".bin";
         try
         {
-            var binBytes = ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin");
+            var binBytes = ReadAssetByPath(skinBin);
             if (binBytes is null) { _log.Warn("Props", $"{skin}: the skin bin is not in this map."); return; }
             var meshRef = SkinMeshExtractor.Extract(binBytes, ResolveWadPath);
             if (meshRef?.SimpleSkin is not { Length: > 0 } sknPath)
@@ -1322,8 +1324,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             _log.Info("Props", $"{node.Prop.CharacterName} / {node.EffectiveSkinName} — {Path.GetFileName(sknPath)}");
             ShowMeshPreviewWindow?.Invoke();
-            _ = LoadMeshPreviewAsync(entry);
-            TryLoadMaterialBin(entry, alsoRawBin: true);
+            // M728: with the bin it came from. Worked out again from the mesh's folder, a skin that shares another
+            // skin's mesh opened as that other skin.
+            _ = LoadMeshPreviewAsync(entry, skinBin);
+            TryLoadMaterialBin(entry, alsoRawBin: true, skinBin: skinBin);
         }
         catch (Exception ex) { _log.Error("Props", ex.Message); }
     }
@@ -7171,9 +7175,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// disappeared, and the W action then matched a clip called Spell2 in some OTHER skin's graph, which
     /// is how a base-skin Blitzcrank came to play blitzcrank_skin20_spell1.</para>
     /// </summary>
+    /// <param name="skinBin">M728: the skin bin the window was opened with - its initialSubmeshToHide and its own
+    /// animation graph. The mesh's folder decides only when nobody chose one.</param>
     private (IReadOnlyList<string> InitialHide, IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? Clips,
              IReadOnlySet<string> OwnAnms, IReadOnlyList<Formats.Skeletons.AnimClipInfo> AllClips)
-        LoadSubmeshRules(WadAssetEntry skn)
+        LoadSubmeshRules(WadAssetEntry skn, string? skinBin = null)
     {
         var ownAnms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Keyed by clip NAME and ordered: this skin's own graph goes in first, so where several graphs
@@ -7195,7 +7201,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             // M86: this skin's OWN animation graph first (named in the skin bin's dependency list) —
             // clips merge first-wins, and other skins' graphs carry other skins' effect keys.
-            var skinBinPath = SkinPaths.BinPathForSkn(skn.Path);
+            var skinBinPath = SkinPaths.PreviewBinPath(skinBin, skn.Path);   // M728: the chosen skin, not the mesh's folder
             // M669: THIS skin's own initialSubmeshToHide, before anything else is consulted. The scan below
             // used to supply it - the first skins/*.bin in asset order that yielded a non-empty list, which
             // for Locke was a later skin's: it hid Recall_Page and Recall_Nail, submeshes his base skin does
@@ -7718,14 +7724,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return added;
     }
 
-    private WadAssetEntry? ResolveMaterialBin(WadAssetEntry entry)
+    /// <param name="skinBin">M728: for a skinned mesh, the skin bin that was chosen with it - see
+    /// <see cref="SkinPaths.PreviewBinPath"/>. Null falls back to the bin in the mesh's folder.</param>
+    private WadAssetEntry? ResolveMaterialBin(WadAssetEntry entry, string? skinBin = null)
     {
         if (!ContentLoaded) return null;
         if (entry.Type == AssetType.Bin) return entry;
         if (!entry.IsResolved) return null;
         string? binPath = entry.Type switch
         {
-            AssetType.SkinnedMesh => SkinPaths.BinPathForSkn(entry.Path),
+            AssetType.SkinnedMesh => SkinPaths.PreviewBinPath(skinBin, entry.Path),
             AssetType.MapGeometry => MapGeoMaterialResolver.MaterialsBinPathFor(entry.Path),
             _ => null,
         };
@@ -7733,9 +7741,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return TryResolveEntry(HashAlgorithms.WadPath(binPath), out var be) ? be : null;
     }
 
-    private void TryLoadMaterialBin(WadAssetEntry entry, bool alsoRawBin)
+    private void TryLoadMaterialBin(WadAssetEntry entry, bool alsoRawBin, string? skinBin = null)
     {
-        var binEntry = ResolveMaterialBin(entry);
+        var binEntry = ResolveMaterialBin(entry, skinBin);
         if (binEntry is null) { MaterialEditor.Clear(); HasMaterialData = false; return; }
         _ = LoadMaterialBinAsync(binEntry, alsoRawBin);
     }
@@ -11384,10 +11392,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Map", $"Legacy map load failed: {ex.Message}"); Status = "Legacy map load failed."; }
     }
 
-    private async Task LoadMeshPreviewAsync(WadAssetEntry entry)
+    /// <param name="skinBin">M728: the skin bin that was CHOSEN with this mesh - the character browser's pick, or a
+    /// placement's skin. Null only for a bare .skn from the asset tree, where the bin in the mesh's folder is the
+    /// best there is. It cannot be worked out from the mesh in general: 11,304 of 14,749 shipped skin bins name a
+    /// mesh in another skin's folder, every chroma among them, so the folder rule showed Lillia's skin 49 as 46.</param>
+    private async Task LoadMeshPreviewAsync(WadAssetEntry entry, string? skinBin = null)
     {
         if (!ContentLoaded) return;
         _previewSkn = entry;   // M642: what a material edit rebuilds the D3D11 scene for
+        // M728: and WHICH skin - every read below goes to this one bin
+        string? binPath = _previewSkinBin = SkinPaths.PreviewBinPath(skinBin, entry.IsResolved ? entry.Path : null);
         EnsureCharacterBrowser();   // M643: the window's picker lists the install this skin came from
         try
         {
@@ -11395,19 +11409,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 var m = SkinnedMeshDecoder.Decode(ReadAsset(entry.PathHash));
                 var s = TryPairSkeleton(entry);
-                var t = TryLoadPreviewDiffuse(entry, m);
-                var v = TryLoadChampionVfxWithResources(entry);   // M55/M86: skin VFX library + resource map
+                var t = TryLoadPreviewDiffuse(entry, m, binPath);
+                var v = TryLoadChampionVfxWithResources(entry, binPath);   // M55/M86: skin VFX library + resource map
                 return (m, s, t, v);
             });
             // M85: game-accurate submesh visibility — skin bin initial-hide + animation-graph clip lists.
-            var (initialHide, clipsByAnm, ownAnms, allClips) = LoadSubmeshRules(entry);
-            await Task.Run(() => LoadChampionAudio(entry));   // M90: clip SFX banks
+            var (initialHide, clipsByAnm, ownAnms, allClips) = LoadSubmeshRules(entry, binPath);
+            // M90: clip SFX banks. M728: still found from the mesh's folder, which for Lillia's skin 49 is right -
+            // its bankUnits name skin 46's banks.
+            await Task.Run(() => LoadChampionAudio(entry));
             // M618: and the D3D11 scene, off the UI thread - it decodes every texture the skin references.
-            var dx11 = await Task.Run(() => BuildCharacterDx11Scene(entry));
+            var dx11 = await Task.Run(() => BuildCharacterDx11Scene(entry, skinBin: binPath));
+            // M726: the skin's own idle effects, off the UI thread with everything else.
+            var idleEffects = await Task.Run(() => TryLoadIdleEffects(entry, binPath));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                MeshPreview.Show(entry.DisplayName, mesh, skeleton, textures.Textures);
+                // M728: the skin in the header as well as the mesh. A chroma's mesh is its base skin's file, and
+                // "Lillia_Skin46.skn" on its own reads exactly like the bug this fixed.
+                MeshPreview.Show(skinBin is { Length: > 0 } ? $"{entry.DisplayName} · {Path.GetFileNameWithoutExtension(skinBin)}" : entry.DisplayName,
+                    mesh, skeleton, textures.Textures);
                 // M664: AFTER Show, which clears Materials. Without this a champion drew every submesh
                 // opaque, and a blend-mode-only transparency like Aatrox's wings came out solid black.
                 MeshPreview.Materials = textures.Materials;
@@ -11416,10 +11437,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     ? FindAnimations(entry, ownAnms)
                     : Enumerable.Empty<AnimationEntryViewModel>());
                 MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
+                // M726: AFTER SetVfx - an idle effect resolves through the resource map that call installs.
+                MeshPreview.SetIdleEffects(idleEffects);
                 // M715: and what the game says each of them is for - the same three-bin walk M713 does for
                 // the particle editor, over the champion this window has just loaded.
                 MeshPreview.SetVfxRoles(BuildParticleRoles(entry.IsResolved ? entry.Path : null));
-                MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry));   // M95c: authored VO lines
+                MeshPreview.SetVoiceEvents(TryLoadVoiceEvents(entry, binPath));   // M95c: authored VO lines
                 // M663: the FULL clip list, not the by-file one - see LoadSubmeshRules for what the by-file
                 // view drops.
                 MeshPreview.SetActions(BuildCharacterActions(entry, allClips));   // M612: Q/W/E/R, move, recall
@@ -11502,6 +11525,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("Preview", $"Map backdrop: {ex.Message}"); }
     }
 
+    /// <summary>
+    /// M726: the loaded skin's own <c>idleParticlesEffects</c>.
+    ///
+    /// <para>From the ONE bin of the skin being shown, never from the dependency walk. Idle records name
+    /// bones, and a champion's dependency closure carries other skins' <c>SkinCharacterDataProperties</c>,
+    /// so a walk would mount another skin's effects on this skin's joints. M728: and that bin is the one the
+    /// skin was opened with, not the bin in its mesh's folder.</para>
+    /// </summary>
+    private IReadOnlyList<ReyEngine.Formats.Characters.SkinIdleEffect> TryLoadIdleEffects(WadAssetEntry skn, string? skinBin = null)
+    {
+        try
+        {
+            if (!ContentLoaded || !skn.IsResolved) return Array.Empty<ReyEngine.Formats.Characters.SkinIdleEffect>();
+            var binPath = SkinPaths.PreviewBinPath(skinBin, skn.Path);
+            if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
+                return Array.Empty<ReyEngine.Formats.Characters.SkinIdleEffect>();
+            return ReyEngine.Formats.Characters.SkinIdleEffects.Read(GetAssetBytes(binEntry));
+        }
+        catch { return Array.Empty<ReyEngine.Formats.Characters.SkinIdleEffect>(); }
+    }
+
     /// <summary>Per-submesh diffuse textures for the model-preview window — NO side effects on the main
     /// viewport's texture/material state (unlike BuildSubmeshTextures, which publishes to it).
     ///
@@ -11509,10 +11553,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// split only because the preview never asked for the second one.</para></summary>
     private (IReadOnlyList<TextureImage?>? Textures,
              IReadOnlyList<ViewportMeshRenderer.SubmeshMaterial>? Materials)
-        TryLoadPreviewDiffuse(WadAssetEntry skn, MeshAsset mesh)
+        TryLoadPreviewDiffuse(WadAssetEntry skn, MeshAsset mesh, string? skinBin = null)
     {
         if (!ContentLoaded || !skn.IsResolved) return (null, null);
-        var binPath = SkinPaths.BinPathForSkn(skn.Path);
+        var binPath = SkinPaths.PreviewBinPath(skinBin, skn.Path);   // M728: the chosen skin's textures
         if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return (null, null);
         var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath);
         // M642: shared with the character editor's live preview
@@ -12356,12 +12400,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M95c: the skin bin's authored VO event names (skinAudioProperties.bankUnits) — voice
     /// lines are triggered by game logic through these, never by animation clip events.</summary>
-    private IReadOnlyList<string> TryLoadVoiceEvents(WadAssetEntry skn)
+    private IReadOnlyList<string> TryLoadVoiceEvents(WadAssetEntry skn, string? skinBin = null)
     {
         try
         {
             if (!skn.IsResolved) return Array.Empty<string>();
-            var binPath = SkinPaths.BinPathForSkn(skn.Path);
+            var binPath = SkinPaths.PreviewBinPath(skinBin, skn.Path);   // M728: the chosen skin's own bankUnits
             if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var be)) return Array.Empty<string>();
             return Formats.Skeletons.ChampionAnimationData.ParseBankEvents(GetAssetBytes(be))
                 .Where(e => e.StartsWith("Play_vo_", StringComparison.OrdinalIgnoreCase))
@@ -12453,10 +12497,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// VFX — the systems live in its linked dependency bins (the multi-skin "longname" bins), so the
     /// whole link chain is followed and merged.</summary>
     private (IReadOnlyDictionary<uint, VfxSystemDefinition> systems, IReadOnlyDictionary<uint, uint>? resourceMap)
-        TryLoadChampionVfxWithResources(WadAssetEntry skn)
+        TryLoadChampionVfxWithResources(WadAssetEntry skn, string? skinBin = null)
     {
         if (!ContentLoaded || !skn.IsResolved) return (EmptyVfx, null);
-        var binPath = SkinPaths.BinPathForSkn(skn.Path);
+        // M728: the chosen skin's library and resolver - Lillia's skin 49 has a ResourceResolver of its own
+        var binPath = SkinPaths.PreviewBinPath(skinBin, skn.Path);
         if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return (EmptyVfx, null);
         try
         {

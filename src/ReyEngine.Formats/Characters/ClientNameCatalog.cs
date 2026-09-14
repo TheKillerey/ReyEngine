@@ -7,8 +7,15 @@ namespace ReyEngine.Formats.Characters;
 /// <summary>A champion as the client names it: "Twisted Fate", whose folder is "TwistedFate".</summary>
 public sealed record ClientChampion(int Id, string Alias, string DisplayName, string Title, IReadOnlyList<string> Roles);
 
-/// <summary>A skin as the client names it: "Spirit Blossom Ahri", not "AhriSkin70".</summary>
-public sealed record ClientSkin(int Id, int Number, string DisplayName, bool IsBase, bool IsLegacy, string? TilePath);
+/// <summary>A skin as the client names it: "Spirit Blossom Ahri", not "AhriSkin70".
+///
+/// <para>M728: or a chroma - "Petals of Spring Lillia (Rose Quartz)" - and then <see cref="ChromaOf"/> is the number
+/// of the skin it recolours. The client lists a chroma inside that skin rather than beside it.</para></summary>
+public sealed record ClientSkin(int Id, int Number, string DisplayName, bool IsBase, bool IsLegacy, string? TilePath,
+    int? ChromaOf = null)
+{
+    public bool IsChroma => ChromaOf is not null;
+}
 
 /// <summary>
 /// M609: the marketing names, from the League client's own data.
@@ -69,6 +76,23 @@ public sealed class ClientNameCatalog
         catch
         {
             // A client update that changes the layout must not stop the character list from appearing.
+        }
+        return catalog;
+    }
+
+    /// <summary>M728: the catalogue from the two documents <see cref="Load"/> reads out of the client WAD - which is
+    /// also how a test hands them in without a League install. The same promise: what cannot be read is left out.</summary>
+    public static ClientNameCatalog FromJson(byte[]? championSummaryJson, byte[]? skinsJson)
+    {
+        var catalog = new ClientNameCatalog();
+        try
+        {
+            catalog.ReadChampions(championSummaryJson);
+            catalog.ReadSkins(skinsJson);
+        }
+        catch
+        {
+            // a malformed document keeps whatever was read before it
         }
         return catalog;
     }
@@ -134,6 +158,31 @@ public sealed class ClientNameCatalog
                 Bool(element, "isBase"),
                 Bool(element, "isLegacy"),
                 Str(element, "tilePath") is { Length: > 0 } tile ? tile : null);
+        }
+
+        // M728: a chroma is not an entry of this file - it sits in the "chromas" array of the skin it recolours, so
+        // Lillia's 876049 exists only under 876046. In the game it is an ordinary skinNN.bin all the same, and
+        // without this every one listed as a bare "Skin 49". A second pass, so a real skin with the same id wins.
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            var parent = property.Value;
+            int parentId = Int(parent, "id");
+            if (parentId <= 0 || !parent.TryGetProperty("chromas", out var chromas) || chromas.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var chroma in chromas.EnumerateArray())
+            {
+                int id = Int(chroma, "id");
+                // numbered inside its own champion's range - anything else is not this skin's chroma
+                if (id <= 0 || id / 1000 != parentId / 1000) continue;
+                _skinsById.TryAdd(id, new ClientSkin(
+                    id,
+                    id % 1000,
+                    Str(chroma, "name"),
+                    IsBase: false,
+                    IsLegacy: false,
+                    Str(chroma, "tilePath") is { Length: > 0 } tile ? tile : null,
+                    ChromaOf: parentId % 1000));
+            }
         }
     }
 

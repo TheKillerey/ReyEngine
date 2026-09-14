@@ -228,7 +228,8 @@ public sealed class CharacterMaterialEditorTests
         // situation to draw as well as the bytes.
         Assert.Contains("MeshPreview.Textures = ResolveSubmeshDiffuse(mesh, resolved);", host);
         Assert.Contains("RebuildCharacterDx11Scene(bytes);", host);
-        Assert.Contains("BuildCharacterDx11Scene(skn, bytes, state)", host);
+        // M728: and which skin - the bin the window was opened with, not the one in the mesh's folder
+        Assert.Contains("BuildCharacterDx11Scene(skn, bytes, state, skinBin)", host);
         Assert.Contains("MeshPreview.SetDx11Scene(scene, status)", host);
 
         // The routing, and that the inspector keeps its map document when a skin arrives.
