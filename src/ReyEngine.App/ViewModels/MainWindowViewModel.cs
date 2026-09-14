@@ -1039,7 +1039,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var snapshot = visible
             .Select(p => (Prop: p.Prop with { Skin = p.EffectiveSkin, VisibilityFlags = p.EffectiveVisibilityFlags,
                                               Transform = p.CurrentTransform, Position = p.CurrentPosition },   // M699
-                          Clip: p.EffectiveAnimation))   // M677: the placement's chosen clip, null for the idle
+                          // M677: the clip chosen for this placement. M723: with none chosen, the clip the
+                          // PLACEMENT names rather than a guess at the skin's idle - IdleAnimationName is
+                          // what the game asks the graph for, and a skin whose base idle is not its first
+                          // idle was previewed playing the wrong one. TryBuildPropMesh still falls back to
+                          // the guess when the named clip resolves to nothing.
+                          Clip: p.EffectiveAnimation ?? (p.Prop.IdleAnimation is { Length: > 0 } named ? named : null)))
             .ToList();
         var (set, owners, resolved, failed) = await System.Threading.Tasks.Task.Run(() => BuildPropRenderSet(snapshot));
         if (!ShowPropMeshes) return;   // toggled off while decoding

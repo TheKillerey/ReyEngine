@@ -32,8 +32,13 @@ public sealed record MapSoundPlacement(
     MapPlacementId Id = default,
     bool HasVisibilityFlags = false);
 
+/// <param name="IdleAnimation">M723: the clip the placement's <c>CharacterMesh</c> names, "" when it names
+/// none. This - not a guess from the skin's graph - is what the game asks the animation graph for.</param>
+/// <param name="PlaysIdle">M723: whether the placement carries <c>PlayIdleAnimation</c>. The schema
+/// defaults it to false, so a prop without it stands in bind pose in-game however many clips its skin has.</param>
 public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterRecord, string Skin,
-    int VisibilityFlags = 255, bool HasVisibilityFlags = false, MapPlacementId Id = default)
+    int VisibilityFlags = 255, bool HasVisibilityFlags = false, MapPlacementId Id = default,
+    string IdleAnimation = "", bool PlaysIdle = false)
 {
     /// <summary>Short character identity, e.g. "SRU_Baron" from "Characters/SRU_Baron/CharacterRecords/Root".</summary>
     public string CharacterName
@@ -68,6 +73,9 @@ public static class MapPlaceableExtractor
     private static readonly uint F_name = HashAlgorithms.Fnv1a("name");
     private static readonly uint F_characterRecord = HashAlgorithms.Fnv1a("characterRecord");
     private static readonly uint F_skin = HashAlgorithms.Fnv1a("skin");
+    private static readonly uint F_characterMesh = HashAlgorithms.Fnv1a("CharacterMesh");
+    private static readonly uint F_idleAnimationName = HashAlgorithms.Fnv1a("IdleAnimationName");
+    private static readonly uint F_playIdleAnimation = HashAlgorithms.Fnv1a("PlayIdleAnimation");
     private static readonly uint F_visibilityFlags = HashAlgorithms.Fnv1a("mVisibilityFlags");
     private static readonly uint F_cubemapTexture = 0xfe380acfu;   // texture path string on MapCubemapProbe
 
@@ -122,8 +130,9 @@ public static class MapPlaceableExtractor
                 }
                 else if (FindCharacterData(s) is ({ } cr, var skin))
                 {
+                    var (idle, plays) = FindCharacterMesh(s);
                     props.Add(new MapAnimatedProp(NameOf(s), transform.Translation, transform, cr, skin ?? "",
-                        visibility, hasVisibility, id));
+                        visibility, hasVisibility, id, idle, plays));
                 }
             }
         }
@@ -140,6 +149,17 @@ public static class MapPlaceableExtractor
                 return (cr.Value, (emb.Properties.TryGetValue(F_skin, out var sk) ? sk : null) is BinTreeString skin ? skin.Value : null);
         }
         return (null, null);
+    }
+
+    /// <summary>M723: the placement's <c>CharacterMesh</c> component - which clip it names and whether it
+    /// asks for it to be played. Found by field rather than by class, the same way the record above is,
+    /// so a placement whose component class changes between patches still reads.</summary>
+    private static (string IdleAnimation, bool PlaysIdle) FindCharacterMesh(BinTreeStruct s)
+    {
+        if (s.Properties.GetValueOrDefault(F_characterMesh) is not BinTreeStruct mesh) return ("", false);
+        string idle = mesh.Properties.GetValueOrDefault(F_idleAnimationName) is BinTreeString n ? n.Value : "";
+        bool plays = mesh.Properties.GetValueOrDefault(F_playIdleAnimation) is BinTreeBool { Value: true };
+        return (idle, plays);
     }
 
     private static string NameOf(BinTreeStruct s) => Get(s, F_name) switch

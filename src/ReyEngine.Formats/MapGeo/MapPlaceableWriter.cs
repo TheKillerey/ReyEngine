@@ -57,7 +57,14 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// <summary>The record a created character placement names, e.g. "Characters/MyProp/CharacterRecords/Root".</summary>
     public string? CharacterRecord { get; init; }
 
-    /// <summary>The clip a created character placement idles with; "Idle1" when unset, Riot's own default.</summary>
+    /// <summary>
+    /// M723: the clip a created character placement idles with. Naming one also sets
+    /// <c>PlayIdleAnimation</c>, which is what actually makes the prop move.
+    ///
+    /// <para>Unset means a prop that stands still: <c>IdleAnimationName</c> is written as Riot's own
+    /// "Idle1" default, but without the flag - the honest form for a character whose graph we cannot
+    /// name a clip in.</para>
+    /// </summary>
     public string? IdleAnimation { get; init; }
 }
 
@@ -227,6 +234,13 @@ public static class MapPlaceableWriter
     private static readonly uint F_Character = HashAlgorithms.Fnv1a("Character");
     private static readonly uint F_CharacterMesh = HashAlgorithms.Fnv1a("CharacterMesh");
     private static readonly uint F_IdleAnimationName = HashAlgorithms.Fnv1a("IdleAnimationName");
+    // M723: the flag that makes a scenery prop animate at all. CharacterMeshGeComponentDef's schema
+    // defaults it to FALSE, so a placement carrying only IdleAnimationName names a clip nobody plays -
+    // which is why every prop this editor placed before now stood in bind pose in-game while the
+    // viewport animated it. Riot writes it on exactly the props that are meant to move: 11 of Map11
+    // bloom's 12 (the Gromp props), and on Map453 the 2 of 26 that are the S3Yonkeys - the other 24
+    // there are turrets, inhibitors and the nexus, whose animation the server drives.
+    private static readonly uint F_PlayIdleAnimation = HashAlgorithms.Fnv1a("PlayIdleAnimation");
     private static readonly uint SkinCharacterGeComponentDefClass = HashAlgorithms.Fnv1a("SkinCharacterGeComponentDef");
     private static readonly uint CharacterMeshGeComponentDefClass = HashAlgorithms.Fnv1a("CharacterMeshGeComponentDef");
 
@@ -299,6 +313,11 @@ public static class MapPlaceableWriter
             // Field for field the shipped scenery placement: the name is a HASH (never a string on this
             // class), Character is a POINTER and CharacterMesh an EMBED - the client drops a property whose
             // wire form disagrees with the class, and a dropped Character is an invisible prop.
+            bool plays = !string.IsNullOrWhiteSpace(edit.IdleAnimation);
+            var mesh = new List<BinTreeProperty>();
+            // M723: field order as the S3Yonkey placements carry it - the flag before the name.
+            if (plays) mesh.Add(new BinTreeBool(F_PlayIdleAnimation, true));
+            mesh.Add(new BinTreeString(F_IdleAnimationName, plays ? edit.IdleAnimation! : "Idle1"));
             var character = new BinTreeStruct(0, CharacterItemClass, new BinTreeProperty[]
             {
                 new BinTreeMatrix44(F_transform, edit.Transform.Value),
@@ -308,10 +327,7 @@ public static class MapPlaceableWriter
                     new BinTreeString(F_characterRecord, edit.CharacterRecord!),
                     new BinTreeString(F_skin, edit.Skin!),
                 }),
-                new BinTreeEmbedded(F_CharacterMesh, CharacterMeshGeComponentDefClass, new BinTreeProperty[]
-                {
-                    new BinTreeString(F_IdleAnimationName, string.IsNullOrWhiteSpace(edit.IdleAnimation) ? "Idle1" : edit.IdleAnimation!),
-                }),
+                new BinTreeEmbedded(F_CharacterMesh, CharacterMeshGeComponentDefClass, mesh),
             });
             items = new BinTreeMap(F_items, items.KeyType, items.ValueType,
                 items.Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key, e.Value))

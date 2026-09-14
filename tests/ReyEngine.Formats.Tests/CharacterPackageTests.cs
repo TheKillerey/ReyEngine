@@ -281,6 +281,12 @@ public sealed class CharacterPackageTests
         Assert.Equal(BinPropertyType.Embedded, characterMesh.Type);
         Assert.Equal(H("CharacterMeshGeComponentDef"), ((BinTreeStruct)characterMesh).ClassHash);
         Assert.Equal("Idle1", ((BinTreeString)((BinTreeStruct)characterMesh).Properties[H("IdleAnimationName")]).Value);
+        // M723: naming a clip is not enough - PlayIdleAnimation defaults to false in the schema, so a
+        // placement without it stands in bind pose in-game. Both S3Yonkey placements carry it, and so do
+        // 11 of the 12 scenery props on Map11's bloom skin.
+        Assert.True(((BinTreeBool)((BinTreeStruct)characterMesh).Properties[H("PlayIdleAnimation")]).Value);
+        Assert.Equal(new[] { H("PlayIdleAnimation"), H("IdleAnimationName") },
+            ((BinTreeStruct)characterMesh).Properties.Keys);
 
         // the extractor that lists a map's props sees it as one, beside the untouched sound
         var (_, props, sounds) = MapPlaceableExtractor.Extract(written!);
@@ -291,6 +297,24 @@ public sealed class CharacterPackageTests
         Assert.Equal(transform.Translation, prop.Position);
         Assert.Equal(id, prop.Id);
         Assert.Single(sounds);
+        // M723: and it reads back the clip and the flag, so the viewport plays what the MAP names and an
+        // editor round-trip cannot quietly drop the difference between a moving prop and a still one
+        Assert.Equal("Idle1", prop.IdleAnimation);
+        Assert.True(prop.PlaysIdle);
+
+        // a placement created without a clip is the still form: Riot's "Idle1" default, no flag
+        var stillId = MapPlaceableWriter.NewParticleId(new BinTree(new MemoryStream(bin, false)), H("Still_1"));
+        byte[]? still = MapPlaceableWriter.WriteEdits(bin,
+            new[] { edit with { Id = stillId, Name = "Still_1", IdleAnimation = null } }, out var stillError);
+        Assert.Null(stillError);
+        var stillMesh = (BinTreeStruct)((BinTreeStruct)((BinTreeMap)new BinTree(new MemoryStream(still!, false))
+            .Objects[ContainerHash].Properties[H("items")])
+            .Single(e => ((BinTreeHash)e.Key).Value == stillId.ItemKey).Value).Properties[H("CharacterMesh")];
+        Assert.Equal("Idle1", ((BinTreeString)stillMesh.Properties[H("IdleAnimationName")]).Value);
+        Assert.False(stillMesh.Properties.ContainsKey(H("PlayIdleAnimation")));
+        var stillProp = Assert.Single(MapPlaceableExtractor.Extract(still!).Props);
+        Assert.Equal("Idle1", stillProp.IdleAnimation);
+        Assert.False(stillProp.PlaysIdle);
 
         // a second creation under the same key, or one without a transform or a skin, is refused
         Assert.Null(MapPlaceableWriter.WriteEdits(written!, new[] { edit }, out _));
