@@ -203,6 +203,16 @@ public sealed class D3D11MapParticles
     /// moves live beams instead of needing a replay - the same reason GL pushes it (M183).</summary>
     public void SetBeamTarget(Vector3? worldTarget) => _beamTarget = worldTarget;
 
+    /// <summary>M726: the world position of a named joint this frame, for an item whose event authored
+    /// <c>mTargetBoneName</c>. Null when there is no skeleton or the name does not resolve, which falls the
+    /// caller back to the dummy exactly as before.</summary>
+    private Vector3? BoneWorldPosition(string? bone)
+    {
+        if (bone is not { Length: > 0 }) return null;
+        if (_boneGlobals is not { } bones || !bones.TryGetValue(bone, out var bm)) return null;
+        return (_boneModelWorld.IsIdentity ? bm : bm * _boneModelWorld).Translation;
+    }
+
     public bool HasPlayback => _playback is not null;
     public int Placements { get; private set; }
     public int ActivePlacements { get; private set; }
@@ -561,7 +571,9 @@ public sealed class D3D11MapParticles
             // bind - and the simulator then resolves endpoints from the emitter's own authored target
             // offset, which is Riot's pattern for untargeted beams. So this is inert for maps and is the
             // whole of "the cast points at the dummy" for a character.
-            sim.SetBeamTarget(item.BeamTarget ?? _beamTarget);
+            // M726: the same precedence GL uses - an explicit world target, then the event's own target
+            // BONE, then the dummy. Written as one expression in both renderers so the order cannot drift.
+            sim.SetBeamTarget(item.BeamTarget ?? BoneWorldPosition(item.TargetBone) ?? _beamTarget);
             sim.Update(dt);
         }
         TickMeshSlices();

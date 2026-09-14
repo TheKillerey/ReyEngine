@@ -210,7 +210,15 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             // (manual VFX picks are left alone). Backward jump in time = the loop restarted.
             if (t + 0.05 < _lastAnimTime && _eventPlaybackActive)
             {
-                if (SelectedVfx is null) ApplyClipParticles();
+                // M726: REPLAY the built set rather than rebuilding it. ApplyClipParticles publishes a new
+                // VfxPlayback, and the viewports respond to a new playback by tearing down and rebuilding
+                // every simulator, texture upload, material and pipeline - once per loop of the clip, for a
+                // cue set that is identical every time round. The cues only need re-arming.
+                if (SelectedVfx is null)
+                {
+                    if (Playback is { Items.Count: > 0 }) ParticleReplayToken++;
+                    else ApplyClipParticles();
+                }
                 ResetSoundSchedule(stopCurrent: false);   // M91: refire from the top; one-shots finish across the seam
             }
             _lastAnimTime = t;
@@ -402,6 +410,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         float frameSeconds = FrameSeconds();   // M724: the CLIP's tick, not just the .anm's fps
         foreach (var ev in clip.ParticleEvents!)
         {
+            // M726: a kill event's job is to STOP a system. Spawning it played a second copy that nothing
+            // ever stopped. (Inert on shipped champion data - Riot never writes the flag true - but a mod
+            // bin that authors one now behaves; see AnimParticleEvent.IsKill for the census.)
+            if (ev.IsKill) continue;
+
             // primary: the skin bin's ResourceResolver map (effect key → system object), like the game
             uint keyHash = ev.EffectHash != 0 ? ev.EffectHash
                 : ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(ev.EffectName);
@@ -420,13 +433,25 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             // child systems, so a clip event's mask was white and its children never spawned.
             // M635: a clip event at the dummy faces the caster; a bone-attached one takes its frame from
             // the bone every frame, so its placement here is only where it starts.
-            items.Add(BuildItem(def, atDummy
-                    ? VfxCastFrame.Toward(anchor, CharacterPosition, anchor)
-                    : System.Numerics.Matrix4x4.CreateTranslation(anchor)) with
-            {
-                AttachBone = atDummy ? null : ResolveBoneName(ev),
-                StartDelay = MathF.Max(0f, ev.StartFrame) / ClipFps(),   // M91: fire at the authored frame
-            });
+            // M726: ONE ITEM PER SPAWN PAIR. mParticleEventDataPairList is a list and the engine spawns one
+            // effect per entry; we took the first entry that named a bone and dropped the rest, so an event
+            // that lights up both hands lit one. Every event has at least one spawn after parsing, so the
+            // single-pair case - which is almost all of them - is unchanged.
+            float start = MathF.Max(0f, ev.StartFrame) * frameSeconds;   // M91: fire at the authored frame
+            float? end = ev.EndFrame >= 0f ? MathF.Max(start, ev.EndFrame * frameSeconds) : null;
+            foreach (var spawn in ev.Spawns ?? new[] { new Formats.Skeletons.AnimParticleSpawn(ev.BoneName, ev.BoneHash) })
+                items.Add(BuildItem(def, atDummy
+                        ? VfxCastFrame.Toward(anchor, CharacterPosition, anchor)
+                        : System.Numerics.Matrix4x4.CreateTranslation(anchor)) with
+                {
+                    AttachBone = atDummy ? null : ResolveBoneName(spawn.BoneName, spawn.BoneHash),
+                    // M726: the far end of a beam, when the event names one of the character's own joints
+                    TargetBone = atDummy ? null : ResolveBoneName(spawn.TargetBoneName, spawn.TargetBoneHash),
+                    StartDelay = start,
+                    // M726: mEndFrame - an effect with an authored end stops there instead of emitting
+                    // until the clip wraps and the whole playback is torn down
+                    EndTime = end,
+                });
         }
         if (_eventBundle is { Count: > 0 }) items.AddRange(_eventBundle);   // M116: spell composite rides along
         // M667: the whole playback about to reach the renderers, in one line. Item counts and bone
@@ -899,13 +924,17 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     /// <summary>Bins store the bone as an unresolvable hash — match it against the skeleton's joints
     /// (FNV1a of the lowercased name, or the joint's Elf AnimHash) to get a real bone name.</summary>
-    private string? ResolveBoneName(Formats.Skeletons.AnimParticleEvent ev)
+    private string? ResolveBoneName(Formats.Skeletons.AnimParticleEvent ev) =>
+        ResolveBoneName(ev.BoneName, ev.BoneHash);
+
+    /// <summary>M726: a joint by literal name, else by the hash the bin stores instead. Split out of the
+    /// event-shaped overload so a spawn pair's bone and its TARGET bone go through the same resolution.</summary>
+    private string? ResolveBoneName(string name, uint hash)
     {
-        if (ev.BoneName.Length > 0) return ev.BoneName;
-        if (ev.BoneHash == 0 || Skeleton is null) return null;
+        if (name.Length > 0) return name;
+        if (hash == 0 || Skeleton is null) return null;
         foreach (var j in Skeleton.Joints)
-            if (j.AnimHash == ev.BoneHash
-                || ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(j.Name) == ev.BoneHash)
+            if (j.AnimHash == hash || ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(j.Name) == hash)
                 return j.Name;
         return null;
     }
@@ -1218,6 +1247,83 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     public void SetVfxRoles(IReadOnlyDictionary<uint, ReyEngine.Formats.Characters.VfxSystemLink>? roles) =>
         _vfxRoles = roles ?? new Dictionary<uint, ReyEngine.Formats.Characters.VfxSystemLink>();
+
+    // ---- M726: the skin's own idle effects ----
+
+    private IReadOnlyList<ReyEngine.Formats.Characters.SkinIdleEffect> _idleEffects =
+        Array.Empty<ReyEngine.Formats.Characters.SkinIdleEffect>();
+    private IReadOnlyList<VfxPlaybackItem> _idleItems = Array.Empty<VfxPlaybackItem>();
+
+    /// <summary>Play the skin's <c>idleParticlesEffects</c>. On by default - the game always plays them -
+    /// with a toggle because a preview is also a place to look at one thing at a time.</summary>
+    [ObservableProperty] private bool _idleEffectsEnabled = true;
+    [ObservableProperty] private int _idleEffectCount;
+
+    /// <summary>M726: bumped to replay the current particle set from the top without rebuilding it - what a
+    /// looping clip does on every wrap. The viewports watch it; see ViewportControl.ReplayParticles.</summary>
+    [ObservableProperty] private int _particleReplayToken;
+
+    partial void OnIdleEffectsEnabledChanged(bool value) { RebuildIdleItems(); RepublishPlayback(); }
+
+    /// <summary>
+    /// M726: the idle effects of THIS skin, from <see cref="ReyEngine.Formats.Characters.SkinIdleEffects"/>.
+    ///
+    /// <para>They must come from the loaded skin's OWN bin. A champion's dependency closure contains other
+    /// skins' bins, and idle records name bones - so reading them from whatever the walk reaches mounts
+    /// another skin's effects on this one's joints.</para>
+    /// </summary>
+    public void SetIdleEffects(IReadOnlyList<ReyEngine.Formats.Characters.SkinIdleEffect>? effects)
+    {
+        _idleEffects = effects ?? Array.Empty<ReyEngine.Formats.Characters.SkinIdleEffect>();
+        RebuildIdleItems();
+        RepublishPlayback();
+    }
+
+    private void RebuildIdleItems()
+    {
+        if (!IdleEffectsEnabled || _idleEffects.Count == 0 || _vfxDefs.Count == 0)
+        {
+            _idleItems = Array.Empty<VfxPlaybackItem>();
+            IdleEffectCount = 0;
+            return;
+        }
+
+        var items = new List<VfxPlaybackItem>();
+        foreach (var idle in _idleEffects)
+        {
+            // through the skin's own ResourceResolver, the way the game resolves an effect key. No name
+            // fallback here: an idle record that resolves to nothing is a deliberately switched-off effect,
+            // and guessing a system by name would resurrect it.
+            if (!_vfxResourceMap.TryGetValue(idle.EffectKey, out var objHash)) continue;
+            if (!_vfxDefs.TryGetValue(objHash, out var def)) continue;
+            if (!def.Emitters.Any(e => e.IsVisual)) continue;
+
+            items.Add(BuildItem(def, System.Numerics.Vector3.Zero) with
+            {
+                // an idle record names its bone in every one of the 1,855 records censused; an empty one
+                // rides the character's own origin rather than the world's
+                AttachBone = ResolveBoneName(idle.BoneName, 0),
+                TargetBone = ResolveBoneName(idle.TargetBoneName, 0),
+                // M712: a fixed seed - an idle is the same effect every launch, and deriving the seed from
+                // where the character stands would re-roll it whenever the character is moved
+                Seed = ReyEngine.Formats.Vfx.VfxRigDefaults.Seed,
+            });
+        }
+        _idleItems = items;
+        IdleEffectCount = items.Count;
+    }
+
+    /// <summary>M726: idle effects play UNDER whatever else is playing - a clip's events, a spell composite
+    /// or a hand-picked system - because in game they never stop. Every path that sets Playback goes through
+    /// here so none of them can drop them.</summary>
+    private void RepublishPlayback()
+    {
+        if (_idleItems.Count == 0) return;
+        var current = Playback;
+        var items = new List<VfxPlaybackItem>(_idleItems);
+        if (current is not null) items.AddRange(current.Items.Where(i => !_idleItems.Contains(i)));
+        Playback = new VfxPlayback(items);
+    }
 
     [ObservableProperty] private ReyEngine.Formats.Vfx.VfxRigMode _rigMode;
     [ObservableProperty] private double _rigHeight;

@@ -174,6 +174,7 @@
                              AnimationClip="{Binding CurrentAnimation}"
                              AnimationTime="{Binding AnimationTime}"
                              ParticlePlayback="{Binding Playback}"
+                             ParticleReplayToken="{Binding ParticleReplayToken}"
                              ParticleRig="{Binding Rig}"
                              Skybox="{Binding Skybox}"
                              TargetDummyPosition="{Binding DummyCubePosition}"
@@ -428,6 +429,16 @@
                         </ComboBox.ItemTemplate>
                       </ComboBox>
                       <Button Classes="tool" Content="⏹ Stop VFX" Command="{Binding StopVfxCommand}" HorizontalAlignment="Left" />
+
+                      <!-- M726: the skin's own idleParticlesEffects - the ones the game plays for as long
+                           as the character exists, riding their bones. They play UNDER everything else, so
+                           the tick is how you look at one effect on its own. -->
+                      <CheckBox Content="Idle effects" IsChecked="{Binding IdleEffectsEnabled}" FontSize="11"
+                                IsVisible="{Binding IdleEffectCount}"
+                                ToolTip.Tip="The skin's idleParticlesEffects — always-on VFX attached to named bones, like Lux's two wand glows." />
+                      <TextBlock Text="{Binding IdleEffectCount, StringFormat='{}{0} idle effect(s) on bones'}"
+                                 IsVisible="{Binding IdleEffectCount}"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
                       <!-- M715: the rig, for the manual pick only. A cast composite and a clip event
                            already move better than a rig can, so the viewport ignores it for both. -->
                       <StackPanel Spacing="5" IsVisible="{Binding SelectedVfx, Converter={x:Static ObjectConverters.IsNotNull}}">

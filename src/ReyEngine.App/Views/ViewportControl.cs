@@ -481,6 +481,42 @@ public sealed class ViewportControl : OpenGlControlBase
     // beside the soft dot, and re-uploaded with it, because ClearTextures owns and deletes both.
     private uint _unnamedTex;
     private readonly System.Diagnostics.Stopwatch _particleClock = new();
+    /// <summary>M726: the animation time the particle sims were last advanced to, so a clip's effects step
+    /// by the clip's own delta instead of by wall time. Reset whenever no clip is driving them.</summary>
+    private float _lastParticleAnimTime;
+
+    /// <summary>
+    /// M726: bump to replay the CURRENT particle set from the top without rebuilding it.
+    ///
+    /// <para>A looping clip used to hand the viewport a brand-new <c>VfxPlayback</c> on every wrap, and a new
+    /// playback tears down and rebuilds every simulator, texture upload, material and pipeline - once per
+    /// loop, for an effect set that had not changed at all. This replays instead: the sims are reset and
+    /// their start delays re-armed, and not one texture is re-uploaded.</para>
+    /// </summary>
+    public static readonly StyledProperty<int> ParticleReplayTokenProperty =
+        AvaloniaProperty.Register<ViewportControl, int>(nameof(ParticleReplayToken));
+
+    public int ParticleReplayToken { get => GetValue(ParticleReplayTokenProperty); set => SetValue(ParticleReplayTokenProperty, value); }
+
+    /// <summary>Replay the built particle set from t=0. <see cref="VfxParticleSimulator.Reset"/> clears the
+    /// particles but NOT the start delay, which <c>Update</c> consumes by counting down - so re-arming it is
+    /// what makes the second pass of a loop fire its cues at their authored frames instead of all at once.</summary>
+    private void ReplayParticles()
+    {
+        if (_particleSimCache.Count == 0) return;
+        foreach (var (item, sim) in _particleSimCache)
+        {
+            sim.Reset();
+            if (item.StartDelay > 0f) sim.SetStartDelay(item.StartDelay);
+        }
+        _childSims.Clear();            // children belong to the pass that just ended
+        _expiredTravelSims.Clear();    // and a travelling system flies again
+        _rigStopped.Clear();
+        _autoStopElapsed = 0f;
+        _lastParticleAnimTime = (float)AnimationTime;
+        _particleClock.Restart();
+        RequestNextFrameRendering();
+    }
 
     /// <summary>
     /// M537: ask for the next ANIMATION frame, no faster than <see cref="AnimationFrameSeconds"/>.
@@ -1311,7 +1347,30 @@ public sealed class ViewportControl : OpenGlControlBase
                 prend.CaptureDepth(w, h);
             float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
             _particleClock.Restart();
-            dt = ParticlePaused ? 0f : dt * (float)ParticleSpeed;   // M46: editor speed/pause controls
+            if (AnimationClip is not null)
+            {
+                // M726: while a CLIP is playing, the effects run on the animation's clock rather than on
+                // wall time. They are cues on that timeline - pausing the animation used to leave them
+                // emitting, scrubbing left them where they were, and slowing the clip desynchronised every
+                // event from the pose that is supposed to be throwing it.
+                //
+                // Only while a clip is selected. With none - which is when a skin's IDLE effects play, and
+                // what the particle editor always does - the clock stays real time, because nothing is
+                // driving it and freezing there would mean idle effects that never move.
+                float t = (float)AnimationTime;
+                // a backward jump is the clip wrapping; ApplyClipParticles replays the cues on that seam,
+                // so this frame simply contributes nothing rather than a negative step
+                dt = MathF.Max(0f, t - _lastParticleAnimTime);
+                _lastParticleAnimTime = t;
+                // ParticleSpeed is deliberately NOT applied on top: the animation's own speed already
+                // governs, and multiplying the two would make the clip and its effects disagree again.
+                if (ParticlePaused) dt = 0f;
+            }
+            else
+            {
+                _lastParticleAnimTime = 0f;
+                dt = ParticlePaused ? 0f : dt * (float)ParticleSpeed;   // M46: editor speed/pause controls
+            }
             // M48 wing flap: CPU-skin animated mesh primitives (butterflies) at the looping emitter age
             // and push the new positions before drawing. Tiny meshes (~100 verts) — negligible cost.
             foreach (var (es, anim) in _animatedMeshEmitters)
@@ -1408,8 +1467,14 @@ public sealed class ViewportControl : OpenGlControlBase
                     _autoStopElapsed = 0f;
                 }
             }
+            // M726: an explicit world-space BeamTarget wins (a travelling missile tethers to its launch
+            // point), then the event's own target BONE, and only then the practice dummy. The dummy used to
+            // be the answer for every beam, which is right for a targeted spell and wrong for a tether
+            // between two of the character's own joints.
             foreach (var (beamItem, beamSim) in _particleSimCache)
-                beamSim.SetBeamTarget(beamItem.BeamTarget ?? TargetDummyPosition);
+                beamSim.SetBeamTarget(beamItem.BeamTarget
+                    ?? BoneWorldPosition(beamItem.TargetBone)
+                    ?? TargetDummyPosition);
             foreach (var psim in _particleSims)
             {
                 if (_expiredTravelSims.Contains(psim)) continue;
@@ -1959,6 +2024,7 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == ModelMatCapTexturesProperty || change.Property == ModelMatCapMaskTexturesProperty
                  || change.Property == ModelLightmapTexturesProperty)
         { _texturesDirty = true; RequestNextFrameRendering(); }
+        else if (change.Property == ParticleReplayTokenProperty) ReplayParticles();   // M726
         else if (change.Property == ModelSubmeshVisibleProperty) { _visibilityDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == BackgroundMeshProperty) { _bgMeshDirty = true; _bgTexDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == BackgroundTexturesProperty || change.Property == BackgroundBlendTexturesProperty
@@ -2061,6 +2127,7 @@ public sealed class ViewportControl : OpenGlControlBase
                     // M613: the SAME matrix the mesh uses. A separate scale-only one here left every
                     // bone-attached effect standing at the origin while the character walked off.
                     var modelM = ModelWorldTransform;
+                    _lastBoneGlobals = bones;   // M726: the beam loop reads these too
                     foreach (var (item, sim) in _particleSimCache)
                         if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
                             sim.SetWorldTransform(modelM.IsIdentity ? bm : bm * modelM);
@@ -2069,12 +2136,72 @@ public sealed class ViewportControl : OpenGlControlBase
             }
             catch { /* keep last frame */ }
         }
-        else if (_wasAnimating && Mesh is { } bind)
+        else
         {
-            _meshRenderer.UpdateVertices(bind.Positions, bind.Normals);
-            if (Skeleton is { } s) _meshRenderer.SetBoneSegments(BuildBoneSegments(s));
-            _wasAnimating = false;
+            if (_wasAnimating && Mesh is { } bind)
+            {
+                _meshRenderer.UpdateVertices(bind.Positions, bind.Normals);
+                if (Skeleton is { } s) _meshRenderer.SetBoneSegments(BuildBoneSegments(s));
+                _wasAnimating = false;
+            }
+            AnchorBoneSystemsToBindPose();
         }
+    }
+
+    /// <summary>The skeleton's bind-pose bone globals, computed once per skeleton.</summary>
+    private IReadOnlyDictionary<string, Matrix4x4>? _bindPoseGlobals;
+    private object? _bindPoseGlobalsFor;
+
+    /// <summary>
+    /// M726: put bone-attached systems on their bones when NO clip is playing.
+    ///
+    /// <para>Re-anchoring used to live only inside the animated branch above, so a bone-attached system was
+    /// moved onto its joint exactly while a clip was selected and the clock was ticking. With no clip - or a
+    /// paused one - it stayed where it was built, which is the world origin. That was survivable while the
+    /// only bone-attached systems were clip particle events (there is always a clip when those exist), and
+    /// it is fatal for a skin's IDLE effects, whose whole point is to play with no clip at all. The D3D11
+    /// sibling has always anchored from bind pose every frame, so the two renderers disagreed.</para>
+    ///
+    /// <para>The bind pose cannot change for a given skeleton, so the joint walk is cached and only the
+    /// (cheap) per-item transform is redone - the D3D11 path's habit of rebuilding a name-keyed dictionary
+    /// every frame is the thing not to copy.</para>
+    /// </summary>
+    private void AnchorBoneSystemsToBindPose()
+    {
+        if (Skeleton is not { } skeleton || _particleSimCache.Count == 0) return;
+        if (!ReferenceEquals(_bindPoseGlobalsFor, skeleton) || _bindPoseGlobals is null)
+        {
+            try { _bindPoseGlobals = BonePalette.Globals(skeleton, null, 0f); }
+            catch { _bindPoseGlobals = null; }
+            _bindPoseGlobalsFor = skeleton;
+        }
+        if (_bindPoseGlobals is not { } bones) return;
+
+        _lastBoneGlobals = bones;   // M726: so a beam can aim at a bone with no clip playing either
+        var modelM = ModelWorldTransform;
+        foreach (var (item, sim) in _particleSimCache)
+            if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
+                sim.SetWorldTransform(modelM.IsIdentity ? bm : bm * modelM);
+    }
+
+    /// <summary>M726: this frame's bone transforms - animated while a clip plays, bind pose otherwise.
+    /// Kept here so the beam loop can resolve a target bone without re-walking the skeleton.</summary>
+    private IReadOnlyDictionary<string, Matrix4x4>? _lastBoneGlobals;
+
+    /// <summary>
+    /// M726: where a named joint is in the world right now, or null when it does not resolve.
+    ///
+    /// <para>The far end of a beam whose event named <c>mTargetBoneName</c>. Real and not rare - 72 of
+    /// Riven's clip events and 192 of Thresh's idle records name one - and until now every beam was pointed
+    /// at the practice dummy regardless, so a tether authored between two of the character's OWN joints ran
+    /// off into the scene.</para>
+    /// </summary>
+    private Vector3? BoneWorldPosition(string? bone)
+    {
+        if (bone is not { Length: > 0 }) return null;
+        if (_lastBoneGlobals is not { } bones || !bones.TryGetValue(bone, out var bm)) return null;
+        var modelM = ModelWorldTransform;
+        return (modelM.IsIdentity ? bm : bm * modelM).Translation;
     }
 
     private void FrameCamera()

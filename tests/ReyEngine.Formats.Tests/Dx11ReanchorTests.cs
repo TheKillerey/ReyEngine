@@ -149,7 +149,15 @@ public sealed class Dx11ReanchorTests
         // M674 made the beam target per item - a Blitzcrank return cable ends at the cast origin, not at
         // the dummy - with the host target as the fallback. The symptom this guards is unchanged: it is
         // still supplied every frame.
-        Assert.Contains("sim.SetBeamTarget(item.BeamTarget ?? _beamTarget)", text);
+        //
+        // M726 added a middle term: the event's own mTargetBoneName, between the explicit world target and
+        // the host fallback. Pinned as "per-item first, host fallback last" rather than as one exact
+        // expression, so adding a source does not fail a guard whose subject is the precedence.
+        int setBeam = text.IndexOf("sim.SetBeamTarget(", StringComparison.Ordinal);
+        Assert.True(setBeam > 0, "the per-frame beam target push must still exist");
+        string call = text.Substring(setBeam, text.IndexOf(';', setBeam) - setBeam);
+        Assert.StartsWith("sim.SetBeamTarget(item.BeamTarget ??", call, StringComparison.Ordinal);
+        Assert.EndsWith("?? _beamTarget)", call, StringComparison.Ordinal);
     }
 
     [Fact]

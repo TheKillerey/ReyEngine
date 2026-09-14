@@ -81,6 +81,18 @@ public sealed record VfxPlaybackItem(
     public Vector3? BeamTarget { get; init; }
     /// <summary>Optional end of this playback phase, measured from the start of the whole cast.</summary>
     public float? EndTime { get; init; }
+
+    /// <summary>
+    /// M726: the skeleton joint this system's beam aims at, re-read every skinned frame like
+    /// <see cref="AttachBone"/>.
+    ///
+    /// <para><c>mTargetBoneName</c> on a clip's particle event, and <c>targetBoneName</c> on a skin's idle
+    /// effect. Without it a bone-attached beam had no skeleton-derived far end and fell back to the practice
+    /// dummy or an editor stub, so a tether authored between two of the character's OWN joints pointed off
+    /// into the scene. Measured real: 192 of Thresh's 1,047 idle records and 72 of Riven's clip events name
+    /// one. <see cref="BeamTarget"/> stays the explicit world-space override and wins when both are set.</para>
+    /// </summary>
+    public string? TargetBone { get; init; }
 }
 
 /// <summary>
