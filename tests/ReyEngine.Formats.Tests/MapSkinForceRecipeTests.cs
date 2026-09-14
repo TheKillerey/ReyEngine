@@ -405,7 +405,7 @@ public sealed class MapSkinForceRecipeTests
     }
 
     [Fact]
-    public void TheWinterRiftBinIsMilkshakeWithItsCharacterSkinsCarriedPlusOneStaleAliasAnEarlierMergeLeft()
+    public void TheWinterRiftBinIsMilkshakeWithItsCharacterSkinsCarried()
     {
         if (!File.Exists(WinterRift) || !File.Exists(Champions)) return;
         byte[] installedBin;
@@ -426,11 +426,18 @@ public sealed class MapSkinForceRecipeTests
         Assert.Equal(24, replay.Swap.CarriedCharacterSkins.Count);
         Assert.True(replay.Swap.RoutedSkinHashes.Count >= 35, $"routed {replay.Swap.RoutedSkinHashes.Count}");
 
-        // 16.18 removed Hall_Of_Legends; the 16.17->16.18 merge restored the mod's copy as an unregistered alias
-        // ("edited by mod but removed by the patch - mod version restored"). A rebase names it as the remainder.
+        // As first met, the bin carried one stale unregistered alias: 16.18 removed Hall_Of_Legends and the
+        // 16.17->16.18 merge restored the mod's copy ("edited by mod but removed by the patch - mod version
+        // restored"), which a rebase names as the remainder. The switcher has since been run on the bin again
+        // (2026-09-14), which made it exactly the recipe replayed, so there is nothing left to merge. Either
+        // state of the file is the same rebase read honestly, and the test holds for both.
         var result = BinRecipeRebase.Rebase(recipe, installedBin, mod, installedBin, Resolve);
-        Assert.True(result.MergedRemainder);
-        Assert.Contains(result.Lines, l => l.Contains("1 added / 0 removed / 0 modified"));
+        Assert.Contains(result.Lines, l => l.StartsWith("Re-applied on the installed patch: ")
+                                           && l.Contains("Milkshake_SRS") && l.Contains("24 character skin(s) carried"));
+        if (result.MergedRemainder)
+            Assert.Contains(result.Lines, l => l.Contains("1 added / 0 removed / 0 modified"));
+        else
+            AssertSameBin(replay.Bytes, result.Bytes, "a bin that is exactly the recipe rebases to the recipe replayed on the installed original");
     }
 
     // ===================================================== wiring

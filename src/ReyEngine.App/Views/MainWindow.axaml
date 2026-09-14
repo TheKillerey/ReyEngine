@@ -118,8 +118,10 @@
                   Classes.newFeature="{Binding NewFeature[character-editor]}"
                   ToolTip.Tip="Pick a champion, a character and a skin, preview it on either renderer and edit its materials - one window." />
         <MenuItem Header="Add prop to map…" Command="{Binding OpenAddPropCommand}"
+                  Classes.newFeature="{Binding NewFeature[add-prop]}"
                   ToolTip.Tip="Place a character this map's package already carries - a camp, a turret, anything you imported - as scenery at the gizmo. It draws and animates; nothing in game can target it." />
         <MenuItem Header="Import character folder…" Command="{Binding OpenCharacterCreatorCommand}"
+                  Classes.newFeature="{Binding NewFeature[character-creator]}"
                   ToolTip.Tip="Turn an old character folder - its .skn, .skl, animations and texture, from any patch - into a prop this map can place. Outdated files are brought to today's form and the bins the game needs are written for you." />
         <MenuItem Header="Cinematic Capture…" Command="{Binding OpenCinematicCaptureCommand}"
                   Classes.newFeature="{Binding NewFeature[cinematic]}"
@@ -194,7 +196,8 @@
         </MenuItem>
         <MenuItem Header="Hashes &amp; Names">
           <MenuItem Header="Sync Hash Tables (Mimir)" Command="{Binding SyncMimirHashesCommand}"
-                    ToolTip.Tip="The same hash tables CommunityDragon publishes, as ~64 MB of memory-mapped binaries instead of ~554 MB of text. Each table is verified against the release manifest's SHA-256, and lookups resolve straight out of the mapped file. Once synced, this replaces the CommunityDragon download." />
+                    Classes.newFeature="{Binding NewFeature[hash-updates]}"
+                    ToolTip.Tip="The same hash tables CommunityDragon publishes, as ~64 MB of memory-mapped binaries instead of ~554 MB of text. Each table is verified against the release manifest's SHA-256, and lookups resolve straight out of the mapped file. Once synced, this replaces the CommunityDragon download - and a newer release is fetched by itself at startup while Preferences ▸ Updates says so." />
           <MenuItem Header="Sync Hashes (CommunityDragon)" Command="{Binding SyncHashesCommand}"
                     ToolTip.Tip="The original text-list path. Still here for installs that already use it, and as a fallback when no Mimir tables are present." />
           <MenuItem Header="Sync Meta Classes (LeagueToolkit)" Command="{Binding SyncMetaClassesCommand}"

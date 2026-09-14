@@ -25,7 +25,7 @@ public static class NewFeatures
     /// <summary>The release whose highlights are currently on offer. Bumped when a release ADDS entries -
     /// a fix-only release (0.4.6) leaves it, so the What's New list keeps its newest header and nothing
     /// glows for a release that changed no entry point.</summary>
-    public const string CurrentVersion = "0.4.5";
+    public const string CurrentVersion = "0.4.7";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -84,6 +84,13 @@ public static class NewFeatures
         // 0.4.5. The list itself is the entry point; the GIF backdrop lives inside Preferences, whose
         // entry above already glows for the look.
         new("whats-new",        "0.4.5", "Help ▸ What's New — every feature by release, and the one Got it that stops the highlights"),
+        // 0.4.7. Two entry points this release ADDS to the Tools menu, and one whose capability changed:
+        // the hash sync keeps itself current now. The rest of the release - the particle rig and curve
+        // editor, the Character Viewer's backdrop, chromas, the map bins the patch updater re-does - lives
+        // inside windows whose entries already glow, or arrives by itself, and has no control here.
+        new("character-creator", "0.4.7", "Character Creator — an old character folder, from any patch, becomes a prop your map can place"),
+        new("add-prop",          "0.4.7", "Add prop to map — place any character the map's package carries as scenery at the gizmo"),
+        new("hash-updates",      "0.4.7", "Hashes & Names — hash tables and meta classes keep themselves current at startup; the switch is in Preferences ▸ Updates"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
