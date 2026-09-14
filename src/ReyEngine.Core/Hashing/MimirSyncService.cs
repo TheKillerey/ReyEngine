@@ -9,6 +9,10 @@ public sealed record MimirSyncResult(string ReleaseTag, int Downloaded, int Reus
     public string Summary => UpToDate
         ? $"Already on {ReleaseTag} — nothing to download."
         : $"{ReleaseTag}: {Downloaded} table(s) downloaded, {Reused} reused, {Bytes / 1024.0 / 1024.0:0.0} MB.";
+
+    /// <summary>M731: files of older releases removed after the sync. Best effort - a table the running
+    /// database still maps stays until a later sync, when nothing maps it any more.</summary>
+    public int Removed { get; init; }
 }
 
 /// <summary>
@@ -24,8 +28,13 @@ public sealed record MimirSyncResult(string ReleaseTag, int Downloaded, int Reus
 /// wrong names or throw deep inside a lookup. Downloads land in a <c>.part</c> file and are moved into
 /// place only after the hash matches, so an interrupted sync cannot leave a corrupt table behind.</para>
 ///
-/// <para>Tables already present with the right hash are reused, so re-running after a partial sync only
-/// fetches what is missing rather than the whole ~64 MB again.</para>
+/// <para><b>M731: each release's tables live in their own folder, <c>mimir/&lt;tag&gt;/</c>.</b> A table the
+/// running database has memory-mapped is never replaced: <c>MemoryMappedFile.CreateFromFile</c> opens it
+/// with <c>FileShare.Read</c>, so moving a new file over it fails on Windows, and disposing the map under a
+/// lookup on another thread is the torn-read race M508 already paid for once. A new release is written beside
+/// the old one, the manifest is switched to it last, and the old folder is removed by a later sync once
+/// nothing maps it. Tables already present with the right hash - in the new folder, the previous release's
+/// folder, or the flat layout releases before M731 used - are copied or reused rather than fetched again.</para>
 /// </summary>
 public sealed class MimirSyncService
 {
@@ -63,6 +72,30 @@ public sealed class MimirSyncService
         return (tag, assets);
     }
 
+    // ---- M731: where a release's tables live ------------------------------------------------------
+
+    /// <summary>A release tag as a folder name: <c>hashes-2026-09-14</c> is already one; anything a file
+    /// system refuses becomes an underscore.</summary>
+    public static string SafeTag(string tag)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        string safe = new string(tag.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim();
+        return safe.Length == 0 ? "release" : safe;
+    }
+
+    public static string TableDir(string root, string tag) => Path.Combine(root, SafeTag(tag));
+
+    /// <summary>The file a table is read from: the release's folder when it holds one, else the flat path
+    /// releases before M731 were written to (existing installs), else where the release's folder would put it.</summary>
+    public static string ResolveTablePath(string root, string? tag, string file)
+    {
+        string? versioned = string.IsNullOrEmpty(tag) ? null : Path.Combine(TableDir(root, tag), file);
+        if (versioned is not null && File.Exists(versioned)) return versioned;
+        string flat = Path.Combine(root, file);
+        if (File.Exists(flat)) return flat;
+        return versioned ?? flat;
+    }
+
     /// <summary>Download the latest release's tables into the local cache, verifying each one.</summary>
     public async Task<MimirSyncResult> SyncAsync(Action<string> log, bool force = false,
         CancellationToken ct = default)
@@ -88,17 +121,30 @@ public sealed class MimirSyncService
             ?? throw new InvalidOperationException("The Mimir manifest could not be parsed.");
         manifest.ReleaseTag = tag;
 
+        string root = ReyPaths.MimirDir;
+        string tableDir = TableDir(root, tag);
+        Directory.CreateDirectory(tableDir);
+
         int downloaded = 0, reused = 0;
         long bytes = 0;
         foreach (var (name, table, kind) in manifest.UsableTables())
         {
             ct.ThrowIfCancellationRequested();
-            string target = Path.Combine(ReyPaths.MimirDir, table.File);
+            string target = Path.Combine(tableDir, table.File);
 
             // Reuse anything already correct: a re-run after a failed sync should fetch only the gap.
             if (!force && File.Exists(target) && HashMatches(target, table.Sha256))
             {
                 log($"  {name}: already current ({table.Entries:n0} entries)");
+                reused++;
+                continue;
+            }
+            // A table the previous release shipped with this exact content is copied, not fetched again -
+            // most tables do not change between two daily releases.
+            if (!force && ReusableCopy(root, current, table, target) is { } previous)
+            {
+                File.Copy(previous, target, overwrite: true);
+                log($"  {name}: unchanged since {current?.ReleaseTag ?? "the last sync"} ({table.Entries:n0} entries)");
                 reused++;
                 continue;
             }
@@ -111,10 +157,72 @@ public sealed class MimirSyncService
             downloaded++;
         }
 
+        // The manifest is switched LAST, so a sync that dies above leaves the previous release in use.
         File.WriteAllText(ReyPaths.MimirManifestFile, manifest.ToJson());
-        var result = new MimirSyncResult(tag, downloaded, reused, bytes, UpToDate: false);
+        int removed = RemoveOtherReleases(root, tag, manifest);
+        var result = new MimirSyncResult(tag, downloaded, reused, bytes, UpToDate: false) { Removed = removed };
         log(result.Summary);
+        if (removed > 0) log($"  {removed} file(s) of older releases removed.");
         return result;
+    }
+
+    /// <summary>
+    /// A file elsewhere in the cache whose content IS this table, if there is one: the same file name in the
+    /// previous release's folder or the flat layout, or - since Mimir names every table by release date
+    /// (<c>game-2026-09-14.lhdb</c>) - any table of the previous release with the same SHA-256 under its own
+    /// name. Between two weekly releases most tables do not change at all.
+    /// </summary>
+    public static string? ReusableCopy(string root, MimirManifest? previous, MimirTable table, string target)
+    {
+        var candidates = new List<string>();
+        if (previous is not null)
+        {
+            candidates.Add(ResolveTablePath(root, previous.ReleaseTag, table.File));
+            if (table.Sha256.Length > 0)
+                foreach (var (_, previousTable, _) in previous.UsableTables())
+                    if (string.Equals(previousTable.Sha256.Replace("-", ""), table.Sha256.Replace("-", ""), StringComparison.OrdinalIgnoreCase))
+                        candidates.Add(ResolveTablePath(root, previous.ReleaseTag, previousTable.File));
+        }
+        candidates.Add(Path.Combine(root, table.File));
+        foreach (string candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(candidate) || PathsEqual(candidate, target)) continue;
+            if (HashMatches(candidate, table.Sha256)) return candidate;
+        }
+        return null;
+    }
+
+    private static bool PathsEqual(string a, string b) =>
+        string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Delete other releases' folders, and every flat table the current manifest does not name - the layout
+    /// releases before M731 used, where nothing ever deleted anything: five dated releases, ~300 MB, were
+    /// found beside each other. Best effort: a file the running database still maps refuses to go and is
+    /// left for a later sync. Only <c>.lhdb</c> tables and stray <c>.part</c> downloads are touched.
+    /// </summary>
+    public static int RemoveOtherReleases(string root, string keepTag, MimirManifest current)
+    {
+        int removed = 0;
+        string keep = SafeTag(keepTag);
+        foreach (string dir in Directory.EnumerateDirectories(root))
+        {
+            if (string.Equals(Path.GetFileName(dir), keep, StringComparison.OrdinalIgnoreCase)) continue;
+            try { Directory.Delete(dir, recursive: true); removed++; }
+            catch { /* still mapped - next time */ }
+        }
+        var currentFiles = current.UsableTables().Select(t => t.Table.File).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in Directory.EnumerateFiles(root))
+        {
+            string name = Path.GetFileName(path);
+            bool table = name.EndsWith(".lhdb", StringComparison.OrdinalIgnoreCase);
+            bool stray = name.EndsWith(".part", StringComparison.OrdinalIgnoreCase);
+            if (!table && !stray) continue;
+            if (table && currentFiles.Contains(name)) continue;
+            try { File.Delete(path); removed++; }
+            catch { /* still mapped - next time */ }
+        }
+        return removed;
     }
 
     /// <summary>Fetch to a .part file, hash it, and only then move it into place. A table that fails
@@ -161,7 +269,7 @@ public sealed class MimirSyncService
     }
 
     private static bool TablesPresent(MimirManifest manifest) =>
-        manifest.UsableTables().All(t => File.Exists(Path.Combine(ReyPaths.MimirDir, t.Table.File)));
+        manifest.UsableTables().All(t => File.Exists(ResolveTablePath(ReyPaths.MimirDir, manifest.ReleaseTag, t.Table.File)));
 
     /// <summary>Open the cached tables. Returns an empty set when nothing is synced, which is a legitimate
     /// state: the CommunityDragon path still works and Mimir is an optional replacement for it.</summary>
@@ -173,7 +281,7 @@ public sealed class MimirSyncService
 
         foreach (var (name, table, kind) in manifest.UsableTables())
         {
-            string path = Path.Combine(ReyPaths.MimirDir, table.File);
+            string path = ResolveTablePath(ReyPaths.MimirDir, manifest.ReleaseTag, table.File);
             if (!File.Exists(path)) continue;
             try { opened.Add((name, kind, HashDbFile.Open(path))); }
             catch (Exception ex) { log?.Invoke($"{name}: {ex.Message}"); }

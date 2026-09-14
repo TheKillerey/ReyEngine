@@ -128,6 +128,11 @@
                 <ComboBoxItem>Manual — only open the download page</ComboBoxItem>
               </ComboBox>
               <TextBlock Classes="settingsDesc" Text="{Binding UpdateModeHint}" />
+              <!-- M731 -->
+              <CheckBox Content="Keep hash tables and meta classes up to date" IsChecked="{Binding AutoUpdateHashes}"
+                        FontSize="12" Margin="0,8,0,0" />
+              <TextBlock Classes="settingsDesc"
+                         Text="At startup, fetch a newer Mimir hash-table release (or changed CommunityDragon lists) and a newer meta-class database when one was published, then re-resolve the open project. One request each when nothing changed. Off: Tools ▸ Sync when you want it." />
             </StackPanel>
           </Border>
           <!-- M503c -->

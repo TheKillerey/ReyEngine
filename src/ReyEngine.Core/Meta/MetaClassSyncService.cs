@@ -10,6 +10,10 @@ namespace ReyEngine.Core.Meta;
 /// this repo should not redistribute a copy of it; and it is re-dumped every patch, so a committed snapshot
 /// would be stale almost immediately. Downloading it puts the copy on the user's machine, under their
 /// control, exactly like the hash lists.</para>
+///
+/// <para>M731: the ETag the copy on disk was downloaded with is kept beside it, so
+/// <see cref="SyncIfChangedAsync"/> can ask GitHub with <c>If-None-Match</c> and learn "unchanged" from a
+/// 304 instead of fetching 3.6 MB to compare.</para>
 /// </summary>
 public sealed class MetaClassSyncService
 {
@@ -27,40 +31,84 @@ public sealed class MetaClassSyncService
         return c;
     }
 
+    /// <summary>M731: the ETag of the cached database, beside it.</summary>
+    public static string EtagFile => ReyPaths.MetaDbFile + ".etag";
+
     /// <summary>Download the database, cache it, and return it parsed. Downloads to a temporary file and
     /// moves it into place only on success, so an interrupted sync cannot leave a truncated cache that then
     /// fails to parse on every subsequent launch.</summary>
     public async Task<MetaClassDatabase> SyncAsync(Action<string> log, int? build = null,
         CancellationToken ct = default)
     {
+        await DownloadAsync(log, ifNoneMatch: null, ct);
+        log("Parsing meta classes…");
+        var db = MetaClassDatabase.Load(ReyPaths.MetaDbFile, build, log);
+        log("Meta-class sync complete.");
+        return db;
+    }
+
+    /// <summary>M731: fetch only when GitHub reports different content than the copy on disk was downloaded
+    /// with. Null when the copy is current. A copy from before M731 has no ETag on record, so its first
+    /// automatic check downloads once and records one.</summary>
+    public async Task<MetaClassDatabase?> SyncIfChangedAsync(Action<string> log, int? build = null,
+        CancellationToken ct = default)
+    {
+        if (!await DownloadAsync(log, ReadEtag(EtagFile), ct)) return null;
+        log("Parsing meta classes…");
+        var db = MetaClassDatabase.Load(ReyPaths.MetaDbFile, build, log);
+        log("Meta-class sync complete.");
+        return db;
+    }
+
+    /// <summary>False when the server answered 304 Not Modified to <paramref name="ifNoneMatch"/>.</summary>
+    private static async Task<bool> DownloadAsync(Action<string> log, string? ifNoneMatch, CancellationToken ct)
+    {
         ReyPaths.EnsureMetaDir();
-        log("Downloading LeagueToolkit meta-class database…");
+        log(ifNoneMatch is null ? "Downloading LeagueToolkit meta-class database…" : "Checking the LeagueToolkit meta-class database…");
 
         string target = ReyPaths.MetaDbFile;
         string temp = target + ".part";
         try
         {
-            using (var response = await Http.GetAsync(MetaDbUrl, HttpCompletionOption.ResponseHeadersRead, ct))
+            using var request = new HttpRequestMessage(HttpMethod.Get, MetaDbUrl);
+            if (ifNoneMatch is { Length: > 0 }) request.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch);
+            using (var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct))
             {
+                if (response.StatusCode == System.Net.HttpStatusCode.NotModified) return false;
                 response.EnsureSuccessStatusCode();
                 long? size = response.Content.Headers.ContentLength;
                 if (size is { } s) log($"meta.db.json — {s / 1024.0 / 1024.0:0.0} MB");
-                await using var src = await response.Content.ReadAsStreamAsync(ct);
-                await using var dst = File.Create(temp);
-                await src.CopyToAsync(dst, ct);
+                await using (var src = await response.Content.ReadAsStreamAsync(ct))
+                await using (var dst = File.Create(temp))
+                    await src.CopyToAsync(dst, ct);
+                File.Move(temp, target, overwrite: true);
+                WriteEtag(EtagFile, response.Headers.ETag?.Tag);
             }
-            File.Move(temp, target, overwrite: true);
+            return true;
         }
         catch
         {
             try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best effort */ }
             throw;
         }
+    }
 
-        log("Parsing meta classes…");
-        var db = MetaClassDatabase.Load(target, build, log);
-        log("Meta-class sync complete.");
-        return db;
+    public static string? ReadEtag(string path)
+    {
+        try { return File.Exists(path) && File.ReadAllText(path).Trim() is { Length: > 0 } tag ? tag : null; }
+        catch { return null; }
+    }
+
+    /// <summary>Record the tag, or forget it when the server sent none - a stale tag would make the next
+    /// check believe an unrelated copy is current.</summary>
+    public static void WriteEtag(string path, string? etag)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(etag)) { if (File.Exists(path)) File.Delete(path); }
+            else File.WriteAllText(path, etag.Trim());
+        }
+        catch { /* best effort: without it the next check downloads once more */ }
     }
 
     /// <summary>Load whatever is cached - no network. Empty when nothing has been synced yet, which is a

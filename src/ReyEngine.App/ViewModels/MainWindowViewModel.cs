@@ -7414,14 +7414,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     // ---- Hashes ---------------------------------------------------------
 
+    /// <summary>M731: one sync at a time. The automatic startup update and the three Tools commands write the
+    /// same cache; two at once would race on the files and swap the resolver twice.</summary>
+    private bool _hashSyncBusy;
+
     [RelayCommand]
     private async Task SyncHashes()
     {
+        if (_hashSyncBusy) { _log.Info("Hashes", "A hash sync is already running."); return; }
+        _hashSyncBusy = true;
         try
         {
             Status = "Syncing CommunityDragon hashes…";
             _log.Info("Hashes", "Downloading CommunityDragon hashes…");
             var db = await Task.Run(() => _sync.SyncAsync(m => _log.Info("Hashes", m)));
+            if (db is null) { Status = "CommunityDragon hashes are current."; return; }
             _resolver.Swap(db);
             ApplyHashesToOpenWad();
             Status = $"Hashes synced — {db.WadCount:n0} WAD + {db.BinCount:n0} bin";
@@ -7430,6 +7437,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             _log.Error("Hashes", $"Sync failed: {ex.Message}");
         }
+        finally { _hashSyncBusy = false; }
     }
 
     /// <summary>
@@ -7445,21 +7453,83 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task SyncMimirHashes()
     {
+        if (_hashSyncBusy) { _log.Info("Mimir", "A hash sync is already running."); return; }
+        _hashSyncBusy = true;
         try
         {
             Status = "Syncing Mimir hash tables…";
             var result = await Task.Run(() => _mimir.SyncAsync(m => _log.Info("Mimir", m)));
-
-            // Re-open through the normal path so the tables are attached exactly as a fresh launch would.
-            var db = _sync.LoadLocal(m => _log.Info("Hashes", m));
-            _resolver.Swap(db);
-            ApplyHashesToOpenWad();
-
+            var db = AdoptSyncedHashes();
             Status = result.Summary;
             _log.Success("Mimir", $"{result.Summary} {db.TableEntryCount:n0} entries reachable through "
                                 + $"{db.TableCount} memory-mapped table(s).");
         }
         catch (Exception ex) { _log.Error("Mimir", $"Sync failed: {ex.Message}"); }
+        finally { _hashSyncBusy = false; }
+    }
+
+    /// <summary>Re-open the synced tables through the normal path, so they are attached exactly as a fresh
+    /// launch would attach them, then re-resolve whatever is open.</summary>
+    private HashDatabase AdoptSyncedHashes()
+    {
+        var db = _sync.LoadLocal(m => _log.Info("Hashes", m));
+        _resolver.Swap(db);
+        ApplyHashesToOpenWad();
+        return db;
+    }
+
+    /// <summary>
+    /// M731: keep the hash tables and the meta-class database current without anyone pressing Sync.
+    ///
+    /// <para>Runs once per launch, a few seconds in, when Settings ▸ Updates leaves it on. It updates
+    /// whichever source this install already uses - the Mimir tables when a manifest is present, else the
+    /// CommunityDragon lists when they are - and never introduces one: an install with no hashes at all is the
+    /// first-run wizard's job. Every check is one request; a newer release is fetched, adopted and applied to
+    /// the open project. Failures are logged at info level: being offline is not an error.</para>
+    /// </summary>
+    public async Task AutoUpdateHashesAsync()
+    {
+        if (!Settings.AutoUpdateHashes) return;
+        await Task.Delay(TimeSpan.FromSeconds(4));   // after the window has settled and the last project has opened
+        if (_hashSyncBusy) return;
+        _hashSyncBusy = true;
+        try
+        {
+            if (_mimir.Local is not null)
+            {
+                var result = await Task.Run(() => _mimir.SyncAsync(m => _log.Info("Mimir", m)));
+                if (result.UpToDate) _log.Info("Mimir", $"Hash tables are current ({result.ReleaseTag}).");
+                else
+                {
+                    var db = AdoptSyncedHashes();
+                    _log.Success("Mimir", $"Hash tables updated automatically: {result.Summary} "
+                                        + $"{db.TableEntryCount:n0} entries through {db.TableCount} table(s).");
+                }
+            }
+            else if (HashSyncService.HasLocalRaw)
+            {
+                var db = await Task.Run(() => _sync.SyncAsync(m => _log.Info("Hashes", m), onlyIfChanged: true));
+                if (db is null) _log.Info("Hashes", "CommunityDragon hash lists are current.");
+                else
+                {
+                    _resolver.Swap(db);
+                    ApplyHashesToOpenWad();
+                    _log.Success("Hashes", $"Hashes updated automatically: {db.WadCount:n0} WAD + {db.BinCount:n0} bin entries.");
+                }
+            }
+        }
+        catch (Exception ex) { _log.Info("Hashes", $"Automatic hash update skipped: {ex.Message}"); }
+        finally { _hashSyncBusy = false; }
+
+        try
+        {
+            if (!MetaClassSyncService.HasLocalCopy) return;
+            var db = await _metaSync.SyncIfChangedAsync(m => _log.Info("Meta", m));
+            if (db is null) { _log.Info("Meta", "Meta classes are current."); return; }
+            _meta = new Lazy<MetaClassDatabase>(() => db);
+            _log.Success("Meta", $"Meta classes updated automatically: {db.ClassCount:n0} class(es), build {db.ResolvedBuild}.");
+        }
+        catch (Exception ex) { _log.Info("Meta", $"Automatic meta-class update skipped: {ex.Message}"); }
     }
 
     /// <summary>M367: download the LeagueToolkit meta-class database. Companion to Sync Hashes, and
@@ -7496,10 +7566,33 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void ApplyHashesToOpenWad()
     {
         if (!ContentLoaded) return;
-        int resolved = _resolver.RefreshArchive(_archive);
+
+        // M731: a project is MOUNTS, not an archive. This dereferenced _archive - null in every folder project -
+        // so Sync Hashes, Sync Hash Tables and Reload Local Hashes all died with "Sync failed: Object reference
+        // not set to an instance of an object" the moment a project was open, which is most of the time; the
+        // sync itself had already finished. The WAD mounts re-resolve their entries in place; the folder and
+        // override mounts name their files through the resolver on every enumeration, so rebuilding the index
+        // and the tree is what applies the new names to them.
+        if (_mounts is { } mounts)
+        {
+            int resolved = 0, total = 0;
+            foreach (var wad in mounts.Mounts.OfType<WadMount>().Concat(mounts.Fallback.OfType<WadMount>()))
+            {
+                resolved += _resolver.RefreshArchive(wad.Archive);
+                total += wad.Archive.Entries.Count;
+            }
+            mounts.Rebuild();
+            BuildProjectTree();
+            _log.Success("Hashes", $"Resolved {resolved:n0} / {total:n0} WAD paths across the project's mounts.");
+            Status = $"{Project.Name} — {mounts.Count:n0} assets · {resolved:n0} WAD paths resolved";
+            return;
+        }
+
+        if (_archive is null) return;
+        int n = _resolver.RefreshArchive(_archive);
         RebuildTree();
-        _log.Success("Hashes", $"Resolved {resolved:n0} / {_archive.Entries.Count:n0} WAD paths.");
-        Status = $"{_archive.Name} — {_archive.Entries.Count:n0} entries · {resolved:n0} resolved";
+        _log.Success("Hashes", $"Resolved {n:n0} / {_archive.Entries.Count:n0} WAD paths.");
+        Status = $"{_archive.Name} — {_archive.Entries.Count:n0} entries · {n:n0} resolved";
     }
 
     [RelayCommand]

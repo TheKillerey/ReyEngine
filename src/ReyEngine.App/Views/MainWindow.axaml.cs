@@ -710,6 +710,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             };
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
+            _ = vm.AutoUpdateHashesAsync();      // M731: newer hash tables / meta classes, when Settings leaves it on
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
 
             // M83: breadcrumb behaves like Explorer's path bar — on navigation, scroll to the END so the

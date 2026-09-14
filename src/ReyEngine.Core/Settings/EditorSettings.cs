@@ -56,6 +56,11 @@ public sealed class EditorSettings
     /// (an MSI can set it) or falls back to <c>ask</c> - see UpdateService.EffectiveMode.</summary>
     public string UpdateMode { get; set; } = "";
 
+    /// <summary>M731: at startup, fetch a newer Mimir hash-table release (or changed CommunityDragon lists) and
+    /// a newer meta-class database when one was published, then re-resolve whatever is open. On by default;
+    /// the Settings window's UPDATES card turns it off.</summary>
+    public bool AutoUpdateHashes { get; set; } = true;
+
     // ---- character-preview backdrop (M88) ----
     /// <summary>Path to a legacy League LEVELS/&lt;Map&gt; folder (containing Scene/room.nvr) used as the
     /// 3D backdrop behind previewed characters. Empty disables the feature.</summary>
@@ -159,6 +164,7 @@ public sealed class EditorSettings
         BackgroundImageOpacity = s.BackgroundImageOpacity; BackgroundGlass = s.BackgroundGlass;
         BackgroundImageStretch = s.BackgroundImageStretch;
         UpdateMode = s.UpdateMode;   // M681
+        AutoUpdateHashes = s.AutoUpdateHashes;   // M731
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder; PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
         FirstRunCompleted = s.FirstRunCompleted;
         LastSeenFeatureVersion = s.LastSeenFeatureVersion;   // M593

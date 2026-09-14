@@ -6,6 +6,10 @@ namespace ReyEngine.Core.Hashing;
 /// Downloads the CommunityDragon hash lists (game split files, lcu, bin*) and merges
 /// them into a <see cref="HashDatabase"/> + local binary cache. After the first sync the
 /// app loads from cache and never needs the network again.
+///
+/// <para>M731: the listing GitHub returns carries each file's blob sha, and the sha every file was last
+/// synced at is kept in <see cref="ManifestFile"/>. A sync fetches only the lists that changed, and an
+/// automatic one can say "nothing changed" after a single request instead of ~100 MB of downloads.</para>
 /// </summary>
 public sealed class HashSyncService
 {
@@ -20,22 +24,52 @@ public sealed class HashSyncService
         return c;
     }
 
-    /// <summary>Download everything, parse, cache. Returns a fresh populated database.</summary>
-    public async Task<HashDatabase> SyncAsync(Action<string> log, CancellationToken ct = default)
+    /// <summary>One file as GitHub lists it. <paramref name="Sha"/> is the git blob sha - it changes exactly
+    /// when the content does, which is what makes it a cheap "is my copy current" check.</summary>
+    public sealed record RemoteFile(string Name, string Url, long Size, string Sha);
+
+    /// <summary>M731: name → blob sha of every file as last synced.</summary>
+    public static string ManifestFile => Path.Combine(ReyPaths.HashesDir, "communitydragon.manifest.json");
+
+    /// <summary>Does this install use the CommunityDragon lists at all?</summary>
+    public static bool HasLocalRaw =>
+        Directory.Exists(ReyPaths.CommunityDragonDir) && Directory.EnumerateFiles(ReyPaths.CommunityDragonDir, "hashes.*").Any();
+
+    /// <summary>The files worth downloading: missing locally, never synced, or synced at another sha.</summary>
+    public static IReadOnlyList<RemoteFile> ChangedFiles(IEnumerable<RemoteFile> listing,
+        IReadOnlyDictionary<string, string> synced, Func<string, bool> existsLocally) =>
+        listing.Where(f => !existsLocally(f.Name)
+                           || !synced.TryGetValue(f.Name, out var sha)
+                           || !string.Equals(sha, f.Sha, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    /// <summary>Download everything that changed, parse, cache. Returns a fresh populated database - or null
+    /// when <paramref name="onlyIfChanged"/> is set and no file moved since the last sync.</summary>
+    public async Task<HashDatabase?> SyncAsync(Action<string> log, CancellationToken ct = default, bool onlyIfChanged = false)
     {
         ReyPaths.EnsureHashDirs();
         log("Downloading CommunityDragon hash file list…");
         var files = await GetFileListAsync(ct);
         log($"Found {files.Count} hash files on CommunityDragon/Data.");
 
+        var synced = LoadManifest(ManifestFile);
+        var changed = ChangedFiles(files, synced, name => File.Exists(Path.Combine(ReyPaths.CommunityDragonDir, name)));
+        if (onlyIfChanged && changed.Count == 0 && File.Exists(ReyPaths.MergedCache))
+        {
+            log("Every CommunityDragon hash file is current.");
+            return null;
+        }
+        if (changed.Count < files.Count)
+            log($"{files.Count - changed.Count} file(s) unchanged since the last sync - kept.");
+
         long total = 0;
-        for (int i = 0; i < files.Count; i++)
+        for (int i = 0; i < changed.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
-            var (name, url, size) = files[i];
-            log($"Downloading [{i + 1}/{files.Count}] {name}  ({size / 1024.0 / 1024.0:0.0} MB)…");
-            await DownloadAsync(url, Path.Combine(ReyPaths.CommunityDragonDir, name), ct);
-            total += size;
+            var file = changed[i];
+            log($"Downloading [{i + 1}/{changed.Count}] {file.Name}  ({file.Size / 1024.0 / 1024.0:0.0} MB)…");
+            await DownloadAsync(file.Url, Path.Combine(ReyPaths.CommunityDragonDir, file.Name), ct);
+            total += file.Size;
         }
         log($"Downloaded {total / 1024.0 / 1024.0:0.0} MB. Parsing…");
 
@@ -45,8 +79,32 @@ public sealed class HashSyncService
         log($"Loaded {db.WadCount:n0} WAD + {db.BinCount:n0} bin entries ({db.ConflictCount:n0} conflicts).");
         log("Saving merged cache…");
         db.SaveCache(ReyPaths.MergedCache);
+        SaveManifest(ManifestFile, files);
         log("Hash sync complete.");
         return db;
+    }
+
+    public static Dictionary<string, string> LoadManifest(string path)
+    {
+        try
+        {
+            if (File.Exists(path)
+                && JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path)) is { } map)
+                return new Dictionary<string, string>(map, StringComparer.OrdinalIgnoreCase);
+        }
+        catch { /* a manifest that will not read means "sync everything", which is safe */ }
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public static void SaveManifest(string path, IEnumerable<RemoteFile> files)
+    {
+        try
+        {
+            var map = files.GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Sha, StringComparer.OrdinalIgnoreCase);
+            File.WriteAllText(path, JsonSerializer.Serialize(map, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { /* without it the next sync downloads everything again - the pre-M731 behaviour */ }
     }
 
     /// <summary>Load from local cache (or raw files) — no network. Returns null counts if nothing local.</summary>
@@ -102,18 +160,19 @@ public sealed class HashSyncService
         return db;
     }
 
-    private static async Task<List<(string name, string url, long size)>> GetFileListAsync(CancellationToken ct)
+    private static async Task<List<RemoteFile>> GetFileListAsync(CancellationToken ct)
     {
         var json = await Http.GetStringAsync(ContentsApi, ct);
         using var doc = JsonDocument.Parse(json);
-        var list = new List<(string, string, long)>();
+        var list = new List<RemoteFile>();
         foreach (var el in doc.RootElement.EnumerateArray())
         {
             var name = el.GetProperty("name").GetString();
             if (name is null || !name.StartsWith("hashes.", StringComparison.Ordinal)) continue;
             var url = el.GetProperty("download_url").GetString();
             if (url is null) continue;
-            list.Add((name, url, el.GetProperty("size").GetInt64()));
+            string sha = el.TryGetProperty("sha", out var s) ? s.GetString() ?? "" : "";
+            list.Add(new RemoteFile(name, url, el.GetProperty("size").GetInt64(), sha));
         }
         return list;
     }

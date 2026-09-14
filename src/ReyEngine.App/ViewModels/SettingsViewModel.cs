@@ -148,6 +148,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         false => "The installer set asking as the default for this install.",
         _ => "The changelog is shown in every mode but manual, which only opens the download page.",
     };
+    /// <summary>M731: fetch newer hash tables and meta classes at startup.</summary>
+    [ObservableProperty] private bool _autoUpdateHashes = true;
     [ObservableProperty] private string _projectsDirectory = "";   // M133
     [ObservableProperty] private string _wwiseConsolePath = "";    // M138
     [ObservableProperty] private string _wwiseProjectPath = "";
@@ -376,6 +378,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         AutoSaveEdits = s.AutoSaveEdits;                       // M503c
         AutoSaveDelaySeconds = s.EffectiveAutoSaveDelaySeconds;
         UpdateModeIndex = UpdateService.IndexOfMode(UpdateService.EffectiveMode(s.UpdateMode));   // M681
+        AutoUpdateHashes = s.AutoUpdateHashes;   // M731
         ProjectsDirectory = s.ProjectsDirectory;
         WwiseConsolePath = s.WwiseConsolePath;
         WwiseProjectPath = s.WwiseProjectPath;
@@ -410,6 +413,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             InvertLookY = InvertLookY, FlySpeed = FlySpeed, CullBackfacesDefault = CullBackfacesDefault,
             AutoSaveEdits = AutoSaveEdits, AutoSaveDelaySeconds = AutoSaveDelaySeconds,   // M503c
             UpdateMode = UpdateService.ModeAtIndex(UpdateModeIndex),   // M681
+            AutoUpdateHashes = AutoUpdateHashes,   // M731
             Theme = _theme,
             ThemeAccent = LookSettings().ThemeAccent, BackgroundImagePath = LookSettings().BackgroundImagePath,   // M683
             BackgroundImageOpacity = LookSettings().BackgroundImageOpacity, BackgroundGlass = LookSettings().BackgroundGlass,
