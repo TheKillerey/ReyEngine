@@ -5101,12 +5101,18 @@ float4 psmain(VOut i) : SV_Target
     {
         error = null;
         DrawCalls = 0;
-        if (!IsReady) { error = "no shader loaded"; return null; }
+        // M727: a legacy NVR backdrop is something to draw on its own. IsReady means "a device AND at least one
+        // material", and the backdrop pass owns no material - so without this, a Character Viewer subject that
+        // resolved no D3D11 scene (a prop, or a skin the resolver did not understand) refused every frame and the
+        // map vanished with it, where the GL viewport still draws it. The M725 diffuse-only prop never hit this
+        // only because it registered materials. IsReady itself is left alone: the map window gates vertex and
+        // material rebuilds on it, and those must not run against an empty scene.
+        if (_device.Handle is null || (_materials.Count == 0 && !HasBackdrop)) { error = "no shader loaded"; return null; }
         // M264: either source is enough. A particle-only frame has no static mesh, and a map frame has
         // no dynamic one until something uploads quads. M640: mesh-particle geometry counts too - a
         // system whose quads have all died while a mesh emitter still lives was refused as "no mesh set".
         if ((_vb.Handle is null || _indexCount == 0) && (_dynVb.Handle is null || _dynIndexCount == 0)
-            && _meshGeoms.All(g => g is null) && _riotMeshGeoms.All(g => g is null))
+            && _meshGeoms.All(g => g is null) && _riotMeshGeoms.All(g => g is null) && !HasBackdrop)
         { error = "no mesh set"; return null; }
         if (width <= 0 || height <= 0) { error = "zero-sized target"; return null; }
 
@@ -5175,6 +5181,12 @@ float4 psmain(VOut i) : SV_Target
             // host sets a sky source. It sets its own raster/blend/depth states, which the three lines
             // below then reset for the scene pass.
             DrawSky(view, proj);
+
+            // M727: the legacy NVR preview backdrop (Dominion / Twisted Treeline), right after the sky and before
+            // the scene - where the GL viewport draws it. Unlike the sky it tests AND writes depth, so the
+            // character composites against the map rather than over it. No-op until a host sets a backdrop. It
+            // sets its own raster/blend/depth states, which the three lines below then reset for the scene pass.
+            DrawBackdrop(view, proj);
 
             _ctx.RSSetState(_raster);
             var factor = stackalloc float[4] { 0, 0, 0, 0 };
@@ -5735,6 +5747,7 @@ float4 psmain(VOut i) : SV_Target
         _dummyVb.Dispose();  // M628
         _rangeVb.Dispose();  // M639
         DisposeSky();
+        DisposeBackdrop();   // M727
         DisposeRibbon();
         DisposeDynamicLights();
         DisposeClusterLights();

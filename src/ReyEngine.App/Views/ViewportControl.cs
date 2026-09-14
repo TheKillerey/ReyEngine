@@ -216,6 +216,12 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, NvrSunSettings?>(nameof(NvrSun));
     public static readonly StyledProperty<bool> NvrUseMapSunProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(NvrUseMapSun), true);
+    // M729: the BACKDROP's authored sun/ambient (the level's terrain.inibin, or ReyEngine's built-in copy of it) and
+    // its toggle. The backdrop's lighting is resolved by Services.BackdropLighting - the function D3D11 uses too.
+    public static readonly StyledProperty<NvrSunSettings?> BackgroundSunProperty =
+        AvaloniaProperty.Register<ViewportControl, NvrSunSettings?>(nameof(BackgroundSun));
+    public static readonly StyledProperty<bool> BackgroundUseMapSunProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(BackgroundUseMapSun), true);
     public static readonly StyledProperty<double> VertexLightmapScaleProperty =
         AvaloniaProperty.Register<ViewportControl, double>(nameof(VertexLightmapScale), 2.0);
     public static readonly StyledProperty<double> BackgroundBrightnessProperty =     // M89: base sun/sky on the backdrop
@@ -308,6 +314,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public double NvrBrightness { get => GetValue(NvrBrightnessProperty); set => SetValue(NvrBrightnessProperty, value); }
     public NvrSunSettings? NvrSun { get => GetValue(NvrSunProperty); set => SetValue(NvrSunProperty, value); }   // M149
     public bool NvrUseMapSun { get => GetValue(NvrUseMapSunProperty); set => SetValue(NvrUseMapSunProperty, value); }
+    public NvrSunSettings? BackgroundSun { get => GetValue(BackgroundSunProperty); set => SetValue(BackgroundSunProperty, value); }   // M729
+    public bool BackgroundUseMapSun { get => GetValue(BackgroundUseMapSunProperty); set => SetValue(BackgroundUseMapSunProperty, value); }
     public double VertexLightmapScale { get => GetValue(VertexLightmapScaleProperty); set => SetValue(VertexLightmapScaleProperty, value); }
     public double BackgroundBrightness { get => GetValue(BackgroundBrightnessProperty); set => SetValue(BackgroundBrightnessProperty, value); }
     public bool ShowGrid { get => GetValue(ShowGridProperty); set => SetValue(ShowGridProperty, value); }
@@ -1301,27 +1309,23 @@ public sealed class ViewportControl : OpenGlControlBase
             // additive term (alternative models; running both double-counts). Mask-blend maps like Map8
             // have no composite, so they keep their established M89 look exactly.
             bool m142 = BackgroundLightmapTextures is not null;
-            bg.SetVertexLightmap(m142, 2f);
-            bg.SetVertexBakedLight(!m142, (float)BackgroundVertexLight);   // M89: NVR ground baked shading
+            float bright = (float)BackgroundBrightness;
+            // M729: resolved by the ONE function the D3D11 backdrop takes its lighting from. It replaces two GL calls
+            // that did not do what their arguments said. SetSunLighting takes the direction TOWARD the sun, so the
+            // M142.9 night sun - written as the way light travels - lit Twisted Treeline's LM_ meshes from below; and
+            // a ZERO direction makes it substitute its own default sun (0.75) and sky (0.35), so Dominion's Bright
+            // slider never reached the picture. Dominion is now lit by its authored terrain.inibin sun the way the
+            // legacy client's LIT_PS lights it, and M89's belief that old maps are "meant to be lit by their Light.dat"
+            // is retired: LIT_PS has no point-light term, and Dominion's torch pools are in its vertex colour.
+            var lit = Services.BackdropLighting.Resolve(m142, bright, (float)BackgroundVertexLight, BackgroundSun, BackgroundUseMapSun);
+            bg.SetVertexLightmap(lit.CompositeModel, 2f);                        // M142.9: vertex colour AS the lightmap
+            bg.SetVertexBakedLight(!lit.CompositeModel, lit.VertexBakedScale);   // M89/M729: the baked vertex light
             bg.SetNvrFourBlend(true);                                      // M89: CREATE_GROUND_MOSAIC_FOUR_BLEND
             bg.SetWorldTransform(BackgroundModel());                       // M89: move + rotate the map
-            // M89: base sun/sky kept DARK by default — old maps are meant to be lit by their Light.dat
-            // point lights, and a bright base washes the ground flat (in-game look = dark + warm pools).
-            float bright = (float)BackgroundBrightness;
-            var bgLight = new Vector4(bright, bright, bright, 1f);
             if (SunProperties is { } bsun)
                 bg.SetSunLighting(bsun.SunDirection, bsun.SunColor * bright, bsun.SkyLightColor * bright, bsun.SkyLightScale);
-            else if (m142)
-            {
-                // M142.9: same dim directional night sun/sky as the standalone viewer (which un-baked LM_/
-                // decal meshes fall through to), scaled by the Bright slider so it still tunes the map.
-                float k = bright / 0.55f;   // 0.55 = the slider default -> exact parity with the viewer
-                bg.SetSunLighting(new Vector3(-0.3f, -0.85f, -0.4f),
-                    new Vector4(0.30f * k, 0.30f * k, 0.36f * k, 1f),
-                    new Vector4(0.20f * k, 0.21f * k, 0.26f * k, 1f), 1f);
-            }
             else
-                bg.SetSunLighting(Vector3.Zero, bgLight, bgLight, 1f);
+                bg.SetSunLighting(lit.DirectionToSun, new Vector4(lit.SunColor, 1f), new Vector4(lit.SkyColor, 1f), 1f);
             bg.Render(viewProj, view, _camera.Position, 0, Wireframe, false, false, cullBackfaces: false);
         }
         // M90: uniform preview-model scale (identity at 1.0 — the main map viewport never changes it).
@@ -2039,7 +2043,8 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == LegacyMapProperty || change.Property == NvrFourBlendProperty
                  || change.Property == NvrVertexLightProperty || change.Property == NvrBrightnessProperty   // M148
                  || change.Property == LightFalloffSoftnessProperty                              // M160
-                 || change.Property == NvrSunProperty || change.Property == NvrUseMapSunProperty) { RequestNextFrameRendering(); }   // M149
+                 || change.Property == NvrSunProperty || change.Property == NvrUseMapSunProperty                // M149
+                 || change.Property == BackgroundSunProperty || change.Property == BackgroundUseMapSunProperty) { RequestNextFrameRendering(); }   // M729
         else if (change.Property == ModelScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
         else if (change.Property == ModelPositionProperty || change.Property == ModelYawProperty)
         { _skinDirty = true; RequestNextFrameRendering(); }   // M613: move the model and its attached VFX

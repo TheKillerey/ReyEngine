@@ -35,6 +35,27 @@ public sealed record NvrSunSettings
             ?? TryLoadSunIni(Path.Combine(mapFolder, "sun.ini"));
     }
 
+    /// <summary>
+    /// M729: the authored environment of a legacy level whose folder does not carry it. The backdrop packs ship
+    /// room.nvr, Light.dat and textures but not the level's terrain.inibin, so without this Dominion was lit by a
+    /// guess. The numbers are the 4.20 client's own <c>LEVELS/Map8/terrain.inibin</c>: SUN*SunLightColor
+    /// (155, 125, 83), SUN*SunDir (-0.5354, -0.8383, -0.1036), SUN*AmbientLightColor (7, 31, 68).
+    ///
+    /// <para>Only levels with an authored directional sun are listed. Twisted Treeline's terrain.inibin carries no
+    /// sun - its environment shader reads a baked colour map instead (LIT_PS, MOD2X_COLORMAP) - so it has no entry
+    /// and needs none.</para>
+    /// </summary>
+    public static NvrSunSettings? BuiltIn(string? levelName) =>
+        string.Equals(levelName, "Map8", StringComparison.OrdinalIgnoreCase)
+            ? new NvrSunSettings
+            {
+                SunColor = Norm(new Vector3(155f, 125f, 83f)),
+                AmbientColor = Norm(new Vector3(7f, 31f, 68f)),
+                SunDirection = Dir(new Vector3(-0.5353644f, -0.83824426f, -0.10359311f)),
+                Source = "built in (the 4.20 client's LEVELS/Map8/terrain.inibin)",
+            }
+            : null;
+
     // ---- newer levels: terrain.inibin ----
     private static NvrSunSettings? TryLoadTerrainInibin(string path)
     {

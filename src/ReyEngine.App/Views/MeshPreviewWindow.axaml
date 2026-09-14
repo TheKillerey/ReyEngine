@@ -205,6 +205,8 @@
                              BackgroundRotation="{Binding BackgroundRotation}"
                              BackgroundVertexLight="{Binding BackgroundVertexLight}"
                              BackgroundBrightness="{Binding BackgroundBrightness}"
+                             BackgroundSun="{Binding BackgroundSun}"
+                             BackgroundUseMapSun="{Binding BackgroundUseMapSun}"
                              ShowGrid="{Binding ShowGrid}"
                              DynamicLights="{Binding BackgroundLights}"
                              DynamicLightsEnabled="{Binding BackgroundLightsEnabled}"
@@ -643,19 +645,42 @@
                         <Slider Minimum="0" Maximum="360" Value="{Binding BackgroundRotation, Mode=TwoWay}" Width="120" />
                         <TextBlock Text="{Binding BackgroundRotation, StringFormat='{}{0:0}°'}" FontSize="11" VerticalAlignment="Center" />
                       </StackPanel>
-                      <Button Classes="tool" Content="Reset position" Command="{Binding ResetBackgroundOffsetCommand}" HorizontalAlignment="Stretch" />
+                      <Button Classes="tool" Content="Reset position" Command="{Binding ResetBackgroundOffsetCommand}" HorizontalAlignment="Stretch"
+                              ToolTip.Tip="Back to this map's own default placement. Dominion has a hand-tuned hero-shot framing; every other map sits where the loader anchored its spawn." />
 
-                      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+                      <!-- M725: the D3D11 host has no NVR material model, so it draws the backdrop as
+                           diffuse-only geometry. It used to draw nothing at all while these controls stayed
+                           live, which reads as the backdrop being broken rather than being simpler. -->
+                      <TextBlock Text="Direct3D 11 draws the backdrop diffuse-only — no baked light, blend layers or Light.dat."
+                                 IsVisible="{Binding BackdropIsDiffuseOnly}" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" Margin="0,2,0,0" />
+
+                      <!-- M729: the level's authored sun and ambient, and where they came from. The packs ship without
+                           terrain.inibin, so for Dominion this names ReyEngine's built-in copy of the client's file. -->
+                      <TextBlock Text="{Binding BackgroundSunSource}" IsVisible="{Binding HasBackgroundSun}" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource ReyAccent2Brush}" FontSize="10" Margin="0,4,0,0" />
+                      <CheckBox Content="Map's sun / ambient" IsChecked="{Binding BackgroundUseMapSun}" FontSize="11"
+                                IsVisible="{Binding HasBackgroundSun}"
+                                ToolTip.Tip="Light the map the way the game's own environment shader does: its authored sun direction and colour (doubled, as LIT_VS does), its ambient, and the baked vertex light below. Off falls back to a neutral reference sun." />
+
+                      <!-- M725: the enable tick the card never had. M729: both maps bake these pools - Twisted Treeline
+                           into its composite atlas, Dominion into its vertex colours - so it starts OFF on both. -->
+                      <CheckBox Content="Light.dat point lights" IsChecked="{Binding BackgroundLightsEnabled}" FontSize="11"
+                                Margin="0,4,0,0"
+                                ToolTip.Tip="Evaluate the map's Light.dat torches and braziers at runtime. Off by default: the game bakes these pools into the map (Twisted Treeline's composite atlas, Dominion's vertex colours), so turning this on counts every light twice. Every light draws when it is on." />
+                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding BackgroundLightsEnabled}">
                         <TextBlock Text="Light" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
                         <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundLightIntensity, Mode=TwoWay}" Width="120" />
                         <TextBlock Text="{Binding BackgroundLightIntensity, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
                       </StackPanel>
-                      <StackPanel Orientation="Horizontal" Spacing="6">
+                      <StackPanel Orientation="Horizontal" Spacing="6"
+                                  ToolTip.Tip="Scales the sun and the ambient together. 0.55 is the map's own level.">
                         <TextBlock Text="Bright" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
                         <Slider Minimum="0" Maximum="2" Value="{Binding BackgroundBrightness, Mode=TwoWay}" Width="120" />
                         <TextBlock Text="{Binding BackgroundBrightness, StringFormat='{}{0:0.00}'}" FontSize="11" VerticalAlignment="Center" />
                       </StackPanel>
-                      <StackPanel Orientation="Horizontal" Spacing="6">
+                      <StackPanel Orientation="Horizontal" Spacing="6"
+                                  ToolTip.Tip="Baked vertex light - the torch pools the map bakes into its vertex colours. The game multiplies them by 4.">
                         <TextBlock Text="Ground" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
                         <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundVertexLight, Mode=TwoWay}" Width="120" />
                         <TextBlock Text="{Binding BackgroundVertexLight, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />

@@ -477,6 +477,40 @@ public sealed class Dx11ViewportSurface : IDisposable
         return true;
     }
 
+    /// <summary>M727: the legacy NVR preview backdrop (Dominion / Twisted Treeline) to draw, or null for none.
+    /// Remembered like <see cref="PropMeshes"/> and uploaded on the next frame the device exists - and only when
+    /// the scene object really changes, because the upload builds a vertex buffer and one texture per image.</summary>
+    public ReyEngine.Rendering.D3D11.BackdropScene? Backdrop
+    {
+        get => _backdrop;
+        set
+        {
+            if (ReferenceEquals(_backdrop, value)) return;
+            _backdrop = value;
+            _backdropDirty = true;
+        }
+    }
+    private ReyEngine.Rendering.D3D11.BackdropScene? _backdrop;
+    private bool _backdropDirty;
+
+    /// <summary>M727: this frame's backdrop placement and lighting, resolved by the view model from the same
+    /// recipe the GL viewport runs. Pushed every frame: the sliders and the map transform move it live.</summary>
+    public ReyEngine.Rendering.D3D11.BackdropFrame? BackdropLighting { get; set; }
+
+    /// <summary>M727: the last upload could not build the backdrop pipeline. The host falls back to the
+    /// diffuse-only prop on this, so a shader that fails to compile costs the look, not the whole map.</summary>
+    public bool BackdropFailed { get; private set; }
+
+    private void ApplyBackdrop()
+    {
+        if (_backdropDirty)
+        {
+            _backdropDirty = false;
+            BackdropFailed = !_renderer.SetBackdrop(_backdrop);
+        }
+        _renderer.SetBackdropFrame(BackdropLighting);
+    }
+
     /// <summary>Render one frame at the given pixel size using the editor camera. Returns false when there
     /// is nothing to show, in which case the caller should leave the previous image up rather than blank
     /// the viewport.</summary>
@@ -484,6 +518,7 @@ public sealed class Dx11ViewportSurface : IDisposable
     {
         if (!_ready || width <= 0 || height <= 0) return false;
         var frameClock = Stopwatch.StartNew();
+        ApplyBackdrop();   // M727: before RenderFrame, which draws it straight after the sky
 
         // Hoisted out of the settings initialiser because the particle tick below needs the same value:
         // one clock reading per frame, or the shader animation and the particles would drift apart.

@@ -212,6 +212,13 @@ public partial class MeshPreviewWindow
         // installs), and a wire box at the same place when it did not. The two are mutually exclusive by
         // construction: DummyCubePosition is non-null only while DummyProps is null.
         // M636: the arena floor rides in the same set as the dummy - one PropRenderSet per renderer.
+        // M727: the NVR map backdrop through its own D3D11 pass - four-blend and height-blend ground, the composite
+        // atlas, vertex light and Light.dat, lit by the GL viewport's own recipe. Last frame's upload outcome goes
+        // back first: only a pass that could not be built brings the diffuse-only prop back (M725's fallback),
+        // so the map is neither drawn twice nor silently missing. Both assignments are no-ops when unchanged.
+        vm.Dx11BackdropFailed = _dx11.BackdropFailed;
+        _dx11.Backdrop = vm.Dx11Backdrop;
+        _dx11.BackdropLighting = vm.Dx11BackdropFrame();
         _dx11.PropMeshes = vm.SceneProps;
         _dx11.RangeLines = vm.RangeRingLines;   // M639: the cast-range ring, same line list GL draws
         _dx11.PlayPropAnimations = true;

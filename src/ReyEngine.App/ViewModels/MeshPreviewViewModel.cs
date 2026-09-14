@@ -340,7 +340,19 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// <summary>Attach (or clear) the loaded NVR backdrop. Lights are enabled only when present.</summary>
     public void SetBackground(Services.MapPreviewBackground? bg)
     {
-        BackgroundMesh = bg?.Mesh;
+        // M725: a DIFFERENT backdrop map gets its own placement. Only on a change, so a user who has moved
+        // the map keeps their framing across reloads of the same one. The arena owns the placement while it
+        // is loaded (SetArenaBackdrop zeroes it deliberately), so leave it alone then.
+        // M729: and its own lighting defaults, on the same once-per-map rule (Services.BackdropLighting.Defaults).
+        // They used to be re-applied on EVERY call, and a call comes with every skin loaded, so ticking Light.dat on
+        // lasted until the next skin.
+        if (bg is not null && !_arenaOwnsBackdrop
+            && !string.Equals(bg.MapName, BackgroundMapName, StringComparison.OrdinalIgnoreCase))
+        {
+            ApplyBackdropPlacement(bg.MapName);
+            ApplyBackdropLightingDefaults(bg);
+        }
+
         BackgroundTextures = bg?.SubmeshTextures;
         BackgroundBlendTextures = bg?.SubmeshBlend;
         BackgroundColor1Textures = bg?.SubmeshColor1;
@@ -350,8 +362,16 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         BackgroundMaskTextures = bg?.SubmeshMask;
         BackgroundLightmapTextures = bg?.SubmeshLightmap;
         BackgroundLights = bg?.Lights;
-        BackgroundLightsEnabled = bg?.Lights is { Count: > 0 };
+        // M729: the level's authored sun and ambient. The packs ship without terrain.inibin, so a level ReyEngine
+        // knows gets the client's own numbers rather than a guess.
+        BackgroundSun = bg is null ? null : BackdropSunFor(bg);
         BackgroundMapName = bg?.MapName;
+        // M727: the MESH goes LAST, because assigning it is what fires the rebuild. It used to go first, so
+        // OnBackgroundMeshChanged -> RebuildSceneProps -> BackdropProp() ran while every field below it still
+        // held the previous backdrop's values - null on a first load. The D3D11 backdrop was built with a null
+        // texture on every submesh and drew entirely WHITE; the log named it "backdrop|?" because MapName was
+        // unset too. Everything the prop reads must be in place before the mesh announces itself.
+        BackgroundMesh = bg?.Mesh;
         HasBackground = bg?.Mesh is not null;
     }
 

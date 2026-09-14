@@ -111,14 +111,70 @@ public sealed partial class MeshPreviewViewModel
         var list = new List<PropInstanceData>();
         if (UseDx11Preview && _arena is { } arena)
             list.Add(new PropInstanceData(arena.Dx11Geometry, Matrix4x4.Identity));
+        // M725: the NVR preview backdrop gets the same treatment the arena floor has had since M665.
+        // Ticking Direct3D 11 used to make Dominion / Twisted Treeline silently vanish while the MAP
+        // BACKDROP card and its sliders stayed on screen driving nothing.
+        //
+        // M727: now only a FALLBACK. The D3D11 renderer has a real NVR backdrop pass (four-blend, height blend,
+        // the composite atlas, vertex light, Light.dat - MeshPreviewViewModel.Backdrop), so this diffuse-only
+        // prop comes back only when that pass could not be built. Drawing both would put the map in twice.
+        else if (UseDx11Preview && Dx11BackdropFailed && BackgroundVisible && BackdropProp() is { } backdrop)
+            list.Add(new PropInstanceData(backdrop, BackdropWorld));
         if (DummyProps is { } dummy) list.AddRange(dummy.Instances);
         SceneProps = list.Count > 0 ? new PropRenderSet(list) : null;
     }
 
+    /// <summary>M725: the backdrop's placement, composed EXACTLY as the GL viewport composes it
+    /// (<c>ViewportControl.BackgroundWorld</c>: translate, then rotate about world Y). A different order
+    /// here would put the same map in a different place under the two renderers, which is the one thing
+    /// this is meant to stop.</summary>
+    private Matrix4x4 BackdropWorld =>
+        Matrix4x4.CreateTranslation(BackgroundOffset)
+        * Matrix4x4.CreateRotationY((float)(BackgroundRotation * Math.PI / 180.0));
+
+    private PropMesh? _backdropProp;
+    private object? _backdropPropFor;
+    private object? _backdropPropTexturesFor;
+
+    /// <summary>The backdrop as diffuse-only prop geometry for the D3D11 host, built once per mesh. The
+    /// D3D11 path has no NVR material model, so this is the same deliberate compromise the arena floor
+    /// makes: the same geometry and the same resolved diffuse, without the blend layers or baked light.
+    ///
+    /// <para>M727: cached on the mesh AND the texture list. Keyed on the mesh alone, a prop built before its
+    /// textures arrived stayed textureless for the rest of the session - the mesh reference never changed, so
+    /// the cache never missed. That, together with SetBackground assigning the mesh first, is the whole of
+    /// "the D3D11 backdrop is white".</para></summary>
+    private PropMesh? BackdropProp()
+    {
+        if (BackgroundMesh is not { } m)
+        {
+            _backdropProp = null; _backdropPropFor = null; _backdropPropTexturesFor = null;
+            return null;
+        }
+        var tex = BackgroundTextures;
+        if (_backdropProp is not null && ReferenceEquals(_backdropPropFor, m) && ReferenceEquals(_backdropPropTexturesFor, tex))
+            return _backdropProp;
+
+        var subs = m.SubMeshes
+            .Select((s, i) => new PropSubmesh(s.StartIndex, s.IndexCount, tex is not null && i < tex.Count ? tex[i] : null))
+            .ToList();
+        _backdropPropFor = m;
+        _backdropPropTexturesFor = tex;
+        return _backdropProp = new PropMesh("backdrop|" + (BackgroundMapName ?? "?"),
+            m.Positions, m.Normals, m.Uvs, m.Indices, subs);
+    }
+
+    partial void OnBackgroundMeshChanged(ReyEngine.Formats.Meshes.MeshAsset? value) => RebuildSceneProps();
+    partial void OnBackgroundVisibleChanged(bool value) => RebuildSceneProps();
+    partial void OnBackgroundOffsetChanged(Vector3 value) => RebuildSceneProps();
+    partial void OnBackgroundRotationChanged(double value) => RebuildSceneProps();
+
     /// <summary>M725: true when the backdrop is configured but the active renderer cannot show it the way
     /// the card's controls describe - the D3D11 host draws it as diffuse-only geometry, with no baked
     /// light, no blend layers and no Light.dat. Surfaced so the card can say so instead of looking broken.</summary>
-    public bool BackdropIsDiffuseOnly => UseDx11Preview && HasBackground && _arena is null;
+    // M727: true only when the D3D11 backdrop pass could NOT be built and the diffuse-only prop is standing in.
+    // With the pass working, D3D11 draws the full NVR look and the card's note would be a false statement.
+    public bool BackdropIsDiffuseOnly => UseDx11Preview && HasBackground && _arena is null && Dx11BackdropFailed;
 
     /// <summary>
     /// M665: put the backdrop at the origin while an arena owns it.
