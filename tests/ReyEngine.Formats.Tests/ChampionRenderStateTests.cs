@@ -26,7 +26,9 @@ public sealed class ChampionRenderStateTests
     private static string Source(params string[] parts)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ReyEngine.sln"))) dir = dir.Parent;
+        // M725: ReyEngine.slnx is the repo root marker; with "ReyEngine.sln" this walk never terminated on
+        // a real directory and every guard in this file silently passed without reading anything.
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
         return dir is null ? "" : File.ReadAllText(Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray()));
     }
 

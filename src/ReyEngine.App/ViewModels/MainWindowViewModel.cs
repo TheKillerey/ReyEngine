@@ -11440,6 +11440,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // M88: cache the last-loaded backdrop so re-previewing skins doesn't re-read the ~60 MB room.nvr.
     private Services.MapPreviewBackground? _previewBackground;
     private string? _previewBackgroundFolder;
+    /// <summary>M725: when the cached backdrop's room.nvr was last written. The cache was keyed on the
+    /// FOLDER PATH alone and never invalidated, so re-downloading or repairing a pack into the same folder
+    /// kept showing the map from before the repair until the app was restarted - and the user's evidence
+    /// that the repair worked was precisely that the map would change.</summary>
+    private DateTime _previewBackgroundStamp;
+
+    /// <summary>M725: drop the cached backdrop so the next apply reloads it from disk.</summary>
+    public void InvalidatePreviewBackground()
+    {
+        _previewBackground = null;
+        _previewBackgroundFolder = null;
+        _previewBackgroundStamp = default;
+    }
+
+    private static DateTime NvrStampOf(string folder)
+    {
+        try
+        {
+            string nvr = Path.Combine(folder, "Scene", "room.nvr");
+            return File.Exists(nvr) ? File.GetLastWriteTimeUtc(nvr) : default;
+        }
+        catch { return default; }
+    }
 
     /// <summary>Load (or reuse) the configured NVR map backdrop and attach it to the preview window.
     /// Silent no-op when the feature is off or the folder isn't a legacy map.</summary>
@@ -11457,12 +11480,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 return;
             }
 
-            if (_previewBackground is null || !string.Equals(_previewBackgroundFolder, folder, StringComparison.OrdinalIgnoreCase))
+            // M725: the folder AND the room's write time - a pack repaired or re-downloaded in place keeps
+            // its path, so path-only caching served the old map for the rest of the session.
+            var stamp = NvrStampOf(folder);
+            if (_previewBackground is null
+                || !string.Equals(_previewBackgroundFolder, folder, StringComparison.OrdinalIgnoreCase)
+                || _previewBackgroundStamp != stamp)
             {
                 _log.Info("Preview", $"Loading map backdrop from {Path.GetFileName(folder)}…");
                 var bg = await Task.Run(() => Services.MapPreviewLoader.Load(folder));
                 _previewBackground = bg;
                 _previewBackgroundFolder = folder;
+                _previewBackgroundStamp = stamp;
                 _log.Success("Preview", $"Backdrop '{bg.MapName}': {bg.MeshCount:n0} meshes, {bg.Mesh.TriangleCount:n0} tris, {bg.Lights.Count} lights" +
                                         (bg.MissingTextures > 0 ? $" ({bg.MissingTextures} submesh(es) untextured)" : ""));
             }

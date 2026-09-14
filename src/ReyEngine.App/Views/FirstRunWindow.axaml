@@ -74,12 +74,18 @@
         <!-- 4 · Dominion map -->
         <Border Classes="settingsCard">
           <StackPanel Spacing="8">
-            <TextBlock Classes="settingsTitle" Text="4 · DOMINION PREVIEW MAP  (optional)" />
+            <TextBlock Classes="settingsTitle" Text="4 · PREVIEW MAP  (optional)" />
             <TextBlock Text="{Binding MapStatus}" FontSize="12" TextWrapping="Wrap"
                        Foreground="{DynamicResource ReyTextBrush}" />
-            <Button Content="⬇ Download Dominion map (Map8)"
-                    Command="{Binding DownloadMapCommand}"
-                    IsEnabled="{Binding !MapBusy}" IsVisible="{Binding !MapOk}" />
+            <!-- M725: both environments. Twisted Treeline was downloadable in Settings and absent here, so
+                 a first run implied Dominion was the only backdrop there is. Always offered, because
+                 having one installed is no reason to hide the other. -->
+            <Button Content="⬇ Download Dominion (Map8)"
+                    Command="{Binding DownloadMapCommand}" CommandParameter="Map8"
+                    IsEnabled="{Binding !MapBusy}" />
+            <Button Content="⬇ Download Twisted Treeline (Map10)"
+                    Command="{Binding DownloadMapCommand}" CommandParameter="Map10"
+                    IsEnabled="{Binding !MapBusy}" />
           </StackPanel>
         </Border>
 

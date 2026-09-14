@@ -61,10 +61,17 @@ public sealed partial class FirstRunViewModel : ObservableObject
             ? $"✔ vgmstream found — audio playback available."
             : "Needed to play Wwise audio (SFX preview, map ambience). ~2 MB, ISC-licensed.";
 
-        MapOk = SetupService.Map8Installed;
-        MapStatus = MapOk
-            ? "✔ Dominion map installed — backdrop available in the Model Preview."
-            : "Optional: classic Dominion map as a 3D backdrop behind previewed champions (~66 MB).";
+        // M725: BOTH preview environments, not just Dominion. Twisted Treeline was downloadable in
+        // Settings and invisible here, so a first run left the user believing Dominion was the only one.
+        bool dominion = SetupService.Map8Installed, treeline = SetupService.Map10Installed;
+        MapOk = dominion || treeline;
+        MapStatus = (dominion, treeline) switch
+        {
+            (true, true) => "✔ Dominion and Twisted Treeline installed — both available as Model Preview backdrops.",
+            (true, false) => "✔ Dominion installed. Twisted Treeline is also available (Settings ▸ Maps).",
+            (false, true) => "✔ Twisted Treeline installed. Dominion is also available (Settings ▸ Maps).",
+            _ => "Optional: a classic map as a 3D backdrop behind previewed champions — Dominion or Twisted Treeline (~66 MB each).",
+        };
     }
 
     [RelayCommand]
@@ -103,19 +110,27 @@ public sealed partial class FirstRunViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task DownloadMap()
+    /// <summary>M725: either preview environment. <paramref name="pack"/> is "Map10" for Twisted Treeline
+    /// and anything else for Dominion, which keeps the old no-argument binding working as Dominion.</summary>
+    private async Task DownloadMap(string? pack)
     {
         if (MapBusy) return;
         MapBusy = true;
         try
         {
+            bool treeline = string.Equals(pack, "Map10", StringComparison.OrdinalIgnoreCase);
+            string url = treeline ? SetupService.Map10Url : SetupService.Map8Url;
+            string dir = treeline ? SetupService.Map10InstallDir : SetupService.Map8InstallDir;
+
             var progress = new Progress<string>(s => MapStatus = s);
-            await SetupService.DownloadAndExtractAsync(SetupService.Map8Url, SetupService.Map8InstallDir, progress);
-            if (SetupService.Map8Installed)
+            await SetupService.DownloadAndExtractAsync(url, dir, progress);
+            if (SetupService.HasNvr(dir))
             {
-                _main.Settings.PreviewBackgroundMapFolder = SetupService.Map8InstallDir;
+                _main.Settings.PreviewBackgroundMapFolder = dir;
                 _main.Settings.PreviewBackgroundEnabled = true;
                 _main.Settings.Save();
+                // M725: the loaded backdrop is cached by folder; a fresh download must not serve a stale one
+                _main.InvalidatePreviewBackground();
                 RefreshStatus();
             }
             else MapStatus = "Extracted, but Scene\\room.nvr was not found in the package.";

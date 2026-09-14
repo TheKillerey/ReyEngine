@@ -85,13 +85,22 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     private IReadOnlyList<CharacterAction> BuildCharacterActions(
         WadAssetEntry skn, IReadOnlyList<Formats.Skeletons.AnimClipInfo>? allClips)
     {
-        if (allClips is not { Count: > 0 } || !skn.IsResolved) return Array.Empty<CharacterAction>();
-
         // M636: the arena needs the install and the readers this window owns; handed over on every
         // character load, because the resolver only exists once the hash database has been read.
+        //
+        // M725: ABOVE the early return, not below it. The arena is a property of the map and the install,
+        // not of the subject, but it was configured only for subjects that resolved animation clips - so
+        // loading a prop or a clipless skin left the arena card unconfigured, and whether you could walk
+        // around a map depended on whether the thing you last clicked had animations.
         if (_resolver is { } resolver)
+        {
             MeshPreview.ConfigureArena(new MeshPreviewViewModel.ArenaHost(
                 Project.GameDirectory, resolver, ResolveBinName, ResolveWadPath));
+            // M725: put the configured NVR backdrop back when an arena is unloaded.
+            MeshPreview.ReapplyBackdrop = ApplyPreviewBackgroundAsync;
+        }
+
+        if (allClips is not { Count: > 0 } || !skn.IsResolved) return Array.Empty<CharacterAction>();
 
         try
         {

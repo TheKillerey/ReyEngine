@@ -304,8 +304,30 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private void UpdateBackgroundOffset() =>
         BackgroundOffset = new System.Numerics.Vector3((float)BackgroundOffsetX, (float)BackgroundOffsetY, (float)BackgroundOffsetZ);
 
-    [RelayCommand] private void ResetBackgroundOffset()
-    { BackgroundOffsetX = -6400; BackgroundOffsetY = -60; BackgroundOffsetZ = 2000; BackgroundRotation = 180; }
+    /// <summary>
+    /// M725: where a given backdrop map wants the character to stand.
+    ///
+    /// <para><see cref="Services.MapPreviewLoader"/> already shifts every backdrop so the team spawn it
+    /// anchored on sits at the world origin, so ZERO is the honest default for any map: the character stands
+    /// exactly where the loader put the spawn. Dominion is the exception because its numbers are not a
+    /// placement, they are a hand-tuned hero shot into an NVR room, and they have been the look of this
+    /// window since M89.</para>
+    ///
+    /// <para>Twisted Treeline used to inherit Dominion's numbers silently - 6,400 units off, turned 180
+    /// degrees - because the defaults were field initialisers with no map behind them.</para>
+    /// </summary>
+    public static (double X, double Y, double Z, double Rotation) BackdropPlacement(string? mapName) =>
+        string.Equals(mapName, "Map8", StringComparison.OrdinalIgnoreCase)
+            ? (-6400d, -60d, 2000d, 180d)
+            : (0d, 0d, 0d, 0d);
+
+    [RelayCommand] private void ResetBackgroundOffset() => ApplyBackdropPlacement(BackgroundMapName);
+
+    private void ApplyBackdropPlacement(string? mapName)
+    {
+        var (x, y, z, rot) = BackdropPlacement(mapName);
+        BackgroundOffsetX = x; BackgroundOffsetY = y; BackgroundOffsetZ = z; BackgroundRotation = rot;
+    }
 
     /// <summary>Attach (or clear) the loaded NVR backdrop. Lights are enabled only when present.</summary>
     public void SetBackground(Services.MapPreviewBackground? bg)

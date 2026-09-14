@@ -28,7 +28,11 @@ public static class SetupService
     // ---- legacy (NVR) map asset packs — download + view via Open Legacy Map / preview backdrop ----
     private static string MapsRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ReyEngine Projects", "Maps");
-    private static bool HasNvr(string dir) => File.Exists(Path.Combine(dir, "Scene", "room.nvr"));
+    /// <summary>M725: a pack folder is only installed when the room it exists for is actually there.
+    /// Public because the download path has to re-check it: extracting a renamed, truncated or wrong-archive
+    /// zip used to leave the row claiming "installed" and wearing the backdrop badge, while the backdrop
+    /// itself silently never appeared.</summary>
+    public static bool HasNvr(string dir) => File.Exists(Path.Combine(dir, "Scene", "room.nvr"));
 
     // Dominion (Map8)
     public static string Map8InstallDir => Path.Combine(MapsRoot, "Map8");
@@ -42,12 +46,40 @@ public static class SetupService
     public const string Map10Url =
         $"https://github.com/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases/download/maps/ReyEngine-Map10-TwistedTreeline.zip";
 
-    /// <summary>All downloadable legacy-map packs (name, install dir, url, installed?) — for a picker/UI.</summary>
+    /// <summary>
+    /// The two preview environments the Character Viewer offers, and the only ones.
+    ///
+    /// <para>M725: named ONCE, here. The Map8 pack was "Dominion" in the first-run wizard and the README and
+    /// "Crystal Scar (Map8)" in Settings - the same download under two names, which reads as two different
+    /// maps that you are missing one of. It is Dominion; Crystal Scar is the arena Dominion is played on.</para>
+    /// </summary>
     public static IReadOnlyList<(string Name, string InstallDir, string Url, bool Installed)> LegacyMapPacks => new[]
     {
-        ("Crystal Scar (Map8)", Map8InstallDir, Map8Url, Map8Installed),
-        ("Twisted Treeline (Map10)", Map10InstallDir, Map10Url, Map10Installed),
+        (BackdropDominion, Map8InstallDir, Map8Url, Map8Installed),
+        (BackdropTwistedTreeline, Map10InstallDir, Map10Url, Map10Installed),
     };
+
+    public const string BackdropDominion = "Dominion (Map8)";
+    public const string BackdropTwistedTreeline = "Twisted Treeline (Map10)";
+
+    /// <summary>The install folder for a pack name, or null when the name is not one of the two.</summary>
+    public static string? BackdropFolderFor(string? name) => name switch
+    {
+        BackdropDominion => Map8InstallDir,
+        BackdropTwistedTreeline => Map10InstallDir,
+        _ => null,
+    };
+
+    /// <summary>Which of the two a folder is, by the install directory it sits in. Null for anything else -
+    /// an arena, or a legacy map opened through Open Legacy Map, neither of which is a preview backdrop.</summary>
+    public static string? BackdropNameFor(string? folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder)) return null;
+        string f = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar);
+        if (string.Equals(f, Path.GetFullPath(Map8InstallDir).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) return BackdropDominion;
+        if (string.Equals(f, Path.GetFullPath(Map10InstallDir).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) return BackdropTwistedTreeline;
+        return null;
+    }
 
     /// <summary>Download a zip with progress and extract it into <paramref name="destDir"/> (created;
     /// existing files overwritten). Reports "Downloading… NN%" / "Extracting…" through

@@ -83,7 +83,16 @@ public sealed partial class MapPackRowViewModel : ObservableObject
                 Busy = true;
                 var progress = new Progress<string>(s => Status = s);
                 await SetupService.DownloadAndExtractAsync(Url, InstallDir, progress);
-                Installed = true;
+                // M725: the download completing is not the same as the pack being usable. This used to set
+                // Installed unconditionally, so a zip that extracted to the wrong shape left the row badged
+                // "Use as backdrop" while the backdrop silently never appeared - and the only symptom was
+                // an empty viewport. Ask the same question the installed check asks.
+                Installed = SetupService.HasNvr(InstallDir);
+                if (!Installed)
+                {
+                    Status = "Downloaded, but no Scene\\room.nvr in the package - it cannot be used as a backdrop.";
+                    return;
+                }
             }
             UseAsBackdrop?.Invoke(this);
             Status = "Selected as the preview backdrop. Save to apply.";

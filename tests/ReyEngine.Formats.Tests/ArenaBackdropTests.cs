@@ -37,7 +37,10 @@ public sealed class ArenaBackdropTests
     private static string Source(params string[] parts)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ReyEngine.sln"))) dir = dir.Parent;
+        // M725: the repo root marker is ReyEngine.slnx - there is no .sln. With the wrong name the walk
+        // reached the drive root, Source() returned null, and every guard below early-returned GREEN
+        // without ever reading a file. Two files had it; the other ~40 test classes were always right.
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
         return dir is null ? "" : File.ReadAllText(Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray()));
     }
 

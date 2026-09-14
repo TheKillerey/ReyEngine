@@ -43,11 +43,22 @@ public sealed partial class MeshPreviewViewModel
 
     private ArenaHost? _arenaHost;
 
+    /// <summary>M725: idempotent. This runs on EVERY character load, and it used to Clear() the map list
+    /// each time - which drops the selection, so a user who had picked Map12 and then loaded another
+    /// champion silently got Map11 back. The list only depends on the install, so rebuild it only when the
+    /// install actually offers something different, and keep a selection that is still valid.</summary>
     public void ConfigureArena(ArenaHost host)
     {
         _arenaHost = host;
-        ArenaMaps.Clear();
-        foreach (var key in ArenaLoader.AvailableMaps(host.GameDirectory)) ArenaMaps.Add(key);
+        var available = ArenaLoader.AvailableMaps(host.GameDirectory).ToList();
+        if (!available.SequenceEqual(ArenaMaps, StringComparer.OrdinalIgnoreCase))
+        {
+            string? keep = SelectedArenaMap;
+            ArenaMaps.Clear();
+            foreach (var key in available) ArenaMaps.Add(key);
+            // put the user's pick back if the new install still has it
+            SelectedArenaMap = keep is not null && ArenaMaps.Contains(keep, StringComparer.OrdinalIgnoreCase) ? keep : null;
+        }
         SelectedArenaMap ??= ArenaMaps.FirstOrDefault(m => m.Equals("Map11", StringComparison.OrdinalIgnoreCase))
                              ?? ArenaMaps.FirstOrDefault();
         OnPropertyChanged(nameof(HasArenaMaps));
@@ -103,6 +114,11 @@ public sealed partial class MeshPreviewViewModel
         if (DummyProps is { } dummy) list.AddRange(dummy.Instances);
         SceneProps = list.Count > 0 ? new PropRenderSet(list) : null;
     }
+
+    /// <summary>M725: true when the backdrop is configured but the active renderer cannot show it the way
+    /// the card's controls describe - the D3D11 host draws it as diffuse-only geometry, with no baked
+    /// light, no blend layers and no Light.dat. Surfaced so the card can say so instead of looking broken.</summary>
+    public bool BackdropIsDiffuseOnly => UseDx11Preview && HasBackground && _arena is null;
 
     /// <summary>
     /// M665: put the backdrop at the origin while an arena owns it.
@@ -198,8 +214,12 @@ public sealed partial class MeshPreviewViewModel
         finally { ArenaLoading = false; }
     }
 
+    /// <summary>M725: host hook - reload and re-attach the configured Dominion / Twisted Treeline backdrop.
+    /// The view model cannot do it itself: the loader, the settings and the cache all live on the host.</summary>
+    public Func<Task>? ReapplyBackdrop;
+
     [RelayCommand]
-    private void UnloadArena()
+    private async Task UnloadArena()
     {
         _arena = null;
         _waypoints.Clear();
@@ -208,6 +228,16 @@ public sealed partial class MeshPreviewViewModel
         ArenaStatus = "";
         OnPropertyChanged(nameof(HasArena));
         OnPropertyChanged(nameof(ArenaName));
+
+        // M725: "whatever owned it" was nothing. SetArenaBackdrop(null) clears the mesh and the champion
+        // load path is the only thing that ever streams the NVR room back in, so unloading an arena left the
+        // viewer standing in empty space with no visible way to get an environment back until the next
+        // character was loaded. Ask the host to put the configured backdrop back.
+        if (ReapplyBackdrop is { } reapply)
+        {
+            try { await reapply(); }
+            catch (Exception ex) { LogDx11?.Invoke("Arena", $"backdrop could not be restored: {ex.Message}"); }
+        }
     }
 
     /// <summary>Where the viewport should look. Set on spawn and, while following, every control tick.</summary>
