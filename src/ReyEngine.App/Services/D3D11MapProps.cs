@@ -69,6 +69,20 @@ public sealed class D3D11MapProps
     private readonly List<PropGeom> _geoms = new();
     private readonly HashSet<string> _textureKeys = new(StringComparer.Ordinal);
 
+    /// <summary>M733: one distinct prop mesh still to be uploaded, and the placements waiting on it.</summary>
+    private sealed class PendingUpload
+    {
+        public required PropMesh Mesh { get; init; }
+        public readonly List<Matrix4x4> Transforms = new();
+    }
+    private readonly List<PendingUpload> _pending = new();
+    private int _pendingAt;
+    private Func<PropMesh, PreparedCharacterScene?>? _prepare;
+    private Func<Vector3, PropLighting?>? _lightingAt;
+    private readonly StringBuilder _loadLog = new();
+    private VfxD3D11EmitterPipeline.Tocs? _fallbackTocs;
+    private bool _fallbackTocsRead;
+
     public D3D11MapProps(ShaderPreviewRenderer renderer, ShaderCacheReader cache)
     { _renderer = renderer; _cache = cache; }
 
@@ -78,6 +92,15 @@ public sealed class D3D11MapProps
     /// <summary>M676: how many of the prop meshes draw through Riot's own shaders.</summary>
     public int RiotShaderMeshes { get; private set; }
     public string Report { get; private set; } = "";
+    /// <summary>M733: distinct prop meshes still waiting to be uploaded. Reported beside the particle
+    /// warm-up count, because both mean the same thing to the user: the viewport is still filling in.</summary>
+    public int UploadsPending => _pending.Count - _pendingAt;
+
+    /// <summary>M733: how long one frame may spend uploading prop meshes - the same 3 ms budget
+    /// <see cref="ParticleWarmupQueue"/> takes, and like it at least one mesh lands per frame, so a single
+    /// expensive mesh can overshoot but never stall the queue.</summary>
+    public double UploadBudgetMs { get; set; } = 3.0;
+
     /// <summary>M694: what the last <see cref="Tick"/> cost, and what it did.</summary>
     public double LastTickMs { get; private set; }
     public int PosedThisFrame { get; private set; }
@@ -96,6 +119,11 @@ public sealed class D3D11MapProps
             if (g.RiotGeometryId >= 0) _renderer.ReleaseRiotMeshGeometry(g.RiotGeometryId);
         }
         _geoms.Clear();
+        _pending.Clear();
+        _pendingAt = 0;
+        _loadLog.Clear();
+        _prepare = null;
+        _lightingAt = null;
         PropInstanceCount = 0;
         SkippedProps = 0;
         RiotShaderMeshes = 0;
@@ -110,95 +138,142 @@ public sealed class D3D11MapProps
         Clear();
         if (set is null || set.Instances.Count == 0) { Report = "no props"; return; }
 
-        var sb = new StringBuilder();
-        // One geometry per DISTINCT mesh. PropMesh is shared by reference across placements of the same
-        // skin precisely so this dedup is possible - six identical camps upload one buffer.
-        var byMesh = new Dictionary<PropMesh, PropGeom?>(ReferenceEqualityComparer.Instance);
+        _prepare = prepare;
+        _lightingAt = lightingAt;
 
+        // M733: grouping is ALL this does now. It used to upload every distinct mesh here - the scene
+        // prepare, every texture decoded, the pipeline built and the geometry sent to the card - and it is
+        // called from the PropMeshes setter, which the host assigns inside its render frame. So switching
+        // props on, or any scene rebuild, did 28 meshes' worth of that work between two presented frames.
+        // The uploads are pumped from Tick under a budget instead; a placement draws once its mesh lands.
+        //
+        // One group per DISTINCT mesh. PropMesh is shared by reference across placements of the same skin
+        // precisely so this dedup is possible - six identical camps upload one buffer.
+        var byMesh = new Dictionary<PropMesh, PendingUpload>(ReferenceEqualityComparer.Instance);
         foreach (var inst in set.Instances)
         {
-            if (!byMesh.TryGetValue(inst.Mesh, out var g))
+            if (!byMesh.TryGetValue(inst.Mesh, out var p))
             {
-                g = Upload(inst.Mesh, prepare, sb);
-                byMesh[inst.Mesh] = g;   // null = rejected, remembered so the next placement does not retry
-                if (g is not null) _geoms.Add(g);
+                p = new PendingUpload { Mesh = inst.Mesh };
+                byMesh[inst.Mesh] = p;
+                _pending.Add(p);
             }
-            if (g is null) continue;
-            g.Instances.Add(inst.Transform);
+            p.Transforms.Add(inst.Transform);
+        }
+        UpdateReport();
+    }
+
+    /// <summary>M733: upload as many waiting prop meshes as <see cref="UploadBudgetMs"/> allows, and at
+    /// least one. Returns how many landed. Called from <see cref="Tick"/> every frame, including the
+    /// frames where prop animation is switched off - a still prop still has to appear.</summary>
+    public int PumpUploads()
+    {
+        if (_pendingAt >= _pending.Count) return 0;
+
+        var clock = Stopwatch.StartNew();
+        int done = 0;
+        while (_pendingAt < _pending.Count && (done == 0 || clock.Elapsed.TotalMilliseconds < UploadBudgetMs))
+        {
+            UploadOne(_pending[_pendingAt++]);
+            done++;
+        }
+
+        if (_pendingAt >= _pending.Count) { _pending.Clear(); _pendingAt = 0; }
+        UpdateReport();
+        return done;
+    }
+
+    /// <summary>One waiting mesh: the geometry and materials, then the placements that were held for it.</summary>
+    private void UploadOne(PendingUpload pending)
+    {
+        var g = Upload(pending.Mesh, _prepare, _loadLog);
+        if (g is null) return;
+        _geoms.Add(g);
+
+        foreach (var transform in pending.Transforms)
+        {
+            g.Instances.Add(transform);
             // M680: the lightgrid where this placement stands. The list rides beside Instances, and the
             // Riot path's materials read both per placement; the diffuse-only draw has no ambient cube.
             PropLighting? lighting = null;
-            if (g.RiotGeometryId >= 0 && lightingAt is not null)
-                try { lighting = lightingAt(inst.Transform.Translation); } catch { lighting = null; }
+            if (g.RiotGeometryId >= 0 && _lightingAt is not null)
+                try { lighting = _lightingAt(transform.Translation); } catch { lighting = null; }
             g.Ambient.Add(lighting?.LightGridColors);
             g.LightGridScale ??= lighting?.LightGridScale;
             PropInstanceCount++;
         }
 
         // M680: the cube per placement and the grid's scale, onto every material of the Riot path
-        foreach (var g in _geoms)
+        if (g.RiotGeometryId >= 0)
+        {
             foreach (var mat in g.Materials)
             {
                 mat.CharacterInstanceAmbient = g.Ambient;
                 if (g.LightGridScale is { } scale) mat.Params["LIGHTGRID_SCALE"] = scale;
             }
-
-        // The diffuse-only draw for whatever the Riot path did not take. One material per (mesh, submesh):
-        // a prop's submeshes carry their own diffuse, so they cannot share a material even though they
-        // share a geometry. The carrier shaders are read on first need - a map whose every prop took the
-        // Riot path never touches them.
-        VfxD3D11EmitterPipeline.Tocs? tocs = null;
-        foreach (var g in _geoms)
-        {
-            if (g.RiotGeometryId >= 0) continue;
-            if (tocs is null)
-            {
-                tocs = VfxD3D11EmitterPipeline.ReadTocs(_cache, out var tocError);
-                if (tocs is null)
-                {
-                    SkippedProps++;
-                    sb.AppendLine($"   {g.Mesh.Key}: {tocError ?? "the particle shaders could not be read"}");
-                    continue;
-                }
-            }
-            foreach (var sub in g.Mesh.Submeshes)
-            {
-                if (sub.Count <= 0) continue;
-                var mat = BuildPropMaterial(tocs, $"prop:{g.Mesh.Key}", sb);
-                if (mat is null) { SkippedProps++; continue; }
-
-                mat.MeshGeometryId = g.GeometryId;
-                mat.MeshIndexStart = sub.Start;
-                mat.MeshIndexCount = sub.Count;
-                mat.MeshModels = g.Instances;
-                mat.UsesDynamicMesh = false;
-                mat.SortableByPipeline = false;
-                // Props are opaque scene objects, unlike particles: they WRITE depth, or a prop behind
-                // another would draw over it.
-                mat.WritesDepth = true;
-                mat.MeshCull = true;
-                // M297: cut out rather than blend. GL uses 0.35 explicitly so fur and wing alpha reads;
-                // with depth writes on, blending instead makes those fringes stamp depth and halo.
-                mat.MeshAlphaCutoff = 0.35f;
-
-                if (sub.Texture is { } img)
-                {
-                    string textureKey = $"prop:{g.Mesh.Key}:{g.GeometryId}:{sub.Start}";
-                    _renderer.SetTexture(mat, "TEXTURE__TX", textureKey, img.Rgba, img.Width, img.Height);
-                    _textureKeys.Add(textureKey);
-                }
-
-                _renderer.AddMaterial(mat);
-                _mine.Add(mat);
-            }
+            return;
         }
 
+        BuildFallbackMaterials(g);
+    }
+
+    /// <summary>The diffuse-only draw for whatever the Riot path did not take. One material per (mesh,
+    /// submesh): a prop's submeshes carry their own diffuse, so they cannot share a material even though
+    /// they share a geometry. The carrier shaders are read on first need - a map whose every prop took the
+    /// Riot path never touches them.</summary>
+    private void BuildFallbackMaterials(PropGeom g)
+    {
+        if (!_fallbackTocsRead)
+        {
+            _fallbackTocsRead = true;
+            _fallbackTocs = VfxD3D11EmitterPipeline.ReadTocs(_cache, out var tocError);
+            if (_fallbackTocs is null) _loadLog.AppendLine($"   {g.Mesh.Key}: {tocError ?? "the particle shaders could not be read"}");
+        }
+        if (_fallbackTocs is not { } tocs) { SkippedProps++; return; }
+
+        foreach (var sub in g.Mesh.Submeshes)
+        {
+            if (sub.Count <= 0) continue;
+            var mat = BuildPropMaterial(tocs, $"prop:{g.Mesh.Key}", _loadLog);
+            if (mat is null) { SkippedProps++; continue; }
+
+            mat.MeshGeometryId = g.GeometryId;
+            mat.MeshIndexStart = sub.Start;
+            mat.MeshIndexCount = sub.Count;
+            mat.MeshModels = g.Instances;
+            mat.UsesDynamicMesh = false;
+            mat.SortableByPipeline = false;
+            // Props are opaque scene objects, unlike particles: they WRITE depth, or a prop behind
+            // another would draw over it.
+            mat.WritesDepth = true;
+            mat.MeshCull = true;
+            // M297: cut out rather than blend. GL uses 0.35 explicitly so fur and wing alpha reads;
+            // with depth writes on, blending instead makes those fringes stamp depth and halo.
+            mat.MeshAlphaCutoff = 0.35f;
+
+            if (sub.Texture is { } img)
+            {
+                string textureKey = $"prop:{g.Mesh.Key}:{g.GeometryId}:{sub.Start}";
+                _renderer.SetTexture(mat, "TEXTURE__TX", textureKey, img.Rgba, img.Width, img.Height);
+                _textureKeys.Add(textureKey);
+            }
+
+            _renderer.AddMaterial(mat);
+            _mine.Add(mat);
+        }
+    }
+
+    /// <summary>What this driver holds, and what it is still waiting to upload.</summary>
+    private void UpdateReport()
+    {
         int lit = _geoms.Sum(g => g.Ambient.Count(a => a is not null));
+        int waiting = UploadsPending;
         Report = $"{_geoms.Count} prop mesh(es), {PropInstanceCount} placement(s)"
                + (RiotShaderMeshes > 0 ? $", {RiotShaderMeshes} on Riot's shaders" : "")
                + (lit > 0 ? $", {lit} lit by the lightgrid" : "")
                + (SkippedProps > 0 ? $", {SkippedProps} skipped" : "")
-               + (sb.Length > 0 ? "\n" + sb : "");
+               + (waiting > 0 ? $", {waiting} still uploading" : "")
+               + (_loadLog.Length > 0 ? "\n" + _loadLog : "");
     }
 
     /// <summary>Upload one distinct mesh: Riot's shaders when the host can prepare the scene and the
@@ -307,7 +382,10 @@ public sealed class D3D11MapProps
         var clock = Stopwatch.StartNew();
         PosedThisFrame = 0;
         NearMeshes = 0;
-        if (!playing) { LastTickMs = 0; return; }
+        // M733: ahead of the pose gate and ahead of the `playing` early-out - a prop that is not animating
+        // still has to arrive, and switching animations off must not leave the rest of the set unuploaded.
+        PumpUploads();
+        if (!playing) { LastTickMs = clock.Elapsed.TotalMilliseconds; return; }
         // world space is unmirrored and the flip lives in the view matrix, so the camera is mirrored to
         // compare - the same vector the particle gate tests against
         var mirroredCam = new Vector3(-cameraPosition.X, cameraPosition.Y, cameraPosition.Z);

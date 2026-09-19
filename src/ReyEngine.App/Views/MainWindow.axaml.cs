@@ -465,6 +465,8 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         vm.Dx11ViewportStatus = _dx11.HasScene
             ? $"{_dx11.LastFrameMs:F2} ms · props {_dx11.PropsMs:F1} · particles {_dx11.ParticlesMs:F1}"
               + (_dx11.Particles is { WarmupPending: > 0 } warming ? $" · warming {warming.WarmupPending}" : "")
+              // M733: prop meshes still to upload, the same way the particle warm-up is reported
+              + (_dx11.Props is { UploadsPending: > 0 } loading ? $" · uploading {loading.UploadsPending}" : "")
             : "no scene";
 
         // ...and everything that used to be on the toolbar is still one hover away. M255's unbound report

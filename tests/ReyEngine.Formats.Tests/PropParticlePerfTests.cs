@@ -199,6 +199,37 @@ public sealed class PropParticlePerfTests
         Assert.Contains("decodedMesh: mesh.SknMesh);", characters);
     }
 
+    /// <summary>M733: switching props on used to upload every distinct mesh - the scene prepare, the
+    /// texture decodes, the pipeline build and the geometry upload - inside the host's render frame,
+    /// because that is where the PropMeshes setter is assigned. The set is grouped there now and the
+    /// meshes land a few per frame, the way a particle system is warmed.</summary>
+    [Fact]
+    public void SwitchingPropsOnDoesNotUploadEveryMeshInOneFrame()
+    {
+        var props = Source("src", "ReyEngine.App", "Services", "D3D11MapProps.cs");
+        var main = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml.cs");
+        if (props is null || main is null) return;
+
+        // Load groups and queues; it no longer uploads as it walks the placements
+        Assert.DoesNotContain("g = Upload(inst.Mesh, prepare, sb);", props);
+        Assert.Contains("_pending.Add(p);", props);
+        // the pump runs every frame, ahead of the animation early-out, and keeps at least one per frame
+        Assert.Contains("PumpUploads();", props);
+        Assert.Contains("while (_pendingAt < _pending.Count && (done == 0 || clock.Elapsed.TotalMilliseconds < UploadBudgetMs))", props);
+        // and it counts what it uploaded - without this the "at least one" guard never clears and the
+        // budget never applies, which is the whole point of the queue
+        int pump = props.IndexOf("public int PumpUploads()", StringComparison.Ordinal);
+        Assert.True(pump > 0);
+        Assert.Contains("done++;", props.Substring(pump, 700));
+        Assert.Contains("if (!playing) { LastTickMs = clock.Elapsed.TotalMilliseconds; return; }", props);
+        Assert.True(props.IndexOf("PumpUploads();", StringComparison.Ordinal)
+                    < props.IndexOf("if (!playing) {", StringComparison.Ordinal));
+        // the same budget the particle warm-up takes
+        Assert.Contains("public double UploadBudgetMs { get; set; } = 3.0;", props);
+        // and the viewport says it is still filling in
+        Assert.Contains("uploading {loading.UploadsPending}", main);
+    }
+
     [Fact]
     public void BothViewportsGateTheirPropsAndBudgetTheirWarmups()
     {
