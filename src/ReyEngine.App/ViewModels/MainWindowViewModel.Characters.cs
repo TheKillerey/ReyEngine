@@ -235,7 +235,9 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
                 resolveBinName: ResolveBinName,
                 resolveWadPath: ResolveWadPath,
-                fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader);
+                fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader,
+                // M732: this mesh was already decoded on the thread pool when the prop set was built.
+                decodedMesh: mesh.SknMesh);
         }
         catch { return null; }
     }

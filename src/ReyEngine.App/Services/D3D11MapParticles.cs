@@ -134,6 +134,13 @@ public sealed class D3D11MapParticles
         public int RiotGeometryId { get; init; } = -1;
         public Vector2? BeamZRange { get; init; }
         public List<Matrix4x4> BeamTransforms { get; } = new();
+
+        /// <summary>M732: the re-skin scratch, kept per slice. This used to call
+        /// <c>SkinnedMeshAnimator.Skin</c> every frame, which allocates a PoseBuffer, a positions array, a
+        /// normals array, a bone-segment array and a Dictionary of every joint NAME - and the caller then
+        /// used the positions alone. The rest was garbage on arrival, per animated mesh emitter per frame.</summary>
+        public ReyEngine.Formats.Animation.PoseBuffer Pose { get; } = new();
+        public float[]? SkinPositions;
     }
     private readonly List<MeshSlice> _meshSlices = new();
     /// <summary>M640: the mesh shader pair, read once per rebuild. Null when the cache lacks it, in which
@@ -783,9 +790,14 @@ public sealed class D3D11MapParticles
             if (ms.Animation is { } anim && anim.Clip.Duration > 1e-3f)
             {
                 float t = es.EmitterAge % anim.Clip.Duration;
-                var frame = ReyEngine.Formats.Animation.SkinnedMeshAnimator.Skin(
-                    anim.Mesh, anim.Skeleton, anim.Clip, t);
-                _renderer.UpdateMeshGeometryPositions(ms.GeometryId, frame.Positions);
+                // M732: the M694 split pass into buffers this slice keeps, positions only - the mesh
+                // pipeline's vertex is position + uv, so the normals were computed and dropped.
+                var index = ReyEngine.Formats.Animation.SkeletonIndex.For(anim.Skeleton);
+                ReyEngine.Formats.Animation.SkeletonPose.ComputeSkin(index, anim.Clip, t, ms.Pose);
+                int need = anim.Mesh.VertexCount * 3;
+                if (ms.SkinPositions is null || ms.SkinPositions.Length < need) ms.SkinPositions = new float[need];
+                ReyEngine.Formats.Animation.SkinnedMeshAnimator.Deform(anim.Mesh, index, ms.Pose, ms.SkinPositions, null);
+                _renderer.UpdateMeshGeometryPositions(ms.GeometryId, ms.SkinPositions);
             }
             MeshEmittersDrawn++;
         }

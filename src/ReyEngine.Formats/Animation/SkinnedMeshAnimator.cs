@@ -51,11 +51,16 @@ public static class SkinnedMeshAnimator
     /// and <paramref name="normals"/>, each VertexCount * 3 long. Reads only; safe to run for different
     /// meshes on different threads, and for one mesh once its pose has been computed.
     /// </summary>
-    public static void Deform(MeshAsset mesh, SkeletonIndex index, PoseBuffer pose, float[] positions, float[] normals)
+    /// <param name="normals">M732: null skips the normal half entirely. The two D3D11 consumers - the
+    /// prop fallback geometry and a particle mesh emitter - upload positions only (the mesh pipeline's
+    /// vertex is position + uv), so they were paying for a transform, a normalize and a store per vertex
+    /// and then discarding the array.</param>
+    public static void Deform(MeshAsset mesh, SkeletonIndex index, PoseBuffer pose, float[] positions, float[]? normals)
     {
         int vc = mesh.VertexCount;
-        if (positions.Length < vc * 3 || normals.Length < vc * 3)
+        if (positions.Length < vc * 3 || (normals is not null && normals.Length < vc * 3))
             throw new ArgumentException("output arrays must hold VertexCount * 3 floats");
+        bool wantNormals = normals is not null;
         var skin = pose.Skin;
         int maxId = index.MaxId;
         var bi = mesh.BlendIndices!;
@@ -67,7 +72,7 @@ public static class SkinnedMeshAnimator
         for (int v = 0; v < vc; v++)
         {
             var bp = new Vector3(src[v * 3], src[v * 3 + 1], src[v * 3 + 2]);
-            var bn = new Vector3(srcN[v * 3], srcN[v * 3 + 1], srcN[v * 3 + 2]);
+            var bn = wantNormals ? new Vector3(srcN[v * 3], srcN[v * 3 + 1], srcN[v * 3 + 2]) : default;
             Vector3 sp = Vector3.Zero, sn = Vector3.Zero;
             float wsum = 0;
 
@@ -80,14 +85,15 @@ public static class SkinnedMeshAnimator
                 if (jointId < 0 || jointId > maxId) continue;
                 var m = skin[jointId];
                 sp += w * Vector3.Transform(bp, m);
-                sn += w * Vector3.TransformNormal(bn, m);
+                if (wantNormals) sn += w * Vector3.TransformNormal(bn, m);
                 wsum += w;
             }
 
             if (wsum <= 0f) { sp = bp; sn = bn; }
             positions[v * 3] = sp.X; positions[v * 3 + 1] = sp.Y; positions[v * 3 + 2] = sp.Z;
+            if (!wantNormals) continue;
             sn = sn.LengthSquared() > 1e-8f ? Vector3.Normalize(sn) : bn;
-            normals[v * 3] = sn.X; normals[v * 3 + 1] = sn.Y; normals[v * 3 + 2] = sn.Z;
+            normals![v * 3] = sn.X; normals[v * 3 + 1] = sn.Y; normals[v * 3 + 2] = sn.Z;
         }
     }
 }

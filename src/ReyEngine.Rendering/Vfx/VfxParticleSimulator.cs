@@ -839,7 +839,11 @@ public sealed class VfxParticleSimulator
         int n = s.Particles.Count;
         // Sized from the renderer's stride, never a literal - see the comment on VfxParticleRenderer.Stride.
         int stride = VfxParticleRenderer.Stride;
-        if (s.Instances.Length < n * stride) s.Instances = new float[Math.Max(n * stride, stride * 4)];
+        // M732: grow geometrically. This asked for EXACTLY the size it needed, so an emitter whose live
+        // count climbs by one a frame - which is every emitter during its fill - reallocated the whole
+        // instance array every frame, and a pre-warm does that up to 150 times per system.
+        if (s.Instances.Length < n * stride)
+            s.Instances = new float[Math.Max(Math.Max(n * stride, s.Instances.Length * 2), stride * 4)];
         var buf = s.Instances;
         int k = 0;
         for (int i = 0; i < n; i++)

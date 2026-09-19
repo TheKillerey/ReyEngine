@@ -3018,8 +3018,16 @@ float4 psmain(VOut i) : SV_Target
     /// <summary>M659: line segments for the point-light radius rings, in world space.</summary>
     public void SetLightRangeLines(float[]? verts)
     {
+        // M732: the host pushes this every frame and the array it passes is itself cached, so the same
+        // rings were re-uploaded 60 times a second - 676 lights on the Harrowing map is ~2.3 MB of
+        // Map/MemoryCopy/Unmap per frame for geometry that had not moved. Same guard SetIcons has.
+        if (ReferenceEquals(_lightRangeSource, verts)) return;
+
         _lightRangeVerts = 0;
-        if (verts is null || verts.Length < 6 || !EnsureOverlay()) return;
+        // Null is remembered (the rings are off, and staying off costs nothing); a failed EnsureOverlay is
+        // NOT, so the next frame tries again rather than leaving the rings off for the session.
+        if (verts is null) { _lightRangeSource = null; return; }
+        if (verts.Length < 6 || !EnsureOverlay()) return;
 
         int bytes = verts.Length * sizeof(float);
         if (_lightRangeVbCapacity < bytes || _lightRangeVb.Handle is null)
@@ -3040,7 +3048,11 @@ float4 psmain(VOut i) : SV_Target
         unsafe { fixed (float* src = verts) System.Buffer.MemoryCopy(src, map.PData, bytes, bytes); }
         _ctx.Unmap(_lightRangeVb, 0);
         _lightRangeVerts = verts.Length / 3;
+        _lightRangeSource = verts;
     }
+
+    /// <summary>M732: the array whose rings are already in the buffer, compared by reference.</summary>
+    private float[]? _lightRangeSource;
 
     /// <summary>M659: how far each dynamic point light reaches. Same visibility rule as the icons - the
     /// ring belongs to the light marker, and one hidden by the wall it stops at is the useful picture.</summary>

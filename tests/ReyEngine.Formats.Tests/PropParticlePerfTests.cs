@@ -140,6 +140,65 @@ public sealed class PropParticlePerfTests
         Assert.Equal(5, generous.Pump(all));                     // a wide budget drains the queue in one call
     }
 
+    /// <summary>M732: the two D3D11 consumers upload positions only, so the normal half is skipped
+    /// entirely rather than computed and dropped. The positions must not move because of it.</summary>
+    [Fact]
+    public void DeformingWithoutNormalsLeavesThePositionsIdentical()
+    {
+        if (Mob("smallgolem") is not { } mob) return;
+        var index = SkeletonIndex.For(mob.Skeleton);
+        var pose = new PoseBuffer();
+        SkeletonPose.ComputeSkin(index, mob.Clip, 0.35f, pose);
+
+        int n = mob.Mesh.VertexCount * 3;
+        var withNormals = new float[n];
+        var normals = new float[n];
+        var without = new float[n];
+        SkinnedMeshAnimator.Deform(mob.Mesh, index, pose, withNormals, normals);
+        SkinnedMeshAnimator.Deform(mob.Mesh, index, pose, without, null);
+        Assert.Equal(withNormals, without);
+
+        // and the positions-only pass allocates nothing at all
+        SkinnedMeshAnimator.Deform(mob.Mesh, index, pose, without, null);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 4; i++) SkinnedMeshAnimator.Deform(mob.Mesh, index, pose, without, null);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    /// <summary>M732: an emitter's instance array grows geometrically. Growing to the exact size meant a
+    /// reallocation on every frame an emitter gained a particle, which is every frame of its fill.</summary>
+    [Fact]
+    public void TheInstanceArrayDoesNotReallocateOnEveryAddedParticle()
+    {
+        var src = Source("src", "ReyEngine.Rendering", "Vfx", "VfxParticleSimulator.cs");
+        if (src is null) return;
+        Assert.Contains("s.Instances = new float[Math.Max(Math.Max(n * stride, s.Instances.Length * 2), stride * 4)];", src);
+        Assert.DoesNotContain("s.Instances = new float[Math.Max(n * stride, stride * 4)];", src);
+    }
+
+    /// <summary>M732: the per-frame work each of the three toggles was repeating - a re-skin that threw
+    /// most of its result away, a ring buffer re-uploaded unchanged, and a mesh decoded twice.</summary>
+    [Fact]
+    public void TheFrameDoesNotRedoWorkItAlreadyDid()
+    {
+        var particles = Source("src", "ReyEngine.App", "Services", "D3D11MapParticles.cs");
+        var props = Source("src", "ReyEngine.App", "Services", "D3D11MapProps.cs");
+        var renderer = Source("src", "ReyEngine.Rendering.D3D11", "ShaderPreviewRenderer.cs");
+        var characters = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.Characters.cs");
+        if (particles is null || props is null || renderer is null || characters is null) return;
+
+        // a mesh emitter re-skins into buffers it keeps, positions only - no PoseBuffer, arrays, bone
+        // segments and joint-name dictionary per emitter per frame
+        Assert.Contains("SkinnedMeshAnimator.Deform(anim.Mesh, index, ms.Pose, ms.SkinPositions, null)", particles);
+        Assert.DoesNotContain("SkinnedMeshAnimator.Skin(", particles);
+        // the prop fallback path likewise
+        Assert.Contains("SkinnedMeshAnimator.Deform(m.SknMesh!, index, g.Pose, g.SkinPositions, null)", props);
+        // the light rings are uploaded when they change, like the icons beside them
+        Assert.Contains("if (ReferenceEquals(_lightRangeSource, verts)) return;", renderer);
+        // and a placed prop's mesh is decoded once, off the UI thread, not again inside the frame
+        Assert.Contains("decodedMesh: mesh.SknMesh);", characters);
+    }
+
     [Fact]
     public void BothViewportsGateTheirPropsAndBudgetTheirWarmups()
     {

@@ -63,7 +63,7 @@ public sealed class D3D11MapProps
         // palette array by reference and see each frame's values in place
         public readonly PoseBuffer Pose = new();
         public Matrix4x4[]? Palette;
-        public float[]? SkinPositions, SkinNormals;
+        public float[]? SkinPositions;
         public float LastPoseTime = float.NegativeInfinity;
     }
     private readonly List<PropGeom> _geoms = new();
@@ -332,8 +332,10 @@ public sealed class D3D11MapProps
                     var index = SkeletonIndex.For(m.Skeleton!);
                     SkeletonPose.ComputeSkin(index, clip, time, g.Pose);
                     int n = m.SknMesh!.VertexCount * 3;
-                    if (g.SkinPositions is null || g.SkinPositions.Length < n) { g.SkinPositions = new float[n]; g.SkinNormals = new float[n]; }
-                    SkinnedMeshAnimator.Deform(m.SknMesh!, index, g.Pose, g.SkinPositions, g.SkinNormals!);
+                    if (g.SkinPositions is null || g.SkinPositions.Length < n) g.SkinPositions = new float[n];
+                    // M732: positions only. UpdateMeshGeometryPositions writes a position + uv vertex, so
+                    // the normals this used to compute were transformed, normalized, stored and dropped.
+                    SkinnedMeshAnimator.Deform(m.SknMesh!, index, g.Pose, g.SkinPositions, null);
                     _renderer.UpdateMeshGeometryPositions(g.GeometryId, g.SkinPositions);
                 }
                 g.LastPoseTime = seconds;

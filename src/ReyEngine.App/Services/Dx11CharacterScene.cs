@@ -106,12 +106,21 @@ public static class Dx11CharacterScene
         Func<uint, string?> resolveBinName,
         Func<ulong, string?>? resolveWadPath = null,
         string? fallbackShader = null,
-        MaterialDriverState? driverState = null)
+        MaterialDriverState? driverState = null,
+        // M732: the caller's already-decoded mesh, when it has one. A placed prop is decoded off the UI
+        // thread while the prop set is built (BuildPropRenderSet), and this then decoded the SAME bytes a
+        // second time - on the UI thread, inside the render frame, once per distinct prop mesh, every time
+        // props are switched on or the scene is rebuilt. Null keeps the old behaviour.
+        MeshAsset? decodedMesh = null)
     {
         var state = driverState ?? MaterialDriverState.Rest;
         MeshAsset mesh;
-        try { mesh = SkinnedMeshDecoder.Decode(sknBytes); }
-        catch { return null; }
+        if (decodedMesh is not null) mesh = decodedMesh;
+        else
+        {
+            try { mesh = SkinnedMeshDecoder.Decode(sknBytes); }
+            catch { return null; }
+        }
 
         var sb = new StringBuilder();
         var geometry = PreviewGeometry.FromLeagueArrays(
