@@ -4,7 +4,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Version>0.4.7</Version>
+    <Version>0.4.8</Version>
     <Authors>ReyEngine</Authors>
     <Product>ReyEngine</Product>
   </PropertyGroup>
