@@ -467,6 +467,10 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
               + (_dx11.Particles is { WarmupPending: > 0 } warming ? $" · warming {warming.WarmupPending}" : "")
               // M733: prop meshes still to upload, the same way the particle warm-up is reported
               + (_dx11.Props is { UploadsPending: > 0 } loading ? $" · uploading {loading.UploadsPending}" : "")
+              // M734: and WHERE the particle tick went, when it is worth naming. One number said the
+              // particles were expensive; the phases have completely different fixes.
+              + (_dx11.Particles?.PhaseReport() is { Length: > 0 } phases && _dx11.ParticlesMs >= 2
+                  ? $"\n   particles: {phases}" : "")
             : "no scene";
 
         // ...and everything that used to be on the toolbar is still one hover away. M255's unbound report

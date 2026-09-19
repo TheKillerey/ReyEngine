@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
@@ -146,6 +147,18 @@ public sealed class D3D11MapParticles
     /// <summary>M640: the mesh shader pair, read once per rebuild. Null when the cache lacks it, in which
     /// case mesh emitters draw through the M283 approximation and the report says so.</summary>
     private VfxD3D11EmitterPipeline.Tocs? _meshTocs;
+    /// <summary>M734: where the last Tick's milliseconds went. The status line reports the tick as one
+    /// number, which says the particles are expensive without saying which part of them is - and the parts
+    /// have completely different fixes. Rebuild is the burst after a playback change; the rest are paid
+    /// every frame.</summary>
+    public double RebuildMs { get; private set; }
+    public double GateMs { get; private set; }
+    public double SimulateMs { get; private set; }
+    public double MeshMs { get; private set; }
+    public double RibbonMs { get; private set; }
+    public double PackMs { get; private set; }
+    public double UploadMs { get; private set; }
+
     /// <summary>M640: how many mesh emitters were built on Riot's mesh shaders in the last rebuild.</summary>
     public int RiotMeshEmitters { get; private set; }
     /// <summary>M640: off = every mesh emitter takes the M283 approximation. Exists so the two can be
@@ -546,7 +559,9 @@ public sealed class D3D11MapParticles
     public void Tick(float dt, in Matrix4x4 mirrorInclusiveView, in Matrix4x4 mirrorInclusiveViewProj,
         Vector3 cameraPosition, float cameraDistance)
     {
-        if (_dirty) Rebuild();
+        RebuildMs = GateMs = SimulateMs = MeshMs = RibbonMs = PackMs = UploadMs = 0;
+        var phase = Stopwatch.StartNew();
+        if (_dirty) { Rebuild(); RebuildMs = phase.Elapsed.TotalMilliseconds; }
         // M283: mesh emitters count too. Returning on _slices alone would freeze a system whose only
         // drawable emitters are meshes - it has no quad slices at all, so the old test read as "nothing
         // to do" and its meshes never advanced or drew.
@@ -556,11 +571,13 @@ public sealed class D3D11MapParticles
         if (_playback is not { } pb
             || (_slices.Count == 0 && _meshSlices.Count == 0 && _ribbonSlices.Count == 0)) return;
 
+        phase.Restart();
         UpdateActive(pb, mirrorInclusiveViewProj, cameraPosition, cameraDistance);
 
         // M630: re-anchor BEFORE the step, so a bone-attached system is simulated from where its bone is
         // this frame rather than from where it was last frame.
         Reanchor(dt);
+        GateMs = phase.Elapsed.TotalMilliseconds;   // M734: the camera gate, the warm-up pump and the re-anchor
 
         for (int i = _active.Count - 1; i >= 0; i--)
         {
@@ -572,6 +589,7 @@ public sealed class D3D11MapParticles
             }
         }
 
+        phase.Restart();
         foreach (var (item, sim) in _active)
         {
             // M630: beams terminate at the target. The map host still passes null - it has no dummy to
@@ -583,8 +601,9 @@ public sealed class D3D11MapParticles
             sim.SetBeamTarget(item.BeamTarget ?? BoneWorldPosition(item.TargetBone) ?? _beamTarget);
             sim.Update(dt);
         }
-        TickMeshSlices();
-        TickRibbonSlices(cameraPosition);
+        SimulateMs = phase.Elapsed.TotalMilliseconds;
+        phase.Restart(); TickMeshSlices(); MeshMs = phase.Elapsed.TotalMilliseconds;
+        phase.Restart(); TickRibbonSlices(cameraPosition); RibbonMs = phase.Elapsed.TotalMilliseconds;
 
         var (right, up, normal) = VfxBillboardBasis.FromView(mirrorInclusiveView);
         if (_slices.Count == 0) return;   // meshes are updated above; there is nothing to pack
@@ -605,10 +624,12 @@ public sealed class D3D11MapParticles
 
         EnsureCapacity(Math.Min(requested, _maxQuads));
 
+        phase.Restart();
         int quads = Pack(_liveBySlice, _maxQuads, _verts, _indices,
             right, up, normal, _ranges, out int vertexCount, out int indexCount,
             out int packRequested, out int truncated);
 
+        PackMs = phase.Elapsed.TotalMilliseconds;
         QuadsRequested = packRequested;
         LiveParticles = quads;
         SlicesTruncated = truncated;
@@ -625,8 +646,26 @@ public sealed class D3D11MapParticles
         // Grow the device buffers to fit what was just packed, then upload once for the whole frame.
         // UpdateDynamicMesh CLAMPS silently to capacity, so the ensure has to come first or an over-budget
         // frame would lose its tail without saying so.
+        phase.Restart();
         _renderer.SetDynamicMesh(vertexCount, indexCount);
         _renderer.UpdateDynamicMesh(_verts, vertexCount, _indices, indexCount);
+        UploadMs = phase.Elapsed.TotalMilliseconds;
+    }
+
+    /// <summary>M734: the phase breakdown, for the status line. Only the phases that cost something are
+    /// named, so a healthy frame stays short.</summary>
+    public string PhaseReport()
+    {
+        var parts = new List<string>(7);
+        void Add(string name, double ms) { if (ms >= 0.05) parts.Add($"{name} {ms:F1}"); }
+        Add("rebuild", RebuildMs);
+        Add("gate", GateMs);
+        Add("sim", SimulateMs);
+        Add("mesh", MeshMs);
+        Add("ribbon", RibbonMs);
+        Add("pack", PackMs);
+        Add("upload", UploadMs);
+        return parts.Count == 0 ? "" : string.Join(" · ", parts);
     }
 
     /// <summary>M283: build one mesh-primitive emitter's material and upload its geometry. Returns false

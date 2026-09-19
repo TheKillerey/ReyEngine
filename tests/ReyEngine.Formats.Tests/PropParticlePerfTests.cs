@@ -230,6 +230,29 @@ public sealed class PropParticlePerfTests
         Assert.Contains("uploading {loading.UploadsPending}", main);
     }
 
+    /// <summary>M734: the particle tick is reported as one number, and on the Harrowing map that number was
+    /// 33.5 of a 45.7 ms frame - which says the particles are expensive without saying which part of them
+    /// is, and the parts have completely different fixes. Every phase of the tick is timed and named.</summary>
+    [Fact]
+    public void TheParticleTickSaysWhereItsTimeWent()
+    {
+        var particles = Source("src", "ReyEngine.App", "Services", "D3D11MapParticles.cs");
+        var main = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml.cs");
+        if (particles is null || main is null) return;
+
+        foreach (var phase in new[] { "RebuildMs", "GateMs", "SimulateMs", "MeshMs", "RibbonMs", "PackMs", "UploadMs" })
+            Assert.Contains($"public double {phase} {{ get; private set; }}", particles);
+        // every phase is actually assigned, not just declared
+        foreach (var assign in new[] { "RebuildMs = phase.Elapsed", "GateMs = phase.Elapsed", "SimulateMs = phase.Elapsed",
+                                       "MeshMs = phase.Elapsed", "RibbonMs = phase.Elapsed", "PackMs = phase.Elapsed",
+                                       "UploadMs = phase.Elapsed" })
+            Assert.Contains(assign, particles);
+        // and they are cleared each tick, so a phase that did not run this frame reads zero
+        Assert.Contains("RebuildMs = GateMs = SimulateMs = MeshMs = RibbonMs = PackMs = UploadMs = 0;", particles);
+        Assert.Contains("public string PhaseReport()", particles);
+        Assert.Contains("_dx11.Particles?.PhaseReport()", main);
+    }
+
     [Fact]
     public void BothViewportsGateTheirPropsAndBudgetTheirWarmups()
     {
