@@ -822,16 +822,40 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// <summary>Host hook: decode the skybox behind a combo index (index 1 opens the custom picker).</summary>
     public Func<int, Task<Services.SkyboxSpec?>>? LoadSkybox;
 
+    /// <summary>M735: same rule as the map's own list - an unchanged set of options leaves the chosen sky
+    /// alone, and a changed one restores it by label without re-running the loader. This reset to index 0
+    /// on every call, and it is called from the map view model's rebuild, which any write inside the
+    /// project folder schedules.</summary>
     public void SetSkyboxOptions(IEnumerable<string> options)
     {
-        SkyboxOptions.Clear();
-        foreach (var o in options) SkyboxOptions.Add(o);
-        HasSkyboxOptions = SkyboxOptions.Count > 1;
-        SelectedSkyboxIndex = 0;
+        var labels = options as IList<string> ?? options.ToList();
+
+        bool same = labels.Count == SkyboxOptions.Count;
+        for (int i = 0; same && i < labels.Count; i++) same = string.Equals(labels[i], SkyboxOptions[i], StringComparison.Ordinal);
+        if (same) return;
+
+        string? chosen = SelectedSkyboxIndex >= 0 && SelectedSkyboxIndex < SkyboxOptions.Count
+            ? SkyboxOptions[SelectedSkyboxIndex] : null;
+
+        _suppressSkyboxReload = true;
+        try
+        {
+            SkyboxOptions.Clear();
+            foreach (var o in labels) SkyboxOptions.Add(o);
+            HasSkyboxOptions = SkyboxOptions.Count > 1;
+            int restore = chosen is null ? 0 : SkyboxOptions.IndexOf(chosen);
+            SelectedSkyboxIndex = restore >= 0 ? restore : 0;
+        }
+        finally { _suppressSkyboxReload = false; }
+
+        if (SelectedSkyboxIndex == 0 && chosen is not null) Skybox = null;
     }
+
+    private bool _suppressSkyboxReload;
 
     partial void OnSelectedSkyboxIndexChanged(int value)
     {
+        if (_suppressSkyboxReload) return;
         if (LoadSkybox is { } load) _ = Apply();
         async Task Apply() { Skybox = await load(value); }
     }

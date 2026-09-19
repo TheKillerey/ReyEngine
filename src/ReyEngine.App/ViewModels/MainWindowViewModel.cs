@@ -6997,20 +6997,62 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private int _selectedSkyboxIndex;
     [ObservableProperty] private Services.SkyboxSpec? _currentSkybox;
 
+    /// <summary>M735: the chosen sky SURVIVES a rebuild.
+    ///
+    /// <para>This used to end with <c>SelectedSkyboxIndex = 0</c>, which drops the sky. It runs from
+    /// <see cref="RefreshContentPanels"/>, i.e. from every browser refresh, and the project watcher
+    /// schedules one of those on ANY write inside the project folder. Capture Sequence writes
+    /// <c>.reyengine/cinematics.json</c> before its first frame (and the PNGs too, when the output folder
+    /// is inside the project), so pressing it reset the skybox to "No skybox" a moment later and every
+    /// captured frame came out with no sky - the bug this fixes. Saving a bin or adding a mesh did the
+    /// same thing; the capture just made it obvious.</para>
+    ///
+    /// <para>Two rules. An unchanged catalogue does not touch the selection at all - the common case, and
+    /// the whole of the capture case. A changed one restores the same option BY LABEL with the reload
+    /// suppressed, because re-running the handler for index 1 would pop the "Custom image" file dialog
+    /// mid-capture, and re-running it for a catalogue entry would decode a cubemap that is already
+    /// loaded.</para></summary>
     private void RebuildSkyboxOptions()
     {
-        _skyboxCatalog = Services.SkyboxCatalog.Discover(AssetEntries);
-        SkyboxOptions.Clear();
-        SkyboxOptions.Add("No skybox");
-        SkyboxOptions.Add("Custom image…");
-        foreach (var o in _skyboxCatalog) SkyboxOptions.Add(o.Label);
-        SelectedSkyboxIndex = 0;
+        var catalog = Services.SkyboxCatalog.Discover(AssetEntries);
+        var labels = new List<string>(catalog.Count + 2) { "No skybox", "Custom image…" };
+        foreach (var o in catalog) labels.Add(o.Label);
+
+        bool same = labels.Count == SkyboxOptions.Count;
+        for (int i = 0; same && i < labels.Count; i++) same = string.Equals(labels[i], SkyboxOptions[i], StringComparison.Ordinal);
+        _skyboxCatalog = catalog;
+        if (same) return;
+
+        string? chosen = SelectedSkyboxIndex >= 0 && SelectedSkyboxIndex < SkyboxOptions.Count
+            ? SkyboxOptions[SelectedSkyboxIndex] : null;
+
+        _suppressSkyboxReload = true;
+        try
+        {
+            SkyboxOptions.Clear();
+            foreach (var l in labels) SkyboxOptions.Add(l);
+            int restore = chosen is null ? 0 : labels.IndexOf(chosen);
+            SelectedSkyboxIndex = restore >= 0 ? restore : 0;
+        }
+        finally { _suppressSkyboxReload = false; }
+
+        // Only when the chosen sky is genuinely gone from the catalogue does the loaded one go with it.
+        if (SelectedSkyboxIndex == 0 && chosen is not null) CurrentSkybox = null;
+
         MeshPreview.SetSkyboxOptions(SkyboxOptions);
         if (_skyboxCatalog.Count > 0)
             _log.Info("Skybox", $"{_skyboxCatalog.Count} skybox asset(s) discovered (cubemaps, domes, sky textures).");
     }
 
-    partial void OnSelectedSkyboxIndexChanged(int value) => _ = ApplyMapSkyboxAsync(value);
+    /// <summary>M735: set while the options list is rebuilt, so restoring the selection does not re-run the
+    /// loader (index 1 would open a file dialog).</summary>
+    private bool _suppressSkyboxReload;
+
+    partial void OnSelectedSkyboxIndexChanged(int value)
+    {
+        if (_suppressSkyboxReload) return;
+        _ = ApplyMapSkyboxAsync(value);
+    }
 
     private async Task ApplyMapSkyboxAsync(int index)
     {

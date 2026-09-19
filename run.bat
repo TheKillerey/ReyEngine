@@ -19,8 +19,13 @@ rem  way a rebuild goes wrong.
 rem ============================================================
 
 set "ROOT=%~dp0"
-set "CONFIG=Debug"
-set "DOBUILD="
+rem RELEASE is the default. A Debug build runs the viewport several times slower - on the
+rem Harrowing map the particle step alone was 33 ms a frame in Debug against ~10 ms in
+rem Release - and "why is the editor slow" has been answered with "it was a Debug build"
+rem once too often. Use "run.bat debug" when you actually want to attach a debugger.
+set "CONFIG=Release"
+rem No arguments means "build it and run it", which is the everyday command.
+set "DOBUILD=1"
 set "ACTION=run"
 
 for %%A in (%*) do (
@@ -28,6 +33,8 @@ for %%A in (%*) do (
   if /I "%%~A"=="debug"   set "CONFIG=Debug"
   if /I "%%~A"=="build"   set "DOBUILD=1"
   if /I "%%~A"=="rebuild" set "DOBUILD=1"
+  if /I "%%~A"=="nobuild" set "DOBUILD="
+  if /I "%%~A"=="run"     set "DOBUILD="
   if /I "%%~A"=="stop"    set "ACTION=stop"
   if /I "%%~A"=="test"    set "ACTION=test"
   if /I "%%~A"=="publish" set "ACTION=publish"
@@ -38,7 +45,11 @@ for %%A in (%*) do (
 
 set "PROJ=%ROOT%src\ReyEngine.App\ReyEngine.App.csproj"
 set "TESTPROJ=%ROOT%tests\ReyEngine.Formats.Tests\ReyEngine.Formats.Tests.csproj"
-set "EXE=%ROOT%src\ReyEngine.App\bin\%CONFIG%\net10.0\ReyEngine.App.exe"
+set "BINDIR=%ROOT%src\ReyEngine.App\bin\%CONFIG%"
+set "EXE=%BINDIR%\net10.0-windows\ReyEngine.App.exe"
+rem M576 moved the app onto the net10.0-windows TFM, and this launcher still pointed at
+rem the old net10.0 folder - so every launch verb looked for an exe that is not there.
+if not exist "%EXE%" if exist "%BINDIR%\net10.0\ReyEngine.App.exe" set "EXE=%BINDIR%\net10.0\ReyEngine.App.exe"
 set "PUBDIR=%ROOT%publish\win-x64"
 
 if /I "%ACTION%"=="help"    goto :help
@@ -74,6 +85,7 @@ if not exist "%EXE%" (
 rem Print when this exe was produced. The usual confusion is launching a stale
 rem build, or staring at an instance that was already open before the rebuild.
 for %%F in ("%EXE%") do echo [ReyEngine] Launching %CONFIG% build, compiled %%~tF
+if /I "%CONFIG%"=="Debug" echo [ReyEngine] NOTE: this is a DEBUG build - the viewport runs several times slower. Use "run.bat" for Release.
 start "ReyEngine" /D "%ROOT%" "%EXE%"
 exit /b 0
 
@@ -102,18 +114,25 @@ if errorlevel 1 (
   exit /b 1
 )
 echo [ReyEngine] Published to %PUBDIR%
+if not defined DOBUILD (
+  echo [ReyEngine] Launching the published build ...
+  start "ReyEngine" /D "%PUBDIR%" "%PUBDIR%\ReyEngine.App.exe"
+)
 exit /b 0
 
 :help
 echo ReyEngine dev launcher
 echo.
-echo   run.bat                  run the latest Debug build ^(builds it if missing^)
-echo   run.bat build            rebuild Debug, then run
-echo   run.bat release          run the Release build
-echo   run.bat release build    rebuild Release, then run
+echo   run.bat                  build Release and run it            ^<- the everyday command
+echo   run.bat nobuild          run the last Release build, no build
+echo   run.bat debug            build Debug and run it ^(for a debugger; much slower^)
 echo   run.bat stop             just close a running ReyEngine
 echo   run.bat test             run the test suite
 echo   run.bat publish          self-contained win-x64 build, same as the CI release
+echo   run.bat publish run      ...and launch it when it is done
+echo.
+echo   Release is the default on purpose: a Debug build runs the viewport several
+echo   times slower ^(the particle step measured 33 ms a frame against ~10 ms^).
 echo.
 echo   Any build verb closes a running ReyEngine first - it holds its DLLs open
 echo   and the build would otherwise fail on locked files.
