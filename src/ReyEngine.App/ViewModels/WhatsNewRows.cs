@@ -30,8 +30,11 @@ public static class WhatsNewRows
         {
             bool current = string.Equals(version, NewFeatures.CurrentVersion, StringComparison.Ordinal);
             rows.Add(new WhatsNewRow(true, version, "", false, current));
+            // M737: by RELEASE, not by id. IsNew(id) answers "does this control glow", and a note has no
+            // control - it would have listed every note as already seen.
+            bool unseen = NewFeatures.Compare(version, lastSeenVersion) > 0;
             foreach (var f in features.Where(f => f.Version == version))
-                rows.Add(new WhatsNewRow(false, version, f.Label, NewFeatures.IsNew(f.Id, lastSeenVersion), current));
+                rows.Add(new WhatsNewRow(false, version, f.Label, unseen, current));
         }
         return rows;
     }

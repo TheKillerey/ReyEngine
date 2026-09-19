@@ -76,9 +76,35 @@ public sealed class NewFeatureRegistryWiringTests
         var bound = BoundIds();
         if (bound.Count == 0) return;   // sources not present (packaged test run)
 
-        var unbound = NewFeatures.Shipping.Select(f => f.Id).Where(id => !bound.Contains(id)).ToList();
+        // M737: a NOTE is exempt by definition - it belongs to a release that added no entry point, so
+        // there is nothing for it to glow on. Every entry that DOES carry an id still has to be bound.
+        var unbound = NewFeatures.Shipping.Where(f => f.HasControl).Select(f => f.Id)
+            .Where(id => !bound.Contains(id)).ToList();
         Assert.True(unbound.Count == 0,
             "registered but nothing binds them, so they highlight nowhere: " + string.Join(", ", unbound));
+    }
+
+    /// <summary>M737: a release whose work is performance and fixes still reaches What's New. v0.4.8
+    /// shipped with no entry of any kind and the window skipped the release entirely.</summary>
+    [Fact]
+    public void AReleaseThatAddsNoEntryPointStillHasItsOwnLines()
+    {
+        var notes = NewFeatures.Shipping.Where(f => !f.HasControl).ToList();
+        Assert.NotEmpty(notes);
+        Assert.All(notes, n => Assert.False(string.IsNullOrWhiteSpace(n.Label)));
+        // a note never glows - nothing is bound to it, and IsNew must not claim otherwise
+        Assert.All(notes, n => Assert.False(NewFeatures.IsNew(n.Id, "0.3.1")));
+
+        // ...but it IS listed, and marked NEW for someone who has not acknowledged that release
+        var rows = ReyEngine.App.ViewModels.WhatsNewRows.Build(NewFeatures.Shipping, "0.4.7");
+        foreach (var n in notes)
+        {
+            var row = rows.FirstOrDefault(r => !r.IsHeader && r.Label == n.Label);
+            Assert.True(row is not null, $"the note '{n.Label}' is not in the What's New list");
+            Assert.True(row!.IsNew, $"the note '{n.Label}' is not marked NEW for a user coming from 0.4.7");
+        }
+        // and the release this build ships is the newest one the list knows
+        Assert.Equal(NewFeatures.CurrentVersion, rows.First(r => r.IsHeader).Version);
     }
 
     [Fact]
@@ -87,7 +113,8 @@ public sealed class NewFeatureRegistryWiringTests
         var bound = BoundIds();
         if (bound.Count == 0) return;
 
-        var known = NewFeatures.Shipping.Select(f => f.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var known = NewFeatures.Shipping.Where(f => f.HasControl).Select(f => f.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var unknown = bound.Where(id => !known.Contains(id)).ToList();
         Assert.True(unknown.Count == 0,
             "bound in XAML but unknown to the registry, so they silently never glow: "
@@ -98,7 +125,7 @@ public sealed class NewFeatureRegistryWiringTests
     public void EveryFeatureGlowsForSomeoneComingFromTheLastRelease()
     {
         // The whole point: a user updating from v0.3.1 sees all of them.
-        Assert.All(NewFeatures.Shipping, f => Assert.True(NewFeatures.IsNew(f.Id, "0.3.1"),
+        Assert.All(NewFeatures.Shipping.Where(f => f.HasControl), f => Assert.True(NewFeatures.IsNew(f.Id, "0.3.1"),
             $"{f.Id} would not glow for a user coming from 0.3.1"));
     }
 
@@ -106,7 +133,7 @@ public sealed class NewFeatureRegistryWiringTests
     public void AFreshInstallWithNoRecordedVersionSeesThemToo()
     {
         // LastSeenFeatureVersion defaults to empty, and empty sorts lowest.
-        Assert.All(NewFeatures.Shipping, f => Assert.True(NewFeatures.IsNew(f.Id, "")));
+        Assert.All(NewFeatures.Shipping.Where(f => f.HasControl), f => Assert.True(NewFeatures.IsNew(f.Id, "")));
     }
 
     [Fact]
@@ -147,9 +174,11 @@ public sealed class NewFeatureRegistryWiringTests
     [Fact]
     public void IdsAreUniqueAndLowercaseKebab()
     {
-        Assert.Equal(NewFeatures.Shipping.Count,
-            NewFeatures.Shipping.Select(f => f.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-        Assert.All(NewFeatures.Shipping, f => Assert.Matches("^[a-z0-9]+(-[a-z0-9]+)*$", f.Id));
+        // M737: a note carries no id - nothing binds it - so uniqueness and the kebab shape are about the
+        // entries that DO name a control. Two notes sharing "" is not a collision.
+        var named = NewFeatures.Shipping.Where(f => f.HasControl).ToList();
+        Assert.Equal(named.Count, named.Select(f => f.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(named, f => Assert.Matches("^[a-z0-9]+(-[a-z0-9]+)*$", f.Id));
     }
 
     /// <summary>Nothing confidential, internal or unfinished may appear — the registry is the thing that

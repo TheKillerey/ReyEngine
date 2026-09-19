@@ -5,7 +5,21 @@ namespace ReyEngine.Core.Settings;
 /// a control binds to, and a rename silently stops highlighting it.</param>
 /// <param name="Version">The release that introduced it, e.g. <c>0.4.0</c>.</param>
 /// <param name="Label">What it is, in the words a mod author would use. For the What's New list.</param>
-public sealed record NewFeature(string Id, string Version, string Label);
+public sealed record NewFeature(string Id, string Version, string Label)
+{
+    /// <summary>M737: false for a NOTE - a line that belongs to a release but has no control to glow on.
+    ///
+    /// <para>Every entry used to need a control bound to its id, so a release that added no entry point
+    /// could carry no entry at all, and What's New skipped it entirely: v0.4.8 made the map viewport
+    /// several times faster and fixed two things about capturing, and the window had nothing to say about
+    /// it. A note is listed and marked NEW like anything else; it simply makes nothing in the menus
+    /// glow, because there is nothing to point at.</para></summary>
+    public bool HasControl => !string.IsNullOrWhiteSpace(Id);
+
+    /// <summary>A line for a release that changed no entry point - performance, or a fix worth telling
+    /// the user about. See <see cref="HasControl"/>.</summary>
+    public static NewFeature Note(string version, string label) => new("", version, label);
+}
 
 /// <summary>
 /// M593: which features are still worth pointing out, given what this user has already seen.
@@ -25,7 +39,7 @@ public static class NewFeatures
     /// <summary>The release whose highlights are currently on offer. Bumped when a release ADDS entries -
     /// a fix-only release (0.4.6) leaves it, so the What's New list keeps its newest header and nothing
     /// glows for a release that changed no entry point.</summary>
-    public const string CurrentVersion = "0.4.7";
+    public const string CurrentVersion = "0.4.8";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -91,6 +105,11 @@ public static class NewFeatures
         new("character-creator", "0.4.7", "Character Creator — an old character folder, from any patch, becomes a prop your map can place"),
         new("add-prop",          "0.4.7", "Add prop to map — place any character the map's package carries as scenery at the gizmo"),
         new("hash-updates",      "0.4.7", "Hashes & Names — hash tables and meta classes keep themselves current at startup; the switch is in Preferences ▸ Updates"),
+        // 0.4.8 adds no entry point to this window - it is a faster viewport and two fixes to capturing -
+        // so both of its lines are NOTES (M737). Before notes existed this release would have been absent
+        // from What's New altogether, which is how it was first shipped and immediately noticed.
+        NewFeature.Note("0.4.8", "Maps draw far faster with particles, animated props and lights switched on — and the frame line says where a frame's time went"),
+        NewFeature.Note("0.4.8", "Cinematic Capture keeps the map's sky, and a captured sequence runs at the shot's speed rather than the export's"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
