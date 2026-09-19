@@ -218,6 +218,20 @@ public sealed class Dx11ViewportSurface : IDisposable
 
     private float _lastParticleTime = -1f;
 
+    /// <summary>M736: the capture's own particle clock and its "a capture is running" flag.
+    ///
+    /// <para>The live viewport keeps drawing while a capture runs - RenderFrameAsync asks for a live frame
+    /// on purpose, so the viewport shows the shot going by - and the two timelines were sharing
+    /// <see cref="_lastParticleTime"/> and the props' LastPoseTime. A live frame's <c>now</c> is the wall
+    /// clock and a capture frame's is the shot's, so every live frame that landed between two captured
+    /// ones produced a delta of (wall - shot), which the simulator clamps to its 0.1 s ceiling and then
+    /// APPLIES: particles advanced ~0.1 s per captured frame instead of 1/60, i.e. six times too fast. The
+    /// same crossing stamped the props' LastPoseTime with wall-clock values, so two captured frames in a
+    /// row hit the 30 Hz gate (1/60 &lt; 1/30) and the second repeated the first one's pose - the props
+    /// coming out slow.</para></summary>
+    private float _captureLastTime = -1f;
+    private bool _capturing;
+
     // ---- M605: cinematic capture ------------------------------------------------------------------
     //
     // A capture frame is the ordinary frame with four things taken over: the camera comes from the shot
@@ -228,7 +242,8 @@ public sealed class Dx11ViewportSurface : IDisposable
     // inside one synchronous call - the settings, the particle view, the particle tick and the tail - and
     // a four-parameter overload of a method this long is harder to read than a field that is set and
     // cleared within the same call. Never non-null across an await; RenderCaptureFrame is synchronous.
-    private readonly record struct CaptureRequest(Matrix4x4 View, Matrix4x4 Projection, Vector3 Position, float TimeSeconds);
+    private readonly record struct CaptureRequest(Matrix4x4 View, Matrix4x4 Projection, Vector3 Position,
+        float TimeSeconds, float Delta);
 
     private CaptureRequest? _capture;
 
@@ -259,6 +274,8 @@ public sealed class Dx11ViewportSurface : IDisposable
     {
         var restore = new CaptureScope(this, _lastParticleTime, _frozenTime, Wireframe);
         _lastParticleTime = -1f;
+        _captureLastTime = -1f;
+        _capturing = true;
         Wireframe = false;
         _renderer.SetGizmoGeometry(null, null, null);
         return restore;
@@ -276,6 +293,8 @@ public sealed class Dx11ViewportSurface : IDisposable
         public void Dispose()
         {
             _surface._capture = null;
+            _surface._capturing = false;
+            _surface._captureLastTime = -1f;
             _surface._lastParticleTime = _particleTime;
             _surface._frozenTime = _frozen;
             _surface.Wireframe = _wireframe;
@@ -298,9 +317,13 @@ public sealed class Dx11ViewportSurface : IDisposable
         if (!_ready || width <= 0 || height <= 0) return null;
         // The live camera's own near/far, so a captured frame clips exactly as the preview it was framed
         // in - see CinematicPose.Projection.
+        // M736: the step comes from the SHOT's own timeline - the gap to the previous captured frame -
+        // not from a clock the live viewport also writes to. At 60 fps that is a flat 1/60 per frame.
+        float delta = _captureLastTime < 0f ? 0f : MathF.Max(0f, timeSeconds - _captureLastTime);
+        _captureLastTime = timeSeconds;
         _capture = new CaptureRequest(pose.ViewMatrix,
             pose.Projection((float)width / height, camera.EffectiveNear, camera.Far),
-            pose.Position, timeSeconds);
+            pose.Position, timeSeconds, delta);
         try { return Render(camera, width, height) ? LastPixels : null; }
         finally { _capture = null; }
     }
@@ -528,9 +551,16 @@ public sealed class Dx11ViewportSurface : IDisposable
         // pauses props too. GL drives these from a dedicated stopwatch; that divergence is deliberate and
         // noted here rather than left to be discovered.
         var propClock = Stopwatch.StartNew();
-        Props?.Tick(t, PlayPropAnimations,
+        // M736: while a capture runs, only the CAPTURE frames move the props. A live frame in between is
+        // on the wall clock, and letting it pose stamps LastPoseTime with a time from the other timeline -
+        // which is what made the next captured frame fail the 30 Hz gate and repeat a pose.
+        // A captured frame poses unconditionally: a 60 fps export wants 60 Hz of animation, and the 30 Hz
+        // gate is a live-viewport budget, not an export rule.
+        bool liveFrameDuringCapture = _capturing && _capture is null;
+        Props?.Tick(t, PlayPropAnimations && !liveFrameDuringCapture,
             _capture?.Position ?? PreviewPose?.Position ?? camera.Position,
-            ReyEngine.App.Services.VfxPlaybackSim.MaxDistanceSquared(camera.Distance));   // M694: near + 30 Hz gate
+            ReyEngine.App.Services.VfxPlaybackSim.MaxDistanceSquared(camera.Distance),   // M694: near + 30 Hz gate
+            poseEveryFrame: _capture is not null);
         PropsMs = propClock.Elapsed.TotalMilliseconds;
 
         _renderer.SetBoneLines(BoneLines);   // M619
@@ -635,7 +665,11 @@ public sealed class Dx11ViewportSurface : IDisposable
             var particleView = _capture?.View ?? PreviewPose?.ViewMatrix ?? camera.View;
             if (settings.MirrorX) particleView = Matrix4x4.CreateScale(-1f, 1f, 1f) * particleView;
             var particleClock = Stopwatch.StartNew();
-            Particles.Tick(ParticleDelta(t), particleView,
+            // M736: a captured frame steps by the shot's own delta; a live frame drawn while a capture
+            // runs steps by nothing, so only the export advances the simulation. Outside a capture this is
+            // the ordinary wall-clock difference.
+            float particleDt = _capture is { } cap ? cap.Delta : (liveFrameDuringCapture ? 0f : ParticleDelta(t));
+            Particles.Tick(particleDt, particleView,
                 particleView * settings.SuppliedProjection!.Value,
                 _capture?.Position ?? PreviewPose?.Position ?? camera.Position, camera.Distance);
             ParticlesMs = particleClock.Elapsed.TotalMilliseconds;   // M694: the phase the status line names

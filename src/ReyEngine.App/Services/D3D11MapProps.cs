@@ -377,7 +377,8 @@ public sealed class D3D11MapProps
     /// animated skins cost 0.8 ms and 355 KB of garbage per frame before; the palette is the same array
     /// the materials already hold, filled in place.</para>
     /// </summary>
-    public void Tick(float seconds, bool playing, Vector3 cameraPosition, float gateDistanceSq)
+    public void Tick(float seconds, bool playing, Vector3 cameraPosition, float gateDistanceSq,
+        bool poseEveryFrame = false)
     {
         var clock = Stopwatch.StartNew();
         PosedThisFrame = 0;
@@ -395,7 +396,7 @@ public sealed class D3D11MapProps
             if (!m.CanAnimate) continue;
             bool near = PropAnimationGate.AnyNear(g.Instances, mirroredCam, gateDistanceSq);
             if (near) NearMeshes++;
-            if (!PropAnimationGate.ShouldPose(g.LastPoseTime, seconds, m.PoseSource is not null, near)) continue;
+            if (!PropAnimationGate.ShouldPose(g.LastPoseTime, seconds, m.PoseSource is not null, near, poseEveryFrame)) continue;
             // M636: a driven mesh (the playground actor) supplies its own clip and time; a prop idles.
             var (clip, time) = m.PoseAt(seconds);
             try

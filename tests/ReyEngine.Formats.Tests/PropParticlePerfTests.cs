@@ -263,8 +263,10 @@ public sealed class PropParticlePerfTests
         var main = Source("src", "ReyEngine.App", "Views", "MainWindow.axaml.cs");
         if (surface is null || props is null || particles is null || gl is null || main is null) return;
         // D3D11: the camera reaches the props, the props gate and reuse, the particles warm under a budget
-        Assert.Contains("VfxPlaybackSim.MaxDistanceSquared(camera.Distance));   // M694", surface);
-        Assert.Contains("PropAnimationGate.ShouldPose(g.LastPoseTime, seconds, m.PoseSource is not null, near)", props);
+        // M736 put the force-pose argument after it, so the line no longer ends there - the fact being
+        // pinned is unchanged: the live camera's distance is what the prop gate measures against.
+        Assert.Contains("VfxPlaybackSim.MaxDistanceSquared(camera.Distance),   // M694", surface);
+        Assert.Contains("PropAnimationGate.ShouldPose(g.LastPoseTime, seconds, m.PoseSource is not null, near, poseEveryFrame)", props);
         Assert.Contains("BonePalette.Build(m.Skeleton!, clip, time, g.Pose, g.Palette)", props);
         Assert.Contains("_warmup.Pump(_readyScratch);", particles);
         Assert.DoesNotContain("sim.PreWarm(sim.FillDuration);", particles);

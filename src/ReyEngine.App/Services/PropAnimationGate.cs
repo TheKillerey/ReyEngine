@@ -38,9 +38,13 @@ public static class PropAnimationGate
 
     /// <summary>Pose now? <paramref name="lastPoseTime"/> is the clock reading of the last pose
     /// (negative infinity for never); <paramref name="driven"/> bypasses the rate cap.</summary>
-    public static bool ShouldPose(float lastPoseTime, float now, bool driven, bool near)
+    /// <param name="poseEveryFrame">M736: this frame must pose regardless of the rate cap. Set for a
+    /// cinematic capture frame - a 60 fps export wants 60 Hz of animation, and the 30 Hz cap below exists
+    /// to spend a live frame's budget, which an export does not have.</param>
+    public static bool ShouldPose(float lastPoseTime, float now, bool driven, bool near, bool poseEveryFrame = false)
     {
         if (!near) return false;
+        if (poseEveryFrame) return true;
         if (driven) return true;
         return float.IsNegativeInfinity(lastPoseTime) || now - lastPoseTime >= MinInterval || now < lastPoseTime;
     }
