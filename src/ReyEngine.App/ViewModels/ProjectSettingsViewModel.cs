@@ -1,4 +1,7 @@
-﻿using Avalonia.Platform.Storage;
+﻿using System.Collections.ObjectModel;
+using System.IO;
+using System.Linq;
+using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.App.Services;
@@ -33,6 +36,17 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     [ObservableProperty] private bool _autoUpdateOnRiotPatch = true;
     [ObservableProperty] private bool _autoBuildAfterPatchUpdate = true;
 
+    /// <summary>M744: the project's modpkg layers, base first. Shared with every folder row, so a layer
+    /// added or renamed here is offered there immediately.</summary>
+    public ObservableCollection<ProjectLayerRow> Layers { get; } = new();
+
+    /// <summary>Every WAD folder the project ships, and which layer it rides.</summary>
+    public ObservableCollection<FolderLayerRow> FolderLayers { get; } = new();
+
+    [ObservableProperty] private string _layerError = "";
+    public bool HasLayerError => LayerError.Length > 0;
+    partial void OnLayerErrorChanged(string value) => OnPropertyChanged(nameof(HasLayerError));
+
     public bool Saved { get; private set; }
     public event Action? CloseRequested;
 
@@ -56,6 +70,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         _autoUpdateOnRiotPatch = p.AutoUpdateOnRiotPatch;
         _autoBuildAfterPatchUpdate = p.AutoBuildAfterPatchUpdate;
         ValidateGameDirectory();
+        SeedLayers(p);
     }
 
     partial void OnGameDirectoryChanged(string value) => ValidateGameDirectory();
@@ -68,6 +83,76 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
             ? $"Verified: {status.GameDirectory}"
             : status.Message + " Select the League of Legends\\Game folder containing DATA\\FINAL.";
         return status;
+    }
+
+    // ===================================================== M744: content layers
+
+    /// <summary>The project's layers as rows, plus the base row every project has, and one row per WAD
+    /// folder showing the layer it ships in.</summary>
+    private void SeedLayers(ReyProject p)
+    {
+        Layers.Add(new ProjectLayerRow
+        {
+            IsBase = true,
+            Name = ProjectLayer.BaseLayer,
+            Description = "Everything no other layer claims. Always shipped.",
+        });
+        foreach (var l in p.Layers)
+        {
+            if (string.Equals(l.Name, ProjectLayer.BaseLayer, StringComparison.OrdinalIgnoreCase)) continue;
+            Layers.Add(new ProjectLayerRow { Name = l.Name, Priority = l.Priority, Description = l.Description });
+        }
+
+        // The exporter ships a folder under the leaf of its resolved path, so that is the name a layer
+        // claims - not the possibly-relative entry in ProjectFolders.
+        foreach (string entry in p.ProjectFolders)
+        {
+            string folder = Path.GetFileName(p.ResolveProjectPath(entry).TrimEnd('/', '\\'));
+            if (folder.Length == 0
+                || FolderLayers.Any(r => string.Equals(r.Folder, folder, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            string owner = p.LayerOf(folder);
+            var row = Layers.FirstOrDefault(l => string.Equals(l.Name, owner, StringComparison.OrdinalIgnoreCase))
+                      ?? Layers[0];
+            FolderLayers.Add(new FolderLayerRow(folder, row, Layers));
+        }
+    }
+
+    public bool HasFolders => FolderLayers.Count > 0;
+
+    [RelayCommand]
+    private void AddLayer()
+    {
+        int n = Layers.Count;
+        string name = "layer" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        while (Layers.Any(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase)))
+            name = "layer" + (++n).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        // Above every existing layer, so a new one is applied over what is already there.
+        int priority = Layers.Count == 0 ? 10 : Layers.Max(l => l.Priority) + 10;
+        Layers.Add(new ProjectLayerRow { Name = name, Priority = priority });
+        LayerError = "";
+    }
+
+    /// <summary>Delete a layer. Its folders fall back to base rather than vanishing with it - a folder
+    /// always ships somewhere.</summary>
+    [RelayCommand]
+    private void RemoveLayer(ProjectLayerRow? row)
+    {
+        if (row is null || row.IsBase || !Layers.Contains(row)) return;
+        foreach (var f in FolderLayers.Where(f => ReferenceEquals(f.Layer, row)))
+            f.Layer = Layers[0];
+        Layers.Remove(row);
+        LayerError = "";
+    }
+
+    /// <summary>The first thing wrong with the layer list, or null. A name becomes a folder under
+    /// <c>content/</c> in the sent mod, so it has to be usable as one and has to be unique.</summary>
+    private string? ValidateLayers()
+    {
+        foreach (var l in Layers)
+            if (l.Problem(Layers) is { } problem) return problem;
+        return null;
     }
 
     public void ApplyTo(ReyProject p)
@@ -88,6 +173,17 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         p.RiotPatchVersion = RiotPatchVersionDetector.TryNormalize(RiotPatchVersion, out var patch) ? patch : null;
         p.AutoUpdateOnRiotPatch = AutoUpdateOnRiotPatch;
         p.AutoBuildAfterPatchUpdate = AutoBuildAfterPatchUpdate;
+
+        // M744: layers, rebuilt from the rows. A layer with no folders is kept - the user may be setting
+        // one up before moving content into it, and dropping it would silently discard their typing.
+        p.Layers = Layers.Where(l => !l.IsBase).Select(l => new ProjectLayer
+        {
+            Name = l.Name.Trim(),
+            Priority = l.Priority,
+            Description = l.Description.Trim(),
+            Folders = FolderLayers.Where(f => ReferenceEquals(f.Layer, l))
+                                  .Select(f => f.Folder).ToList(),
+        }).ToList();
     }
 
     [RelayCommand]
@@ -120,6 +216,8 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     private void Save()
     {
         if (!string.IsNullOrWhiteSpace(GameDirectory) && !ValidateGameDirectory().IsValid) return;
+        LayerError = ValidateLayers() ?? "";
+        if (HasLayerError) return;
         Saved = true;
         CloseRequested?.Invoke();
     }

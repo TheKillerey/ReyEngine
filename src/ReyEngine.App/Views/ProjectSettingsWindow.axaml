@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ReyEngine.App.Views"
+        xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         x:Class="ReyEngine.App.Views.ProjectSettingsWindow"
         Title="Project Settings"
         Width="540" Height="740"
@@ -83,6 +84,68 @@
                 IsChecked="{Binding AutoBuildAfterPatchUpdate}" FontSize="11" />
       <TextBlock Text="Bin edits use a transactional three-way merge. Full texture, mesh, mapgeo and audio replacements are retained and repacked unchanged. Backups and a report are stored under .reyengine."
                  FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+      <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,8" />
+      <TextBlock Text="CONTENT LAYERS (LTK Manager)" FontSize="11" FontWeight="SemiBold"
+                 Foreground="{DynamicResource ReyTextDimBrush}" />
+      <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                 Text="Send to LTK Manager ships each layer separately, and the user can switch any of them off without losing the rest of the mod - so an optional half, like a particle fix, does not have to live inside the map it is seen on. Layers are applied lowest priority first, and a higher one wins where two touch the same file. A folder no layer claims ships in base. This does not affect a .fantome build, which has no layers." />
+
+      <ItemsControl ItemsSource="{Binding Layers}" Margin="0,4,0,0">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:ProjectLayerRow">
+            <Border Background="{DynamicResource ReyPanelBrush}" CornerRadius="3" Padding="8,6" Margin="0,0,0,4">
+              <StackPanel Spacing="4">
+                <Grid ColumnDefinitions="*,Auto,64,Auto,Auto">
+                  <TextBox Grid.Column="0" Text="{Binding Name}" FontSize="11" Padding="4,2"
+                           IsEnabled="{Binding IsEditable}" PlaceholderText="layer name" />
+                  <TextBlock Grid.Column="1" Text="priority" FontSize="10" VerticalAlignment="Center"
+                             Margin="8,0,4,0" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <NumericUpDown Grid.Column="2" Value="{Binding Priority}" Minimum="0" Maximum="9999"
+                                 Increment="10" FormatString="0" FontSize="11" ShowButtonSpinner="False"
+                                 IsEnabled="{Binding IsEditable}" />
+                  <Button Grid.Column="4" Classes="tool" Content="Remove" FontSize="10" Margin="8,0,0,0"
+                          IsVisible="{Binding IsEditable}"
+                          Command="{Binding $parent[ItemsControl].((vm:ProjectSettingsViewModel)DataContext).RemoveLayerCommand}"
+                          CommandParameter="{Binding}"
+                          ToolTip.Tip="Delete this layer. Folders that ship in it fall back to base - nothing is dropped from the mod." />
+                </Grid>
+                <TextBox Text="{Binding Description}" FontSize="10" Padding="4,2"
+                         IsEnabled="{Binding IsEditable}"
+                         PlaceholderText="what this layer does, shown beside the switch in LTK Manager" />
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <Button Content="Add Layer" Command="{Binding AddLayerCommand}" FontSize="11"
+              HorizontalAlignment="Left" Padding="10,3" />
+      <TextBlock Text="{Binding LayerError}" FontSize="10" TextWrapping="Wrap"
+                 Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding HasLayerError}" />
+
+      <TextBlock Text="Which layer each folder ships in" FontSize="11" Margin="0,8,0,0"
+                 Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding HasFolders}" />
+      <TextBlock Text="This project has no WAD folders yet, so there is nothing to assign."
+                 FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                 IsVisible="{Binding !HasFolders}" />
+      <ItemsControl ItemsSource="{Binding FolderLayers}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:FolderLayerRow">
+            <Grid ColumnDefinitions="*,180" Margin="0,0,0,3">
+              <TextBlock Grid.Column="0" Text="{Binding Folder}" FontSize="11" VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis" Margin="0,0,8,0" />
+              <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}" SelectedItem="{Binding Layer}"
+                        FontSize="11" HorizontalAlignment="Stretch">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ProjectLayerRow">
+                    <TextBlock Text="{Binding Label}" FontSize="11" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
 
       <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,12,0,0">
         <Button Content="Cancel" Command="{Binding CancelCommand}" Padding="14,5" />
