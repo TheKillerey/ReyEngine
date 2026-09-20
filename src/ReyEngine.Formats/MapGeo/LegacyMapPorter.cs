@@ -549,6 +549,45 @@ public static class LegacyMapPorter
     /// added later all change the ordering, and a group nudge that silently caught destination geometry
     /// would move the part of the map that was already correct.</para>
     /// </summary>
+    /// <summary>
+    /// M738: the ported DECAL meshes of an already-ported map - the second ground layer, as opposed to the
+    /// terrain it lies on.
+    ///
+    /// <para>Named by the porter as <c>LegacyPort/&lt;source&gt;/Decal_&lt;texture&gt;</c>, which is what
+    /// separates them from the destination map's OWN decals: on Map453 those are
+    /// <c>Maps/KitPieces/Jade/...</c> and <c>..._decalVersion3_no_shadow</c>, and they are placed correctly
+    /// already. Lifting those too would move geometry that has nothing wrong with it.</para>
+    /// </summary>
+    public static bool IsLegacyDecalMaterial(string? material) =>
+        IsLegacyImportMaterial(material)
+        && material!.Substring(material.LastIndexOf('/') + 1).StartsWith("Decal_", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// M738: every mesh of the ported decal overlay, for the lift that takes it off the terrain.
+    ///
+    /// <para><b>Why it needs lifting.</b> Measured on the Harrowing port against Riot's own Map453, per
+    /// decal vertex, against the highest surface not above it: this porter's decals are welded FLAT onto
+    /// the ground - 15,843 of 15,845 vertices sit within 0.001 of it, a median gap of 0.000 - while Riot's
+    /// own decals on the same map sit a median 6.37 units clear, and only 9.3% of theirs are coplanar at
+    /// all. Two coplanar surfaces share one depth plane, and everything else drawn at ground level lands
+    /// in the same contest: a champion's ground projection, a turret shot's projected sprite.</para>
+    /// </summary>
+    public static IReadOnlyList<MapGeoMesh> ImportedDecalMeshes(MapGeoAsset map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        var decals = new HashSet<int>();
+        var other = new HashSet<int>();
+        // A mesh is a decal mesh only when EVERY group on it is a ported decal: a mesh shared with terrain
+        // would take the terrain up with it.
+        foreach (var g in map.Groups)
+        {
+            if (g.MeshIndex < 0) continue;
+            (IsLegacyDecalMaterial(g.Material) ? decals : other).Add(g.MeshIndex);
+        }
+        decals.ExceptWith(other);
+        return map.Meshes.Where(m => decals.Contains(m.Index)).ToList();
+    }
+
     public static IReadOnlyList<MapGeoMesh> ImportedMeshes(MapGeoAsset map)
     {
         ArgumentNullException.ThrowIfNull(map);

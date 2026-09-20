@@ -27,6 +27,15 @@
           <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
           <TextBox Grid.Column="5" Text="{Binding LegacyNudgeZ}" FontSize="10" Padding="3,1" />
         </Grid>
+        <TextBlock Text="Decal lift (raises the ported decal overlay off the ground)" FontSize="9"
+                   Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,6,0,0" />
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <TextBlock Grid.Column="0" Text="Y" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisYBrush}" />
+          <TextBox Grid.Column="1" Text="{Binding DecalLift}" FontSize="10" Padding="3,1" />
+          <Button Grid.Column="2" Classes="tool" Content="Lift Decals" Margin="5,0,0,0"
+                  Command="{Binding LiftLegacyDecalsCommand}"
+                  ToolTip.Tip="Raise the ported decal overlay off the terrain, as one undoable edit. The porter welds decals FLAT onto the ground - measured on the Harrowing port, 15,843 of 15,845 decal vertices sit within 0.001 of the surface beneath them, where Riot's own decals on the same map sit a median 6.37 units clear. Two coplanar surfaces share one depth plane, and so does anything drawn at ground level on top of them: a champion's ground projection, a turret shot's projected sprite. Only LegacyPort/.../Decal_ meshes move; the map's own decals are already placed correctly and are left alone. Additive, like the nudge above." />
+        </Grid>
         <Button Classes="tool" Content="Nudge Imported Geometry" HorizontalAlignment="Left"
                 Command="{Binding NudgeLegacyImportCommand}"
                 ToolTip.Tip="Move every mesh that came from the WGEO/NVR port by this delta, as one undoable edit. Additive — nudging twice by 10 moves 20 — so you can walk the alignment in. Only meshes with LegacyPort/ materials move; the destination map's own geometry is never touched. The per-mesh TRANSFORM box takes ABSOLUTE world positions instead, which is why it cannot be used to fine-tune a whole import." />

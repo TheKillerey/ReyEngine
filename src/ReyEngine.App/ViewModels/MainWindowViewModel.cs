@@ -9811,6 +9811,54 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                              + "Undo restores them; Save to Mod writes it.");
     }
 
+    /// <summary>M738: how far the decal lift raises the ported overlay, in world units.</summary>
+    [ObservableProperty] private string _decalLift = "1";
+
+    /// <summary>
+    /// M738: raise the ported decal overlay off the terrain, as one undoable edit.
+    ///
+    /// <para>The porter welds decals flat onto the ground: measured on the Harrowing port, 15,843 of
+    /// 15,845 decal vertices sit within 0.001 of the surface beneath them. Riot's own decals on the same
+    /// map sit a median 6.37 units clear and are coplanar in only 9.3% of cases. A coplanar pair shares
+    /// one depth plane, and so does anything else drawn at ground level - which is why a champion's ground
+    /// projection and a turret shot's projected sprite look wrong over this map's decals and nowhere
+    /// else.</para>
+    ///
+    /// <para>Only the PORTED decals move (<c>LegacyPort/.../Decal_*</c>). The destination map's own decals
+    /// are placed correctly and are left alone. Additive, like the nudge above it: lifting twice by 1
+    /// lifts 2.</para>
+    /// </summary>
+    [RelayCommand]
+    private void LiftLegacyDecals()
+    {
+        if (_currentMap is not { } map) { _log.Warn("MapGeo", "Open a map first."); return; }
+        if (!float.TryParse(DecalLift, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float lift) || lift == 0f)
+        { _log.Warn("MapGeo", "Enter a non-zero decal lift."); return; }
+
+        var meshes = Formats.MapGeo.LegacyMapPorter.ImportedDecalMeshes(map);
+        if (meshes.Count == 0)
+        { _log.Warn("MapGeo", "No ported decal overlay in this map (no LegacyPort/.../Decal_ materials)."); return; }
+
+        var entries = new List<(MapGeoMesh, MeshTransformCommand.State, MeshTransformCommand.State)>(meshes.Count);
+        foreach (var mesh in meshes)
+        {
+            var before = MeshTransformCommand.State.Capture(mesh);
+            map.TranslateMesh(mesh, mesh.Offset + new System.Numerics.Vector3(0f, lift, 0f));
+            entries.Add((mesh, before, MeshTransformCommand.State.Capture(mesh)));
+        }
+
+        var cmd = new BatchTransformCommand("Lift Legacy Decals", map, entries, MakeBatchRefresh(map));
+        if (cmd.HasChange) UndoService.PushApplied(cmd);
+
+        MeshVerticesRevision++;
+        RefreshSelectionVisuals();
+        if (SelectedMapMesh is { } sel) RefreshMeshTransformFields(sel);
+        HasMapMoves = MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes);
+        _log.Success("MapGeo", $"Lifted {meshes.Count} ported decal mesh(es) by {lift:0.###} unit(s). "
+                             + "Undo restores them; Save to Mod writes it.");
+    }
+
     [RelayCommand]
     private void ResetMeshTransform()
     {
