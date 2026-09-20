@@ -15558,7 +15558,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Version: string.IsNullOrWhiteSpace(Project.ModVersion) ? "1.0.0" : Project.ModVersion,
             Description: Project.ModDescription ?? "",
             Author: author,
-            ThumbnailPath: Project.ThumbnailPath);
+            ThumbnailPath: Project.ThumbnailPath)
+        {
+            // M742: the project's modpkg layers, so an optional half of a mod ships as something the
+            // user can switch off in LTK Manager rather than as part of the map. "base" is always
+            // declared, even when the project names no layers, because that is where unclaimed folders go.
+            Layers = Core.Build.LtkProjectLayers.Of(Project),
+        };
 
         IsBuilding = true; Status = "Sending to LTK Manager…";
         try
@@ -15567,14 +15573,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 // Same enumeration the WAD packer walks, so what LTK Manager gets is what a build would
                 // have contained - one source of truth for "the project's files".
-                var files = new List<(string WadFolder, string RelPath, string AbsPath)>();
+                var files = new List<(string Layer, string WadFolder, string RelPath, string AbsPath)>();
                 foreach (var f in Project.ProjectFolders)
                 {
                     var abs = Project.ResolveProjectPath(f);
                     if (!Directory.Exists(abs)) continue;
                     var folderName = Path.GetFileName(abs.TrimEnd('/', '\\'));
+                    // M742: which modpkg layer this WAD folder ships in - "base" unless a layer claims it.
+                    string layer = Project.LayerOf(folderName);
                     foreach (var (_, path) in Core.Build.WadPackService.EnumerateChunkFiles(abs))
-                        files.Add((folderName, Path.GetRelativePath(abs, path).Replace('\\', '/'), path));
+                        files.Add((layer, folderName, Path.GetRelativePath(abs, path).Replace('\\', '/'), path));
                 }
                 if (files.Count == 0)
                     throw new InvalidOperationException("The project has no packable content to send.");

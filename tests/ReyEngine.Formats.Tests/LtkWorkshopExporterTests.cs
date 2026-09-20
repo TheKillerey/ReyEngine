@@ -37,12 +37,138 @@ public class LtkWorkshopExporterTests : IDisposable
         WorkshopRoot: Workshop, Slug: slug, DisplayName: "My Map", Version: "1.2.3",
         Description: "a map", Author: "TheKillerey");
 
-    private (string, string, string) File1(string rel = "data/maps/a.mapgeo", string body = "one")
+    private (string, string, string, string) File1(string rel = "data/maps/a.mapgeo", string body = "one",
+        string layer = "", string wadFolder = "Map453")
     {
-        string abs = Path.Combine(_src, rel.Replace('/', Path.DirectorySeparatorChar));
+        string abs = Path.Combine(_src, wadFolder, rel.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
         File.WriteAllText(abs, body);
-        return ("Map453", rel, abs);
+        return (layer, wadFolder, rel, abs);
+    }
+
+    /// <summary>
+    /// M742: a mod ships as layers the user can switch off one at a time, so an optional half - the
+    /// Harrowing map's champion particle fix - is beside the map rather than inside it.
+    /// </summary>
+    [Fact]
+    public void Each_layer_gets_its_own_content_folder_and_is_declared()
+    {
+        var opts = Opts() with
+        {
+            Layers = new[]
+            {
+                new LtkLayer("base", 0, "Base layer of the mod"),
+                new LtkLayer("particle-fix", 10, "Champion particle fix"),
+            },
+        };
+
+        var r = LtkWorkshopExporter.Send(opts, new[]
+        {
+            File1("data/maps/a.mapgeo", "map", layer: "base"),
+            File1("data/characters/jade_malzahar/skins/skin0.bin", "fix", layer: "particle-fix", wadFolder: "Malzahar"),
+        });
+
+        string mod = Path.Combine(Workshop, "my-map");
+        Assert.Equal(2, r.FilesWritten);
+        Assert.True(File.Exists(Path.Combine(mod, "content", "base", "Map453.wad.client", "data", "maps", "a.mapgeo")));
+        Assert.True(File.Exists(Path.Combine(mod, "content", "particle-fix", "Malzahar.wad.client",
+            "data", "characters", "jade_malzahar", "skins", "skin0.bin")));
+
+        // both layers are declared, with their priorities, so the manager can offer the switch
+        var cfg = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(mod, "mod.config.json")))!;
+        var layers = cfg["layers"]!.AsArray();
+        Assert.Equal(2, layers.Count);
+        Assert.Contains(layers, l => l!["name"]!.GetValue<string>() == "particle-fix"
+                                  && l["priority"]!.GetValue<int>() == 10);
+    }
+
+    /// <summary>
+    /// The reporter's case: a mod that already exists (its config declaring only "base") gains a second
+    /// layer. The first version of this merge reassigned the layers array onto the config it had just been
+    /// read from, which is a node that already has a parent - so an UPDATE threw where a CREATE did not,
+    /// and the content shipped layered while the config still advertised one layer.
+    /// </summary>
+    [Fact]
+    public void A_second_layer_reaches_the_config_of_a_mod_that_already_exists()
+    {
+        LtkWorkshopExporter.Send(Opts(), new[] { File1() });          // creates it, config says "base"
+
+        var opts = Opts() with
+        {
+            Layers = new[]
+            {
+                new LtkLayer("base", 0, "Base layer of the mod"),
+                new LtkLayer("particle-fix", 10, "Champion particle fix"),
+            },
+        };
+        LtkWorkshopExporter.Send(opts, new[]
+        {
+            File1("data/maps/a.mapgeo", "map", layer: "base"),
+            File1("data/characters/jade_x/skins/skin0.bin", "fix", layer: "particle-fix", wadFolder: "Malzahar"),
+        });
+
+        var cfg = System.Text.Json.Nodes.JsonNode.Parse(
+            File.ReadAllText(Path.Combine(Workshop, "my-map", "mod.config.json")))!;
+        var layers = cfg["layers"]!.AsArray();
+        Assert.Equal(2, layers.Count);
+        Assert.Contains(layers, l => l!["name"]!.GetValue<string>() == "particle-fix");
+    }
+
+    /// <summary>
+    /// M742: what the SEND declares, from the project. This is the half that was missing when the fix
+    /// first shipped: the content was written per layer while the options carried no layers at all, so
+    /// the config advertised "base" alone and the manager never offered the switch.
+    /// </summary>
+    [Fact]
+    public void A_projects_layers_reach_the_send_with_base_always_declared()
+    {
+        var project = new ReyEngine.Core.Projects.ReyProject();
+        Assert.Equal(new[] { "base" }, LtkProjectLayers.Of(project).Select(l => l.Name));
+
+        project.Layers.Add(new ReyEngine.Core.Projects.ProjectLayer
+        {
+            Name = "particle-fix", Priority = 10, Description = "Champion particle fix",
+            Folders = { "Malzahar", "Ahri" },
+        });
+
+        var layers = LtkProjectLayers.Of(project);
+        Assert.Equal(new[] { "base", "particle-fix" }, layers.Select(l => l.Name));   // priority order
+        Assert.Equal(10, layers[1].Priority);
+        Assert.Equal("Champion particle fix", layers[1].Description);
+
+        // and the folders route to it, while anything unclaimed stays in base
+        Assert.Equal("particle-fix", project.LayerOf("Malzahar"));
+        Assert.Equal("particle-fix", project.LayerOf("ahri"));       // case does not matter
+        Assert.Equal("base", project.LayerOf("Map453"));
+    }
+
+    /// <summary>A project may rename or re-prioritise "base" itself; it must not appear twice.</summary>
+    [Fact]
+    public void Redeclaring_base_replaces_it_rather_than_duplicating_it()
+    {
+        var project = new ReyEngine.Core.Projects.ReyProject();
+        project.Layers.Add(new ReyEngine.Core.Projects.ProjectLayer
+        { Name = "base", Priority = 0, Description = "The map itself" });
+
+        var layers = LtkProjectLayers.Of(project);
+        Assert.Single(layers);
+        Assert.Equal("The map itself", layers[0].Description);
+    }
+
+    /// <summary>A layer this project does not declare is left where it is: the manager's own editor can
+    /// add one, and a send may not delete what it did not write.</summary>
+    [Fact]
+    public void A_layer_the_project_does_not_know_about_survives_a_send()
+    {
+        string mod = Path.Combine(Workshop, "my-map");
+        LtkWorkshopExporter.Send(Opts(), new[] { File1() });
+        string foreign = Path.Combine(mod, "content", "hand-made", "Map11.wad.client", "data", "x.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(foreign)!);
+        File.WriteAllText(foreign, "not ours");
+
+        LtkWorkshopExporter.Send(Opts(), new[] { File1(body: "again") });
+
+        Assert.True(File.Exists(foreign), "a layer the send does not own must not be deleted");
     }
 
     [Fact]

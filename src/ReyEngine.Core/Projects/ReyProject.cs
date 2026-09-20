@@ -23,6 +23,27 @@ public sealed class ReyProject
     public List<string> ProjectWads { get; set; } = new();
     /// <summary>Editable unpacked-WAD folders (relative to <see cref="RootPath"/>).</summary>
     public List<string> ProjectFolders { get; set; } = new();
+
+    /// <summary>
+    /// M742: which modpkg LAYER each WAD folder ships in. Empty means the shipped convention - everything
+    /// in "base".
+    ///
+    /// <para>LTK Manager's modpkg format carries a mod as layers a user can switch off one at a time
+    /// (<c>layerStates</c> per profile, missing = enabled). That is what makes an optional half possible:
+    /// the Harrowing map's champion particle fix ships beside the map instead of inside it, so someone who
+    /// dislikes it - or who runs another mod touching the same champions - turns off one layer rather than
+    /// the whole mod.</para>
+    ///
+    /// <para>A folder named by no layer ships in "base", so a project that never heard of layers exports
+    /// exactly as it did before.</para>
+    /// </summary>
+    public List<ProjectLayer> Layers { get; set; } = new();
+
+    /// <summary>The layer a WAD folder ships in - <see cref="ProjectLayer.BaseLayer"/> when none claims it.</summary>
+    public string LayerOf(string folderName) =>
+        Layers.FirstOrDefault(l => l.Folders.Any(f =>
+            string.Equals(f, folderName, StringComparison.OrdinalIgnoreCase)))?.Name
+        ?? ProjectLayer.BaseLayer;
     /// <summary>Read-only Riot reference WAD paths (absolute).</summary>
     public List<string> ReferenceWads { get; set; } = new();
     public List<string> RecentAssets { get; set; } = new();

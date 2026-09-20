@@ -62,7 +62,47 @@ public sealed record LtkSendOptions(
     string Description,
     string Author,
     string Layer = "base",
-    string? ThumbnailPath = null);
+    string? ThumbnailPath = null)
+{
+    /// <summary>
+    /// M742: every layer this send writes, lowest priority first. Empty keeps the single-layer behaviour,
+    /// where everything lands in <see cref="Layer"/>.
+    ///
+    /// <para>A layer the project no longer declares is LEFT where it is rather than deleted: the manager's
+    /// own editor can add layers to a mod, and a send is not entitled to remove what it did not write.</para>
+    /// </summary>
+    public IReadOnlyList<LtkLayer> Layers { get; init; } = System.Array.Empty<LtkLayer>();
+}
+
+/// <summary>M742: the layer list a project sends, base first and priority-ordered.</summary>
+public static class LtkProjectLayers
+{
+    /// <summary>
+    /// Every layer a send declares: the project's own, plus "base", which always exists because a WAD
+    /// folder no layer claims ships there. A project that names no layers yields base alone, which is what
+    /// the format shipped with.
+    /// </summary>
+    public static IReadOnlyList<LtkLayer> Of(Projects.ReyProject project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        var layers = new List<LtkLayer>
+        {
+            new(Projects.ProjectLayer.BaseLayer, 0, "Base layer of the mod"),
+        };
+        foreach (var l in project.Layers)
+        {
+            if (string.IsNullOrWhiteSpace(l.Name)) continue;
+            int at = layers.FindIndex(x => string.Equals(x.Name, l.Name, StringComparison.OrdinalIgnoreCase));
+            var mapped = new LtkLayer(l.Name, l.Priority, l.Description);
+            if (at >= 0) layers[at] = mapped; else layers.Add(mapped);
+        }
+        return layers.OrderBy(l => l.Priority).ToList();
+    }
+}
+
+/// <param name="Name">Layer name, matching the content folder under <c>content/</c>.</param>
+/// <param name="Priority">Lowest first; a higher number is applied over a lower one.</param>
+public sealed record LtkLayer(string Name, int Priority, string Description);
 
 /// <param name="Created">True when the mod folder did not exist and was created.</param>
 public sealed record LtkSendResult(
@@ -142,7 +182,7 @@ public static class LtkWorkshopExporter
     /// <param name="files">(project folder name, path relative to that folder, absolute source path).</param>
     public static LtkSendResult Send(
         LtkSendOptions o,
-        IReadOnlyList<(string WadFolder, string RelPath, string AbsPath)> files,
+        IReadOnlyList<(string Layer, string WadFolder, string RelPath, string AbsPath)> files,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(o);
@@ -165,25 +205,40 @@ public static class LtkWorkshopExporter
             throw new InvalidOperationException("refusing to treat the workshop root itself as a mod folder");
 
         Directory.CreateDirectory(modFolder);
-        string layerRoot = Path.Combine(modFolder, "content", o.Layer);
+
+        // M742: which layers this send owns. Files name their own; anything unnamed lands in o.Layer, so a
+        // caller that knows nothing about layers behaves exactly as before.
+        var layerNames = new List<string>();
+        foreach (var f in files)
+        {
+            string name = string.IsNullOrWhiteSpace(f.Layer) ? o.Layer : f.Layer;
+            if (!layerNames.Contains(name, StringComparer.OrdinalIgnoreCase)) layerNames.Add(name);
+        }
+        if (layerNames.Count == 0) layerNames.Add(o.Layer);
 
         // Replace the layer's contents so a file deleted from the project disappears from the mod too.
         // Guarded twice: the delete is confined to content/<layer>, and on an UPDATE the folder had to
         // carry a mod.config.json to be matched at all, so this cannot be pointed at an arbitrary
         // directory that merely shares a name.
         int deleted = 0;
-        if (Directory.Exists(layerRoot))
+        foreach (string layer in layerNames)
         {
-            foreach (var f in Directory.EnumerateFiles(layerRoot, "*", SearchOption.AllDirectories)) { deleted++; }
-            Directory.Delete(layerRoot, recursive: true);
+            string root = Path.Combine(modFolder, "content", layer);
+            if (Directory.Exists(root))
+            {
+                foreach (var f in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) { deleted++; }
+                Directory.Delete(root, recursive: true);
+            }
+            Directory.CreateDirectory(root);
         }
-        Directory.CreateDirectory(layerRoot);
 
         int written = 0;
         long bytes = 0;
-        foreach (var (wadFolder, rel, abs) in files)
+        foreach (var (fileLayer, wadFolder, rel, abs) in files)
         {
             ct.ThrowIfCancellationRequested();
+            string layerRoot = Path.Combine(modFolder, "content",
+                string.IsNullOrWhiteSpace(fileLayer) ? o.Layer : fileLayer);
             string dest = Path.Combine(layerRoot, MountFolderName(wadFolder), rel.Replace('/', Path.DirectorySeparatorChar));
             string destFull = Path.GetFullPath(dest);
             if (!destFull.StartsWith(Path.GetFullPath(layerRoot) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
@@ -242,13 +297,39 @@ public static class LtkWorkshopExporter
                 ["role"] = "Author",
             });
 
-        if (cfg["layers"] is not JsonArray { Count: > 0 })
-            cfg["layers"] = new JsonArray(new JsonObject
+        // M742: the project's layers, merged into whatever the file already declares - an entry the
+        // manager or the user added by hand keeps its other fields, and a layer this project does not
+        // know about is left alone.
+        var declared = o.Layers.Count > 0
+            ? o.Layers
+            : new[] { new LtkLayer(o.Layer, 0, "Base layer of the mod") };
+
+        // Built as a FRESH array of clones rather than edited in place: assigning a node that already has
+        // a parent back onto that parent throws, so the first version of this merge updated a brand-new
+        // mod fine and threw on every later send - the content shipped layered while the config still
+        // advertised one layer, which is exactly how it was found.
+        var layers = new JsonArray();
+        if (cfg["layers"] is JsonArray existingLayers)
+            foreach (var node in existingLayers)
+                if (node is not null) layers.Add(node.DeepClone());
+        foreach (var layer in declared)
+        {
+            var found = layers.OfType<JsonObject>().FirstOrDefault(j =>
+                string.Equals(j["name"]?.GetValue<string>(), layer.Name, StringComparison.OrdinalIgnoreCase));
+            if (found is null)
+                layers.Add(new JsonObject
+                {
+                    ["name"] = layer.Name,
+                    ["priority"] = layer.Priority,
+                    ["description"] = layer.Description,
+                });
+            else
             {
-                ["name"] = o.Layer,
-                ["priority"] = 0,
-                ["description"] = "Base layer of the mod",
-            });
+                found["priority"] = layer.Priority;
+                if (!string.IsNullOrWhiteSpace(layer.Description)) found["description"] = layer.Description;
+            }
+        }
+        cfg["layers"] = layers;
 
         File.WriteAllText(path, cfg.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
