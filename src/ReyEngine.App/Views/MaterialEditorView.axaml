@@ -3,6 +3,7 @@
              xmlns:views="clr-namespace:ReyEngine.App.Views"
              xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
              xmlns:conv="clr-namespace:ReyEngine.App.Converters"
+             xmlns:shaders="clr-namespace:ReyEngine.Formats.Shaders;assembly=ReyEngine.Formats"
              x:Class="ReyEngine.App.Views.MaterialEditorView"
              x:DataType="vm:MaterialEditorViewModel"
              x:CompileBindings="True">
@@ -380,7 +381,7 @@
         <StackPanel Spacing="3" Margin="0,4,0,0">
                 <ItemsControl ItemsSource="{Binding Slots}">
                   <ItemsControl.ItemTemplate>
-                    <DataTemplate>
+                    <DataTemplate x:DataType="vm:TextureSlotViewModel">
                       <StackPanel Spacing="2" Margin="0,4,0,0">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                           <TextBlock Text="{Binding SamplerName}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
@@ -443,11 +444,11 @@
                     <ItemsControl ItemsSource="{Binding MissingSamplers}">
                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                       <ItemsControl.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="shaders:ShaderTextureDef">
                           <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
                                   Content="{Binding Name, StringFormat='+ {0}'}"
                                   ToolTip.Tip="{Binding DefaultTexturePath}"
-                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSamplerCommand}"
+                                  Command="{Binding $parent[ItemsControl].((vm:MaterialBindingViewModel)DataContext).AddShaderSamplerCommand}"
                                   CommandParameter="{Binding}" />
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>
@@ -507,7 +508,7 @@
                                Foreground="{DynamicResource ReyTextDimBrush}" />
                     <ItemsControl ItemsSource="{Binding Switches}">
                       <ItemsControl.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="vm:MaterialSwitchViewModel">
                           <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,1">
                             <!-- Name in a TextBlock, not CheckBox.Content: content text treats
                                  the first underscore as an access-key marker and eats it. -->
@@ -530,9 +531,9 @@
                     <ItemsControl ItemsSource="{Binding ShaderSwitches}">
                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                       <ItemsControl.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="x:String">
                           <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
-                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderSwitchCommand}"
+                                  Command="{Binding $parent[ItemsControl].((vm:MaterialBindingViewModel)DataContext).AddShaderSwitchCommand}"
                                   CommandParameter="{Binding}">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                               <TextBlock Text="+" FontSize="9" />
@@ -548,7 +549,7 @@
                                Foreground="{DynamicResource ReyTextDimBrush}" />
                     <ItemsControl ItemsSource="{Binding Macros}">
                       <ItemsControl.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="vm:MaterialMacroViewModel">
                           <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,1"
                                 ToolTip.Tip="{Binding StatusTip}">
                             <!-- The name goes in a TextBlock, not CheckBox.Content: content is
@@ -590,7 +591,7 @@
                     <ItemsControl ItemsSource="{Binding MissingMacros}">
                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                       <ItemsControl.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="vm:MacroCandidateViewModel">
                           <!-- A define the game never cooked for this shader is never
                                APPLIED (M486), but the chip stays clickable: M533 made
                                clicking it explain the refusal and name the remedy in the
@@ -600,7 +601,7 @@
                                underscore as an access key. -->
                           <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
                                   ToolTip.Tip="{Binding Tip}"
-                                  Command="{Binding $parent[ItemsControl].DataContext.AddMacroCommand}"
+                                  Command="{Binding $parent[ItemsControl].((vm:MaterialBindingViewModel)DataContext).AddMacroCommand}"
                                   CommandParameter="{Binding}">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                               <TextBlock Text="+" FontSize="9" />
@@ -631,7 +632,7 @@
                   </Grid>
                   <ItemsControl ItemsSource="{Binding Parameters}">
                     <ItemsControl.ItemTemplate>
-                      <DataTemplate>
+                      <DataTemplate x:DataType="vm:MaterialParameterViewModel">
                         <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,2,0,0">
                           <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" MinWidth="110" VerticalAlignment="Center" />
                           <!-- M50c: live colour swatch for Tint/Color params -->
@@ -645,7 +646,7 @@
                           <Button Content="✓" Command="{Binding ApplyCommand}" FontSize="10" Padding="5,0" />
                           <Button Content="↺" Command="{Binding RevertCommand}" FontSize="10" Padding="5,0" />
                           <Button Content="✕" FontSize="10" Padding="5,0" IsVisible="{Binding IsRemovable}"
-                                  Command="{Binding $parent[ItemsControl].DataContext.RemoveParameterCommand}"
+                                  Command="{Binding $parent[ItemsControl].((vm:MaterialBindingViewModel)DataContext).RemoveParameterCommand}"
                                   CommandParameter="{Binding}" ToolTip.Tip="Remove this parameter" />
                           <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
                           <!-- M646: a dynamicMaterial driver overrides this value in the game -->
@@ -677,11 +678,11 @@
                     <ItemsControl ItemsSource="{Binding MissingParameters}">
                       <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                       <ItemsControl.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="shaders:ShaderParamDef">
                           <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
                                   Content="{Binding Name, StringFormat='+ {0}'}"
                                   ToolTip.Tip="{Binding DefaultText, StringFormat='default {0}'}"
-                                  Command="{Binding $parent[ItemsControl].DataContext.AddShaderParameterCommand}"
+                                  Command="{Binding $parent[ItemsControl].((vm:MaterialBindingViewModel)DataContext).AddShaderParameterCommand}"
                                   CommandParameter="{Binding}" />
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>
