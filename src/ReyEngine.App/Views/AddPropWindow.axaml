@@ -21,10 +21,13 @@
 
     <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="18,10">
-      <Grid ColumnDefinitions="*,Auto">
+      <Grid ColumnDefinitions="*,Auto,Auto">
         <TextBlock Grid.Column="0" Text="{Binding Status}" FontSize="10.5" TextWrapping="Wrap" VerticalAlignment="Center"
                    Foreground="{DynamicResource ReyTextDimBrush}" />
-        <Button Grid.Column="1" x:Name="AddButton" Classes="primary" Content="Add at the gizmo"
+        <CheckBox Grid.Column="1" Content="Client-side prop" IsChecked="{Binding PlaceAsAnimatedProp}"
+                  Margin="12,0,0,0" VerticalAlignment="Center" FontSize="11"
+                  ToolTip.Tip="Place it as a MapAnimatedProp - the form Riot uses for decorations like the Summoner's Rift ducks (3,058 on the shipped maps) - instead of as a scenery character. Character placements written by ReyEngine did not spawn in game, while Riot's own did; the likely reason is that characters are spawned by the server, which a mod cannot change, and animated props by the game client. Untick it to write the older character form." />
+        <Button Grid.Column="2" x:Name="AddButton" Classes="primary" Content="Add at the gizmo"
                 Command="{Binding AddPropCommand}" IsEnabled="{Binding CanAdd}" Padding="18,7" Margin="12,0,0,0"
                 ToolTip.Tip="Add a scenery placement of this skin to the open map, at the gizmo (or the map centre)" />
       </Grid>

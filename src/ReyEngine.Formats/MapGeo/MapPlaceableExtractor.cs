@@ -36,9 +36,13 @@ public sealed record MapSoundPlacement(
 /// none. This - not a guess from the skin's graph - is what the game asks the animation graph for.</param>
 /// <param name="PlaysIdle">M723: whether the placement carries <c>PlayIdleAnimation</c>. The schema
 /// defaults it to false, so a prop without it stands in bind pose in-game however many clips its skin has.</param>
+/// <param name="IsAnimatedPropClass">M747: read from Riot's <c>MapAnimatedProp</c> class (PropName + SkinID)
+/// rather than from a scenery-character placement (a <c>Character</c> component). The record and skin are
+/// then the paths that class implies: Characters/&lt;PropName&gt;/CharacterRecords/Root and
+/// Characters/&lt;PropName&gt;/Skins/Skin&lt;SkinID&gt; - where 3,052 of the 3,058 shipped props find their skin.</param>
 public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterRecord, string Skin,
     int VisibilityFlags = 255, bool HasVisibilityFlags = false, MapPlacementId Id = default,
-    string IdleAnimation = "", bool PlaysIdle = false)
+    string IdleAnimation = "", bool PlaysIdle = false, bool IsAnimatedPropClass = false)
 {
     /// <summary>Short character identity, e.g. "SRU_Baron" from "Characters/SRU_Baron/CharacterRecords/Root".</summary>
     public string CharacterName
@@ -77,6 +81,9 @@ public static class MapPlaceableExtractor
     private static readonly uint F_idleAnimationName = HashAlgorithms.Fnv1a("IdleAnimationName");
     private static readonly uint F_playIdleAnimation = HashAlgorithms.Fnv1a("PlayIdleAnimation");
     private static readonly uint F_visibilityFlags = HashAlgorithms.Fnv1a("mVisibilityFlags");
+    private static readonly uint AnimatedPropClass = HashAlgorithms.Fnv1a("MapAnimatedProp");
+    private static readonly uint F_propName = HashAlgorithms.Fnv1a("PropName");
+    private static readonly uint F_skinId = HashAlgorithms.Fnv1a("SkinID");
     private static readonly uint F_cubemapTexture = 0xfe380acfu;   // texture path string on MapCubemapProbe
 
     /// <param name="resolveWadPath">M590: cubemapTexture became a WadChunkLink in 16.17.</param>
@@ -127,6 +134,19 @@ public static class MapPlaceableExtractor
                         VisibilityFlags: visibility,
                         Id: id,
                         HasVisibilityFlags: hasVisibility));
+                }
+                else if (s.ClassHash == AnimatedPropClass)
+                {
+                    // M747: Riot's MapAnimatedProp - 3,058 on the shipped maps (SR's ducks, Noxtorra ...) that
+                    // this reader skipped, because it recognised a prop only by a Character component.
+                    string prop = (Get(s, F_propName) as BinTreeString)?.Value ?? "";
+                    if (prop.Length == 0) continue;
+                    uint skinId = (Get(s, F_skinId) as BinTreeU32)?.Value ?? 0;
+                    string idle = (Get(s, F_idleAnimationName) as BinTreeString)?.Value ?? "";
+                    bool plays = Get(s, F_playIdleAnimation) is BinTreeBool { Value: true };
+                    props.Add(new MapAnimatedProp(NameOf(s), transform.Translation, transform,
+                        $"Characters/{prop}/CharacterRecords/Root", $"Characters/{prop}/Skins/Skin{skinId}",
+                        visibility, hasVisibility, id, idle, plays, IsAnimatedPropClass: true));
                 }
                 else if (FindCharacterData(s) is ({ } cr, var skin))
                 {

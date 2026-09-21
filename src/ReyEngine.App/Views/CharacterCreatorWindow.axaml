@@ -22,13 +22,17 @@
     <!-- the bottom bar: status and the one button -->
     <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="20,10">
-      <Grid ColumnDefinitions="*,Auto,Auto">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
         <TextBlock Grid.Column="0" Text="{Binding Status}" FontSize="10.5" TextWrapping="Wrap" VerticalAlignment="Center"
                    Foreground="{DynamicResource ReyTextDimBrush}" />
+        <CheckBox Grid.Column="2" Content="Client-side prop" IsChecked="{Binding PlaceAsAnimatedProp}"
+                  IsVisible="{Binding CanPlace}" IsEnabled="{Binding AlsoPlace}" Margin="0,0,12,0"
+                  VerticalAlignment="Center" FontSize="11"
+                  ToolTip.Tip="Place it as a MapAnimatedProp - the form Riot uses for decorations like the Summoner's Rift ducks (3,058 on the shipped maps) - instead of as a scenery character. Character placements written by ReyEngine did not spawn in game, while Riot's own did; the likely reason is that characters are spawned by the server, which a mod cannot change, and animated props by the game client. Untick it to write the older character form." />
         <CheckBox Grid.Column="1" Content="Also place it at the gizmo" IsChecked="{Binding AlsoPlace}" IsVisible="{Binding CanPlace}"
                   Margin="12,0" VerticalAlignment="Center" FontSize="11"
                   ToolTip.Tip="Add a placement of the new character to the open map, at the gizmo (or the map centre), idling with its idle clip" />
-        <Button Grid.Column="2" x:Name="CreateButton" Classes="primary" Content="{Binding CreateLabel}" Command="{Binding CreateCharacterCommand}"
+        <Button Grid.Column="3" x:Name="CreateButton" Classes="primary" Content="{Binding CreateLabel}" Command="{Binding CreateCharacterCommand}"
                 IsEnabled="{Binding CanCreate}" Padding="18,7" />
       </Grid>
     </Border>

@@ -69,6 +69,8 @@ public sealed partial class CharacterCreatorViewModel : ObservableObject
     [ObservableProperty] private string _name = "";
     [ObservableProperty] private float _skinScale = 1f;
     [ObservableProperty] private bool _alsoPlace = true;
+    /// <summary>M747: place as a MapAnimatedProp (client-side) rather than a scenery character.</summary>
+    [ObservableProperty] private bool _placeAsAnimatedProp = true;
     [ObservableProperty] private string _status = "Pick the folder that holds the character's .skn, .skl, animations and texture.";
     [ObservableProperty] private bool _busy;
     [ObservableProperty] private bool _created;

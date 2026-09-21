@@ -66,6 +66,30 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// name a clip in.</para>
     /// </summary>
     public string? IdleAnimation { get; init; }
+
+    /// <summary>
+    /// M747: create a <c>MapAnimatedProp</c> - Riot's other decorative placement, the one SR's ducks and
+    /// Noxtorra use (3,058 on the shipped maps). It names a character by <see cref="PropName"/> and plays
+    /// its idle, and it carries no <c>Character</c> component, no team and nothing attackable.
+    ///
+    /// <para>Why it exists here: every scenery-CHARACTER placement ReyEngine wrote on the ported Map453
+    /// failed to spawn, including a plain S3Yonkey whose Riot-placed twins on the same map do spawn, and
+    /// every test was a replay recorded on vanilla data. The working theory is that character placements
+    /// are spawned by the server, which a client mod cannot reach, while this form is created by the client
+    /// the way particles are. That is a theory until a placement written this way appears in game.</para>
+    ///
+    /// <para>Requires <see cref="Transform"/> and <see cref="PropName"/>. Uses <see cref="Name"/>,
+    /// <see cref="IdleAnimation"/> and <see cref="SkinId"/>.</para>
+    /// </summary>
+    public bool CreateAnimatedProp { get; init; }
+
+    /// <summary>M747: the character a <c>MapAnimatedProp</c> shows, by folder name ("Sru_Duckie"). All
+    /// 3,058 shipped props name a character their map also lists in a <c>MapCharacterList</c>.</summary>
+    public string? PropName { get; init; }
+
+    /// <summary>M747: which <c>skins/skin&lt;N&gt;.bin</c> of <see cref="PropName"/> the prop uses. Riot
+    /// never writes it as 0 (0 of 3,058) - the field is left out instead.</summary>
+    public uint SkinId { get; init; }
 }
 
 /// <summary>
@@ -230,6 +254,42 @@ public static class MapPlaceableWriter
         return new MapPlacementId(best.PathHash, candidate);
     }
 
+    /// <summary>M747: "Characters/X/Skins/Skin12" (or "Skin12") -> 12.</summary>
+    public static bool TrySkinNumber(string skin, out uint number)
+    {
+        number = 0;
+        string leaf = skin.Contains('/') ? skin[(skin.LastIndexOf('/') + 1)..] : skin;
+        return leaf.StartsWith("Skin", StringComparison.OrdinalIgnoreCase)
+            && uint.TryParse(leaf.AsSpan(4), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out number);
+    }
+
+    /// <summary>
+    /// M747: allocate a placement identity for a <c>MapAnimatedProp</c>: the container that already holds
+    /// the most of them - Riot keeps them in their own layers (AnimProps_NightMarket, SRX_Duckies,
+    /// Design_Base ...) - and on a map with none, where the map keeps its characters
+    /// (<see cref="NewCharacterId"/>), since a prop names a character too.
+    /// </summary>
+    public static MapPlacementId NewAnimatedPropId(BinTree tree, uint seed)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        BinTreeObject? best = null;
+        int bestCount = 0;
+        foreach (var o in tree.Objects.Values)
+        {
+            if (o.ClassHash != ContainerClass || o.Properties.GetValueOrDefault(F_items) is not BinTreeMap m) continue;
+            int count = m.Count(e => e.Value is BinTreeStruct st && st.ClassHash == AnimatedPropClass);
+            if (count > bestCount) { best = o; bestCount = count; }
+        }
+        if (best is null) return NewCharacterId(tree, seed);
+
+        var items = (BinTreeMap)best.Properties[F_items];
+        var used = items.Where(e => e.Key is BinTreeHash).Select(e => ((BinTreeHash)e.Key).Value).ToHashSet();
+        uint candidate = seed * 2654435761u + 0x9E3779B9u;
+        while (candidate == 0 || used.Contains(candidate)) candidate++;
+        return new MapPlacementId(best.PathHash, candidate);
+    }
+
     /// <summary>
     /// M531: allocate MANY placement identities at once (any placement type - M575 sounds included).
     ///
@@ -281,6 +341,14 @@ public static class MapPlaceableWriter
     // bloom's 12 (the Gromp props), and on Map453 the 2 of 26 that are the S3Yonkeys - the other 24
     // there are turrets, inhibitors and the nexus, whose animation the server drives.
     private static readonly uint F_PlayIdleAnimation = HashAlgorithms.Fnv1a("PlayIdleAnimation");
+    // M747: Riot's MapAnimatedProp, field for field from the schema database.
+    private static readonly uint AnimatedPropClass = HashAlgorithms.Fnv1a("MapAnimatedProp");
+    private static readonly uint F_PropName = HashAlgorithms.Fnv1a("PropName");
+    private static readonly uint F_SkinID = HashAlgorithms.Fnv1a("SkinID");
+    // "Dimension" (U8, schema default 0). Riot writes 6 on 2,906 of 3,058 props and nothing else when it
+    // writes it at all; what the value means is not known, so it is copied rather than interpreted.
+    private const uint F_Dimension = 0x670b6ae3u;
+    private const byte RiotDimension = 6;
     private static readonly uint SkinCharacterGeComponentDefClass = HashAlgorithms.Fnv1a("SkinCharacterGeComponentDef");
     private static readonly uint CharacterMeshGeComponentDefClass = HashAlgorithms.Fnv1a("CharacterMeshGeComponentDef");
 
@@ -374,6 +442,33 @@ public static class MapPlaceableWriter
                     .Append(new(new BinTreeHash(0, edit.Id.ItemKey), character)));
             container.Properties[F_items] = items;
         }
+        else if (edit.CreateAnimatedProp)
+        {
+            if (items.Any(e => e.Key is BinTreeHash k && k.Value == edit.Id.ItemKey)
+                || edit.Transform is null || string.IsNullOrWhiteSpace(edit.PropName)) return false;
+            // Field order as Riot writes it (1,251 of 3,058 carry exactly this shape): transform, name,
+            // PropName, PlayIdleAnimation, IdleAnimationName, SkinID, Dimension. Unlike the character
+            // placement the name is a STRING on this class (3,058 of 3,058), and SkinID 0 is left out.
+            bool plays = !string.IsNullOrWhiteSpace(edit.IdleAnimation);
+            var fields = new List<BinTreeProperty>
+            {
+                new BinTreeMatrix44(F_transform, edit.Transform.Value),
+                new BinTreeString(F_name, edit.Name ?? edit.PropName!),
+                new BinTreeString(F_PropName, edit.PropName!),
+            };
+            if (plays)
+            {
+                fields.Add(new BinTreeBool(F_PlayIdleAnimation, true));
+                fields.Add(new BinTreeString(F_IdleAnimationName, edit.IdleAnimation!));
+            }
+            if (edit.SkinId != 0) fields.Add(new BinTreeU32(F_SkinID, edit.SkinId));
+            fields.Add(new BinTreeU8(F_Dimension, RiotDimension));
+
+            items = new BinTreeMap(F_items, items.KeyType, items.ValueType,
+                items.Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key, e.Value))
+                    .Append(new(new BinTreeHash(0, edit.Id.ItemKey), new BinTreeStruct(0, AnimatedPropClass, fields))));
+            container.Properties[F_items] = items;
+        }
 
         BinTreeProperty? key = null, value = null;
         foreach (var e in items)
@@ -410,7 +505,14 @@ public static class MapPlaceableWriter
                 _ => new BinTreeU8(F_visibilityFlags, (byte)maskValue),
             };
         }
-        if (edit.Skin is { } skin)
+        if (edit.Skin is { } propSkin && s.ClassHash == AnimatedPropClass)
+        {
+            // M747: this class names its skin by NUMBER; "Characters/X/Skins/Skin3" becomes SkinID 3.
+            if (!TrySkinNumber(propSkin, out uint number)) return false;
+            if (number == 0) s.Properties.Remove(F_SkinID);
+            else s.Properties[F_SkinID] = new BinTreeU32(F_SkinID, number);
+        }
+        else if (edit.Skin is { } skin)
         {
             var characterData = s.Properties.Values.OfType<BinTreeStruct>()
                 .FirstOrDefault(x => x.Properties.ContainsKey(F_characterRecord));
@@ -428,7 +530,8 @@ public static class MapPlaceableWriter
         var editedByContainer = edits.GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
         // M206: a clone's key is absent from `before` on purpose, so it must not read as an intruder.
-        var addedByContainer = edits.Where(e => e.CloneOf is not null || e.CreateParticle || e.CreateSound || e.CreateCharacter)
+        var addedByContainer = edits.Where(e => e.CloneOf is not null || e.CreateParticle || e.CreateSound || e.CreateCharacter
+                                                || e.CreateAnimatedProp)
             .GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
 

@@ -38,8 +38,9 @@ public sealed partial class MainWindowViewModel
             CanPlace = _currentMap is not null && _currentMapEntry is not null,
             PickFolder = () => Dialogs.OpenFolderAsync("Pick the character folder (its .skn, .skl, animations and texture)"),
             DecodeImage = DecodeCharacterImage,
-            Create = CreateCharacterFromFolderAsync,
         };
+        // M747: the form is the window's choice, read when Create runs so a late toggle counts.
+        vm.Create = (result, place) => CreateCharacterFromFolderAsync(result, place, vm.PlaceAsAnimatedProp);
         ShowCharacterCreatorWindow?.Invoke(vm);
     }
 
@@ -74,7 +75,7 @@ public sealed partial class MainWindowViewModel
     /// <summary>Stage the finished character into the open map's package and, when
     /// <paramref name="place"/>, add a scenery placement of it at the gizmo. Returns the line the window
     /// shows; throws with the reason when it cannot.</summary>
-    private async Task<string> CreateCharacterFromFolderAsync(CharacterImportResult result, bool place)
+    private async Task<string> CreateCharacterFromFolderAsync(CharacterImportResult result, bool place, bool asAnimatedProp = true)
     {
         if (_currentMapEntry is not { } mapEntry)
             throw new InvalidOperationException("Open the map the character belongs to first - its files are staged into that map's package.");
@@ -92,7 +93,7 @@ public sealed partial class MainWindowViewModel
             throw new InvalidOperationException("These files could not be staged: " + string.Join(", ", staged.Missing.Take(4)));
 
         string placed = place
-            ? await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry)
+            ? await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry, asAnimatedProp)
             : "";
         if (!place) { FinishWorkshopMutation(); await LoadMapGeoAsync(mapEntry); }
 
@@ -109,7 +110,8 @@ public sealed partial class MainWindowViewModel
             throw new InvalidOperationException("Open a map before adding a prop to it.");
         if (!await EnsureProjectSavedAsync())
             throw new InvalidOperationException("Save the project before adding a prop.");
-        string placed = await PlaceCharacterAsync(request.Character, request.CharacterRecord, request.Skin, request.IdleClip, mapEntry);
+        string placed = await PlaceCharacterAsync(request.Character, request.CharacterRecord, request.Skin, request.IdleClip, mapEntry,
+            request.AsAnimatedProp);
         return placed.TrimStart();
     }
 
@@ -118,7 +120,7 @@ public sealed partial class MainWindowViewModel
     /// reloads the map so the prop is there, and selects it.
     /// </summary>
     private async Task<string> PlaceCharacterAsync(string character, string recordPath, string skinPath, string? idleClip,
-        Core.Assets.WadAssetEntry mapEntry)
+        Core.Assets.WadAssetEntry mapEntry, bool asAnimatedProp = true)
     {
         if (_currentMap is not { } map) throw new InvalidOperationException("No map is open.");
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
@@ -130,21 +132,40 @@ public sealed partial class MainWindowViewModel
 
         var tree = SafeBinTree.Parse(target);
         // M746: into the container the map keeps its characters in - the first one is not a safe default.
-        var id = MapPlaceableWriter.NewCharacterId(tree, HashAlgorithms.Fnv1a(placementName));
+        // M747: an animated prop goes where the map keeps those, falling back to the same place.
+        var id = asAnimatedProp
+            ? MapPlaceableWriter.NewAnimatedPropId(tree, HashAlgorithms.Fnv1a(placementName))
+            : MapPlaceableWriter.NewCharacterId(tree, HashAlgorithms.Fnv1a(placementName));
         if (!id.IsValid)
             throw new InvalidOperationException("This map has no MapPlaceableContainer, so it cannot safely hold placements.");
 
         var transform = System.Numerics.Matrix4x4.Identity;
         transform.Translation = GizmoPivot ?? map.Center;
-        var edit = new MapPlacementEdit(id)
-        {
-            CreateCharacter = true,
-            Name = placementName,
-            Transform = transform,
-            CharacterRecord = recordPath,
-            Skin = skinPath,
-            IdleAnimation = idleClip,
-        };
+        // M747: a MapAnimatedProp names its skin by number; a skin path that is not "Skins/SkinN" cannot be
+        // said in that form, and is refused rather than silently placed as Skin0.
+        uint skinId = 0;
+        if (asAnimatedProp && !MapPlaceableWriter.TrySkinNumber(skinPath, out skinId))
+            throw new InvalidOperationException($"'{skinPath}' is not a Skins/SkinN path, so it cannot be placed as an "
+                + "animated prop. Untick \"Client-side prop\" to place it as a character instead.");
+        var edit = asAnimatedProp
+            ? new MapPlacementEdit(id)
+            {
+                CreateAnimatedProp = true,
+                Name = placementName,
+                Transform = transform,
+                PropName = character,
+                SkinId = skinId,
+                IdleAnimation = idleClip,
+            }
+            : new MapPlacementEdit(id)
+            {
+                CreateCharacter = true,
+                Name = placementName,
+                Transform = transform,
+                CharacterRecord = recordPath,
+                Skin = skinPath,
+                IdleAnimation = idleClip,
+            };
         byte[] written = MapPlaceableWriter.WriteEdits(target, new[] { edit }, out var error)
             ?? throw new InvalidOperationException(error ?? "The character placement could not be created.");
         if (!await SaveMapBinBytesAsync(binEntry, written))
@@ -162,7 +183,7 @@ public sealed partial class MainWindowViewModel
         FinishWorkshopMutation();
         await LoadMapGeoAsync(mapEntry);
         if (MapContent.AllProps.FirstOrDefault(p => p.Prop.Id == id) is { } added) SelectedPropNode = added;
-        _log.Success("Props", $"Placed '{placementName}' ({skinPath}) at "
+        _log.Success("Props", $"Placed '{placementName}' ({skinPath}) as {(asAnimatedProp ? "an animated prop" : "a character")} at "
             + $"({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0}).");
         return $" Placed '{placementName}' at ({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0})." + listed;
     }

@@ -174,9 +174,11 @@ public sealed class CharacterCreatorTests : IDisposable
         Assert.Contains("WriteStagedAssets(sources, mapEntry, new List<string>(), overwrite: true)", host);
         Assert.Contains("bool overwrite = false)", staging);
         Assert.Contains("if (!overwrite && File.Exists(file)) continue;", staging);
-        // and places through the writer's create-character verb, at the gizmo, with the package's idle
+        // and places through the writer's create verbs, at the gizmo, with the package's idle - as a
+        // MapAnimatedProp by default (M747), as a scenery character when the window says so
         Assert.Contains("CreateCharacter = true,", host);
-        Assert.Contains("await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry)", host);
+        Assert.Contains("CreateAnimatedProp = true,", host);
+        Assert.Contains("await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry, asAnimatedProp)", host);
         Assert.Contains("transform.Translation = GizmoPivot ?? map.Center;", host);
         // M722: and lists every character on the map in the map's own bin, so the game preloads it
         Assert.Contains("string listed = await RegisterMapCharactersAsync(mapEntry, onMap);", host);
