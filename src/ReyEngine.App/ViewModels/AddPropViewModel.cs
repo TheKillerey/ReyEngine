@@ -32,7 +32,7 @@ public sealed class PropSkinRowViewModel
 /// <param name="AsAnimatedProp">M747: write a MapAnimatedProp (client-side decoration) rather than a scenery
 /// character placement.</param>
 public sealed record AddPropRequest(string Character, string CharacterRecord, string Skin, string? IdleClip,
-    bool AsAnimatedProp = true);
+    bool AsAnimatedProp = true, float AppearAfterSeconds = 0f);
 
 /// <summary>
 /// M697: add a prop to the map - a character the map's own package already carries, placed as scenery.
@@ -72,6 +72,8 @@ public sealed partial class AddPropViewModel : ObservableObject
     [ObservableProperty] private bool _busy;
     /// <summary>M747: place as a MapAnimatedProp (client-side) rather than a scenery character.</summary>
     [ObservableProperty] private bool _placeAsAnimatedProp = true;
+    /// <summary>M748 (experimental): seconds of game time before the prop appears; 0 = always.</summary>
+    [ObservableProperty] private decimal _appearAfterSeconds;
 
     /// <summary>The skin's object path, in the spelling the hash dictionary knows.</summary>
     public string? SkinObjectPath { get; private set; }
@@ -195,7 +197,8 @@ public sealed partial class AddPropViewModel : ObservableObject
         if (!CanAdd || Add is null || SkinObjectPath is not { } skin || CharacterRecordPath is not { } record
             || SelectedCharacter is not { } character) return;
         Busy = true;
-        try { Status = await Add(new AddPropRequest(character.Name, record, skin, SelectedClip, PlaceAsAnimatedProp)); }
+        try { Status = await Add(new AddPropRequest(character.Name, record, skin, SelectedClip, PlaceAsAnimatedProp,
+            PlaceAsAnimatedProp ? (float)AppearAfterSeconds : 0f)); }
         catch (Exception ex) { Status = ex.Message; }
         finally { Busy = false; }
     }

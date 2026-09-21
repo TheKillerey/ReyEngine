@@ -22,7 +22,7 @@
     <!-- the bottom bar: status and the one button -->
     <Border DockPanel.Dock="Bottom" Background="{DynamicResource ReyHeaderBrush}"
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,1,0,0" Padding="20,10">
-      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto">
         <TextBlock Grid.Column="0" Text="{Binding Status}" FontSize="10.5" TextWrapping="Wrap" VerticalAlignment="Center"
                    Foreground="{DynamicResource ReyTextDimBrush}" />
         <CheckBox Grid.Column="2" Content="Client-side prop" IsChecked="{Binding PlaceAsAnimatedProp}"
@@ -32,7 +32,14 @@
         <CheckBox Grid.Column="1" Content="Also place it at the gizmo" IsChecked="{Binding AlsoPlace}" IsVisible="{Binding CanPlace}"
                   Margin="12,0" VerticalAlignment="Center" FontSize="11"
                   ToolTip.Tip="Add a placement of the new character to the open map, at the gizmo (or the map centre), idling with its idle clip" />
-        <Button Grid.Column="3" x:Name="CreateButton" Classes="primary" Content="{Binding CreateLabel}" Command="{Binding CreateCharacterCommand}"
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="0,0,12,0"
+                    IsEnabled="{Binding PlaceAsAnimatedProp}" IsVisible="{Binding CanPlace}">
+          <TextBlock Text="Appear after" FontSize="11" VerticalAlignment="Center" />
+          <NumericUpDown Value="{Binding AppearAfterSeconds}" Minimum="0" Maximum="7200" Increment="10"
+                         FormatString="0" Width="92" FontSize="11" ToolTip.Tip="EXPERIMENTAL. Hide the prop until the game clock passes this many seconds; 0 = always visible. Written as a logic-driven visibility controller (TimeMaterialDriver greater than N) from classes Riot ships, but Riot never gates a map placement on time, so whether the game honours it is what a test decides. Only for a client-side prop." />
+          <TextBlock Text="s" FontSize="11" VerticalAlignment="Center" />
+        </StackPanel>
+        <Button Grid.Column="4" x:Name="CreateButton" Classes="primary" Content="{Binding CreateLabel}" Command="{Binding CreateCharacterCommand}"
                 IsEnabled="{Binding CanCreate}" Padding="18,7" />
       </Grid>
     </Border>

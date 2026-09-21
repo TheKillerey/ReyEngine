@@ -178,7 +178,7 @@ public sealed class CharacterCreatorTests : IDisposable
         // MapAnimatedProp by default (M747), as a scenery character when the window says so
         Assert.Contains("CreateCharacter = true,", host);
         Assert.Contains("CreateAnimatedProp = true,", host);
-        Assert.Contains("await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry, asAnimatedProp)", host);
+        Assert.Contains("await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry, asAnimatedProp,", host);
         Assert.Contains("transform.Translation = GizmoPivot ?? map.Center;", host);
         // M722: and lists every character on the map in the map's own bin, so the game preloads it
         Assert.Contains("string listed = await RegisterMapCharactersAsync(mapEntry, onMap);", host);

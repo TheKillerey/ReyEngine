@@ -40,9 +40,11 @@ public sealed record MapSoundPlacement(
 /// rather than from a scenery-character placement (a <c>Character</c> component). The record and skin are
 /// then the paths that class implies: Characters/&lt;PropName&gt;/CharacterRecords/Root and
 /// Characters/&lt;PropName&gt;/Skins/Skin&lt;SkinID&gt; - where 3,052 of the 3,058 shipped props find their skin.</param>
+/// <param name="AppearAfterSeconds">M748: the game-clock gate ReyEngine wrote on this placement, or null.</param>
 public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterRecord, string Skin,
     int VisibilityFlags = 255, bool HasVisibilityFlags = false, MapPlacementId Id = default,
-    string IdleAnimation = "", bool PlaysIdle = false, bool IsAnimatedPropClass = false)
+    string IdleAnimation = "", bool PlaysIdle = false, bool IsAnimatedPropClass = false,
+    float? AppearAfterSeconds = null)
 {
     /// <summary>Short character identity, e.g. "SRU_Baron" from "Characters/SRU_Baron/CharacterRecords/Root".</summary>
     public string CharacterName
@@ -146,7 +148,8 @@ public static class MapPlaceableExtractor
                     bool plays = Get(s, F_playIdleAnimation) is BinTreeBool { Value: true };
                     props.Add(new MapAnimatedProp(NameOf(s), transform.Translation, transform,
                         $"Characters/{prop}/CharacterRecords/Root", $"Characters/{prop}/Skins/Skin{skinId}",
-                        visibility, hasVisibility, id, idle, plays, IsAnimatedPropClass: true));
+                        visibility, hasVisibility, id, idle, plays, IsAnimatedPropClass: true,
+                        AppearAfterSeconds: MapPlaceableWriter.ReadAppearAfter(bin, s)));
                 }
                 else if (FindCharacterData(s) is ({ } cr, var skin))
                 {

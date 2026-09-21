@@ -235,7 +235,7 @@ public sealed class MapAnimatedPropTests
             creator = File.ReadAllText(Path.Combine(app, "Views", "CharacterCreatorWindow.axaml"));
         }
         if (src is null) return;
-        Assert.Contains("CreateCharacterFromFolderAsync(result, place, vm.PlaceAsAnimatedProp)", src);
+        Assert.Contains("CreateCharacterFromFolderAsync(result, place, vm.PlaceAsAnimatedProp,", src);
         Assert.Contains("request.AsAnimatedProp", src);
         Assert.Contains("MapPlaceableWriter.NewAnimatedPropId(tree, HashAlgorithms.Fnv1a(placementName))", src);
         Assert.Contains("{Binding PlaceAsAnimatedProp}", addProp);

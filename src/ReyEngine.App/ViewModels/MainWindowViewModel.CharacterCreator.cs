@@ -40,7 +40,8 @@ public sealed partial class MainWindowViewModel
             DecodeImage = DecodeCharacterImage,
         };
         // M747: the form is the window's choice, read when Create runs so a late toggle counts.
-        vm.Create = (result, place) => CreateCharacterFromFolderAsync(result, place, vm.PlaceAsAnimatedProp);
+        vm.Create = (result, place) => CreateCharacterFromFolderAsync(result, place, vm.PlaceAsAnimatedProp,
+            vm.PlaceAsAnimatedProp ? (float)vm.AppearAfterSeconds : 0f);
         ShowCharacterCreatorWindow?.Invoke(vm);
     }
 
@@ -75,7 +76,8 @@ public sealed partial class MainWindowViewModel
     /// <summary>Stage the finished character into the open map's package and, when
     /// <paramref name="place"/>, add a scenery placement of it at the gizmo. Returns the line the window
     /// shows; throws with the reason when it cannot.</summary>
-    private async Task<string> CreateCharacterFromFolderAsync(CharacterImportResult result, bool place, bool asAnimatedProp = true)
+    private async Task<string> CreateCharacterFromFolderAsync(CharacterImportResult result, bool place, bool asAnimatedProp = true,
+        float appearAfterSeconds = 0f)
     {
         if (_currentMapEntry is not { } mapEntry)
             throw new InvalidOperationException("Open the map the character belongs to first - its files are staged into that map's package.");
@@ -93,7 +95,8 @@ public sealed partial class MainWindowViewModel
             throw new InvalidOperationException("These files could not be staged: " + string.Join(", ", staged.Missing.Take(4)));
 
         string placed = place
-            ? await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry, asAnimatedProp)
+            ? await PlaceCharacterAsync(package.Name, package.CharacterRecord, package.Skin, package.IdleClip, mapEntry, asAnimatedProp,
+                appearAfterSeconds)
             : "";
         if (!place) { FinishWorkshopMutation(); await LoadMapGeoAsync(mapEntry); }
 
@@ -111,7 +114,7 @@ public sealed partial class MainWindowViewModel
         if (!await EnsureProjectSavedAsync())
             throw new InvalidOperationException("Save the project before adding a prop.");
         string placed = await PlaceCharacterAsync(request.Character, request.CharacterRecord, request.Skin, request.IdleClip, mapEntry,
-            request.AsAnimatedProp);
+            request.AsAnimatedProp, request.AppearAfterSeconds);
         return placed.TrimStart();
     }
 
@@ -120,7 +123,7 @@ public sealed partial class MainWindowViewModel
     /// reloads the map so the prop is there, and selects it.
     /// </summary>
     private async Task<string> PlaceCharacterAsync(string character, string recordPath, string skinPath, string? idleClip,
-        Core.Assets.WadAssetEntry mapEntry, bool asAnimatedProp = true)
+        Core.Assets.WadAssetEntry mapEntry, bool asAnimatedProp = true, float appearAfterSeconds = 0f)
     {
         if (_currentMap is not { } map) throw new InvalidOperationException("No map is open.");
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
@@ -156,6 +159,8 @@ public sealed partial class MainWindowViewModel
                 PropName = character,
                 SkinId = skinId,
                 IdleAnimation = idleClip,
+                // M748 (experimental): hidden until the game clock passes this; null writes no gate.
+                AppearAfterSeconds = appearAfterSeconds > 0 ? appearAfterSeconds : null,
             }
             : new MapPlacementEdit(id)
             {
@@ -183,7 +188,7 @@ public sealed partial class MainWindowViewModel
         FinishWorkshopMutation();
         await LoadMapGeoAsync(mapEntry);
         if (MapContent.AllProps.FirstOrDefault(p => p.Prop.Id == id) is { } added) SelectedPropNode = added;
-        _log.Success("Props", $"Placed '{placementName}' ({skinPath}) as {(asAnimatedProp ? "an animated prop" : "a character")} at "
+        _log.Success("Props", $"Placed '{placementName}' ({skinPath}) as {(asAnimatedProp ? "an animated prop" : "a character")}{(asAnimatedProp && appearAfterSeconds > 0 ? $" appearing after {appearAfterSeconds:0.#} s (experimental)" : "")} at "
             + $"({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0}).");
         return $" Placed '{placementName}' at ({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0})." + listed;
     }

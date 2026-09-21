@@ -90,6 +90,24 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// <summary>M747: which <c>skins/skin&lt;N&gt;.bin</c> of <see cref="PropName"/> the prop uses. Riot
     /// never writes it as 0 (0 of 3,058) - the field is left out instead.</summary>
     public uint SkinId { get; init; }
+
+    /// <summary>
+    /// M748 (EXPERIMENTAL): make the placement appear only once the game clock passes this many seconds.
+    /// Greater than zero sets it, zero removes it, null leaves it alone.
+    ///
+    /// <para>Written as a <c>LogicDriverVisibilityController</c> of the placement's own, whose
+    /// <c>VisibilityDriver</c> is <c>FloatComparisonMaterialDriver(TimeMaterialDriver &gt; N)</c>, linked from
+    /// the placement's <c>VisibilityController</c>. Every piece is a class Riot ships - the comparison and
+    /// the clock in 1,183 champion and map bins - but Riot never gates a MAP placement on time: 0 of the
+    /// 678 visibility controllers on the shipped maps are logic-driven, and 0 of 3,058 animated props link
+    /// a controller at all. Whether the client evaluates it, and which clock TimeMaterialDriver reads, is
+    /// what an in-game test decides.</para>
+    ///
+    /// <para><c>mOperator</c> 1 is read as "greater than" from Riot's own ladders: a sine compared with 0.95
+    /// for brief sparkles, Rumble's velocity with 50, and the mirrored form (3, "less than") on Ezreal's
+    /// health against 0.3 for the low-health effect.</para>
+    /// </summary>
+    public float? AppearAfterSeconds { get; init; }
 }
 
 /// <summary>
@@ -254,6 +272,57 @@ public static class MapPlaceableWriter
         return new MapPlacementId(best.PathHash, candidate);
     }
 
+    /// <summary>M748: the path of the controller object that belongs to one placement. Derived from the
+    /// placement's identity so a second edit finds and replaces the first one's controller rather than
+    /// leaving it behind.</summary>
+    public static string AppearAfterControllerPath(MapPlacementId id) =>
+        $"ReyEngine/VisibilityControllers/AppearAfter/{id.ContainerHash:x8}_{id.ItemKey:x8}";
+
+    /// <summary>M748: the seconds a placement waits before appearing, when it carries a controller this
+    /// writer made; null otherwise.</summary>
+    public static float? ReadAppearAfter(BinTree tree, BinTreeStruct placement)
+    {
+        if (placement.Properties.GetValueOrDefault(F_VisibilityController) is not BinTreeObjectLink link) return null;
+        if (!tree.Objects.TryGetValue(link.Value, out var ctrl) || ctrl.ClassHash != LogicDriverVisibilityControllerClass) return null;
+        if (ctrl.Properties.GetValueOrDefault(F_VisibilityDriver) is not BinTreeStruct cmp || cmp.ClassHash != FloatComparisonClass) return null;
+        if (cmp.Properties.GetValueOrDefault(F_mValueA) is not BinTreeStruct { } a || a.ClassHash != TimeDriverClass) return null;
+        if (cmp.Properties.GetValueOrDefault(F_mValueB) is not BinTreeStruct { } b || b.ClassHash != FloatLiteralClass) return null;
+        return b.Properties.GetValueOrDefault(F_mValue) is BinTreeF32 v ? v.Value : 0f;
+    }
+
+    private static bool ApplyAppearAfter(BinTree tree, MapPlacementId id, BinTreeStruct placement, float seconds)
+    {
+        if (float.IsNaN(seconds) || float.IsInfinity(seconds) || seconds < 0) return false;
+        uint ctrlHash = HashAlgorithms.Fnv1a(AppearAfterControllerPath(id));
+
+        if (seconds == 0)
+        {
+            // Removing the gate: drop the link, and the controller if it is ours - a controller someone
+            // else made stays, it may be shared.
+            if (placement.Properties.GetValueOrDefault(F_VisibilityController) is BinTreeObjectLink l && l.Value == ctrlHash)
+                placement.Properties.Remove(F_VisibilityController);
+            tree.Objects.Remove(ctrlHash);
+            return true;
+        }
+
+        // Riot writes PathHash first on every controller object it ships.
+        var controller = new BinTreeObject(ctrlHash, LogicDriverVisibilityControllerClass, new BinTreeProperty[]
+        {
+            new BinTreeHash(F_PathHash, ctrlHash),
+            new BinTreeStruct(F_VisibilityDriver, FloatComparisonClass, new BinTreeProperty[]
+            {
+                new BinTreeStruct(F_mValueA, TimeDriverClass, Array.Empty<BinTreeProperty>()),
+                new BinTreeStruct(F_mValueB, FloatLiteralClass, new BinTreeProperty[] { new BinTreeF32(F_mValue, seconds) }),
+                new BinTreeU32(F_mOperator, GreaterThan),
+            }),
+        });
+        tree.Objects[ctrlHash] = controller;
+        // On a placement the link is the LAST field (Riot's MapParticles: ..., eyeCandy, VisibilityController).
+        placement.Properties.Remove(F_VisibilityController);
+        placement.Properties[F_VisibilityController] = new BinTreeObjectLink(F_VisibilityController, ctrlHash);
+        return true;
+    }
+
     /// <summary>M747: "Characters/X/Skins/Skin12" (or "Skin12") -> 12.</summary>
     public static bool TrySkinNumber(string skin, out uint number)
     {
@@ -349,6 +418,19 @@ public static class MapPlaceableWriter
     // writes it at all; what the value means is not known, so it is copied rather than interpreted.
     private const uint F_Dimension = 0x670b6ae3u;
     private const byte RiotDimension = 6;
+    // M748: the time gate, built from classes Riot ships.
+    private static readonly uint F_VisibilityController = HashAlgorithms.Fnv1a("VisibilityController");
+    private static readonly uint F_PathHash = HashAlgorithms.Fnv1a("PathHash");
+    private static readonly uint F_VisibilityDriver = HashAlgorithms.Fnv1a("VisibilityDriver");
+    private static readonly uint F_mValueA = HashAlgorithms.Fnv1a("mValueA");
+    private static readonly uint F_mValueB = HashAlgorithms.Fnv1a("mValueB");
+    private static readonly uint F_mOperator = HashAlgorithms.Fnv1a("mOperator");
+    private static readonly uint F_mValue = HashAlgorithms.Fnv1a("mValue");
+    private static readonly uint LogicDriverVisibilityControllerClass = HashAlgorithms.Fnv1a("LogicDriverVisibilityController");
+    private static readonly uint FloatComparisonClass = HashAlgorithms.Fnv1a("FloatComparisonMaterialDriver");
+    private static readonly uint TimeDriverClass = HashAlgorithms.Fnv1a("TimeMaterialDriver");
+    private static readonly uint FloatLiteralClass = HashAlgorithms.Fnv1a("FloatLiteralMaterialDriver");
+    private const uint GreaterThan = 1u;
     private static readonly uint SkinCharacterGeComponentDefClass = HashAlgorithms.Fnv1a("SkinCharacterGeComponentDef");
     private static readonly uint CharacterMeshGeComponentDefClass = HashAlgorithms.Fnv1a("CharacterMeshGeComponentDef");
 
@@ -505,6 +587,7 @@ public static class MapPlaceableWriter
                 _ => new BinTreeU8(F_visibilityFlags, (byte)maskValue),
             };
         }
+        if (edit.AppearAfterSeconds is { } after && !ApplyAppearAfter(tree, edit.Id, s, after)) return false;
         if (edit.Skin is { } propSkin && s.ClassHash == AnimatedPropClass)
         {
             // M747: this class names its skin by NUMBER; "Characters/X/Skins/Skin3" becomes SkinID 3.
@@ -535,11 +618,17 @@ public static class MapPlaceableWriter
             .GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
 
-        if (before.Objects.Count != after.Objects.Count)
-            return $"object count {before.Objects.Count} -> {after.Objects.Count}";
+        // M748: a time gate adds, replaces or removes one controller object per gated placement - exactly
+        // those, and nothing else, may differ at the object level.
+        var gateObjects = edits.Where(e => e.AppearAfterSeconds is not null)
+            .Select(e => HashAlgorithms.Fnv1a(AppearAfterControllerPath(e.Id))).ToHashSet();
+        foreach (var hash in after.Objects.Keys)
+            if (!before.Objects.ContainsKey(hash) && !gateObjects.Contains(hash))
+                return $"object 0x{hash:x8} appeared without being asked for";
 
         foreach (var (hash, a) in before.Objects)
         {
+            if (gateObjects.Contains(hash)) continue;
             if (!after.Objects.TryGetValue(hash, out var b)) return $"object 0x{hash:x8} disappeared";
             if (a.ClassHash != b.ClassHash) return $"object 0x{hash:x8} changed class";
 
