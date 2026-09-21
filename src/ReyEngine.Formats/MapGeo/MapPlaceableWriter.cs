@@ -193,6 +193,44 @@ public static class MapPlaceableWriter
     }
 
     /// <summary>
+    /// M746: allocate a placement identity for a CHARACTER, in the container that already holds the map's
+    /// characters.
+    ///
+    /// <para><see cref="NewParticleId"/> takes the first container the tree yields, and a map's containers
+    /// are not interchangeable buckets: <c>mapContainer.chunks</c> names each one as a layer (Structures,
+    /// jungle, Vfx, Audio, Design_Data, Test ...). On Map453 the first one is a scratch layer - Riot keeps
+    /// a single test light at intensity 1000 in it, fifteen null entries and two bare markers, and not one
+    /// character. Every prop the Character Creator placed went there, and none of them spawned in game,
+    /// including a plain S3Yonkey whose Riot-placed twins on the same map do. Across the shipped maps the
+    /// first container holds characters in 1 of the 25 bins that have any.</para>
+    ///
+    /// <para>So a character goes where the map already keeps characters: the container holding the most
+    /// character placements (scenery or attackable), the same "follow the map's own layout" rule
+    /// <see cref="MapCharacterListWriter"/> uses for the character lists. A map with no characters at all
+    /// falls back to <see cref="NewParticleId"/>'s choice.</para>
+    /// </summary>
+    public static MapPlacementId NewCharacterId(BinTree tree, uint seed)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        BinTreeObject? best = null;
+        int bestCount = 0;
+        foreach (var o in tree.Objects.Values)
+        {
+            if (o.ClassHash != ContainerClass || o.Properties.GetValueOrDefault(F_items) is not BinTreeMap m) continue;
+            int count = m.Count(e => e.Value is BinTreeStruct st
+                && (st.ClassHash == CharacterItemClass || st.ClassHash == UnitCharacterItemClass));
+            if (count > bestCount) { best = o; bestCount = count; }
+        }
+        if (best is null) return NewParticleId(tree, seed);
+
+        var items = (BinTreeMap)best.Properties[F_items];
+        var used = items.Where(e => e.Key is BinTreeHash).Select(e => ((BinTreeHash)e.Key).Value).ToHashSet();
+        uint candidate = seed * 2654435761u + 0x9E3779B9u;
+        while (candidate == 0 || used.Contains(candidate)) candidate++;
+        return new MapPlacementId(best.PathHash, candidate);
+    }
+
+    /// <summary>
     /// M531: allocate MANY placement identities at once (any placement type - M575 sounds included).
     ///
     /// <para><see cref="NewParticleId"/> derives its key from the keys the tree holds RIGHT NOW, so
@@ -231,6 +269,8 @@ public static class MapPlaceableWriter
     // M696: the decorative character placement. Its class has no name in the hash database; the value is
     // the one every such placement carries on the shipped maps (26 on Map453, 33 on Map12, 60 on Map11).
     private const uint CharacterItemClass = 0x9aa5b4bcu;
+    // M746: the attackable character placement (turrets, inhibitors, nexus, camps) - also unnamed.
+    private const uint UnitCharacterItemClass = 0xad65d8c4u;
     private static readonly uint F_Character = HashAlgorithms.Fnv1a("Character");
     private static readonly uint F_CharacterMesh = HashAlgorithms.Fnv1a("CharacterMesh");
     private static readonly uint F_IdleAnimationName = HashAlgorithms.Fnv1a("IdleAnimationName");

@@ -129,7 +129,8 @@ public sealed partial class MainWindowViewModel
         string placementName = $"{character}_{existing + 1}";
 
         var tree = SafeBinTree.Parse(target);
-        var id = MapPlaceableWriter.NewParticleId(tree, HashAlgorithms.Fnv1a(placementName));
+        // M746: into the container the map keeps its characters in - the first one is not a safe default.
+        var id = MapPlaceableWriter.NewCharacterId(tree, HashAlgorithms.Fnv1a(placementName));
         if (!id.IsValid)
             throw new InvalidOperationException("This map has no MapPlaceableContainer, so it cannot safely hold placements.");
 
