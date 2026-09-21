@@ -109,6 +109,16 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// health against 0.3 for the low-health effect.</para>
     /// </summary>
     public float? AppearAfterSeconds { get; init; }
+
+    /// <summary>
+    /// M751: turn an existing scenery-CHARACTER placement into a <c>MapAnimatedProp</c> in place - same
+    /// container, same key, same transform - so a prop placed before M747 spawns without being placed
+    /// again. Character placements are spawned by the server (M747); this form is created by the client.
+    /// Only what the new form can say is carried: the character (its Root record), the skin number, the
+    /// idle and whether it plays, and the visibility mask. Anything else is refused with the reason by
+    /// <see cref="MapPlaceableWriter.WhyNotConvertible"/> rather than dropped.
+    /// </summary>
+    public bool ConvertToAnimatedProp { get; init; }
 }
 
 /// <summary>
@@ -322,6 +332,106 @@ public static class MapPlaceableWriter
         placement.Properties.Remove(F_VisibilityController);
         placement.Properties[F_VisibilityController] = new BinTreeObjectLink(F_VisibilityController, ctrlHash);
         return true;
+    }
+
+    /// <summary>M751: why the placement cannot become a MapAnimatedProp, or null when it can.</summary>
+    public static string? WhyNotConvertible(byte[] materialsBin, MapPlacementId id)
+    {
+        BinTree tree;
+        try { tree = SafeBinTree.Parse(materialsBin); }
+        catch (Exception ex) { return $"the materials bin does not parse: {ex.Message}"; }
+        if (!tree.Objects.TryGetValue(id.ContainerHash, out var container)
+            || container.Properties.GetValueOrDefault(F_items) is not BinTreeMap items)
+            return "the placement's container is not in the materials bin.";
+        foreach (var e in items)
+            if (e.Key is BinTreeHash k && k.Value == id.ItemKey)
+                return e.Value is BinTreeStruct s
+                    ? (ConvertedFrom(s, id.ItemKey, out string? why) is null ? why : null)
+                    : "the placement is not a struct.";
+        return "the placement is not in its container any more.";
+    }
+
+    /// <summary>M751: whether Riot's own bin holds a placement under this (container, key). Such a placement
+    /// is spawned by the server from Riot's data whatever the mod says, so converting it would have the
+    /// client draw a second copy on top of the server's.</summary>
+    public static bool ShippedBy(byte[] riotMaterialsBin, MapPlacementId id)
+    {
+        try
+        {
+            var tree = SafeBinTree.Parse(riotMaterialsBin);
+            return tree.Objects.TryGetValue(id.ContainerHash, out var c)
+                && c.Properties.GetValueOrDefault(F_items) is BinTreeMap m
+                && m.Any(e => e.Key is BinTreeHash k && k.Value == id.ItemKey);
+        }
+        catch { return false; }
+    }
+
+    // The fields a scenery-character placement may carry and still be said as an animated prop.
+    private static readonly HashSet<uint> ConvertibleFields = new()
+    {
+        HashAlgorithms.Fnv1a("transform"), HashAlgorithms.Fnv1a("name"), HashAlgorithms.Fnv1a("mVisibilityFlags"),
+        HashAlgorithms.Fnv1a("Character"), HashAlgorithms.Fnv1a("CharacterMesh"), HashAlgorithms.Fnv1a("VisibilityController"),
+    };
+
+    /// <summary>M751: the MapAnimatedProp that says what this scenery-character placement says, or null
+    /// with the reason. Refuses rather than drops: a field the new form has no place for is a reason.</summary>
+    private static BinTreeStruct? ConvertedFrom(BinTreeStruct s, uint itemKey, out string? why)
+    {
+        why = null;
+        if (s.ClassHash == AnimatedPropClass) { why = "it is already a client-side prop."; return null; }
+        if (s.ClassHash == UnitCharacterItemClass)
+        { why = "it is an attackable unit (a turret, inhibitor, nexus or camp) - a gameplay object, not a decoration."; return null; }
+        if (s.ClassHash != CharacterItemClass) { why = "it is not a character placement."; return null; }
+        if (s.Properties.Keys.FirstOrDefault(k => !ConvertibleFields.Contains(k)) is var extra && extra != 0)
+        { why = $"it carries field 0x{extra:x8}, which an animated prop has no place for."; return null; }
+        if (s.Properties.GetValueOrDefault(F_transform) is not BinTreeMatrix44 transform)
+        { why = "it has no transform."; return null; }
+        if (s.Properties.GetValueOrDefault(F_Character) is not BinTreeStruct character
+            || character.Properties.GetValueOrDefault(F_characterRecord) is not BinTreeString record)
+        { why = "it names no character record."; return null; }
+
+        // An animated prop names a character, and the game takes its Root record; a placement on another
+        // record (Jade_Turret's Jade_Outer, say) would silently become a different unit.
+        var r = record.Value.Split('/');
+        if (r.Length != 4 || !r[0].Equals("Characters", StringComparison.OrdinalIgnoreCase)
+            || !r[2].Equals("CharacterRecords", StringComparison.OrdinalIgnoreCase)
+            || !r[3].Equals("Root", StringComparison.OrdinalIgnoreCase))
+        { why = $"it uses the record '{record.Value}', and an animated prop can only name a character's Root record."; return null; }
+        string prop = r[1];
+
+        uint skinId = 0;
+        if (character.Properties.GetValueOrDefault(F_skin) is BinTreeString skin)
+        {
+            var k = skin.Value.Split('/');
+            if (k.Length != 4 || !k[1].Equals(prop, StringComparison.OrdinalIgnoreCase)
+                || !TrySkinNumber(skin.Value, out skinId))
+            { why = $"its skin '{skin.Value}' is not one of {prop}'s own Skins/SkinN."; return null; }
+        }
+
+        string? idle = null;
+        bool plays = false;
+        if (s.Properties.GetValueOrDefault(F_CharacterMesh) is BinTreeStruct mesh)
+        {
+            idle = (mesh.Properties.GetValueOrDefault(F_IdleAnimationName) as BinTreeString)?.Value;
+            plays = mesh.Properties.GetValueOrDefault(F_PlayIdleAnimation) is BinTreeBool { Value: true };
+        }
+
+        // Riot's field order: transform, name, mVisibilityFlags, PropName, PlayIdleAnimation,
+        // IdleAnimationName, SkinID, Dimension - and a controller link last.
+        var fields = new List<BinTreeProperty>
+        {
+            new BinTreeMatrix44(F_transform, transform.Value),
+            // The character placement's name is a hash, so the text is gone; the key keeps it unique.
+            new BinTreeString(F_name, $"{prop}_{itemKey:x8}"),
+        };
+        if (s.Properties.GetValueOrDefault(F_visibilityFlags) is { } visibility) fields.Add(visibility);
+        fields.Add(new BinTreeString(F_PropName, prop));
+        if (plays) fields.Add(new BinTreeBool(F_PlayIdleAnimation, true));
+        if (!string.IsNullOrWhiteSpace(idle)) fields.Add(new BinTreeString(F_IdleAnimationName, idle));
+        if (skinId != 0) fields.Add(new BinTreeU32(F_SkinID, skinId));
+        fields.Add(new BinTreeU8(F_Dimension, RiotDimension));
+        if (s.Properties.GetValueOrDefault(F_VisibilityController) is { } link) fields.Add(link);
+        return new BinTreeStruct(0, AnimatedPropClass, fields);
     }
 
     /// <summary>M747: "Characters/X/Skins/Skin12" (or "Skin12") -> 12.</summary>
@@ -557,6 +667,16 @@ public static class MapPlaceableWriter
         foreach (var e in items)
             if (e.Key is BinTreeHash kh && kh.Value == edit.Id.ItemKey) { key = e.Key; value = e.Value; break; }
         if (key is null || value is not BinTreeStruct s) return false;
+
+        if (edit.ConvertToAnimatedProp)
+        {
+            if (ConvertedFrom(s, edit.Id.ItemKey, out _) is not { } converted) return false;
+            items = new BinTreeMap(F_items, items.KeyType, items.ValueType,
+                items.Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key,
+                    e.Key is BinTreeHash ck && ck.Value == edit.Id.ItemKey ? converted : e.Value)));
+            container.Properties[F_items] = items;
+            s = converted;   // the other verbs of this edit apply to the new form
+        }
 
         if (edit.Remove)
         {

@@ -193,6 +193,56 @@ public sealed partial class MainWindowViewModel
         return $" Placed '{placementName}' at ({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0})." + listed;
     }
 
+    /// <summary>
+    /// M751: turn the selected scenery-character placement into a client-side MapAnimatedProp in place, so a
+    /// prop placed before M747 spawns without being placed again. Saved at once, like a placement is, and
+    /// the map reloaded - which is why unsaved placement edits are refused first: the reload would drop them.
+    /// </summary>
+    [RelayCommand]
+    private async Task ConvertPropToClientSide()
+    {
+        if (SelectedPropNode is not { } node || _currentMapEntry is not { } mapEntry) return;
+        if (node.Prop.IsAnimatedPropClass) { _log.Info("Props", $"'{node.Name}' is already a client-side prop."); return; }
+        if (!node.Prop.Id.IsValid)
+        { _log.Warn("Props", $"'{node.Name}' has no identity in the bin, so it cannot be converted."); return; }
+        if (MapContent.HasPlacementEdits)
+        {
+            _log.Warn("Props", "Save or discard your map content edits first - converting saves the map and reloads it, "
+                + "which would drop them.");
+            return;
+        }
+        if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
+        { _log.Error("Props", "The open map has no materials .bin."); return; }
+        if (!GuardEditable(binEntry)) return;
+        if (!await EnsureProjectSavedAsync()) return;
+
+        var id = node.Prop.Id;
+        byte[] source = GetAssetBytes(binEntry);
+        if (MapPlaceableWriter.WhyNotConvertible(source, id) is { } why)
+        { _log.Warn("Props", $"'{node.Name}' cannot become a client-side prop: {why}"); return; }
+        // Riot's own placements are spawned by the server from Riot's data whatever the mod writes; a
+        // converted copy would be drawn by the client ON TOP of the server's.
+        if (ReadRiotOriginalBytes(binEntry) is { } riot && MapPlaceableWriter.ShippedBy(riot, id))
+        {
+            _log.Warn("Props", $"'{node.Name}' is Riot's own placement: the server already spawns it from Riot's data, "
+                + "so converting it would draw a second copy on top. Only placements made in ReyEngine are converted.");
+            return;
+        }
+
+        byte[]? written = MapPlaceableWriter.WriteEdits(source, new[] { new MapPlacementEdit(id) { ConvertToAnimatedProp = true } },
+            out string? error);
+        if (written is null) { _log.Error("Props", $"'{node.Name}' could not be converted: {error}"); return; }
+        if (!await SaveMapBinBytesAsync(binEntry, written))
+        { _log.Error("Props", "The edited materials bin could not be saved."); return; }
+
+        string name = node.Name;
+        FinishWorkshopMutation();
+        await LoadMapGeoAsync(mapEntry);
+        if (MapContent.AllProps.FirstOrDefault(p => p.Prop.Id == id) is { } converted) SelectedPropNode = converted;
+        _log.Success("Props", $"'{name}' is now a client-side prop (MapAnimatedProp): same place, same key, "
+            + "and the game client creates it, so it spawns where a character placement never did.");
+    }
+
     /// <summary>M722: list every given character in the map's own bin (<c>mapNNN.bin</c>) so the game preloads
     /// it. The placement is already saved when this runs, so a failure here is reported, not thrown.</summary>
     private async Task<string> RegisterMapCharactersAsync(Core.Assets.WadAssetEntry mapEntry, IReadOnlyList<string> characters)
