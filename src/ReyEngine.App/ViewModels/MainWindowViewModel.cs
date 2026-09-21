@@ -10974,6 +10974,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Skin = !string.IsNullOrWhiteSpace(p.EditedSkin)
                 && !p.EffectiveSkin.Equals(p.Prop.Skin, StringComparison.OrdinalIgnoreCase) ? p.EffectiveSkin : null,
             VisibilityFlags = p.EditedVisibilityFlags,
+            // M750: change or remove the game-clock gate in place, without placing the prop again.
+            AppearAfterSeconds = p.AppearAfterChanged ? (float)p.AppearAfterSeconds : null,
             Remove = p.IsRemoved,
         }));
         placementEdits.AddRange(editedProbes.Where(p => p.Probe.Id.IsValid).Select(p => new MapPlacementEdit(p.Probe.Id)

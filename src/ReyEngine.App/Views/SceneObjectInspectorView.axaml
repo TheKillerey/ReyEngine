@@ -423,6 +423,17 @@
         <ComboBox ItemsSource="{Binding PropAnimationChoices}" SelectedItem="{Binding SelectedPropNode.EditedAnimation}"
                   FontSize="10" HorizontalAlignment="Stretch" MaxDropDownHeight="260"
                   ToolTip.Tip="Which of this character's clips the placed prop plays here. Every placement of the same skin and clip shares one pose. Not written to the map." />
+        <!-- M750: the game-clock gate of a client-side prop, editable in place. -->
+        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding SelectedPropNode.CanAppearAfter}">
+          <TextBlock Text="Appear after" FontSize="10" VerticalAlignment="Center" />
+          <NumericUpDown Value="{Binding SelectedPropNode.AppearAfterSeconds}" Minimum="0" Maximum="7200" Increment="10"
+                         FormatString="0" Width="92" FontSize="10"
+                         ToolTip.Tip="Seconds of game time before this prop appears; 0 = always visible. Saved with Save Map Content Edits. Confirmed in game (a prop set to 60 appeared at 1:00)." />
+          <TextBlock Text="s" FontSize="10" VerticalAlignment="Center" />
+        </StackPanel>
+        <TextBlock Text="A character placement is spawned by the server, so it cannot wait for the clock - place it as a client-side prop instead."
+                   FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                   IsVisible="{Binding !SelectedPropNode.CanAppearAfter}" />
         <Button Classes="tool" Content="Open in character editor" Command="{Binding OpenPropInCharacterEditorCommand}"
                 FontSize="10" Padding="8,2" HorizontalAlignment="Left"
                 ToolTip.Tip="Open this skin in the character window - its materials, clips, drivers and spells - exactly as a champion opens from the character browser" />

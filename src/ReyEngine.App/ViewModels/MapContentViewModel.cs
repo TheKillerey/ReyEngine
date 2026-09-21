@@ -166,6 +166,28 @@ public sealed partial class AnimatedPropViewModel : MapOutlinerItemViewModel
     [ObservableProperty] private string? _editedSkin;
     [ObservableProperty] private int? _editedVisibilityFlags;
 
+    /// <summary>M750: a new game-clock gate for this prop, in seconds; null = untouched, 0 = remove it.</summary>
+    [ObservableProperty] private decimal? _editedAppearAfter;
+
+    /// <summary>M750: whether this prop can carry a game-clock gate. Only Riot's MapAnimatedProp class does
+    /// in practice: a character placement is spawned by the server (M747), so a client-side gate on it would
+    /// be written and never read.</summary>
+    public bool CanAppearAfter => Prop.IsAnimatedPropClass;
+
+    /// <summary>M750: the seconds the prop waits before appearing, edits included; 0 = always visible.</summary>
+    public decimal AppearAfterSeconds
+    {
+        get => EditedAppearAfter ?? (decimal)(Prop.AppearAfterSeconds ?? 0f);
+        set => EditedAppearAfter = value;
+    }
+
+    /// <summary>M750: whether the gate differs from what the map holds, so a save writes it.</summary>
+    public bool AppearAfterChanged =>
+        CanAppearAfter && EditedAppearAfter is { } e && e != (decimal)(Prop.AppearAfterSeconds ?? 0f);
+
+    partial void OnEditedAppearAfterChanged(decimal? value)
+    { OnPropertyChanged(nameof(AppearAfterSeconds)); OnPropertyChanged(nameof(HasEdits)); StateChanged?.Invoke(this); }
+
     /// <summary>M677: the entry in the animation list that means "the idle, as the game plays it".</summary>
     public const string IdleChoice = "(idle)";
 
@@ -194,7 +216,7 @@ public sealed partial class AnimatedPropViewModel : MapOutlinerItemViewModel
     }
     public string EffectiveSkinName => EffectiveSkin.Contains('/') ? EffectiveSkin[(EffectiveSkin.LastIndexOf('/') + 1)..] : EffectiveSkin;
     public int EffectiveVisibilityFlags => EditedVisibilityFlags ?? Prop.VisibilityFlags;
-    public bool HasEdits => IsRemoved || IsMoved || EditedVisibilityFlags is not null
+    public bool HasEdits => IsRemoved || IsMoved || EditedVisibilityFlags is not null || AppearAfterChanged
         || (!string.IsNullOrWhiteSpace(EditedSkin) && !EffectiveSkin.Equals(Prop.Skin, StringComparison.OrdinalIgnoreCase));
 
     // M699: the move/rotate/scale model every other placement already had. A prop was the one kind of
