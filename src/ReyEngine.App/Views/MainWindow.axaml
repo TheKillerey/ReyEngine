@@ -223,7 +223,9 @@
         <MenuItem Header="Send to LTK Manager" Command="{Binding SendToLtkManagerCommand}"
                   Classes.newFeature="{Binding NewFeature[ltk-manager]}"
                   ToolTip.Tip="Copy this project into LTK Manager's workshop folder as a source mod, creating it or updating it in place. The workshop path is read from LTK Manager's own settings. Updating replaces the mod's content layer so deleted files disappear too, and merges mod.config.json rather than overwriting it, so tags, maps and layer descriptions survive. Your profiles, enabled mods and mod order are never touched." />
-        <MenuItem Header="Project Settings…" Command="{Binding OpenProjectSettingsCommand}" />
+        <MenuItem Header="Project Settings…" Command="{Binding OpenProjectSettingsCommand}"
+                  Classes.newFeature="{Binding NewFeature[project-layers]}"
+                  ToolTip.Tip="The mod's name, author and paths - and its content layers: which WAD folders ship in which layer, so Send to LTK Manager delivers an optional part a user can switch off without losing the rest." />
         <MenuItem Header="Manage Riot References…" Command="{Binding ManageRiotReferencesCommand}" />
         <MenuItem Header="Set Game Folder…" Command="{Binding SetGameFolderCommand}" />
         <MenuItem Header="Sync Hashes" Command="{Binding SyncHashesCommand}" />

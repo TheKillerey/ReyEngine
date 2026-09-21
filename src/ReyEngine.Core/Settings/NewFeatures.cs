@@ -39,7 +39,7 @@ public static class NewFeatures
     /// <summary>The release whose highlights are currently on offer. Bumped when a release ADDS entries -
     /// a fix-only release (0.4.6) leaves it, so the What's New list keeps its newest header and nothing
     /// glows for a release that changed no entry point.</summary>
-    public const string CurrentVersion = "0.4.8";
+    public const string CurrentVersion = "0.4.10";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -110,6 +110,15 @@ public static class NewFeatures
         // from What's New altogether, which is how it was first shipped and immediately noticed.
         NewFeature.Note("0.4.8", "Maps draw far faster with particles, animated props and lights switched on — and the frame line says where a frame's time went"),
         NewFeature.Note("0.4.8", "Cinematic Capture keeps the map's sky, and a captured sequence runs at the shot's speed rather than the export's"),
+        // 0.4.10. One entry point whose capability changed - Project Settings now holds the mod's layers.
+        // Add prop and Import character folder changed too, but they already carry their 0.4.7 ids and an
+        // id is never renamed, so what they gained is said in notes; the jade fix and the prop inspector's
+        // controls live inside panels with no control here to glow on.
+        new("project-layers",   "0.4.10", "Project Settings — split a mod into layers LTK Manager can switch on and off"),
+        NewFeature.Note("0.4.10", "Placed props appear in game: Add prop and Import character folder place client-side props, which the game itself creates"),
+        NewFeature.Note("0.4.10", "A placed prop can wait for the game clock — Appear after N seconds, set when placing or later in the prop inspector"),
+        NewFeature.Note("0.4.10", "Old character placements convert to client-side props in one click, from the prop inspector"),
+        NewFeature.Note("0.4.10", "Jade maps: one click switches off the old jade champion ground projections, shipped as a layer you can turn off"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
