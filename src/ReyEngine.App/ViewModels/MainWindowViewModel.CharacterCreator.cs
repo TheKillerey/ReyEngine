@@ -159,7 +159,7 @@ public sealed partial class MainWindowViewModel
                 PropName = character,
                 SkinId = skinId,
                 IdleAnimation = idleClip,
-                // M748 (experimental): hidden until the game clock passes this; null writes no gate.
+                // M748: hidden until the game clock passes this; null writes no gate. Confirmed in game (M749).
                 AppearAfterSeconds = appearAfterSeconds > 0 ? appearAfterSeconds : null,
             }
             : new MapPlacementEdit(id)
@@ -188,7 +188,7 @@ public sealed partial class MainWindowViewModel
         FinishWorkshopMutation();
         await LoadMapGeoAsync(mapEntry);
         if (MapContent.AllProps.FirstOrDefault(p => p.Prop.Id == id) is { } added) SelectedPropNode = added;
-        _log.Success("Props", $"Placed '{placementName}' ({skinPath}) as {(asAnimatedProp ? "an animated prop" : "a character")}{(asAnimatedProp && appearAfterSeconds > 0 ? $" appearing after {appearAfterSeconds:0.#} s (experimental)" : "")} at "
+        _log.Success("Props", $"Placed '{placementName}' ({skinPath}) as {(asAnimatedProp ? "an animated prop" : "a character")}{(asAnimatedProp && appearAfterSeconds > 0 ? $" appearing after {appearAfterSeconds:0.#} s" : "")} at "
             + $"({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0}).");
         return $" Placed '{placementName}' at ({transform.Translation.X:0}, {transform.Translation.Y:0}, {transform.Translation.Z:0})." + listed;
     }

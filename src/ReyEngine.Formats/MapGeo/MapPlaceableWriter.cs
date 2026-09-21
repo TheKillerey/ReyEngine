@@ -92,16 +92,17 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     public uint SkinId { get; init; }
 
     /// <summary>
-    /// M748 (EXPERIMENTAL): make the placement appear only once the game clock passes this many seconds.
-    /// Greater than zero sets it, zero removes it, null leaves it alone.
+    /// M748: make the placement appear only once the game clock passes this many seconds. Greater than
+    /// zero sets it, zero removes it, null leaves it alone.
     ///
     /// <para>Written as a <c>LogicDriverVisibilityController</c> of the placement's own, whose
     /// <c>VisibilityDriver</c> is <c>FloatComparisonMaterialDriver(TimeMaterialDriver &gt; N)</c>, linked from
-    /// the placement's <c>VisibilityController</c>. Every piece is a class Riot ships - the comparison and
-    /// the clock in 1,183 champion and map bins - but Riot never gates a MAP placement on time: 0 of the
-    /// 678 visibility controllers on the shipped maps are logic-driven, and 0 of 3,058 animated props link
-    /// a controller at all. Whether the client evaluates it, and which clock TimeMaterialDriver reads, is
-    /// what an in-game test decides.</para>
+    /// the placement's <c>VisibilityController</c>. Riot never gates a map placement on time - 0 of the 678
+    /// visibility controllers on the shipped maps are logic-driven - so this was built as an experiment,
+    /// and M749 records the answer: a MapAnimatedProp gated at 60 appeared at 60 seconds in a replay of the
+    /// Map453 port. So the client evaluates a logic-driven controller on a map prop, an empty
+    /// TimeMaterialDriver reads the game clock, and operator 1 is "greater than". Measured on
+    /// MapAnimatedProp only; a character placement is server-spawned (M747) and never reaches it.</para>
     ///
     /// <para><c>mOperator</c> 1 is read as "greater than" from Riot's own ladders: a sine compared with 0.95
     /// for brief sparkles, Rumble's velocity with 50, and the mirrored form (3, "less than") on Ezreal's

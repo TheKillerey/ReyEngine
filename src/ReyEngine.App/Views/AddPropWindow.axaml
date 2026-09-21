@@ -31,7 +31,7 @@
                     IsEnabled="{Binding PlaceAsAnimatedProp}">
           <TextBlock Text="Appear after" FontSize="11" VerticalAlignment="Center" />
           <NumericUpDown Value="{Binding AppearAfterSeconds}" Minimum="0" Maximum="7200" Increment="10"
-                         FormatString="0" Width="92" FontSize="11" ToolTip.Tip="EXPERIMENTAL. Hide the prop until the game clock passes this many seconds; 0 = always visible. Written as a logic-driven visibility controller (TimeMaterialDriver greater than N) from classes Riot ships, but Riot never gates a map placement on time, so whether the game honours it is what a test decides. Only for a client-side prop." />
+                         FormatString="0" Width="92" FontSize="11" ToolTip.Tip="Hide the prop until the game clock passes this many seconds; 0 = always visible. Written as a logic-driven visibility controller (TimeMaterialDriver greater than N) and confirmed in game: a prop set to 60 appeared at 1:00. Only for a client-side prop - a character placement is spawned by the server and never reaches it." />
           <TextBlock Text="s" FontSize="11" VerticalAlignment="Center" />
         </StackPanel>
         <Button Grid.Column="3" x:Name="AddButton" Classes="primary" Content="Add at the gizmo"

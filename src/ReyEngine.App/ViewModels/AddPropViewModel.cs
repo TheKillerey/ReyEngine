@@ -72,7 +72,7 @@ public sealed partial class AddPropViewModel : ObservableObject
     [ObservableProperty] private bool _busy;
     /// <summary>M747: place as a MapAnimatedProp (client-side) rather than a scenery character.</summary>
     [ObservableProperty] private bool _placeAsAnimatedProp = true;
-    /// <summary>M748 (experimental): seconds of game time before the prop appears; 0 = always.</summary>
+    /// <summary>M748: seconds of game time before the prop appears; 0 = always (confirmed in game, M749).</summary>
     [ObservableProperty] private decimal _appearAfterSeconds;
 
     /// <summary>The skin's object path, in the spelling the hash dictionary knows.</summary>
