@@ -8118,6 +8118,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapTerrainExtras = null;
         CurrentLightmapScale = 1.0;
         CurrentSunProperties = null;
+        CurrentPostFog = null;   // M760
         CurrentModelParticles = null;
         SelectedParticleTreeItem = null;
         ParticleMarkers = null;
@@ -11940,6 +11941,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _selection.Clear();
                 CurrentModelTextures = textures;
                 ApplySunProperties(sunProperties);
+                LoadScreenFog();   // M760: PostEffectOptions depth + height fog
                 // M287: and then put back whatever the user authored for THIS map. ApplySunProperties has
                 // just overwritten sun/sky with the map's own values and forced SunIntensity to 1.0, which
                 // is correct as a starting point and wrong as a final answer once the project holds edits.

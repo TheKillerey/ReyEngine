@@ -69,6 +69,11 @@ public sealed class PreviewSettings
     /// and the alternate colour cannot drift between them.</summary>
     public (Vector4 StartEndScaleRemap, Vector3 Color, Vector3 AltColor)? EnvFog;
 
+    /// <summary>M760: the map's SCREEN fog - PostEffectOptions depth and height fog - as
+    /// <see cref="ReyEngine.Formats.MapGeo.MapPostFog.ShaderParams"/> builds the four vectors gamma/postfog.ps reads.
+    /// Null skips the pass (every shipped map).</summary>
+    public (Vector4 DepthParams, Vector3 DepthColor, Vector4 HeightParams, Vector3 HeightColor)? ScreenFog;
+
     /// <summary>
     /// M463: the whole authored sun record, for the two inputs that are not single constants -
     /// <c>LightRegionInfo_SharedDataBuffer</c> (a 112-byte structured buffer, see
@@ -5478,6 +5483,9 @@ float4 psmain(VOut i) : SV_Target
             // M460: the chain and the screen composite, over the finished scene and UNDER the editor
             // furniture - the game composites bloom before its UI layer, and the furniture is this app's
             // equivalent of one. Leaves the scene target and the full viewport bound behind it.
+            // M760: the screen fog, over the lit scene and before bloom - the game's pass order.
+            DrawPostFog(s, view, proj);
+
             BloomPasses = 0;
             if (_glowBound) DrawBloom();
 
@@ -5766,6 +5774,7 @@ float4 psmain(VOut i) : SV_Target
         DisposeDynamicLights();
         DisposeClusterLights();
         DisposeBloom();
+        DisposePostFog();   // M760
         DisposeShadow();
         _meshVs.Dispose(); _meshPs.Dispose(); _meshLayout.Dispose(); _meshCb.Dispose();
         _meshCullCw.Dispose(); _meshCullCcw.Dispose();

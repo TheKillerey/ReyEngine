@@ -364,6 +364,58 @@
           </StackPanel>
         </Border>
 
+        <!-- M760: the SCREEN fog - PostEffectOptions depth + height fog, drawn by Riot's gamma/postfog.ps
+             over the finished frame (sky excepted). A second fog model beside the sun's environment fog;
+             no Live map uses it, so it starts off. -->
+        <Border Classes="card" Margin="0,8,0,0">
+          <StackPanel Spacing="4">
+            <TextBlock Text="SCREEN FOG (post effect)" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" Text="{Binding ScreenFogStatus}" />
+            <CheckBox Content="Depth fog" IsChecked="{Binding DepthFogEnabled}" FontSize="11" Margin="0,4,0,0"
+                      ToolTip.Tip="PostEffectOptions.DepthFog: fog by distance from the camera. Nothing nearer than Start, rising to Max intensity at End." />
+            <ColorPicker Color="{Binding DepthFogColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                         IsAlphaVisible="False" IsAlphaEnabled="False" IsEnabled="{Binding DepthFogEnabled}"
+                         ToolTip.Tip="PostEffectOptions.DepthFogColor: the colour distant surfaces fade into." />
+            <UniformGrid Columns="3" IsEnabled="{Binding DepthFogEnabled}">
+              <NumericUpDown Value="{Binding DepthFogStart}" Minimum="0" Maximum="1000000" Increment="250"
+                             FormatString="0.###" FontSize="11" Margin="0,0,3,0"
+                             ToolTip.Tip="DepthFogStart: the camera distance where the depth fog begins. Default 5000." />
+              <NumericUpDown Value="{Binding DepthFogEnd}" Minimum="0" Maximum="1000000" Increment="250"
+                             FormatString="0.###" FontSize="11" Margin="3,0,3,0"
+                             ToolTip.Tip="DepthFogEnd: the camera distance where the depth fog reaches Max intensity. Default 8000." />
+              <NumericUpDown Value="{Binding DepthFogMaxIntensity}" Minimum="0" Maximum="1" Increment="0.05"
+                             FormatString="0.###" FontSize="11" Margin="3,0,0,0"
+                             ToolTip.Tip="DepthFogMaxIntensity: the most the depth fog ever covers, 0 to 1. Default 1." />
+            </UniformGrid>
+            <CheckBox Content="Height fog" IsChecked="{Binding HeightFogEnabled}" FontSize="11" Margin="0,6,0,0"
+                      ToolTip.Tip="PostEffectOptions.HeightFog: fog by world height, applied before the depth fog. Nothing at Start, rising to Max intensity at End (End below Start fills the low ground)." />
+            <ColorPicker Color="{Binding HeightFogColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                         IsAlphaVisible="False" IsAlphaEnabled="False" IsEnabled="{Binding HeightFogEnabled}"
+                         ToolTip.Tip="PostEffectOptions.HeightFogColor: the colour low (or high) ground fades into." />
+            <UniformGrid Columns="3" IsEnabled="{Binding HeightFogEnabled}">
+              <NumericUpDown Value="{Binding HeightFogStart}" Minimum="-1000000" Maximum="1000000" Increment="50"
+                             FormatString="0.###" FontSize="11" Margin="0,0,3,0"
+                             ToolTip.Tip="HeightFogStart: the world height where the height fog begins. Default 300." />
+              <NumericUpDown Value="{Binding HeightFogEnd}" Minimum="-1000000" Maximum="1000000" Increment="50"
+                             FormatString="0.###" FontSize="11" Margin="3,0,3,0"
+                             ToolTip.Tip="HeightFogEnd: the world height where the height fog reaches Max intensity. Default -100." />
+              <NumericUpDown Value="{Binding HeightFogMaxIntensity}" Minimum="0" Maximum="1" Increment="0.05"
+                             FormatString="0.###" FontSize="11" Margin="3,0,0,0"
+                             ToolTip.Tip="HeightFogMaxIntensity: the most the height fog ever covers, 0 to 1. Default 1." />
+            </UniformGrid>
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="Start / End / Max intensity. The Fog toggle under MODE shows it in both viewports." />
+            <Grid ColumnDefinitions="*,*" Margin="0,4,0,0">
+              <Button Grid.Column="0" Classes="tool" Content="Save screen fog to map" Command="{Binding SaveScreenFogToMapCommand}"
+                      HorizontalAlignment="Stretch" Margin="0,0,3,0" FontSize="11" Padding="8,4"
+                      ToolTip.Tip="Write both fogs into the map's materials.bin (PostEffectOptions in the MapContainer's components), adding the component when the map has none. Only fields that differ from the game's defaults, or that the map already has, are written." />
+              <Button Grid.Column="1" Classes="tool" Content="Reset" Command="{Binding ResetScreenFogCommand}"
+                      HorizontalAlignment="Stretch" Margin="3,0,0,0" FontSize="11" Padding="8,4"
+                      ToolTip.Tip="Back to what the map has saved." />
+            </Grid>
+          </StackPanel>
+        </Border>
+
         <!-- M467: the sun's SHADOW half. These are the only map-side shadow controls that exist - the
              meta database puts `castShadows` on SkinMeshDataProperties (characters) and nowhere else, so
              there is no per-material or per-mesh cast flag to offer instead. They are written to the bin

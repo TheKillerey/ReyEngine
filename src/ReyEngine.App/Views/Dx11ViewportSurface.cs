@@ -141,6 +141,10 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// difference that is a UI setting rather than a rendering one.</summary>
     public bool FogEnabled { get; set; }
 
+    /// <summary>M760: the map's PostEffectOptions screen fog, run through Riot's gamma/postfog.ps. Gated on
+    /// <see cref="FogEnabled"/> like the environment fog.</summary>
+    public MapPostFog? ScreenFog { get; set; }
+
     /// <summary>M452: the editor's dynamic point lights, from the SAME view-model list the GL viewport is
     /// bound to (<c>DynamicLights</c>, rebuilt by <c>RepublishLights</c>). Until now this surface carried
     /// none of it, so lights that render in game and in GL were invisible the moment the user switched
@@ -631,6 +635,7 @@ public sealed class Dx11ViewportSurface : IDisposable
             EnvFog = FogEnabled && MapSun is { FogEnabled: true }
                 ? ReyEngine.Formats.MapGeo.MapSunProperties.EnvFogConstants(MapSun, true)
                 : null,
+            ScreenFog = FogEnabled && ScreenFog is { DrawsAnything: true } pf ? MapPostFog.ShaderParams(pf) : null,
 
             // M452: the point-light overlay. Ungated here beyond the toggle - the renderer applies the
             // same clamps the GL setters do, so the two viewports see identical values.

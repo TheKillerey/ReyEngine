@@ -328,6 +328,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         // lightmap scale all change without the scene being rebuilt.
         _dx11.MapSun = vm.CurrentSunProperties;
         _dx11.FogEnabled = vm.ShowFog;
+        _dx11.ScreenFog = vm.CurrentPostFog;   // M760
         _dx11.LightmapScale = vm.CurrentLightmapScale;
         _dx11.AnimateTime = vm.AnimationsPlaying;
         _dx11.Wireframe = vm.ShowWireframe;

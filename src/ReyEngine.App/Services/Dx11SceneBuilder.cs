@@ -100,6 +100,10 @@ public static class Dx11SceneBuilder
         /// running it half-built.</summary>
         public byte[]?[]? ShadowShaders { get; set; }
 
+        /// <summary>M760: Riot's <c>gamma/postfog</c> vertex and pixel blobs (the screen fog), in that order.
+        /// Same all-or-nothing contract as <see cref="ShadowShaders"/>.</summary>
+        public byte[]?[]? PostFogShaders { get; set; }
+
         /// <summary>M278: why the failures failed, first example per distinct kind, in the order they were
         /// first hit. The report used to say "21 unresolved" and nothing else, so a shader cache whose
         /// entries had all been renamed underneath us read exactly like a scene bug - and was chased as one
@@ -401,6 +405,7 @@ public static class Dx11SceneBuilder
         scene.DynamicLightingPinFailed = pinFailed;
         scene.BloomShaders = LoadBloomShaders(cache);
         scene.ShadowShaders = LoadShadowShaders(cache);
+        scene.PostFogShaders = LoadPostFogShaders(cache);
 
         DecodeTextures(distinct, readAsset, scene);
         scene.PrepareMs = (DateTime.UtcNow - t0).TotalMilliseconds;
@@ -499,6 +504,12 @@ public static class Dx11SceneBuilder
             renderer.SetShadowShaders(ss[0], ss[1]);
         else
             renderer.SetShadowShaders(null, null);
+
+        // M760: and the screen fog's two blobs, same contract.
+        if (scene.PostFogShaders is { } pf && pf.Length == 2)
+            renderer.SetPostFogShaders(pf[0], pf[1]);
+        else
+            renderer.SetPostFogShaders(null, null);
 
         int ok = 0, textures = 0, failed = scene.Failed, transparent = 0, clamped = 0;
         var reasons = new Dictionary<string, string>(scene.FailureReasons);
@@ -683,6 +694,33 @@ public static class Dx11SceneBuilder
             else if (define is not null) return null;   // the composite MUST be the bloom permutation
 
             var bytes = cache.LoadBlob(tocPath, blob, out _, out _);
+            if (bytes is null || bytes.Length == 0) return null;
+            loaded[i] = bytes;
+        }
+        return loaded;
+    }
+
+    // ---------------------------------------------------------------- screen fog (M760)
+
+    /// <summary>
+    /// <c>gamma/postfog.vs</c> and <c>.ps</c>, the PostEffectOptions depth + height fog pass. Both TOCs were
+    /// probed in M760 (<c>postfogtoc</c>): the pixel shader has two axes, <c>LOW_QUALITY_MODE</c> and
+    /// <c>FOG_COLOR_FROM_LIGHT_REGIONS</c>; the EMPTY define set is the one that reads its colours from
+    /// <c>$Globals</c> (the other takes them from the light-region texture, which no Live map authors). The
+    /// index is resolved by define set, never hardcoded, for the reason <see cref="LoadBloomShaders"/> gives.
+    /// </summary>
+    public static byte[]?[]? LoadPostFogShaders(ShaderCacheReader cache)
+    {
+        var loaded = new byte[]?[2];
+        var stages = new[] { DxbcStage.Vertex, DxbcStage.Pixel };
+        for (int i = 0; i < 2; i++)
+        {
+            string tocPath = ShaderCacheReader.TocPathFor("assets/shaders/hlsl/gamma/postfog", stages[i]);
+            var toc = cache.ReadToc(tocPath);
+            if (toc is null) return null;
+            var perm = ShaderCacheReader.ResolvePermutation(toc,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), null, null, null, out _);
+            var bytes = cache.LoadBlob(tocPath, perm?.BlobIndex ?? 0, out _, out _);
             if (bytes is null || bytes.Length == 0) return null;
             loaded[i] = bytes;
         }

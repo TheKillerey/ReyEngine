@@ -25,6 +25,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mVertexBakedLight, _mVertexBakedScale;            // M89: NVR vertex-colour baked light
     private int _mVertexLightmap, _mVertexLightmapScale;           // M142.4: PrimaryColor AS baked lightmap
     private int _mFogEnabled, _mFogColor, _mFogStartEnd, _mFogAltColor;   // M145/M759: MapSunProperties environment fog
+    private int _mScreenDepthFog, _mScreenDepthFogColor, _mScreenHeightFog, _mScreenHeightFogColor;   // M760: PostEffectOptions
     private int _mNvrFourBlend;                                    // M89: NVR ground four-blend flag
     private int _mCompositeGround;                                 // M142: Map10 baked height-blend ground (2nd-UV composite)
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
@@ -75,6 +76,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     private Vector4 _fogColor = Vector4.One;
     private Vector4 _fogAltColor = Vector4.One;
     private Vector2 _fogStartEnd = new(0f, -2000f);
+    private Vector4 _screenDepthFog, _screenHeightFog;   // M760: (max, start, 1/(end-start), 0); max 0 = off
+    private Vector3 _screenDepthFogColor, _screenHeightFogColor;
     private bool _nvrFourBlend;                  // M89: NVR ground four-blend (gated per submesh by uHasMask)
     private Matrix4x4 _worldModel = Matrix4x4.Identity;   // M89: world transform for the whole mesh (move/rotate map)
     private int _mLightsTex, _mNumLights, _mLightIntensity, _mLightRadiusScale, _mLightPosScale, _mLightPosScaleXZ, _mLightPosOffset;
@@ -368,6 +371,11 @@ uniform int uFogEnabled;
 uniform vec4 uFogColor;
 uniform vec4 uFogAltColor;
 uniform vec2 uFogStartEnd;
+// M760: PostEffectOptions screen fog, as gamma/postfog.ps blob 0 - (maxIntensity, start, 1/(end-start), 0).
+uniform vec4 uScreenDepthFog;
+uniform vec3 uScreenDepthFogColor;
+uniform vec4 uScreenHeightFog;
+uniform vec3 uScreenHeightFogColor;
 uniform int uNvrFourBlend;     // M89: 1 = CREATE_GROUND_MOSAIC_FOUR_BLEND (blend 4 colour maps by a mask)
 uniform int uCompositeGround;  // M142: 1 = Map10 baked height-blend ground atlas, sampled by the 2nd UV
 uniform sampler2D uLightmap;   // baked lightmap atlas (slot 6)
@@ -924,6 +932,16 @@ void main() {
         vec3 fogCol = mix(uFogColor.rgb, uFogAltColor.rgb, a);
         col = mix(col, fogCol, a);
     }
+    // M760: the screen fog. In the game it is a full-screen pass over the depth buffer after the scene
+    // (gamma/postfog.ps); per fragment it is the same arithmetic on this surface's own position: height
+    // fog first, then depth fog on the distance from the camera, each lerping toward its colour and capped
+    // at its maxIntensity. A zero maximum (the default) leaves col untouched.
+    {
+        float hf = min(clamp((vWorld.y - uScreenHeightFog.y) * uScreenHeightFog.z, 0.0, 1.0), uScreenHeightFog.x);
+        col = mix(col, uScreenHeightFogColor, hf);
+        float df = min(clamp((length(uCamPos - vWorld) - uScreenDepthFog.y) * uScreenDepthFog.z, 0.0, 1.0), uScreenDepthFog.x);
+        col = mix(col, uScreenDepthFogColor, df);
+    }
     FragColor = vec4(col, outA);
 }";
 
@@ -1008,6 +1026,10 @@ void main() { FragColor = uColor; }";
         _mFogColor = gl.GetUniformLocation(_meshProgram, "uFogColor");
         _mFogStartEnd = gl.GetUniformLocation(_meshProgram, "uFogStartEnd");
         _mFogAltColor = gl.GetUniformLocation(_meshProgram, "uFogAltColor");
+        _mScreenDepthFog = gl.GetUniformLocation(_meshProgram, "uScreenDepthFog");
+        _mScreenDepthFogColor = gl.GetUniformLocation(_meshProgram, "uScreenDepthFogColor");
+        _mScreenHeightFog = gl.GetUniformLocation(_meshProgram, "uScreenHeightFog");
+        _mScreenHeightFogColor = gl.GetUniformLocation(_meshProgram, "uScreenHeightFogColor");
         _mNvrFourBlend = gl.GetUniformLocation(_meshProgram, "uNvrFourBlend");
         _mCompositeGround = gl.GetUniformLocation(_meshProgram, "uCompositeGround");
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
@@ -1901,6 +1923,22 @@ void main(){
         _fogStartEnd = startEnd;
     }
 
+    /// <summary>M760: the map's screen fog, as <c>MapPostFog.ShaderParams</c> builds it. Zero maxima (the
+    /// default) draw nothing.</summary>
+    public void SetScreenFog(Vector4 depthParams, Vector3 depthColor, Vector4 heightParams, Vector3 heightColor)
+    {
+        _screenDepthFog = depthParams; _screenDepthFogColor = depthColor;
+        _screenHeightFog = heightParams; _screenHeightFogColor = heightColor;
+    }
+
+    private void UploadScreenFog()
+    {
+        _gl.Uniform4(_mScreenDepthFog, _screenDepthFog.X, _screenDepthFog.Y, _screenDepthFog.Z, _screenDepthFog.W);
+        _gl.Uniform3(_mScreenDepthFogColor, _screenDepthFogColor.X, _screenDepthFogColor.Y, _screenDepthFogColor.Z);
+        _gl.Uniform4(_mScreenHeightFog, _screenHeightFog.X, _screenHeightFog.Y, _screenHeightFog.Z, _screenHeightFog.W);
+        _gl.Uniform3(_mScreenHeightFogColor, _screenHeightFogColor.X, _screenHeightFogColor.Y, _screenHeightFogColor.Z);
+    }
+
     /// <summary>M89: world transform (translation + rotation) applied to the whole mesh — used to slide and
     /// spin the NVR map backdrop under the previewed character.</summary>
     public void SetWorldTransform(Matrix4x4 model) => _worldModel = model;
@@ -2688,7 +2726,7 @@ void main(){
                 _gl.Uniform1(_mVertexLightmapScale, _vertexLightmapScale);
                 _gl.Uniform1(_mFogEnabled, _fogEnabled ? 1 : 0);               // M145
                 _gl.Uniform4(_mFogColor, _fogColor.X, _fogColor.Y, _fogColor.Z, _fogColor.W); _gl.Uniform4(_mFogAltColor, _fogAltColor.X, _fogAltColor.Y, _fogAltColor.Z, _fogAltColor.W);   // M759
-                _gl.Uniform2(_mFogStartEnd, _fogStartEnd.X, _fogStartEnd.Y);
+                _gl.Uniform2(_mFogStartEnd, _fogStartEnd.X, _fogStartEnd.Y); UploadScreenFog();   // M760
                 _gl.Uniform1(_mNvrFourBlend, _nvrFourBlend ? 1 : 0);
                 _gl.Uniform3(_mLight, _lightDirection.X, _lightDirection.Y, _lightDirection.Z);
                 _gl.Uniform3(_mSunColor, _sunColor.X, _sunColor.Y, _sunColor.Z);
@@ -2857,7 +2895,7 @@ void main(){
             _gl.Uniform1(_mVertexBakedLight, 0);   // M89: props never use the NVR baked-light term
             _gl.Uniform1(_mVertexLightmap, 0);     // M142.4: props are not NVR statics
             _gl.Uniform4(_mFogColor, _fogColor.X, _fogColor.Y, _fogColor.Z, _fogColor.W); _gl.Uniform4(_mFogAltColor, _fogAltColor.X, _fogAltColor.Y, _fogAltColor.Z, _fogAltColor.W);   // M759
-            _gl.Uniform2(_mFogStartEnd, _fogStartEnd.X, _fogStartEnd.Y);
+            _gl.Uniform2(_mFogStartEnd, _fogStartEnd.X, _fogStartEnd.Y); UploadScreenFog();   // M760
             _gl.Uniform1(_mNvrFourBlend, 0);
             _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);
             _gl.UniformMatrix4(_mView, 1, false, in view.M11);

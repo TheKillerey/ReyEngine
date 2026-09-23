@@ -473,6 +473,7 @@
                 AnimateWater="{Binding HasFlowmapWater}"
                 LightmapScale="{Binding CurrentLightmapScale}"
                 SunProperties="{Binding CurrentSunProperties}"
+                ScreenFog="{Binding CurrentPostFog}"
                 FogEnabled="{Binding ShowFog}"
                 FocusPoint="{Binding ParticleFocusPoint}"
                 PreviewMode="{Binding PreviewMode}" />

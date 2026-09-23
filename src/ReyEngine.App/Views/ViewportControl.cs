@@ -118,6 +118,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(LightmapScale), 1.0);
     public static readonly StyledProperty<MapSunProperties?> SunPropertiesProperty =
         AvaloniaProperty.Register<ViewportControl, MapSunProperties?>(nameof(SunProperties));
+    public static readonly StyledProperty<MapPostFog?> ScreenFogProperty =
+        AvaloniaProperty.Register<ViewportControl, MapPostFog?>(nameof(ScreenFog));   // M760
     public static readonly StyledProperty<IReadOnlyList<int>?> HighlightSubmeshesProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<int>?>(nameof(HighlightSubmeshes));   // M50b outline
     public static readonly StyledProperty<bool> PlayPropAnimationsProperty =
@@ -386,6 +388,8 @@ public sealed class ViewportControl : OpenGlControlBase
     public double LightmapScale { get => GetValue(LightmapScaleProperty); set => SetValue(LightmapScaleProperty, value); }
     public double LightFalloffSoftness { get => GetValue(LightFalloffSoftnessProperty); set => SetValue(LightFalloffSoftnessProperty, value); }   // M160
     public MapSunProperties? SunProperties { get => GetValue(SunPropertiesProperty); set => SetValue(SunPropertiesProperty, value); }
+    /// <summary>M760: the map's PostEffectOptions depth + height fog; null or all-off draws none.</summary>
+    public MapPostFog? ScreenFog { get => GetValue(ScreenFogProperty); set => SetValue(ScreenFogProperty, value); }
     public IReadOnlyList<int>? HighlightSubmeshes { get => GetValue(HighlightSubmeshesProperty); set => SetValue(HighlightSubmeshesProperty, value); }
     public bool PlayPropAnimations { get => GetValue(PlayPropAnimationsProperty); set => SetValue(PlayPropAnimationsProperty, value); }
     public double ParticleSpeed { get => GetValue(ParticleSpeedProperty); set => SetValue(ParticleSpeedProperty, value); }
@@ -1228,6 +1232,9 @@ public sealed class ViewportControl : OpenGlControlBase
         bool fog = FogEnabled && SunProperties is { FogEnabled: true };
         _meshRenderer.SetFog(fog, SunProperties?.FogColor ?? Vector4.One, SunProperties?.FogAlternateColor ?? Vector4.One,
             SunProperties?.FogStartAndEnd ?? new Vector2(0f, -2000f));
+        // M760: the screen fog, on the same Show fog toggle
+        var screen = FogEnabled && ScreenFog is { DrawsAnything: true } pf ? MapPostFog.ShaderParams(pf) : default;
+        _meshRenderer.SetScreenFog(screen.DepthParams, screen.DepthColor, screen.HeightParams, screen.HeightColor);
         _meshRenderer.SetDynamicLightsEnabled(DynamicLightsEnabled);
         _meshRenderer.SetLightIntensity((float)DynamicLightIntensity);
         _meshRenderer.SetLightRadiusScale((float)DynamicLightRadiusScale);
@@ -2092,6 +2099,7 @@ public sealed class ViewportControl : OpenGlControlBase
         else if (change.Property == ParticlePlaybackProperty)
         { _particlePlaybackDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == AnimateWaterProperty || change.Property == LightmapScaleProperty || change.Property == SunPropertiesProperty
+                 || change.Property == ScreenFogProperty
                  || change.Property == HighlightSubmeshesProperty || change.Property == PlayPropAnimationsProperty
                  || change.Property == LightmapsEnabledProperty || change.Property == DynamicLightsEnabledProperty
                  || change.Property == DynamicLightIntensityProperty)
