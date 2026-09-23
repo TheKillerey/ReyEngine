@@ -164,6 +164,82 @@
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
+                        <!-- M752: the emitter's force fields. Mute and Solo only change what the preview
+                             simulates and are never saved; add, remove and the values are real edits. -->
+                        <Expander FontSize="10" IsExpanded="True" Padding="0" Margin="0" IsVisible="{Binding ShowForces}">
+                          <Expander.Header>
+                            <TextBlock Text="{Binding ForcesHeader}" FontSize="10" />
+                          </Expander.Header>
+                          <StackPanel Spacing="3" Margin="6,2,6,4">
+                            <TextBlock Text="No forces. Add one below - it starts at the values Riot ships most."
+                                       FontSize="9" Opacity="0.5" TextWrapping="Wrap" IsVisible="{Binding !HasForces}" />
+                            <ItemsControl ItemsSource="{Binding Forces}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ParticleForceViewModel">
+                                  <Border BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="0,3">
+                                    <StackPanel Spacing="2">
+                                      <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="✕" FontSize="8" Padding="3,0" Margin="2,0,0,0"
+                                                Background="Transparent" BorderThickness="0"
+                                                Command="{Binding RemoveCommand}" IsEnabled="{Binding CanEdit}"
+                                                ToolTip.Tip="Remove this force from the emitter. The last force of a kind takes its list with it - Riot ships no empty list." />
+                                        <ToggleButton DockPanel.Dock="Right" Classes="vp" Content="S" FontSize="8" Padding="4,0" MinWidth="0"
+                                                      Margin="2,0,0,0" IsChecked="{Binding IsSoloed}"
+                                                      ToolTip.Tip="Solo in the preview: while any force is soloed, only soloed forces act. Preview only - never saved." />
+                                        <ToggleButton DockPanel.Dock="Right" Classes="vp" Content="M" FontSize="8" Padding="4,0" MinWidth="0"
+                                                      IsChecked="{Binding IsMuted}"
+                                                      ToolTip.Tip="Mute in the preview: this force stops acting while you look at the others. Preview only - never saved." />
+                                        <TextBlock Text="{Binding Title}" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
+                                      </DockPanel>
+                                      <ItemsControl ItemsSource="{Binding Values}">
+                                        <ItemsControl.ItemTemplate>
+                                          <DataTemplate x:DataType="vm:ParticleForceValueViewModel">
+                                            <StackPanel Spacing="1" ToolTip.Tip="{Binding Tip}">
+                                              <Grid ColumnDefinitions="64,*,Auto">
+                                                <DockPanel Grid.Column="0" VerticalAlignment="Center">
+                                                  <TextBlock DockPanel.Dock="Right" Text="~" FontSize="9" Margin="2,0"
+                                                             Foreground="{DynamicResource ReyAccentBrush}" IsVisible="{Binding HasCurve}" />
+                                                  <TextBlock Text="{Binding Label}" FontSize="9" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                                                </DockPanel>
+                                                <TextBox Grid.Column="1" Text="{Binding Text}" FontSize="9" Padding="3,1" MinHeight="0"
+                                                         IsEnabled="{Binding CanEdit}">
+                                                  <TextBox.KeyBindings>
+                                                    <KeyBinding Gesture="Enter" Command="{Binding ApplyCommand}" />
+                                                  </TextBox.KeyBindings>
+                                                </TextBox>
+                                                <Button Grid.Column="2" Content="✓" FontSize="8" Padding="3,0" Margin="2,0,0,0"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        Command="{Binding ApplyCommand}" IsEnabled="{Binding CanEdit}" />
+                                              </Grid>
+                                              <TextBlock Text="{Binding Error}" FontSize="9" TextWrapping="Wrap"
+                                                         Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding HasError}" />
+                                            </StackPanel>
+                                          </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                      </ItemsControl>
+                                    </StackPanel>
+                                  </Border>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="Add a force" FontSize="9" Opacity="0.55" Margin="0,2,0,0" />
+                            <ItemsControl ItemsSource="{Binding ForceKindChoices}">
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ParticleForceKindChoice">
+                                  <Button Classes="tool" Content="{Binding Name}" FontSize="9" Padding="5,1" Margin="0,0,3,3"
+                                          Command="{Binding $parent[ItemsControl].DataContext.AddForceCommand}"
+                                          CommandParameter="{Binding}"
+                                          ToolTip.Tip="{Binding Hint}" />
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                        </Expander>
+
                         <!-- M368: what this object does NOT set. Collapsed by default and hidden entirely
                              when the meta-class database was never synced, so the card is unchanged for
                              anyone who has not opted in. Read-only: it reports the game's fallback value,

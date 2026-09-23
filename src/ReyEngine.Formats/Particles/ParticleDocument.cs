@@ -237,7 +237,75 @@ public sealed class ParticleEmitterEntry
         return true;
     }
     private bool _disabledEdited;
-    public bool IsDirty => _disabledEdited || _propertyAdded || Properties.Any(p => p.IsDirty);
+    private bool _forcesEdited;
+    public bool IsDirty => _disabledEdited || _propertyAdded || _forcesEdited || Properties.Any(p => p.IsDirty);
+
+    // ------------------------------------------------------------------ M752: force fields
+
+    /// <summary>M752: this emitter's force fields, read fresh from the live struct.</summary>
+    public IReadOnlyList<ParticleForce> Forces => ParticleForces.Read(EmitterStruct);
+
+    /// <summary>M752: add a force at Riot's typical values; returns its index within its kind.</summary>
+    public int AddForce(ParticleForceKind kind)
+    {
+        int i = ParticleForces.Add(EmitterStruct, kind);
+        _forcesEdited = true;
+        return i;
+    }
+
+    public void RemoveForce(ParticleForceKind kind, int index)
+    {
+        ParticleForces.Remove(EmitterStruct, kind, index);
+        _forcesEdited = true;
+    }
+
+    public void SetForceValue(ParticleForceKind kind, int index, string field, System.Numerics.Vector3 value)
+    {
+        ParticleForces.Set(EmitterStruct, kind, index, field, value);
+        _forcesEdited = true;
+    }
+
+    // ------------------------------------------------------------------ M752: the emitter's own offset
+
+    private static readonly uint EmitterPositionHash = HashAlgorithms.Fnv1a("EmitterPosition");
+    private static readonly uint ConstantValueHash = HashAlgorithms.Fnv1a("constantValue");
+    private static readonly uint DynamicsHash = HashAlgorithms.Fnv1a("dynamics");
+    private static readonly uint CurveValuesHash = HashAlgorithms.Fnv1a("values");
+
+    /// <summary>M752: where this emitter sits relative to its system - <c>EmitterPosition</c>'s constant,
+    /// which is what the simulator places it by. 163,268 of 411,126 shipped emitters author one.</summary>
+    public System.Numerics.Vector3 EmitterPosition =>
+        EmitterStruct.Properties.GetValueOrDefault(EmitterPositionHash) is BinTreeStruct w
+        && w.Properties.GetValueOrDefault(ConstantValueHash) is BinTreeVector3 v ? v.Value : System.Numerics.Vector3.Zero;
+
+    /// <summary>M752: move the emitter (the Move gizmo, M753, calls this). The constant moves, and an animated position's keys move by the
+    /// same amount, so its path keeps its shape instead of snapping back to where it was authored. A
+    /// probability table rides along untouched - it is the scatter around the constant, not a place.</summary>
+    public void SetEmitterPosition(System.Numerics.Vector3 position)
+    {
+        var delta = position - EmitterPosition;
+        if (delta == System.Numerics.Vector3.Zero) return;
+        if (EmitterStruct.Properties.GetValueOrDefault(EmitterPositionHash) is BinTreeStruct wrapper)
+        {
+            wrapper.Properties[ConstantValueHash] = new BinTreeVector3(ConstantValueHash, position);
+            if (wrapper.Properties.GetValueOrDefault(DynamicsHash) is BinTreeStruct dyn
+                && dyn.Properties.GetValueOrDefault(CurveValuesHash) is BinTreeContainer keys
+                && keys.Elements.All(e => e is BinTreeVector3))
+            {
+                var moved = keys.Elements.Cast<BinTreeVector3>()
+                    .Select(k => (BinTreeProperty)new BinTreeVector3(0, k.Value + delta)).ToList();
+                dyn.Properties[CurveValuesHash] = keys is BinTreeUnorderedContainer
+                    ? new BinTreeUnorderedContainer(CurveValuesHash, keys.ElementType, moved)
+                    : new BinTreeContainer(CurveValuesHash, keys.ElementType, moved);
+            }
+        }
+        else
+        {
+            EmitterStruct.Properties[EmitterPositionHash] = new BinTreeEmbedded(EmitterPositionHash,
+                HashAlgorithms.Fnv1a("ValueVector3"), new BinTreeProperty[] { new BinTreeVector3(ConstantValueHash, position) });
+        }
+        _forcesEdited = true;
+    }
 
     private static readonly uint DisabledHash = HashAlgorithms.Fnv1a("disabled");
 

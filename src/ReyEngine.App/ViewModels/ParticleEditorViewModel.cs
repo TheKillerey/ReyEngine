@@ -144,12 +144,16 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
 
     partial void OnSelectedSystemChanged(ParticleSystemNodeViewModel? value)
     {
+        // M752: the switches are keyed by emitter position, which belongs to one system
+        _mutedForces.Clear();
+        _soloedForces.Clear();
+        OnPropertyChanged(nameof(AnyForceSoloed));
         Cards.Clear();
         SelectedProperty = null;
         if (value is null) { Playback = null; return; }
         Cards.Add(new ParticleEmitterCardViewModel(value.Entry, this));   // M188 (3.5): the system's own fields
-        foreach (var e in value.Entry.Emitters)
-            Cards.Add(new ParticleEmitterCardViewModel(e, this));
+        for (int i = 0; i < value.Entry.Emitters.Count; i++)
+            Cards.Add(new ParticleEmitterCardViewModel(value.Entry.Emitters[i], this, i));
         // M713: the game's own wiring first - a spell record that names this system as its missile says
         // so, and hands over the speed with it. M712's name guess is the fallback for the systems nothing
         // names, which is about 44% of them, and it stays labelled as a guess.
@@ -224,7 +228,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
             _defs = VfxSystemResolver.ExtractAll(Document.Serialize());
 
             var rebuilt = card.Entry is { } emitter
-                ? new ParticleEmitterCardViewModel(Document.RebuildRows(emitter), this)
+                ? new ParticleEmitterCardViewModel(Document.RebuildRows(emitter), this, card.EmitterIndex)
                 : SelectedSystem is { } node
                     ? new ParticleEmitterCardViewModel(Document.RebuildRows(node.Entry), this)
                     : null;
@@ -236,10 +240,110 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         catch (Exception ex) { row.ErrorText = ex.Message; }
     }
 
+    // ================================================================ M752: force fields
+
+    /// <summary>The key the preview switches of one force are kept under: the emitter's position in its
+    /// system, the kind and the index. Cards are rebuilt after every edit; this outlives them.</summary>
+    internal static string ForceKey(int emitterIndex, ParticleForceKind kind, int index) => $"{emitterIndex}:{kind}:{index}";
+
+    private readonly HashSet<string> _mutedForces = new();
+    private readonly HashSet<string> _soloedForces = new();
+
+    internal bool IsForceMuted(string key) => _mutedForces.Contains(key);
+    internal bool IsForceSoloed(string key) => _soloedForces.Contains(key);
+
+    internal void SetForceMuted(string key, bool muted)
+    {
+        if (muted ? !_mutedForces.Add(key) : !_mutedForces.Remove(key)) return;
+        RebuildPlayback();
+        NotifyForceSwitches();
+    }
+
+    internal void SetForceSoloed(string key, bool soloed)
+    {
+        if (soloed ? !_soloedForces.Add(key) : !_soloedForces.Remove(key)) return;
+        RebuildPlayback();
+        NotifyForceSwitches();
+    }
+
+    /// <summary>True while any force in the selected system is soloed - then only soloed forces act.</summary>
+    public bool AnyForceSoloed => _soloedForces.Count > 0;
+
+    private void NotifyForceSwitches()
+    {
+        foreach (var c in Cards) foreach (var f in c.Forces) f.NotifySwitches();
+        OnPropertyChanged(nameof(AnyForceSoloed));
+    }
+
+    /// <summary>
+    /// M752: a force edit - add, remove, or a value. The same path as every other edit (mark dirty,
+    /// re-serialize, re-extract, rebuild the preview), and the card is rebuilt because the force list and
+    /// the generic rows under it both change shape. A structural edit shifts the indices of the forces
+    /// after it, so that emitter's Mute and Solo switches are cleared rather than left on the wrong force.
+    /// </summary>
+    internal void EditForce(ParticleEmitterCardViewModel card, Action<ParticleEmitterEntry> mutate, string message, bool structural)
+    {
+        if (Document is null || card.Entry is not { } emitter) return;
+        if (!IsEditable) { Error?.Invoke("Read-only: Copy To Project first."); return; }
+        int at = Cards.IndexOf(card);
+        if (at < 0) return;
+        try
+        {
+            mutate(emitter);
+            MarkDocumentDirty?.Invoke();
+            _defs = VfxSystemResolver.ExtractAll(Document.Serialize());
+            if (structural)
+            {
+                string prefix = card.EmitterIndex + ":";
+                _mutedForces.RemoveWhere(k => k.StartsWith(prefix, StringComparison.Ordinal));
+                _soloedForces.RemoveWhere(k => k.StartsWith(prefix, StringComparison.Ordinal));
+                OnPropertyChanged(nameof(AnyForceSoloed));
+            }
+            Cards[at] = new ParticleEmitterCardViewModel(Document.RebuildRows(emitter), this, card.EmitterIndex);
+            SelectedProperty = null;
+            RebuildPlayback();
+            Info?.Invoke(message);
+        }
+        catch (Exception ex) { Error?.Invoke(ex.Message); }
+    }
+
+    /// <summary>M752: the preview's copy of a system with Mute and Solo applied. The resolver keeps EVERY
+    /// emitter, disabled ones included (the simulator skips those later), in the same file order the
+    /// document lists them - so definition i is file emitter i. Should the two ever disagree in length the
+    /// switches are not applied at all, because muting by a wrong index would silence the wrong force.</summary>
+    private VfxSystemDefinition WithForceSwitches(VfxSystemDefinition def)
+    {
+        if (_mutedForces.Count == 0 && _soloedForces.Count == 0) return def;
+        if (SelectedSystem is not { } node || node.Entry.Emitters.Count != def.Emitters.Count) return def;
+        var emitters = def.Emitters
+            .Select((d, i) => d.ForceFields is { } f ? d with { ForceFields = Filter(i, f) } : d)
+            .ToList();
+        return def with { Emitters = emitters };
+    }
+
+    private VfxForceFields? Filter(int emitterIndex, VfxForceFields f)
+    {
+        bool Keep(ParticleForceKind kind, int i)
+        {
+            string key = ForceKey(emitterIndex, kind, i);
+            if (_mutedForces.Contains(key)) return false;
+            return _soloedForces.Count == 0 || _soloedForces.Contains(key);
+        }
+        static List<T> Pick<T>(IReadOnlyList<T> list, Func<int, bool> keep) => list.Where((_, i) => keep(i)).ToList();
+        var kept = new VfxForceFields(
+            Pick(f.Noise, i => Keep(ParticleForceKind.Noise, i)),
+            Pick(f.Drag, i => Keep(ParticleForceKind.Drag, i)),
+            Pick(f.Acceleration, i => Keep(ParticleForceKind.Acceleration, i)),
+            Pick(f.Attraction, i => Keep(ParticleForceKind.Attraction, i)),
+            Pick(f.Orbital, i => Keep(ParticleForceKind.Orbital, i)));
+        return kept.IsEmpty ? null : kept;
+    }
+
     private void RebuildPlayback()
     {
         if (SelectedSystem is null) { Playback = null; return; }
         if (!_defs.TryGetValue(SelectedSystem.Entry.PathHash, out var def)) { Playback = null; return; }
+        def = WithForceSwitches(def);   // M752: preview-only Mute and Solo
         var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var multTexs = ResolveMultTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var distortionTexs = ResolveDistortionTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
@@ -387,7 +491,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     }
 
     /// <summary>M49: enable/disable one emitter — edits its 'disabled' bool on the live tree and refreshes
-    /// the preview (the resolver skips disabled emitters, so it stops/starts immediately).</summary>
+    /// the preview (the resolver keeps a disabled emitter flagged and the simulator skips it, so it stops/starts
+    /// immediately - M752 measured that the resolver itself does NOT drop it).</summary>
     internal void SetEmitterEnabled(ParticleEmitterCardViewModel card, bool enabled)
     {
         if (Document is null || card.Entry is not { } entry || entry.Disabled == !enabled) return;
@@ -450,10 +555,40 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
 
     partial void OnIsEnabledChanged(bool value) => _owner.SetEmitterEnabled(this, value);
 
-    public ParticleEmitterCardViewModel(ParticleEmitterEntry emitter, ParticleEditorViewModel owner)
+    /// <summary>M752: this emitter's position in its system's emitter list; -1 on the system card.</summary>
+    public int EmitterIndex { get; } = -1;
+
+    /// <summary>M752: the emitter's force fields, and the menu that adds one.</summary>
+    public IReadOnlyList<ParticleForceViewModel> Forces { get; } = Array.Empty<ParticleForceViewModel>();
+    public bool HasForces => Forces.Count > 0;
+    public bool ShowForces => Entry is not null;
+    public string ForcesHeader => Forces.Count == 0 ? "FORCES" : $"FORCES ({Forces.Count})";
+
+    public static IReadOnlyList<ParticleForceKindChoice> ForceKinds { get; } = new[]
+    {
+        new ParticleForceKindChoice(ParticleForceKind.Acceleration, "Acceleration", "A steady push everywhere - gravity, wind, an updraft. Starts at (0, 40, 0), the commonest Riot ships."),
+        new ParticleForceKindChoice(ParticleForceKind.Drag, "Drag", "Slows particles near a point. Starts at radius 1000, strength 2."),
+        new ParticleForceKindChoice(ParticleForceKind.Noise, "Noise", "Turbulence - the commonest force Riot ships. Starts at radius 300, frequency 10, strength 20."),
+        new ParticleForceKindChoice(ParticleForceKind.Orbital, "Orbital", "Spins particles about the emitter. Starts at 1 rad/s about Y."),
+        new ParticleForceKindChoice(ParticleForceKind.Attraction, "Attraction", "Pulls particles toward a point; a negative pull pushes. Starts at radius 500, pull 500."),
+    };
+
+    /// <summary>The same list on the instance - a reflection binding does not reach a static.</summary>
+    public IReadOnlyList<ParticleForceKindChoice> ForceKindChoices => ForceKinds;
+
+    [RelayCommand]
+    private void AddForce(ParticleForceKindChoice? choice)
+    {
+        if (choice is null) return;
+        _owner.EditForce(this, e => e.AddForce(choice.Kind), $"Added {choice.Name} to {Name}.", structural: true);
+    }
+
+    public ParticleEmitterCardViewModel(ParticleEmitterEntry emitter, ParticleEditorViewModel owner, int emitterIndex = -1)
     {
         _owner = owner;
         Entry = emitter;
+        EmitterIndex = emitterIndex;
+        Forces = emitter.Forces.Select(f => new ParticleForceViewModel(f, this, owner)).ToList();
         Name = emitter.Name;
         _isEnabled = !emitter.Disabled;
         Modules = emitter.Modules
