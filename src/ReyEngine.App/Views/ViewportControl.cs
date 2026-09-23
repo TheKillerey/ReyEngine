@@ -764,6 +764,14 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool TryProjectToScreen(Vector3 world, out Vector2 screen)
         => ViewportPicking.ProjectToScreen(world, _lastViewProj, _lastViewportW, _lastViewportH, out screen);
 
+    /// <summary>M764: the mirror-inclusive matrix and size the picking uses, for maths that needs depth as
+    /// well as a screen position (the rotate drag's front-of-ring choice). False before the first frame.</summary>
+    public bool TryGetPickProjection(out Matrix4x4 viewProj, out float width, out float height)
+    {
+        viewProj = _lastViewProj; width = (float)_lastViewportW; height = (float)_lastViewportH;
+        return width > 0 && height > 0;
+    }
+
     /// <summary>
     /// M632: measured in WORLD space, against the real camera - not against <c>_lastCamPos</c>.
     ///

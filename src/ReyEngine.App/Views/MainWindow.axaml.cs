@@ -96,6 +96,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     private Vector3 _gizmoStartRotation; // M42: rotate/scale drag-start state
     private Vector3 _gizmoStartScale;
     private bool _gizmoTargetIsPlacement; // M75: this drag targets a particle/sound placement, not a mesh
+    private Vector2? _rotateScreenTangent; // M764: the ring's on-screen direction at the grab, for Rotate
 
     // Click-to-select: a press+release with almost no movement is a pick, not a camera drag.
     private Point _pressPos;
@@ -1202,6 +1203,13 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                 && Viewport.GizmoPivot is { } pivot
                 && Viewport.TryGetAxisParameter(a, pt.Position, pivot, out var t0))
             {
+                // M764: a rotate drag is measured along the grabbed ring as it runs on screen, through the
+                // same mirrored matrix the picking uses - see GizmoRotateDrag.
+                _rotateScreenTangent = vm.TransformMode == 1
+                    && Viewport.TryGetPickProjection(out var pickVp, out var pickW, out var pickH)
+                    ? ReyEngine.Rendering.GizmoRotateDrag.ScreenTangent(pivot, Viewport.AxisDir(a), Viewport.GizmoArmLengthFor(pivot),
+                        new Vector2((float)pt.Position.X, (float)pt.Position.Y), pickVp, pickW, pickH)
+                    : null;
                 // M567: faces first. In face mode the gizmo belongs to the face selection, and a mesh may
                 // well still be selected underneath - falling through would drag the whole object.
                 if (vm.FaceEditMode && vm.HasFaceGizmoTarget)
@@ -1268,9 +1276,11 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             int comp = axis == ViewportControl.GizmoAxis.X ? 0 : axis == ViewportControl.GizmoAxis.Y ? 1 : 2;
             switch (gvm.TransformMode)
             {
-                case 1: // ROTATE — horizontal drag → degrees about this axis
+                case 1: // ROTATE — drag along the grabbed ring → degrees about this axis (M764)
                 {
-                    float deg = gvm.ApplyRotateSnap((float)(p.X - _pressPos.X) * 0.5f);
+                    if (_gizmoTargetIsFaces) break;   // faces only move; the start rotation here is a leftover
+                    float deg = gvm.ApplyRotateSnap(ReyEngine.Rendering.GizmoRotateDrag.Degrees(
+                        new Vector2((float)(p.X - _pressPos.X), (float)(p.Y - _pressPos.Y)), _rotateScreenTangent));
                     var rot = WithComponent(_gizmoStartRotation, comp, ComponentOf(_gizmoStartRotation, comp) + deg);
                     if (_gizmoTargetIsPlacement) gvm.RotateSelectedPlacementTo(rot);   // M75
                     else gvm.RotateSelectedMeshTo(rot);
@@ -1278,6 +1288,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                 }
                 case 2: // SCALE — drag along the axis arm; ratio to the grab distance scales that axis
                 {
+                    if (_gizmoTargetIsFaces) break;   // M764: as Rotate - faces only move
                     if (Viewport.TryGetAxisParameter(axis, p, _gizmoDragOrigin, out var t))
                     {
                         float f = MathF.Abs(_gizmoDragStartT) > 1e-3f ? t / _gizmoDragStartT : 1f;
