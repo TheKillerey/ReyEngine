@@ -75,3 +75,21 @@ public sealed class EditorSettingsTests
             + "Teach Distinct about it — otherwise the CopyFrom check silently skips the new field."),
     };
 }
+
+/// <summary>M762: the renderer choice is set from the viewport's View menu, not the Preferences dialog, so the
+/// dialog must carry it through - otherwise any Preferences save would silently put an OpenGL user back on
+/// Direct3D 11 (the M593 defect, for a new field).</summary>
+public sealed class RendererChoiceSettingsTests
+{
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Saving_preferences_keeps_the_renderer_choice(bool openGl)
+    {
+        var dialog = new ReyEngine.App.ViewModels.SettingsViewModel(new EditorSettings { UseOpenGlViewport = openGl });
+        Assert.Equal(openGl, dialog.ToSettings().UseOpenGlViewport);
+    }
+
+    [Fact]
+    public void Direct3D_11_is_the_default() => Assert.False(new EditorSettings().UseOpenGlViewport);
+}

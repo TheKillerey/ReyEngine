@@ -32,6 +32,10 @@ public sealed class EditorSettings
     // ---- viewport defaults ----
     public bool CullBackfacesDefault { get; set; } = true;
 
+    /// <summary>M762: the viewport renderer. Direct3D 11 is the default; OpenGL only when D3D11 is
+    /// unavailable or the user asks.</summary>
+    public bool UseOpenGlViewport { get; set; } = false;
+
     // ---- appearance (M72) ----
     /// <summary>UI theme palette name (Themes/Palettes/*.axaml). Unknown names fall back to the default.</summary>
     public string Theme { get; set; } = "Crimson";
@@ -159,6 +163,7 @@ public sealed class EditorSettings
         MouseLookSensitivity = s.MouseLookSensitivity; OrbitSensitivity = s.OrbitSensitivity;
         PanSensitivity = s.PanSensitivity; ZoomSensitivity = s.ZoomSensitivity;
         InvertLookY = s.InvertLookY; FlySpeed = s.FlySpeed; CullBackfacesDefault = s.CullBackfacesDefault;
+        UseOpenGlViewport = s.UseOpenGlViewport;   // M762
         Theme = s.Theme;
         ThemeAccent = s.ThemeAccent; BackgroundImagePath = s.BackgroundImagePath;   // M683
         BackgroundImageOpacity = s.BackgroundImageOpacity; BackgroundGlass = s.BackgroundGlass;

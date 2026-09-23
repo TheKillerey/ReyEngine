@@ -424,6 +424,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             // Carried through unchanged - the dialog does not edit these.
             FirstRunCompleted = _source.FirstRunCompleted,
             LastSeenFeatureVersion = _source.LastSeenFeatureVersion,
+            UseOpenGlViewport = _source.UseOpenGlViewport,   // M762: set from View menu, not this dialog
         });
         return result;
     }

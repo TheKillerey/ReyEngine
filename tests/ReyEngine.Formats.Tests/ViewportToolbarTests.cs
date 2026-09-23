@@ -117,7 +117,8 @@ public sealed class ViewportToolbarTests
 
         // A WrapPanel so a narrow window wraps instead of clipping the right-hand end off.
         Assert.Contains("<WrapPanel Orientation=\"Horizontal\" ItemSpacing=", markup);
-        foreach (string group in new[] { "👁 Display ▾", "◉ Overlays ▾", "🛠 Tools ▾" })
+        // M762: Display/Overlays/Tools became View/Show/Map, without the on-bar emoji.
+        foreach (string group in new[] { "Content=\"View ▾\"", "Text=\"Show ▾\"", "Content=\"Map ▾\"" })
             Assert.Contains(group, markup);
     }
 
@@ -135,10 +136,18 @@ public sealed class ViewportToolbarTests
     public void TheBadgeCountsExactlyWhatTheOverlaysMenuHolds()
     {
         // If these drift apart the number becomes a lie, and a lying badge is worse than no badge.
+        //
+        // M762: the OVERLAYS section now lives inside Show ▾, preceded by a "Game view" checkbox and
+        // followed by a NAVGRID section - both deliberately OUTSIDE this boundary. GameMode is a one-shot
+        // "hide everything", not an overlay of its own, and the NavGrid toggle already had its own command
+        // and semantics before it moved in from its own SplitButton; counting either would make the number
+        // stop matching what OVERLAYS actually lists. The end marker moved from "NAVGRID LAYERS" (the
+        // layer-list sub-header) to "NAVGRID" (the new section header just above the toggle), so the
+        // toggle itself falls outside the captured span same as GameMode does at the start.
         if (MainWindowXaml() is not { } file) return;
         string markup = File.ReadAllText(file);
         int start = markup.IndexOf("OVERLAYS", StringComparison.Ordinal);
-        int end = markup.IndexOf("NAVGRID LAYERS", StringComparison.Ordinal);
+        int end = markup.IndexOf("NAVGRID", StringComparison.Ordinal);
         Assert.True(start > 0 && end > start, "the Overlays menu is not where this test expects it");
         string menu = markup[start..end];
 

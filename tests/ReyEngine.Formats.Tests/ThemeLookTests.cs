@@ -169,9 +169,14 @@ public sealed class ThemeLookTests
         }
     }
 
-    /// <summary>M685: the viewport chrome. The NavGrid split button sits in the toolbar row at the tool
-    /// buttons' size and colours; the flyouts and tooltips paint the palette, not Fluent's greys; the
-    /// orbit/pan hint is out of the toolbar's way at the bottom right.</summary>
+    /// <summary>M685: the viewport chrome. SplitButton.vp keeps the tool buttons' size and colours for
+    /// whatever next needs a split control; the flyouts and tooltips paint the palette, not Fluent's greys;
+    /// the orbit/pan hint is out of the toolbar's way at the bottom right.
+    ///
+    /// <para>M762: the NavGrid SplitButton that used to prove this style live left the bar - its toggle and
+    /// layer list moved into Show ▾ as plain menu rows (ViewportToolbarTests pins that). No control in
+    /// MainWindow.axaml uses SplitButton.vp any more, so this only checks the STYLE definition now; a real
+    /// on-screen exercise of it lives in ToolbarLookCard/UiProbe's "toolbar" mode.</para></summary>
     [Fact]
     public void TheViewportChromeMatchesTheToolbar()
     {
@@ -193,7 +198,8 @@ public sealed class ThemeLookTests
         Assert.Contains("SplitButton.vp /template/ Button#PART_SecondaryButton", theme);
         Assert.Contains("Property=\"BorderThickness\" Value=\"1,1,0,1\"", theme);
         Assert.Contains("Property=\"BorderThickness\" Value=\"0,1,1,1\"", theme);
-        Assert.Contains("<SplitButton Classes=\"vp\" Content=\"🌿 NavGrid\"", xaml);
+        // M762: NavGrid moved into Show ▾ (a CheckBox, not a SplitButton) - see ViewportToolbarTests.
+        Assert.Contains("Content=\"🌿 NavGrid overlay\"", xaml);
 
         // popups: the menu's opaque panel colour, which every palette defines
         foreach (string selector in new[] { "FlyoutPresenter", "ToolTip" })

@@ -3105,10 +3105,37 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private double _animationTime;
     /// <summary>M248 (phase 6, step 1): render the viewport with Direct3D 11 instead of OpenGL.
     ///
-    /// <para>Off by default and deliberately reversible. The OpenGL path is the only reference for what the
-    /// editor used to look like, so it stays until the D3D11 one is trusted - deleting it would remove the
-    /// ability to A/B a regression, which is the whole point of having both.</para></summary>
+    /// <para>M762: Direct3D 11 is now the DEFAULT (set in the constructor from
+    /// <c>!Settings.UseOpenGlViewport</c>) - it draws Riot's own shaders, where OpenGL is an
+    /// approximation. OpenGL stays reachable (View ▾ ▸ "Use OpenGL renderer") both as a fallback for a
+    /// machine where D3D11 fails to start and as the only reference for what the pre-D3D11 editor looked
+    /// like - deleting it would remove the ability to A/B a regression, which is the whole point of having
+    /// both.</para></summary>
     [ObservableProperty] private bool _useDx11Viewport;
+
+    /// <summary>M762: repaints the inverse-named checkbox the View menu binds to. MainWindow's automatic
+    /// D3D11-unavailable fallback (OnDx11Toggled) writes UseDx11Viewport directly and skips
+    /// <see cref="UseOpenGlViewport"/>'s setter, so this is the one place that reacts to that fallback
+    /// rather than the one that decides it - which is also why the fallback never touches settings.json.</summary>
+    partial void OnUseDx11ViewportChanged(bool value) => OnPropertyChanged(nameof(UseOpenGlViewport));
+
+    /// <summary>M762: "Use OpenGL renderer" in View ▾. Binding a checkbox straight to <c>!UseDx11Viewport</c>
+    /// reads as a double negative, and naming the OFF state gives this a second job: it is the ONE place a
+    /// user's own choice of renderer is written to settings.json. The automatic D3D11-unavailable fallback in
+    /// MainWindow.axaml.cs (<c>OnDx11Toggled</c>) sets <see cref="UseDx11Viewport"/> directly and skips this
+    /// setter, so one failed device start on someone else's machine can never silently flip the SAVED
+    /// default away from Direct3D 11.</summary>
+    public bool UseOpenGlViewport
+    {
+        get => !UseDx11Viewport;
+        set
+        {
+            if (UseOpenGlViewport == value) return;
+            UseDx11Viewport = !value;
+            Settings.UseOpenGlViewport = value;
+            Settings.Save();
+        }
+    }
 
     /// <summary>What the D3D11 surface is doing, for the status bar. Empty when it is not running.</summary>
     [ObservableProperty] private string _dx11ViewportStatus = "";
@@ -6348,7 +6375,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// nothing. Routing it here means those callers keep working unchanged.</para>
     /// </summary>
     partial void OnInspectorTabChanged(int value) => InspectorSection = InspectorSections.Asset;
-    [ObservableProperty] private int _previewMode; // 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal
+    // M762: starts on 1 ("Lit"). With D3D11 the default renderer, 0 is the OpenGL-only "Basic" and is
+    // disabled in the picker; D3D11 draws Riot's own shaders for both 0 and 1.
+    [ObservableProperty] private int _previewMode = 1; // 0 Basic · 1 RiotApprox · 2 Debug base · 3 Debug alpha · 4 Debug normal
     [ObservableProperty] private string _shaderDbStatus = "Riot shaders not scanned.";
     /// <summary>
     /// <para>M268: bumped whenever the open map is replaced or cleared. _currentMap is a plain field, so
@@ -6562,6 +6591,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // ResolveBinName usually arrives from a background parse.
         _meta = new Lazy<MetaClassDatabase>(() => _metaSync.LoadLocal(m => _log.Info("Meta", m)));
         _cullBackfaces = Settings.CullBackfacesDefault;   // M40: honor saved viewport default
+        _useDx11Viewport = !Settings.UseOpenGlViewport;   // M762: Direct3D 11 by default
         NewFeature.LastSeenVersion = Settings.LastSeenFeatureVersion;   // M593
         Project.GameDirectory = ReyProject.GuessGameDirectory();
         _log.Info("ReyEngine", "Editor started.");

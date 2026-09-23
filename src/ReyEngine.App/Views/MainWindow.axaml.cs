@@ -150,6 +150,11 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                     else if (e.PropertyName == nameof(MainWindowViewModel.MaterialsRevision)
                              && vm.UseDx11Viewport && _dx11?.IsReady == true) OnDx11Toggled(vm);
                 };
+            // M762: Direct3D 11 is now the VM's own starting value (set in its constructor, before this
+            // handler exists to hear the PropertyChanged that a later toggle relies on) - so a fresh window
+            // has to kick the D3D11 surface awake itself rather than wait for a change notification that
+            // already happened. OnDx11Toggled no-ops harmlessly if a caller ever flips this false first.
+            if (DataContext is MainWindowViewModel started && started.UseDx11Viewport) OnDx11Toggled(started);
         };
         Closed += (_, _) => { _closed = true; _dx11?.Dispose(); _dx11 = null; };
     }
