@@ -1,12 +1,15 @@
 using System.Numerics;
+using System.Text;
 using ReyEngine.App.Services;
 using ReyEngine.App.ViewModels;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
+using ReyEngine.Formats.Animation;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.Shaders;
+using ReyEngine.Formats.Skeletons;
 using ReyEngine.Formats.Vfx;
 using ReyEngine.Rendering.D3D11;
 using ReyEngine.Rendering.Vfx;
@@ -169,14 +172,304 @@ public sealed class RiotMeshEmitterTests
         // REFLECTIVE is asked only of the pair that has the axis.
         Assert.Contains("if (tocs.VsName == MeshVsName && e.Reflection is { HasFresnel: true })", pipeline);
 
-        // D3D11: scale, Euler X-Y-Z, spin about Y, placement. GL: the same chain in the vertex shader.
+        // D3D11: scale, Euler Z-X-Y (roll-pitch-yaw, M765), spin about Y, placement. GL: the same chain in
+        // the vertex shader.
+        Assert.Contains("* Matrix4x4.CreateRotationZ(euler.Z)", d3d);
         Assert.Contains("* Matrix4x4.CreateRotationX(euler.X)", d3d);
+        Assert.Contains("* Matrix4x4.CreateRotationY(euler.Y)", d3d);
         Assert.Contains("* Matrix4x4.CreateRotationY(inst[o + 9])", d3d);
         Assert.Contains("_riotMeshGeoms.All(g => g is null)", d3d);          // a mesh-only frame is a frame
         Assert.Contains("uniform vec3 uMeshEuler;", gl);
         Assert.Contains("rotateEuler(aPos * uScale, uMeshEuler)", gl);
         Assert.Contains("_gl.Uniform3(_muMeshEuler, es.Instances[o + 15], es.Instances[o + 16], es.Instances[o + 17]);", gl);
         Assert.Contains("_gl.Uniform3(_muScale, sx, sy, sz);", gl);
+
+        // M765: SEPARATE_ALPHA_UV is asked only of the mesh pair, on uvMode 2 (LOCK_ALPHA); GL keys the same
+        // condition off VfxPrimitiveSupport.LockAlphaUvMode rather than the literal 2, so a renamed constant
+        // cannot drift the two apart silently.
+        Assert.Contains("if (tocs.VsName == MeshVsName && e.Extras?.UvMode == VfxPrimitiveSupport.LockAlphaUvMode)", pipeline);
+        Assert.Contains("defines[\"SEPARATE_ALPHA_UV\"] = \"1\";", pipeline);
+        Assert.Contains("uniform int uMeshSeparateAlphaUv;", gl);
+        Assert.Contains("es.Def.Extras?.UvMode == ReyEngine.Formats.Vfx.VfxPrimitiveSupport.LockAlphaUvMode", gl);
+
+        // M765: the legacy M283 mesh path (animated .skn emitters) now reads the same 19-float record and
+        // Euler slots the Riot path does, through one shared constant instead of a second copy of "the
+        // stride" that had silently drifted to 11.
+        Assert.Contains("public const int MeshInstanceStride = ParticleQuadBuilder.Stride;", d3d);
+        Assert.Contains("float3 rotated = rotateEuler(scaled, gEuler.xyz);", d3d);
+    }
+
+    // ===================================================== the geometry
+
+    // Matches the fixed MeshVert/MeshHlsl/DrawRiotMeshInstances rotateEuler: Z first, then X, then Y
+    // (roll-pitch-yaw). A local copy on purpose - this test exists to catch the THREE call sites drifting
+    // apart, so it must not share code with any of them.
+    private static Vector3 RollPitchYaw(Vector3 p, Vector3 r)
+    {
+        float sx = MathF.Sin(r.X), cx = MathF.Cos(r.X);
+        float sy = MathF.Sin(r.Y), cy = MathF.Cos(r.Y);
+        float sz = MathF.Sin(r.Z), cz = MathF.Cos(r.Z);
+        p = new Vector3(p.X * cz - p.Y * sz, p.X * sz + p.Y * cz, p.Z);
+        p = new Vector3(p.X, p.Y * cx - p.Z * sx, p.Y * sx + p.Z * cx);
+        return new Vector3(p.X * cy + p.Z * sy, p.Y, -p.X * sy + p.Z * cy);
+    }
+
+    // The order M765 replaced: X, then Y, then Z.
+    private static Vector3 EditorXyz(Vector3 p, Vector3 r)
+    {
+        float sx = MathF.Sin(r.X), cx = MathF.Cos(r.X);
+        float sy = MathF.Sin(r.Y), cy = MathF.Cos(r.Y);
+        float sz = MathF.Sin(r.Z), cz = MathF.Cos(r.Z);
+        p = new Vector3(p.X, p.Y * cx - p.Z * sx, p.Y * sx + p.Z * cx);
+        p = new Vector3(p.X * cy + p.Z * sy, p.Y, -p.X * sy + p.Z * cy);
+        return new Vector3(p.X * cz - p.Y * sz, p.X * sz + p.Y * cz, p.Z);
+    }
+
+    private static float TiltDegrees(Vector3 a, Vector3 b)
+    {
+        var span = b - a;
+        return MathF.Asin(Math.Clamp(span.Y / span.Length(), -1f, 1f)) * 180f / MathF.PI;
+    }
+
+    /// <summary>M765: a pure-maths regression on the root cause itself - independent of either renderer.
+    /// Order Top's authored birthRotation0 (0, 282, -30) deg only levels the shield's arc under
+    /// roll-pitch-yaw; under the old X-then-Y-then-Z order the same rotation tilts it badly, which is what
+    /// the user saw as "the position doesn't seem to look correctly". Needs the game install for the real
+    /// .skn/.skl/.anm - same gate as the rest of this file - because the arc's local geometry is not
+    /// something a synthetic mesh can stand in for.</summary>
+    [Fact]
+    public void OrderTopsBirthRotationLevelsTheShieldArcOnlyUnderRollPitchYaw()
+    {
+        if (!Installed) return;
+        const string Shipping = Final + @"\Maps\Shipping";
+        string mapWad = Path.Combine(Shipping, "Map11.wad.client");
+        string commonWad = Path.Combine(Shipping, "Common.wad.client");
+        if (!File.Exists(mapWad) || !File.Exists(commonWad)) return;
+
+        var database = new HashSyncService().LoadLocal(_ => { });
+        var resolver = new WadPathResolver(database);
+        using var map = WadArchive.Open(mapWad, resolver);
+        using var common = WadArchive.Open(commonWad, resolver);
+
+        byte[]? Read(string path)
+        {
+            ulong h = HashAlgorithms.WadPath(path.ToLowerInvariant());
+            if (map.TryGetEntry(h, out _)) return map.Extract(h);
+            if (common.TryGetEntry(h, out _)) return common.Extract(h);
+            return null;
+        }
+
+        var sknB = Read("ASSETS/Shared/Particles/SRUAP_Order_BaseDoor_RG.skn");
+        if (sknB is null) return;   // asset renamed on a newer patch - nothing left to check against
+        var mesh = SkinnedMeshDecoder.Decode(sknB);
+        float[] pos = mesh.Positions;
+        var sklB = Read("ASSETS/Shared/Particles/SRUAP_Order_BaseDoor_RG.skl");
+        var anmB = Read("ASSETS/Maps/Particles/Default/SRUAP_Order_BaseDoor_Idle1.anm");
+        if (sklB is not null && anmB is not null && mesh.CanSkin)
+        {
+            var skl = SkeletonDecoder.Decode(sklB);
+            var clip = AnimationDecoder.Decode(anmB, "idle");
+            var index = SkeletonIndex.For(skl);
+            var pose = new PoseBuffer();
+            SkeletonPose.ComputeSkin(index, clip, 0f, pose);
+            pos = new float[mesh.VertexCount * 3];
+            SkinnedMeshAnimator.Deform(mesh, index, pose, pos, null);
+        }
+
+        // The two arc ends: the lowest vertex on each local-Z extreme (|z| > 0.8*max), the same selection
+        // the M765 debugger pass used to find the shield's authored hang points.
+        float zmax = 0f;
+        for (int i = 0; i < pos.Length; i += 3) zmax = MathF.Max(zmax, MathF.Abs(pos[i + 2]));
+        Assert.True(zmax > 0f, "the shield mesh decoded with no spread along Z");
+        Vector3 endA = default, endB = default;
+        float ya = float.MaxValue, yb = float.MaxValue;
+        for (int i = 0; i < pos.Length; i += 3)
+        {
+            var v = new Vector3(pos[i], pos[i + 1], pos[i + 2]);
+            if (v.Z > 0.8f * zmax && v.Y < ya) { ya = v.Y; endA = v; }
+            if (v.Z < -0.8f * zmax && v.Y < yb) { yb = v.Y; endB = v; }
+        }
+
+        var rotDeg = new Vector3(0f, 282f, -30f);   // SRUAP_Order_BaseDoor_Shield_Top's authored birthRotation0
+        var r = rotDeg * (MathF.PI / 180f);
+
+        float rpyTilt = MathF.Abs(TiltDegrees(RollPitchYaw(endA, r), RollPitchYaw(endB, r)));
+        float xyzTilt = MathF.Abs(TiltDegrees(EditorXyz(endA, r), EditorXyz(endB, r)));
+
+        // Measured (M765 debugger pass): roll-pitch-yaw levels all four SR gate shields to within 0.1 deg of
+        // each other; Order Top specifically came out at -0.8 deg. The old order put it at -29.9 deg.
+        Assert.True(rpyTilt < 2f, $"roll-pitch-yaw tilt {rpyTilt:0.0} deg - the fixed order should level the arc");
+        Assert.True(xyzTilt > 10f, $"X-Y-Z tilt {xyzTilt:0.0} deg - expected clearly off-level, or this test proves nothing");
+    }
+
+    // ===================================================== SEPARATE_ALPHA_UV
+
+    /// <summary>M765: a mesh emitter authoring uvMode 2 (LOCK_ALPHA) must select mesh_vs/mesh_ps's
+    /// SEPARATE_ALPHA_UV axis and resolve a real permutation - not just log the define. Uses the shipped
+    /// cache directly rather than trusting the resolver to accept anything.</summary>
+    [Fact]
+    public void AUvMode2MeshEmitterResolvesSeparateAlphaUvAgainstTheRealShaderCache()
+    {
+        if (!Installed) return;
+        var database = new HashSyncService().LoadLocal(_ => { });
+        using var cache = ShaderCacheReader.Open(Final, new WadPathResolver(database), out _);
+        if (cache is null) return;
+        var tocs = VfxD3D11EmitterPipeline.ReadMeshTocs(cache, out var tocError);
+        if (tocs is null) return;
+
+        using var renderer = new ShaderPreviewRenderer();
+        if (!renderer.Initialize(out _)) return;   // no D3D11 device on this machine - nothing to build
+
+        var emitter = new VfxEmitterDefinition(
+            Name: "m", Rate: VfxCurveF.Const(1f), ParticleLifetime: VfxCurveF.Const(5f), EmitterLifetime: null,
+            ParticleLinger: 0f, TimeBeforeFirstEmission: 0f, IsSingleParticle: true, Disabled: false, BlendMode: 1,
+            BirthScale: VfxCurve3.Const(Vector3.One), ScaleOverLife: null,
+            BirthColor: VfxCurve4.Const(Vector4.One), ColorOverLife: null,
+            BirthVelocity: null, Acceleration: null, BirthRotationalVelocity: null,
+            EmitterPosition: VfxCurve3.Const(Vector3.Zero),
+            TexturePath: "ASSETS/Test/p.dds", TexDiv: Vector2.One, NumFrames: 1, RandomStartFrame: false,
+            IsMeshPrimitive: true, MeshPath: "ASSETS/Test/m.scb",
+            Extras: new VfxEmitterExtras { UvMode = VfxPrimitiveSupport.LockAlphaUvMode });
+
+        var dummyTex = new TextureImage(4, 4, new byte[4 * 4 * 4]);
+        var log = new StringBuilder();
+        var mat = VfxD3D11EmitterPipeline.Build(renderer, cache, tocs, emitter,
+            sampler => sampler == "TEXTURE" ? VfxD3D11EmitterPipeline.Sprite.Decoded(dummyTex, "test") : null, log);
+
+        Assert.True(mat is not null, "SEPARATE_ALPHA_UV did not resolve against the real shader cache: " + log);
+        Assert.Contains("SEPARATE_ALPHA_UV", log.ToString());
+        Assert.DoesNotContain("UNRESOLVED", log.ToString());
+    }
+
+    // ===================================================== the animated mesh path (M283) really rotates now
+
+    /// <summary>M765: the animated-mesh path (SRUAP_Order_BaseDoor_Shield_Top's own "Shield", forced onto
+    /// it by carrying a .skl/.anm) drew with <c>model = Matrix4x4.Identity</c> and never read birth rotation
+    /// at all - changing its authored value could not move a single pixel. Renders the same animated shield
+    /// twice through the real map pipeline (<see cref="D3D11MapParticles"/>), once with the authored
+    /// birthRotation0 and once with it zeroed, and requires the two pictures to differ - proof the fix
+    /// reaches the draw, not just the CPU-side maths <see cref="OrderTopsBirthRotationLevelsTheShieldArcOnlyUnderRollPitchYaw"/>
+    /// checks.</summary>
+    [Fact]
+    public void ShieldTopsBirthRotationNowMovesPixelsOnTheAnimatedMeshPath()
+    {
+        if (!Installed) return;
+        const string Shipping = Final + @"\Maps\Shipping";
+        string mapWad = Path.Combine(Shipping, "Map11.wad.client");
+        string commonWad = Path.Combine(Shipping, "Common.wad.client");
+        if (!File.Exists(mapWad) || !File.Exists(commonWad)) return;
+
+        var database = new HashSyncService().LoadLocal(_ => { });
+        var resolver = new WadPathResolver(database);
+        using var map = WadArchive.Open(mapWad, resolver);
+        using var common = WadArchive.Open(commonWad, resolver);
+        using var cache = ShaderCacheReader.Open(Final, resolver, out _);
+        if (cache is null) return;
+
+        byte[]? Read(string path)
+        {
+            ulong h = HashAlgorithms.WadPath(path.ToLowerInvariant());
+            if (map.TryGetEntry(h, out _)) return map.Extract(h);
+            if (common.TryGetEntry(h, out _)) return common.Extract(h);
+            return null;
+        }
+
+        var binB = Read("data/maps/mapgeometry/map11/base_srx.materials.bin");
+        if (binB is null) return;
+        var all = VfxSystemResolver.ExtractAll(binB);
+        var system = all.Values.FirstOrDefault(s => s.Name == "SRUAP_Order_BaseDoor_Shield_Top");
+        if (system is null) return;
+        int idx = system.Emitters.ToList().FindIndex(e =>
+            e.IsMeshPrimitive && e.MeshPath is { } mp && mp.EndsWith(".skn", StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+        var meshEmitter = system.Emitters[idx];
+
+        var sknB = Read(meshEmitter.MeshPath!);
+        if (sknB is null) return;
+        var meshAsset = SkinnedMeshDecoder.Decode(sknB);
+        VfxMeshAnimation? anim = null;
+        if (meshAsset.CanSkin && meshEmitter.MeshSkeletonPath is { } sklP && meshEmitter.MeshAnimationPath is { } anmP)
+        {
+            var sklB = Read(sklP);
+            var anmB = Read(anmP);
+            if (sklB is not null && anmB is not null)
+                anim = new VfxMeshAnimation(meshAsset, SkeletonDecoder.Decode(sklB), AnimationDecoder.Decode(anmB, Path.GetFileName(anmP)));
+        }
+        // This test is specifically about the animated path - a bind-pose fallback would prove nothing
+        // about the code under test, so it is a skip rather than a false pass.
+        if (anim is null) return;
+        var meshData = new StaticMeshData(meshAsset.Positions, meshAsset.Uvs, meshAsset.Indices, "shield") { Animation = anim };
+
+        TextureImage? Load(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            var b = Read(path);
+            if (b is null) return null;
+            try { return TextureDecoder.Decode(b); } catch { return null; }
+        }
+        var texs = system.Emitters.Select(e => Load(e.TexturePath)).ToList();
+        var meshes = system.Emitters.Select((_, i) => i == idx ? meshData : null).ToList();
+
+        // M765: placed at the ORIGIN rather than the system's real map coordinates (2701, 96, 4752), like
+        // the Aatrox dome test above. PreviewSettings.MirrorX bakes Scale(-1,1,1) into the VIEW matrix
+        // (ShaderPreviewRenderer.RenderFrame:5204), which reflects world-space X but leaves the LookAt's own
+        // eye/target unreflected - so a camera and placement far from X=0 point the mirrored geometry and
+        // the unmirrored camera in unrelated directions and nothing lands on screen. At the origin the two
+        // agree by construction, which is exactly why the Aatrox test below places its item at
+        // <c>Vector3.Zero</c> too rather than at Aatrox's own world position.
+        var at = Vector3.Zero;
+        VfxSystemDefinition SystemWith(Vector3 rotDeg)
+        {
+            var emitters = system.Emitters.ToList();
+            // BirthRotation is authored in DEGREES, same as every other VfxCurve3 here - the simulator does
+            // the deg->rad conversion when it packs the instance (see AMeshParticleCarriesItsEulerBirthRotation...).
+            emitters[idx] = emitters[idx] with { BirthRotation = VfxCurve3.Const(rotDeg) };
+            return system with { Emitters = emitters };
+        }
+        var realSystem = SystemWith(new Vector3(0f, 282f, -30f));   // authored birthRotation0
+        var zeroSystem = SystemWith(Vector3.Zero);
+
+        var eye = at + new Vector3(0f, 200f, 500f);
+        var target = at + new Vector3(0f, 130f, 0f);
+        var view = Matrix4x4.CreateLookAt(eye, target, Vector3.UnitY);
+        var proj = Matrix4x4.CreatePerspectiveFieldOfView(0.9f, 1f, 5f, 20000f);
+        var mirroredView = Matrix4x4.CreateScale(-1f, 1f, 1f) * view;
+        const int Size = 256;
+
+        byte[]? Render(VfxSystemDefinition sys)
+        {
+            var item = new VfxPlaybackItem(sys, at, texs, meshes);
+            using var renderer = new ShaderPreviewRenderer();
+            if (!renderer.Initialize(out _)) return null;
+            var driver = new D3D11MapParticles(renderer, cache);
+            driver.SetPlayback(new VfxPlayback(new[] { item }));
+            for (int i = 0; i < 9; i++) driver.Tick(1f / 60f, mirroredView, mirroredView * proj, eye, 1000f);
+            var s = new PreviewSettings
+            {
+                SuppliedView = view, SuppliedProjection = proj, SuppliedCameraPosition = eye,
+                AlphaBlend = true, DepthTest = true, MirrorX = true, TransposeMatrices = true,
+                CullBackFaces = false, SortByPipeline = false,
+                ClearColor = new Vector4(0.039f, 0.051f, 0.075f, 1f), TimeSeconds = 0.15f,
+            };
+            var frame = renderer.RenderFrame(Size, Size, s, out _);
+            driver.StopAll();
+            return frame is null ? null : (byte[])frame.Clone();   // RenderFrame reuses its byte[] - must copy
+        }
+
+        var real = Render(realSystem);
+        var zero = Render(zeroSystem);
+        if (real is null || zero is null) return;   // no device on this machine - nothing to compare
+
+        long changed = 0;
+        for (int i = 0; i + 3 < real.Length; i += 4)
+        {
+            int d = Math.Max(Math.Abs(real[i] - zero[i]),
+                Math.Max(Math.Abs(real[i + 1] - zero[i + 1]), Math.Abs(real[i + 2] - zero[i + 2])));
+            if (d > 2) changed++;
+        }
+        // Measured (M765): ~7,800 of the 65,536 px in a 256x256 frame differ once the fix reaches the draw.
+        Assert.True(changed > 1000,
+            $"birth rotation moved only {changed} px between the real and zeroed rotation - the animated mesh path is still ignoring it");
     }
 
     // ===================================================== the picture

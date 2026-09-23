@@ -824,6 +824,7 @@ public sealed class VfxParticleRenderer
     private int _muMeshEuler;   // M640: the Euler birth rotation, instance slots 15-17
     private int _muTexMult, _muHasTexMult, _muUvOffsetMult;
     private int _muMeshTexDiv, _muMeshTexDivMult;   // M117
+    private int _muMeshSeparateAlphaUv;   // M765
     private int _muPlacementRight, _muPlacementUp, _muPlacementForward;
     private int _muCamPosMesh, _muFresnelColor, _muFresnelPower, _muHasFresnel;   // M178 (2.12)
     private int _muPaletteTex, _muPaletteMixer, _muPaletteV, _muHasPalette;   // M641
@@ -928,6 +929,7 @@ public sealed class VfxParticleRenderer
             _muUvOffsetMult = _gl.GetUniformLocation(_meshProgram, "uUvOffsetMult");
             _muMeshTexDiv = _gl.GetUniformLocation(_meshProgram, "uMeshTexDiv");
             _muMeshTexDivMult = _gl.GetUniformLocation(_meshProgram, "uMeshTexDivMult");
+            _muMeshSeparateAlphaUv = _gl.GetUniformLocation(_meshProgram, "uMeshSeparateAlphaUv");   // M765
             _muPlacementRight = _gl.GetUniformLocation(_meshProgram, "uPlacementRight");
             _muPlacementUp = _gl.GetUniformLocation(_meshProgram, "uPlacementUp");
             _muPlacementForward = _gl.GetUniformLocation(_meshProgram, "uPlacementForward");
@@ -1139,6 +1141,9 @@ public sealed class VfxParticleRenderer
         _gl.Uniform2(_muMeshTexDiv, mdiv.X > 0 ? mdiv.X : 1f, mdiv.Y > 0 ? mdiv.Y : 1f);
         var mdivMult = es.Def.TextureMultTexDiv;
         _gl.Uniform2(_muMeshTexDivMult, mdivMult.X > 0 ? mdivMult.X : 1f, mdivMult.Y > 0 ? mdivMult.Y : 1f);
+        // M765: uvMode 2 (LOCK_ALPHA) on a mesh emitter selects mesh_ps's SEPARATE_ALPHA_UV axis on the
+        // D3D11 side (VfxD3D11EmitterPipeline.Build); this is the same condition for the GL mesh program.
+        _gl.Uniform1(_muMeshSeparateAlphaUv, es.Def.Extras?.UvMode == ReyEngine.Formats.Vfx.VfxPrimitiveSupport.LockAlphaUvMode ? 1 : 0);
         // M209 (2.11): backface culling is APPLIED. The winding is CLOCKWISE.
         //
         // Data side - the DEFAULT is an INFERENCE, not a measurement, and the A/B below did not test it.
@@ -1559,19 +1564,24 @@ uniform vec3 uPlacementUp;
 uniform vec3 uPlacementForward;
 out vec2 vUv;
 out vec2 vUvMult;
+out vec2 vUvAlpha;   // M765: tiled-only UV for SEPARATE_ALPHA_UV mesh emitters (uvMode 2), no scroll/offset
 out vec3 vFresnel;
 out vec4 vReflect;   // M181: xyz = reflection vector, w = reflection opacity
 vec3 rotateEuler(vec3 p, vec3 r){
     float sx = sin(r.x); float cx = cos(r.x);
     float sy = sin(r.y); float cy = cos(r.y);
     float sz = sin(r.z); float cz = cos(r.z);
+    // M765: roll-pitch-yaw - Z first, then X, then Y. Decoded from the four SR gate shields' authored
+    // birthRotation0: only this order levels all four arcs (tilt within 0.1 deg of each other); the prior
+    // X-then-Y-then-Z order put them anywhere from -30 deg to +19 deg off level.
+    p = vec3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
     p = vec3(p.x, p.y * cx - p.z * sx, p.y * sx + p.z * cx);
     p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
-    return vec3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
+    return p;
 }
 void main(){
     float s = sin(uRot); float c = cos(uRot);
-    // M640: the authored birth rotation first (the same X-Y-Z order the quad path decoded), then the
+    // M640/M765: the authored birth rotation first (Z, then X, then Y - see rotateEuler), then the
     // over-life spin about Y, then the placement basis. The D3D11 Riot mesh path composes the same chain.
     vec3 e = rotateEuler(aPos * uScale, uMeshEuler);
     vec3 local = vec3(e.x * c - e.z * s, e.y, e.x * s + e.z * c);
@@ -1620,11 +1630,17 @@ void main(){
     // the base ring swirl stretches the texture 4x along the ring, which also fits.
     vUv = aUv * max(uMeshTexDiv, vec2(0.0001)) + uUvOffset;
     vUvMult = aUv * max(uMeshTexDivMult, vec2(0.0001)) + uUvOffsetMult;
+    // M765: same tiling as vUv, but never the scroll/offset - the locked-alpha UV mesh_vs computes as
+    // dot2(uv, transform.xy) with no translation term (mesh_vs SEPARATE_ALPHA_UV blob 33, instructions
+    // 137-138). Computed unconditionally; it costs nothing and is only sampled when uMeshSeparateAlphaUv
+    // selects it in the fragment stage.
+    vUvAlpha = aUv * max(uMeshTexDiv, vec2(0.0001));
 }";
 
     private const string MeshFrag = @"
 in vec2 vUv;
 in vec2 vUvMult;
+in vec2 vUvAlpha;   // M765: SEPARATE_ALPHA_UV's tiled-only UV
 in vec3 vFresnel;
 in vec4 vReflect;
 uniform samplerCube uReflCube;
@@ -1633,6 +1649,7 @@ uniform highp int uHasRefl;   // see MeshVert - the precision must match the ver
 uniform sampler2D uTex;
 uniform sampler2D uTexMult;
 uniform int uHasTexMult;
+uniform int uMeshSeparateAlphaUv;   // M765: uvMode 2 (LOCK_ALPHA) on a mesh emitter
 uniform vec4 uColor;
 // M641: the two stages the mesh program never had. Same uniform NAMES as the quad program (they are
 // per-program, so this is free) to make the parity between the two shaders readable.
@@ -1649,6 +1666,12 @@ uniform float uAlphaRef;
 out vec4 fragColor;
 void main(){
     vec4 texel = texture(uTex, vUv);
+    // M765: SEPARATE_ALPHA_UV - colour keeps the scrolled/tiled UV, alpha is resampled from the SAME
+    // texture at the tiled-only UV (no scroll/offset). DECODED from mesh_ps SEPARATE_ALPHA_UV blob 773,
+    // instructions 113-114: r0.xyz = t2.Sample(v2.xy); r0.w = t2.Sample(v4.xy) - two samples of one
+    // resource, v2 carrying the offset and v4 not. This is why SRU_Order_BaseDoor_Barrier's edge-fade mask
+    // stayed put while its diffuse scrolled, instead of the fade sliding and seaming with it.
+    if (uMeshSeparateAlphaUv != 0) texel.a = texture(uTex, vUvAlpha).a;
     // M641: palette FIRST, on the RAW texel, then the multiplier. DECODED from mesh_ps blob 781
     // (PALETTIZE_TEXTURES + MULT_PASS) and quad_ps blob 39, which agree instruction for instruction:
     //     m = saturate(dot(TEXTURE.Sample(uv), cPaletteSrcMixerMain))   <- the source texel, unmultiplied

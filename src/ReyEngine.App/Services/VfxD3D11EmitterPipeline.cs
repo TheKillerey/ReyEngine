@@ -128,6 +128,17 @@ public static class VfxD3D11EmitterPipeline
             why.Add("REFLECTIVE  <- reflectionDefinition authors a fresnel colour and power");
         }
 
+        // M765: uvMode 2 (LOCK_ALPHA) on a mesh emitter selects mesh_vs/mesh_ps's SEPARATE_ALPHA_UV axis -
+        // colour keeps the scrolled/tiled UV, alpha resamples the SAME texture at a tiled-only UV (no
+        // scroll/offset). Confirmed from the shipped bytecode (mesh_vs blob 33, mesh_ps blob 773): a
+        // non-mesh emitter with uvMode 2 instead routes to quad_ps_fixedalphauv entirely (VfxPrimitiveSupport
+        // .DrawsFixedAlphaUv), so this is asked only of the mesh pair.
+        if (tocs.VsName == MeshVsName && e.Extras?.UvMode == VfxPrimitiveSupport.LockAlphaUvMode)
+        {
+            defines["SEPARATE_ALPHA_UV"] = "1";
+            why.Add("SEPARATE_ALPHA_UV  <- uvMode 2 (LOCK_ALPHA) on a mesh emitter");
+        }
+
         var vsPerm = ShaderCacheReader.ResolvePermutation(tocs.Vs, defines, null, null, null, out var vw);
         var psPerm = ShaderCacheReader.ResolvePermutation(tocs.Ps, defines, null, null, null, out var pw);
 

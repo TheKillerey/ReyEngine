@@ -2342,10 +2342,11 @@ float4 psmain_tex(VTexOut i) : SV_Target
     /// <summary>M283: mesh-primitive particles, ported from the GL mesh program
     /// (<c>VfxParticleRenderer.cs:1310-1413</c>).
     ///
-    /// <para>The transform is the GL one exactly: a Y-axis spin by <c>rot</c>, a UNIFORM scalar scale (the
-    /// mesh path uses birthScale.x alone - Y is not read), then composition against the placement's three
-    /// normalised basis vectors. Because those are normalised, the placement's SCALE is discarded and only
-    /// its rotation survives - that is GL's behaviour and matching it matters more than being right.</para>
+    /// <para>The transform is the GL one exactly: the authored birth rotation (M765: Z, then X, then Y - see
+    /// <c>rotateEuler</c> below), a Y-axis spin by <c>rot</c>, a UNIFORM scalar scale (the mesh path uses
+    /// birthScale.x alone - Y is not read), then composition against the placement's three normalised basis
+    /// vectors. Because those are normalised, the placement's SCALE is discarded and only its rotation
+    /// survives - that is GL's behaviour and matching it matters more than being right.</para>
     ///
     /// <para>Not ported: fresnel and the reflection cubemap. Both need per-vertex normals, which the
     /// StaticMeshData this path receives does not carry (the .skn decoder drops them and GL recomputes
@@ -2364,6 +2365,7 @@ cbuffer MeshCB : register(b0)
     float4 gUv;         // xy = scroll offset, zw = tiling
     float4 gUvMult;
     float4 gMisc;       // x = rotation (radians, Y axis), y = has texMult, z = alpha cutoff
+    float4 gEuler;      // M765: birth rotation (radians), xyz; particles only, props leave it zero
 };
 Texture2D gTex     : register(t0);
 Texture2D gTexMult : register(t1);
@@ -2372,12 +2374,33 @@ SamplerState gSamp : register(s0);
 struct VIn  { float3 pos : POSITION; float2 uv : TEXCOORD0; };
 struct VOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 uvMult : TEXCOORD1; };
 
+// M765: roll-pitch-yaw - Z first, then X, then Y. Same order as the GL mesh program's rotateEuler and
+// DrawRiotMeshInstances, decoded from the four SR gate shields' authored birthRotation0 (see those two
+// for the measurement).
+float3 rotateEuler(float3 p, float3 r)
+{
+    float sx = sin(r.x); float cx = cos(r.x);
+    float sy = sin(r.y); float cy = cos(r.y);
+    float sz = sin(r.z); float cz = cos(r.z);
+    p = float3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
+    p = float3(p.x, p.y * cx - p.z * sx, p.y * sx + p.z * cx);
+    p = float3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
+    return p;
+}
+
 VOut vsmain(VIn i)
 {
     VOut o;
     float s = sin(gMisc.x);
     float c = cos(gMisc.x);
-    float3 local = float3(i.pos.x * c - i.pos.z * s, i.pos.y, i.pos.x * s + i.pos.z * c) * gPosScale.w;
+    // M765: the birth rotation applies to the SCALED local position, before the over-life spin about Y -
+    // the same order (scale, euler, spin) the GL mesh program's main() composes. An animated mesh (this
+    // path owns re-skinning for those) was drawing with gEuler always zero, so its authored rotation was
+    // silently dropped; the CPU re-skin only deforms the pose and carries no rotation of its own, so this
+    // does not double it up.
+    float3 scaled = i.pos * gPosScale.w;
+    float3 rotated = rotateEuler(scaled, gEuler.xyz);
+    float3 local = float3(rotated.x * c - rotated.z * s, rotated.y, rotated.x * s + rotated.z * c);
     float3 p = gRight.xyz * local.x + gUp.xyz * local.y + gForward.xyz * local.z + gPosScale.xyz;
     // M295: a prop's placement is an arbitrary 4x4 out of the map's .materials.bin - rotation, non-uniform
     // scale and shear - which the particle path's basis+scalar-scale composition above cannot express. A
@@ -3224,7 +3247,7 @@ float4 psmain(VOut i) : SV_Target
 
         var cbDesc = new BufferDesc
         {
-            ByteWidth = 256,          // M295: +float4x4 gModel
+            ByteWidth = MeshCbSize,   // M295: +float4x4 gModel; M765: +gEuler
             Usage = Usage.Dynamic,
             BindFlags = (uint)BindFlag.ConstantBuffer,
             CPUAccessFlags = (uint)CpuAccessFlag.Write,
@@ -3584,15 +3607,17 @@ float4 psmain(VOut i) : SV_Target
             var euler = new Vector3(inst[o + 15], inst[o + 16], inst[o + 17]);
             var colour = new[] { inst[o + 5], inst[o + 6], inst[o + 7], inst[o + 8] };
 
-            // Euler birth rotation (X, then Y, then Z - the order the quad path decoded from quad_vs; the
-            // client composes a mesh's mWorld on the CPU, so the mesh order is NOT measurable from bytecode
-            // and is taken to match), then the over-life spin about Y (slot 9, as GL), then the placement.
+            // M765: Euler birth rotation, roll-pitch-yaw - Z, then X, then Y. Decoded from the four SR gate
+            // shields' authored birthRotation0: only this order levels all four arcs (within 0.1 deg of each
+            // other); X-then-Y-then-Z put them anywhere from -30 deg to +19 deg off level. The GL mesh
+            // program's rotateEuler composes the identical chain. Then the over-life spin about Y (slot 9,
+            // as GL), then the placement.
             var model = Matrix4x4.CreateScale(scale)   // a mirrored (negative) axis flips the winding; the
                                                        // rasterizer state is per material, so that case is
                                                        // still drawn with the unflipped cull (GL flips it)
+                        * Matrix4x4.CreateRotationZ(euler.Z)
                         * Matrix4x4.CreateRotationX(euler.X)
                         * Matrix4x4.CreateRotationY(euler.Y)
-                        * Matrix4x4.CreateRotationZ(euler.Z)
                         * Matrix4x4.CreateRotationY(inst[o + 9])
                         * basis
                         * Matrix4x4.CreateTranslation(pos);
@@ -3686,30 +3711,40 @@ float4 psmain(VOut i) : SV_Target
             : geom.IndexCount;
 
         int drawn = 0;
-        var bytes = new byte[256];
+        var bytes = new byte[MeshCbSize];
         for (int i = 0; i < instanceCount; i++)
         {
             Matrix4x4 model;
             float scale, rot, cr, cg, cb, ca, px, py, pz;
+            Vector3 euler;
             if (models is not null)
             {
                 model = models[i];
                 // Everything the particle path composes is neutralised: the placement matrix IS the
                 // transform, and a prop is drawn at its authored colour.
-                scale = 1f; rot = 0f; px = py = pz = 0f; cr = cg = cb = ca = 1f;
+                scale = 1f; rot = 0f; px = py = pz = 0f; cr = cg = cb = ca = 1f; euler = Vector3.Zero;
             }
             else
             {
                 model = Matrix4x4.Identity;
+                // M765: MeshInstanceStride was 11 while both feeders (D3D11MapParticles, D3D11ParticlePlayback)
+                // pass the simulator's real 19-float record (ParticleQuadBuilder.Stride) - every instance past
+                // the first read a scrambled slice of its neighbour's data, and birth rotation (slots 15-17)
+                // was never read at all, so an animated-mesh emitter (routed here because it has a .skl/.anm)
+                // never took its authored rotation. The Riot mesh path (DrawRiotMeshInstances) already reads
+                // this correctly - same stride, same offsets, same fixed Z-X-Y order.
                 int o = i * MeshInstanceStride;
-                scale = inst![o + 3];
+                scale = inst![o + ParticleQuadBuilder.OffSizeX];
                 // GL clamps away from zero rather than skipping: a scale of exactly 0 would collapse the
                 // mesh, and Riot authors 0 to mean "unscaled" often enough that dropping those loses real
                 // geometry.
                 if (MathF.Abs(scale) < 0.01f) scale = MathF.CopySign(0.01f, scale == 0f ? 1f : scale);
-                px = inst[o + 0]; py = inst[o + 1]; pz = inst[o + 2];
-                cr = inst[o + 5]; cg = inst[o + 6]; cb = inst[o + 7]; ca = inst[o + 8];
-                rot = inst[o + 9];
+                px = inst[o + ParticleQuadBuilder.OffPos]; py = inst[o + ParticleQuadBuilder.OffPos + 1]; pz = inst[o + ParticleQuadBuilder.OffPos + 2];
+                cr = inst[o + ParticleQuadBuilder.OffColor]; cg = inst[o + ParticleQuadBuilder.OffColor + 1];
+                cb = inst[o + ParticleQuadBuilder.OffColor + 2]; ca = inst[o + ParticleQuadBuilder.OffColor + 3];
+                rot = inst[o + ParticleQuadBuilder.OffRot];
+                euler = new Vector3(inst[o + ParticleQuadBuilder.OffEuler], inst[o + ParticleQuadBuilder.OffEuler + 1],
+                    inst[o + ParticleQuadBuilder.OffEuler + 2]);
             }
 
             var right = models is not null ? Vector3.UnitX : mat.MeshRight;
@@ -3730,9 +3765,10 @@ float4 psmain(VOut i) : SV_Target
                 mat.MeshUvOffset.X, mat.MeshUvOffset.Y, mat.MeshTexDiv.X, mat.MeshTexDiv.Y,
                 mat.MeshUvOffsetMult.X, mat.MeshUvOffsetMult.Y, mat.MeshTexDivMult.X, mat.MeshTexDivMult.Y,
                 rot, boundMult.Handle is not null ? 1f : 0f, mat.MeshAlphaCutoff, 0f,
+                euler.X, euler.Y, euler.Z, 0f,   // M765: birth rotation, radians - Z-X-Y order (see rotateEuler)
             };
-            System.Buffer.BlockCopy(vals, 0, bytes, 0, 256);
-            Upload(_meshCb, bytes, 256);
+            System.Buffer.BlockCopy(vals, 0, bytes, 0, MeshCbSize);
+            Upload(_meshCb, bytes, MeshCbSize);
             _ctx.VSSetConstantBuffers(0, 1, ref _meshCb);
             _ctx.PSSetConstantBuffers(0, 1, ref _meshCb);
 
@@ -3775,9 +3811,18 @@ float4 psmain(VOut i) : SV_Target
         return default;
     }
 
-    /// <summary>Floats per mesh particle instance, matching the simulator's packed layout so the App layer
-    /// can hand over a slice of it unchanged: [x,y,z, sizeX,sizeY, r,g,b,a, rot, frame].</summary>
-    public const int MeshInstanceStride = 11;
+    /// <summary>M765: floats per mesh particle instance. This used to be its own count of 11 while both
+    /// feeders (D3D11MapParticles, D3D11ParticlePlayback) always handed over the simulator's real 19-float
+    /// record - a second copy of the number that had silently drifted from the thing it was supposed to
+    /// describe. Now the one constant both reader and writer share: <see cref="ParticleQuadBuilder.Stride"/>,
+    /// the same 19-float layout the Riot mesh path (<see cref="DrawRiotMeshInstances"/>) already reads
+    /// correctly - pos(0-2) sizeX(3) sizeY(4) rgba(5-8) rot(9) frame/sizeZ(10) age(11) vel(12-14)
+    /// euler(15-17) erosionDrive(18).</summary>
+    public const int MeshInstanceStride = ParticleQuadBuilder.Stride;
+
+    /// <summary>M765: bytes in MeshCB - 17 float4 registers (mProj+mModel = 8, right/up/fwd/posScale/color/
+    /// uv/uvMult/misc = 8, gEuler = 1).</summary>
+    private const int MeshCbSize = 272;
 
     /// <summary>M282, corrected in M461: the heat-haze pass.
     ///
