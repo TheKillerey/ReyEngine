@@ -6620,6 +6620,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.ResolveReflectionCubemaps = ResolveSystemReflectionCubemaps;   // M181 (2.12)
         MeshPreview.ResolveMeshes = ResolveSystemMeshes;
         MeshPreview.ResolveEmissionSurfaces = ResolveSystemEmissionSurfaces;   // M754
+        MeshPreview.BakeTangents = BakePreviewSkinTangentsAsync;               // M758
         MeshPreview.PlaySoundEvent = PlayPreviewSoundEvent;              // M90: clip SFX
         MeshPreview.StopSounds = () => Sound.StopTag("previewsfx");
 

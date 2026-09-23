@@ -387,6 +387,16 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private void RebuildSubmeshVisibility() =>
         SubmeshVisible = Submeshes.Select(s => s.IsVisible).ToList();
 
+    /// <summary>M758: bake tangents into the skin this window shows; the host writes it into the project
+    /// and reloads the skin.</summary>
+    public Func<Task>? BakeTangents { get; set; }
+
+    [RelayCommand]
+    private async Task BakeSkinTangents()
+    {
+        if (BakeTangents is { } bake) await bake();
+    }
+
     [RelayCommand] private void ShowAllSubmeshes() { foreach (var s in Submeshes) s.IsVisible = true; }
     [RelayCommand] private void HideAllSubmeshes() { foreach (var s in Submeshes) s.IsVisible = false; }
 

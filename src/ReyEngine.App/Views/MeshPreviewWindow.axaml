@@ -604,6 +604,10 @@
                                 ToolTip.Tip="Draw this character with Riot's own compiled shaders instead of the OpenGL approximation." />
                       <TextBlock Text="{Binding Dx11Status}" FontSize="9" TextWrapping="Wrap"
                                  Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <!-- M758: tangents for PBR skins, LTK Manager's bake byte for byte -->
+                      <Button Content="Bake tangents" Command="{Binding BakeSkinTangentsCommand}" FontSize="11"
+                              HorizontalAlignment="Left" Margin="0,4,0,0"
+                              ToolTip.Tip="Write MikkTSpace tangents into this skin's .skn, for PBR skins with a normal map and RMA textures. The mesh is written into your project; the file is byte-identical to LTK Manager's bake. Bake normal maps in MikkTSpace against this same mesh." />
                     </StackPanel>
                   </Border>
                     <!-- M122: skybox picker (same catalogue as the map viewport, independent pick) -->

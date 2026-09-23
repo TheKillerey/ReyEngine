@@ -1033,6 +1033,7 @@
                             <MenuItem Header="Open in Particle Editor" Command="{Binding $parent[Window].DataContext.OpenInParticleEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in Audio Editor" Command="{Binding $parent[Window].DataContext.OpenInAudioEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in HUD Editor" Command="{Binding $parent[Window].DataContext.OpenInHudEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Bake Tangents (PBR)" Command="{Binding $parent[Window].DataContext.BakeSkinTangentsCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
                             <Separator />
                             <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
@@ -1107,6 +1108,7 @@
                             <MenuItem Header="Open in Particle Editor" Command="{Binding $parent[Window].DataContext.OpenInParticleEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in Audio Editor" Command="{Binding $parent[Window].DataContext.OpenInAudioEditorCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Open in HUD Editor" Command="{Binding $parent[Window].DataContext.OpenInHudEditorCommand}" CommandParameter="{Binding}" />
+                            <MenuItem Header="Bake Tangents (PBR)" Command="{Binding $parent[Window].DataContext.BakeSkinTangentsCommand}" CommandParameter="{Binding}" />
                               <MenuItem Header="Show in Explorer" Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}" CommandParameter="{Binding}" />
                               <Separator />
                               <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
