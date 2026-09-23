@@ -26,6 +26,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     /// match the name (the user's own "Old Summoner's Rift - Day" lives in a folder called
     /// oldriftday, which no slugifier would produce).</summary>
     [ObservableProperty] private string _ltkWorkshopSlug = "";
+    [ObservableProperty] private bool _shipBinEditsAsDeclarations;   // M757
     [ObservableProperty] private string _thumbnailPath = "";
     [ObservableProperty] private string _gameDirectory = "";
     [ObservableProperty] private bool _hasGameDirectoryError;
@@ -60,6 +61,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         _heart = p.ModHeart ?? "";
         _home = p.ModHome ?? "";
         _ltkWorkshopSlug = p.LtkWorkshopSlug ?? "";
+        _shipBinEditsAsDeclarations = p.ShipBinEditsAsDeclarations;
         _thumbnailPath = p.ThumbnailPath ?? "";
         _gameDirectory = p.GameDirectory ?? "";
         _outputDirectory = p.OutputDirectory ?? "";
@@ -164,6 +166,7 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         p.ModHeart = string.IsNullOrWhiteSpace(Heart) ? null : Heart.Trim();
         p.ModHome = string.IsNullOrWhiteSpace(Home) ? null : Home.Trim();
         p.LtkWorkshopSlug = string.IsNullOrWhiteSpace(LtkWorkshopSlug) ? null : LtkWorkshopSlug.Trim();
+        p.ShipBinEditsAsDeclarations = ShipBinEditsAsDeclarations;
         p.ThumbnailPath = string.IsNullOrWhiteSpace(ThumbnailPath) ? null : ThumbnailPath.Trim();
         var gameStatus = GameReferenceLibrary.Inspect(GameDirectory);
         if (gameStatus.IsValid) p.GameDirectory = gameStatus.GameDirectory;

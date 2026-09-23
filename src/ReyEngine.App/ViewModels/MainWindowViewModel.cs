@@ -15594,6 +15594,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Layers = Core.Build.LtkProjectLayers.Of(Project),
         };
 
+        bool declare = Project.ShipBinEditsAsDeclarations;
+        var declarationReport = new List<(int Level, string Line)>();
         IsBuilding = true; Status = "Sending to LTK Manager…";
         try
         {
@@ -15614,8 +15616,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
                 if (files.Count == 0)
                     throw new InvalidOperationException("The project has no packable content to send.");
-                return Core.Build.LtkWorkshopExporter.Send(options, files);
+                // M757: game bins as declarations against the game's copy, when the project asks for it
+                var sendOptions = options;
+                if (declare)
+                {
+                    var declared = DeclareGameBins(files);
+                    files = declared.Files;
+                    sendOptions = options with { GameData = declared.GameData };
+                    declarationReport = declared.Report;
+                }
+                return Core.Build.LtkWorkshopExporter.Send(sendOptions, files);
             });
+            foreach (var (level, line) in declarationReport)
+                if (level == 0) _log.Success("LTK", line); else _log.Info("LTK", line);
 
             _log.Success("LTK", $"{result.Detail} → {result.ModFolder}");
 
@@ -15642,6 +15655,73 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         catch (Exception ex) { _log.Error("LTK", $"Send failed: {ex.Message}"); }
         finally { IsBuilding = false; }
+    }
+
+    /// <summary>M757: plaintext for the hashes a declaration spells, from the loaded hash tables.</summary>
+    private sealed class DeclarationNames(Core.Hashing.HashDatabase db) : Formats.Meta.IDeclarationNames
+    {
+        public string? Field(uint hash) => db.TryGetBinName(hash, out var n) ? n : null;
+        public string? Class(uint hash) => Field(hash);
+        public string? Entry(uint hash) => Field(hash);
+        public string? File(ulong hash) => db.TryGetPath(hash, out var p) ? p : null;
+    }
+
+    /// <summary>
+    /// M757: turn every project bin that overrides a GAME bin into declarations against the game's copy.
+    /// A declared or unchanged bin leaves the file list; one that cannot be declared stays in it and the
+    /// report says why. A bin with no game copy is new content and is sent as it always was.
+    /// </summary>
+    private (List<(string Layer, string WadFolder, string RelPath, string AbsPath)> Files,
+             Dictionary<string, string> GameData, List<(int Level, string Line)> Report)
+        DeclareGameBins(List<(string Layer, string WadFolder, string RelPath, string AbsPath)> files)
+    {
+        var names = new DeclarationNames(_resolver.Database);
+        var kept = new List<(string, string, string, string)>();
+        var modules = new Dictionary<string, List<Formats.Meta.DeclaredChunk>>(StringComparer.OrdinalIgnoreCase);
+        var seen = new Dictionary<(string Layer, string Target), byte[]>();
+        var whole = new List<string>();
+        int declared = 0, unchanged = 0, props = 0, added = 0, removed = 0;
+        foreach (var f in files)
+        {
+            if (!f.RelPath.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) { kept.Add(f); continue; }
+            string stem = Path.GetFileNameWithoutExtension(f.RelPath);
+            ulong hash = !f.RelPath.Contains('/') && stem.Length == 16
+                         && ulong.TryParse(stem, System.Globalization.NumberStyles.HexNumber, null, out var hex)
+                ? hex : Core.Hashing.HashAlgorithms.WadPath(f.RelPath);
+            byte[]? riot = null;
+            try { riot = ReadRiotOriginalBytes(new WadAssetEntry { PathHash = hash, Path = f.RelPath }); } catch { }
+            if (riot is null) { kept.Add(f); continue; }   // not a game bin: new content ships as a file
+
+            byte[] mod = File.ReadAllBytes(f.AbsPath);
+            string target = Formats.Meta.BinDeclarations.TargetOf(f.RelPath, hash);
+            // the same bin in two WAD folders of one layer declares once; two different copies cannot
+            if (seen.TryGetValue((f.Layer, target), out var first))
+            {
+                if (first.AsSpan().SequenceEqual(mod)) continue;
+                whole.Add($"{f.WadFolder}/{f.RelPath}: two different copies in one layer");
+                kept.Add(f);
+                continue;
+            }
+            seen[(f.Layer, target)] = mod;
+
+            var chunk = Formats.Meta.BinDeclarations.Convert(target, riot, mod, names);
+            if (chunk.Unchanged) { unchanged++; continue; }
+            if (!chunk.Declared) { whole.Add($"{f.WadFolder}/{f.RelPath}: {chunk.WhyNot}"); kept.Add(f); continue; }
+            if (!modules.TryGetValue(f.Layer, out var list)) modules[f.Layer] = list = new();
+            list.Add(chunk);
+            declared++; props += chunk.Properties; added += chunk.ObjectsAdded; removed += chunk.ObjectsRemoved;
+        }
+
+        var report = new List<(int, string)>
+        {
+            (0, $"Declarations: {declared} game bin(s) sent as changes ({props} propert(ies), {added} object(s) added, "
+                + $"{removed} removed), {unchanged} unchanged bin(s) not sent, {whole.Count} sent whole."),
+        };
+        foreach (var w in whole.Take(20)) report.Add((1, "  sent whole - " + w));
+        if (whole.Count > 20) report.Add((1, $"  ... and {whole.Count - 20} more sent whole."));
+        var gameData = modules.ToDictionary(kv => kv.Key, kv => Formats.Meta.BinDeclarations.Manifest(kv.Value),
+            StringComparer.OrdinalIgnoreCase);
+        return (kept.Select(k => (k.Item1, k.Item2, k.Item3, k.Item4)).ToList(), gameData, report);
     }
 
     private byte[]? LoadThumbnailPng(string? path)

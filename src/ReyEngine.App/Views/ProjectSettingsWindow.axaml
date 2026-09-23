@@ -41,6 +41,10 @@
       <TextBox Text="{Binding LtkWorkshopSlug}" PlaceholderText="oldriftday"
                ToolTip.Tip="Which mod in LTK Manager's workshop folder 'Send to LTK Manager' updates, by its mod.config.json name. Leave empty to derive it from the mod name and record it on the first send. Set it to an existing slug (the folder name under your workshop path) to adopt a mod you already ship, instead of creating a duplicate." />
 
+      <!-- M757: game-data declarations instead of whole game bins -->
+      <CheckBox Content="Send game bin edits as declarations (LTK Manager 1.20+)" IsChecked="{Binding ShipBinEditsAsDeclarations}"
+                ToolTip.Tip="Each bin the project overrides is compared with the game's copy, and only the changes are sent, as game_data.yaml in the layer. LTK Manager re-applies them over whatever the installed patch ships, so Riot's changes to everything else survive a patch. A bin whose changes cannot be declared - a removed property, a changed class - is still sent whole, and the log says why. Older managers and other loaders ignore declarations." />
+
       <TextBlock Text="Thumbnail (PNG/JPG)" FontSize="11" Foreground="{DynamicResource ReyTextDimBrush}" />
       <StackPanel Orientation="Horizontal" Spacing="6">
         <TextBox Text="{Binding ThumbnailPath}" Width="380" />

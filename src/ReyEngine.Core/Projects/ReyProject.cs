@@ -119,6 +119,15 @@ public sealed class ReyProject
     /// </summary>
     public string? LtkWorkshopSlug { get; set; }
 
+    /// <summary>
+    /// M757: send each overridden GAME bin as LTK Manager game-data declarations - its changes against the
+    /// game's copy, in the layer's <c>game_data.yaml</c> - instead of as a whole file, so Riot's later
+    /// changes to every key the mod does not touch survive a patch. Needs LTK Manager 1.20 or newer; off by
+    /// default because an older manager, or any other loader, would ignore the edits entirely. A bin whose
+    /// changes cannot be declared (a removed property, a changed class) still ships whole.
+    /// </summary>
+    public bool ShipBinEditsAsDeclarations { get; set; }
+
     [JsonIgnore] public string EffectiveModName => string.IsNullOrWhiteSpace(ModName) ? Name : ModName!;
     [JsonIgnore] public bool IsFolderProject => RootPath is not null;
     [JsonIgnore] public string? ProjectFilePath { get; set; }

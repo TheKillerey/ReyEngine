@@ -72,6 +72,11 @@ public sealed record LtkSendOptions(
     /// own editor can add layers to a mod, and a send is not entitled to remove what it did not write.</para>
     /// </summary>
     public IReadOnlyList<LtkLayer> Layers { get; init; } = System.Array.Empty<LtkLayer>();
+
+    /// <summary>M757: per layer, the <c>game_data.yaml</c> text to write at the layer's root
+    /// (<c>content/&lt;layer&gt;/game_data.yaml</c>, where league-mod's project loader looks). A layer with
+    /// declarations and no files is still written.</summary>
+    public IReadOnlyDictionary<string, string> GameData { get; init; } = new Dictionary<string, string>();
 }
 
 /// <summary>M742: the layer list a project sends, base first and priority-ordered.</summary>
@@ -214,6 +219,8 @@ public static class LtkWorkshopExporter
             string name = string.IsNullOrWhiteSpace(f.Layer) ? o.Layer : f.Layer;
             if (!layerNames.Contains(name, StringComparer.OrdinalIgnoreCase)) layerNames.Add(name);
         }
+        foreach (var name in o.GameData.Keys)   // M757: a layer may hold only declarations
+            if (!layerNames.Contains(name, StringComparer.OrdinalIgnoreCase)) layerNames.Add(name);
         if (layerNames.Count == 0) layerNames.Add(o.Layer);
 
         // Replace the layer's contents so a file deleted from the project disappears from the mod too.
@@ -247,6 +254,15 @@ public static class LtkWorkshopExporter
             File.Copy(abs, destFull, overwrite: true);
             written++;
             bytes += new FileInfo(destFull).Length;
+        }
+
+        // M757: the declarations, after the files - the layer folders were just recreated above
+        foreach (var (layer, text) in o.GameData)
+        {
+            string path = Path.Combine(modFolder, "content", layer, "game_data.yaml");
+            File.WriteAllText(path, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            written++;
+            bytes += new FileInfo(path).Length;
         }
 
         WriteConfig(modFolder, o);

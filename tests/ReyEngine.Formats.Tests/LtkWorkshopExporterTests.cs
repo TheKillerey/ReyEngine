@@ -281,4 +281,25 @@ public class LtkWorkshopExporterTests : IDisposable
     [InlineData("   ", "reyengine-mod")]
     public void Slugs_match_the_shipped_workshop_convention(string input, string expected) =>
         Assert.Equal(expected, LtkWorkshopExporter.Slugify(input));
+
+    /// <summary>M757: the declarations land at the layer's root, where league-mod's project loader reads
+    /// them (content/&lt;layer&gt;/game_data.yaml), and a layer holding only declarations is still made.</summary>
+    [Fact]
+    public void Declarations_are_written_at_the_layers_root()
+    {
+        const string text = "version: 1\nmodules: []\n";
+        var opts = Opts() with
+        {
+            GameData = new Dictionary<string, string> { ["base"] = text, ["extras"] = text },
+        };
+        var r = LtkWorkshopExporter.Send(opts, new[] { File1() });
+        Assert.Equal(text, File.ReadAllText(Path.Combine(r.ModFolder, "content", "base", "game_data.yaml")));
+        Assert.True(File.Exists(Path.Combine(r.ModFolder, "content", "extras", "game_data.yaml")));
+        Assert.True(File.Exists(Path.Combine(r.ModFolder, "content", "base", "Map453.wad.client", "data", "maps", "a.mapgeo")));
+        Assert.Equal(3, r.FilesWritten);
+
+        // a later send without declarations takes them away, like any other file the project dropped
+        var again = LtkWorkshopExporter.Send(Opts(), new[] { File1() });
+        Assert.False(File.Exists(Path.Combine(again.ModFolder, "content", "base", "game_data.yaml")));
+    }
 }
