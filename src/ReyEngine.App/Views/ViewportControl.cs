@@ -1915,6 +1915,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 var childItem = childItems[sp.ChildIndex];
                 var csim = new VfxParticleSimulator(HashCode.Combine(childItem.System.PathHash, _childSims.Count));
                 csim.SetSystem(childItem.System, Matrix4x4.CreateTranslation(sp.Position));
+                Services.VfxPlaybackSim.ApplyEmissionSurfaces(csim, childItem);   // M754
                 BindEmitterAssets(csim, childItem);
                 _childSims.Add((csim, childItem, 0f));
             }

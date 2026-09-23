@@ -183,6 +183,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolvePaletteTextures;   // M175 (2.6)
     public Func<VfxSystemDefinition, IReadOnlyList<CubemapImage?>>? ResolveReflectionCubemaps;   // M181 (2.12)
     public Func<VfxSystemDefinition, IReadOnlyList<StaticMeshData?>?>? ResolveMeshes;
+    /// <summary>M754: the surfaces emitters are born on.</summary>
+    public Func<VfxSystemDefinition, IReadOnlyList<VfxSurfaceSampler?>?>? ResolveEmissionSurfaces;
 
     private double _lastAnimTime;
 
@@ -1200,7 +1202,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             EmitterErosionTextures: ResolveErosionTextures?.Invoke(def),
             EmitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
             EmitterChildren: ResolveChildren(def, depth),
-            EmitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def));
+            EmitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def))
+            { EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def) };   // M754
 
     public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
         IReadOnlyDictionary<uint, uint>? resourceMap = null)

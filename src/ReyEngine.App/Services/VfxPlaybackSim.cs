@@ -35,6 +35,7 @@ public static class VfxPlaybackSim
         // The Matrix4x4 overload, not the Vector3 one: beyond position it establishes BasePos and the
         // PlacementRight/Up/Forward frame that every arbitraryQuad emitter is oriented in.
         sim.SetSystem(item.System, item.Transform);
+        ApplyEmissionSurfaces(sim, item);   // M754
         if (item.ColorModulate is { } tint) sim.PlacementTint = tint;   // M203
         if (item.StartDelay > 0f) sim.SetStartDelay(item.StartDelay);   // M91: frame-accurate clip events
         return sim;
@@ -152,6 +153,18 @@ public static class VfxPlaybackSim
                 es.ColorGradientW = colorImg.Width;
                 es.ColorGradientH = colorImg.Height;
             }
+        }
+    }
+
+    /// <summary>M754: hand each emitter its emission surface. Both backends and the GL child systems come
+    /// through here, so a surface cannot reach one viewport and not the other.</summary>
+    public static void ApplyEmissionSurfaces(VfxParticleSimulator sim, VfxPlaybackItem item)
+    {
+        if (item.EmitterEmissionSurfaces is not { } surfaces) return;
+        foreach (var es in sim.Emitters)
+        {
+            int idx = AuthoredIndex(item.System, es.Def);
+            es.EmissionSampler = idx >= 0 && idx < surfaces.Count ? surfaces[idx] : null;
         }
     }
 

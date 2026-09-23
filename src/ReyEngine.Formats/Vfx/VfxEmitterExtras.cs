@@ -184,7 +184,8 @@ public sealed record VfxEmitterExtras
     public float? DirectionVelocityScale { get; init; }
     /// <summary>11,548.</summary>
     public float? DirectionVelocityMinScale { get; init; }
-    /// <summary>2,167. Emission is seeded from this mesh; the preview emits from the shape instead.</summary>
+    /// <summary>2,167. Emission is seeded from this mesh - since M754 the preview does the same, through
+    /// <see cref="VfxEmitterDefinition.EmissionSurface"/>.</summary>
     public string? EmissionMeshName { get; init; }
     /// <summary>5,388.</summary>
     public float? EmissionMeshScale { get; init; }
@@ -253,7 +254,9 @@ public static class VfxParkedEmitterFields
         "translationOverride", "scaleOverride", "isFollowingTerrain", "useNavmeshMask",
         "birthRotationalAcceleration",
         "bindWeight", "rateByVelocityFunction", "MaximumRateByVelocity", "ParticlesShareRandomValue",
-        "directionVelocityScale", "directionVelocityMinScale", "emissionMeshName", "emissionMeshScale",
+        "directionVelocityScale", "directionVelocityMinScale",
+        // M754: emissionMeshName and emissionMeshScale are gone from here - particles are born on the mesh.
+        // The normal flag stays: it is read and deliberately not applied (see VfxEmissionSurface).
         "useEmissionMeshNormalForBirth", "doesLifetimeScale", "offsetLifetimeScaling",
         "offsetLifeScalingSymmetryMode",
         // M717: uvMode is gone from here - mode 2 decides which shader an emitter compiles.

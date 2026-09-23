@@ -260,7 +260,10 @@ public sealed record VfxEmitterDefinition(
     Vector2 TextureMultUvOffset = default,
     Vector2 TextureMultUvScrollIntegrated = default,
     Vector2 TextureMultEmitterUvScrollRate = default,
-    bool TextureMultUvScrollClamp = false)
+    bool TextureMultUvScrollClamp = false,
+    /// <summary>M754: the surface particles are born on - a mesh, a skeleton, or the host character. Null
+    /// for the 99.5% of emitters that name none.</summary>
+    VfxEmissionSurface? EmissionSurface = null)
 {
     /// <summary>M707: this emitter authors NO base texture path at all.
     ///

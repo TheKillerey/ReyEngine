@@ -67,6 +67,11 @@ public sealed record VfxPlaybackItem(
     /// separates them, and it is what lets a reader say "the run with seed 1337" and mean it.</para></summary>
     public int? Seed { get; init; }
 
+    /// <summary>M754: per emitter, the surface its particles are born on, aligned to the system's emitter
+    /// list like every other per-emitter list here. Resolved ahead of playback for the same reason the
+    /// meshes are: decoding a .scb on the render thread mid frame is a stall.</summary>
+    public IReadOnlyList<ReyEngine.Formats.Vfx.VfxSurfaceSampler?>? EmitterEmissionSurfaces { get; init; }
+
     /// <summary>M91: seconds after playback start before this system begins simulating — clip events
     /// fire at their authored StartFrame instead of all at clip start.</summary>
     public float StartDelay { get; init; }

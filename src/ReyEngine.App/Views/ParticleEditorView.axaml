@@ -121,6 +121,11 @@
                                      VerticalAlignment="Center" />
                         </DockPanel>
                       </Border>
+                      <!-- M754: what the particles are born on, when the emitter names a surface -->
+                      <Border DockPanel.Dock="Top" Padding="8,3" IsVisible="{Binding HasEmissionNote}"
+                              Background="{DynamicResource ReyPanelAltBrush}">
+                        <TextBlock Text="{Binding EmissionNote}" FontSize="9" Opacity="0.75" TextWrapping="Wrap" />
+                      </Border>
                       <!-- particle sprite preview (Particle Town texture strip) -->
                       <Border DockPanel.Dock="Top" Background="{DynamicResource ReyBgBrush}" Height="52" IsVisible="{Binding HasThumbnail}">
                         <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="3" />

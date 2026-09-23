@@ -502,8 +502,55 @@ public static class VfxSystemResolver
             DisableBackfaceCull: GetBool(p, F_disableBackfaceCull),
             PaletteAddressMode: ReadPaletteAddressMode(p),
             Linger: ReadLinger(p),
-            ParticleLingerType: GetU8(p, F_particleLingerType) ?? -1);
+            ParticleLingerType: GetU8(p, F_particleLingerType) ?? -1,
+            EmissionSurface: ReadEmissionSurface(p));
     }
+
+    private static readonly uint F_emissionMeshName = HashAlgorithms.Fnv1a("emissionMeshName");
+    private static readonly uint F_emissionMeshScale = HashAlgorithms.Fnv1a("emissionMeshScale");
+    private static readonly uint F_emissionSurfaceDef = HashAlgorithms.Fnv1a("emissionSurfaceDefinition");
+    private static readonly uint F_emissionSurface = HashAlgorithms.Fnv1a("EmissionSurface");
+    private static readonly uint F_esMeshName = HashAlgorithms.Fnv1a("meshName");
+    private static readonly uint F_esSkeletonName = HashAlgorithms.Fnv1a("skeletonName");
+    private static readonly uint F_esAnimationName = HashAlgorithms.Fnv1a("AnimationName");
+    private static readonly uint F_esSubmeshes = HashAlgorithms.Fnv1a("Submeshes");
+    private static readonly uint F_esJointMask = HashAlgorithms.Fnv1a("JointMask");
+    private static readonly uint F_esMeshScale = HashAlgorithms.Fnv1a("meshScale");
+    private static readonly uint C_emissionMeshData = HashAlgorithms.Fnv1a("VfxEmissionMeshData");
+    private static readonly uint C_emissionSkeletonData = HashAlgorithms.Fnv1a("VfxEmissionSkeletonData");
+
+    /// <summary>M754: see <see cref="VfxEmissionSurface"/> for the census behind every branch.</summary>
+    private static VfxEmissionSurface? ReadEmissionSurface(IReadOnlyDictionary<uint, BinTreeProperty> p)
+    {
+        // the legacy name first: 105 emitters carry it beside an empty definition, and it is the one that names a mesh
+        if (GetString(p, F_emissionMeshName) is { Length: > 0 } legacy)
+            return new VfxEmissionSurface(VfxEmissionSurfaceKind.LegacyMesh, MeshPath: legacy,
+                Scale: GetF32(p, F_emissionMeshScale) ?? 1f,
+                // hashed inline, not a constant: the flag is read and NOT applied, so it keeps its "not shown"
+                // badge, and VfxPreviewCoverage counts every resolver constant as shown
+                UseNormalForBirth: GetBoolOrNull(p, HashAlgorithms.Fnv1a("useEmissionMeshNormalForBirth")) ?? true);
+        if (Get(p, F_emissionSurfaceDef) is not BinTreeStruct def) return null;
+        if (Get(def.Properties, F_emissionSurface) is BinTreeStruct surface)
+        {
+            var s = surface.Properties;
+            if (surface.ClassHash == C_emissionMeshData && GetString(s, F_esMeshName) is { Length: > 0 } mesh)
+                return new VfxEmissionSurface(VfxEmissionSurfaceKind.Mesh, MeshPath: mesh,
+                    SkeletonPath: GetString(s, F_esSkeletonName) is { Length: > 0 } skl ? skl : null,
+                    AnimationName: GetString(s, F_esAnimationName) is { Length: > 0 } anim ? anim : null,
+                    Submeshes: ReadHashList(Get(s, F_esSubmeshes)),
+                    Scale: GetF32(s, F_esMeshScale) ?? 1f,
+                    UseNormalForBirth: GetBoolOrNull(s, HashAlgorithms.Fnv1a("useSurfaceNormalForBirthPhysics")) ?? true);
+            if (surface.ClassHash == C_emissionSkeletonData && GetString(s, F_esSkeletonName) is { Length: > 0 } skel)
+                return new VfxEmissionSurface(VfxEmissionSurfaceKind.Skeleton, SkeletonPath: skel,
+                    Joints: ReadHashList(Get(s, F_esJointMask)));
+        }
+        // empty, the unnamed surface class, or a mesh surface naming no mesh (SRU_Foutain_Waterfall_Bloom)
+        return new VfxEmissionSurface(VfxEmissionSurfaceKind.Host);
+    }
+
+    private static IReadOnlyList<uint> ReadHashList(BinTreeProperty? list) => list is BinTreeContainer c
+        ? c.Elements.OfType<BinTreeHash>().Select(h => h.Value).ToList()
+        : Array.Empty<uint>();
 
     /// <summary>M177 (2.5): the trail ribbon's parameters. See VfxTrailDefinition for what the payload
     /// turned out to contain and why that settles the "is it really a ribbon" question.</summary>

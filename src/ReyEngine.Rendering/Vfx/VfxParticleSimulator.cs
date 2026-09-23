@@ -34,6 +34,11 @@ public sealed class VfxParticleSimulator
         public byte[]? ColorGradient;
         public int ColorGradientW, ColorGradientH;
         public float SpriteAspect = 1f;         // legacy scalar quads preserve one atlas cell's width/height
+        /// <summary>M754: the surface this emitter's particles are born on, in the emitter's own space, or
+        /// null. Set by the host from the emitter's <see cref="VfxEmitterDefinition.EmissionSurface"/>; an
+        /// emitter whose surface did not load (or needs a character host nobody supplied) emits from its
+        /// point, as it always did.</summary>
+        public VfxSurfaceSampler? EmissionSampler;
         internal float SpawnAccum;
         /// <summary>M174 (2.14): per-instance start jitter from HasVariableStartTime (3,973 emitters).
         /// Without it, every repeat of an effect fires in lockstep and reads as mechanical.</summary>
@@ -776,6 +781,9 @@ public sealed class VfxParticleSimulator
         // Riot spawn-shape and probability-table values are sampled independently for every particle.
         // Mesh primitives keep their authored orientation; their movement comes from the same data path.
         var localOffset = d.SpawnShape?.SampleOffset(_rng) ?? Vector3.Zero;
+        // M754: born on the emission surface. The mesh is in the emitter's own space - the same frame the
+        // spawn shape's offset is in - so it rides the placement and the rig exactly as the shape does.
+        if (s.EmissionSampler is { } surface) localOffset += surface.Sample(_rng);
         // M174: emitterPosition carries probability tables on 37,220 of the 186,374 emitters that author
         // it (60-WAD sample), and its curve keys are all (0,0,0) on exactly those - so the scatter IS the
         // value. Rolled per particle here; the constant part is already baked into BasePos, so only the

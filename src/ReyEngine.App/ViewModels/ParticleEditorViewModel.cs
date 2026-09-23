@@ -30,6 +30,8 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolvePaletteTextures;   // M175 (2.6)
     public Func<VfxSystemDefinition, IReadOnlyList<CubemapImage?>>? ResolveReflectionCubemaps;   // M181 (2.12)
     public Func<VfxSystemDefinition, IReadOnlyList<ReyEngine.Formats.Meshes.StaticMeshData?>?>? ResolveMeshes; // M47
+    /// <summary>M754: the surfaces emitters are born on (.scb, .skn, .skl joints).</summary>
+    public Func<VfxSystemDefinition, IReadOnlyList<VfxSurfaceSampler?>?>? ResolveEmissionSurfaces;
     public Func<string, Avalonia.Media.Imaging.Bitmap?>? LoadThumbnail;   // particle sprite preview on cards
 
     /// <summary>M368: class hash -> every property the class DECLARES, from the LeagueToolkit meta database.
@@ -355,6 +357,29 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         RefreshGizmo();
     }
 
+    /// <summary>M754: what an emitter's particles are born on, in words, or null when it names no surface.
+    /// Asked of the same cached resolver the preview uses, so "did not load" here means the preview is
+    /// emitting from the point instead.</summary>
+    internal string? EmissionNote(int emitterIndex)
+    {
+        if (SelectedSystem is not { } node || !_defs.TryGetValue(node.Entry.PathHash, out var def)) return null;
+        if (emitterIndex < 0 || emitterIndex >= def.Emitters.Count || def.Emitters[emitterIndex].EmissionSurface is not { } s) return null;
+        string file = System.IO.Path.GetFileName(s.MeshPath ?? s.SkeletonPath ?? "");
+        string what = s.Kind switch
+        {
+            VfxEmissionSurfaceKind.LegacyMesh => $"Born on the surface of {file}",
+            VfxEmissionSurfaceKind.Mesh => $"Born on the surface of {file}"
+                + (s.Submeshes is { Count: > 0 } sub ? $" ({sub.Count} submesh(es))" : "")
+                + (s.AnimationName is not null ? ", in its bind pose - the preview does not play its animation yet" : ""),
+            VfxEmissionSurfaceKind.Skeleton => $"Born on the joints of {file}" + (s.Joints is { Count: > 0 } j ? $" ({j.Count} in the mask)" : ""),
+            _ => "Born on the character this effect is attached to. The preview has no character host yet, so it emits from the emitter's point.",
+        };
+        if (s.Kind != VfxEmissionSurfaceKind.Host
+            && ResolveEmissionSurfaces?.Invoke(def) is var loaded && (loaded is null || emitterIndex >= loaded.Count || loaded[emitterIndex] is null))
+            what += ". It did not load (see the log), so the preview emits from the emitter's point.";
+        return what;
+    }
+
     private void RebuildPlaybackCore()
     {
         if (SelectedSystem is null) { Playback = null; return; }
@@ -372,7 +397,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes,
             multTexs, distortionTexs, colorTexs, erosionTexs, paletteTexs,
             emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def))
-            { Seed = RigSeed } });   // M712: the rig's run, rather than one derived from where it stands
+            { Seed = RigSeed, EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def) } });   // M712: the rig's run, rather than one derived from where it stands
     }
 
     /// <summary>M185 (2.15): stop emitting and let the Linger curves play out. Riot's shutdown stage is
@@ -581,6 +606,10 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
     public bool HasForces => Forces.Count > 0;
     public bool ShowForces => Entry is not null;
     public string ForcesHeader => Forces.Count == 0 ? "FORCES" : $"FORCES ({Forces.Count})";
+
+    /// <summary>M754: what this emitter's particles are born on, when it names a surface.</summary>
+    public string? EmissionNote => Entry is null ? null : _owner.EmissionNote(EmitterIndex);
+    public bool HasEmissionNote => EmissionNote is not null;
 
     /// <summary>M753: the Move handle is on this emitter's own position.</summary>
     public bool IsGizmoTarget => Entry is not null && _owner.IsGizmoTarget(ParticleEditorViewModel.EmitterKey(EmitterIndex));
