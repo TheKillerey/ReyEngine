@@ -41,6 +41,33 @@ public sealed partial class MeshPreviewViewModel
             scene?.LongestTransitionSeconds ?? 0f, scene?.TransitionByCondition);
     }
 
+    private ReyEngine.Formats.Vfx.VfxHostSurface? _emissionHost;
+    private ReyEngine.Formats.Meshes.MeshAsset? _emissionHostMesh;
+    private VfxPlayback? _hostNeedFor;
+    private bool _hostNeeded;
+
+    /// <summary>M755: the character, posed at this instant on the SAME clock the palette uses, as the surface
+    /// "born on the character" emitters sample - or null when the playback has none of those, so a skin
+    /// with no such effect pays no CPU skinning for it. The GL viewport builds its own from the same
+    /// inputs; see <see cref="ReyEngine.Formats.Vfx.VfxHostSurface"/>.</summary>
+    public ReyEngine.Formats.Vfx.VfxHostSurface? PosedEmissionHost()
+    {
+        if (!ReferenceEquals(_hostNeedFor, Playback))
+        {
+            _hostNeedFor = Playback;
+            _hostNeeded = Services.VfxPlaybackSim.NeedsHost(Playback);
+        }
+        // a SKINNED character only - the same rule as the GL viewport, where a map's terrain is a Mesh too
+        if (!_hostNeeded || Mesh is not { CanSkin: true } mesh || Skeleton is null) return null;
+        if (!ReferenceEquals(_emissionHostMesh, mesh))
+        {
+            _emissionHost = ReyEngine.Formats.Vfx.VfxHostSurface.For(mesh);
+            _emissionHostMesh = mesh;
+        }
+        _emissionHost?.Pose(Skeleton, CurrentAnimation, (float)AnimationTime, ModelWorld);
+        return _emissionHost;
+    }
+
     /// <summary>The bone palette for this instant, or null when there is no skeleton — in which case the
     /// renderer keeps its bind-pose constant, which is exactly right for anything unskinned.</summary>
     public Matrix4x4[]? CurrentBonePalette()

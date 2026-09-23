@@ -203,6 +203,7 @@ public partial class MeshPreviewWindow
         // animated frame and the dummy moves whenever it is dragged.
         _dx11.BoneGlobals = vm.CurrentBoneGlobals();
         _dx11.BoneModelWorld = vm.ModelWorld;
+        _dx11.EmissionHost = vm.PosedEmissionHost();   // M755: the character as an emission surface
         _dx11.BeamTarget = vm.TargetDummyPosition;
 
         // M628: the target dummy itself. Two halves, exactly as the GL viewport has always had them, and

@@ -1483,6 +1483,10 @@ public sealed class ViewportControl : OpenGlControlBase
                 beamSim.SetBeamTarget(beamItem.BeamTarget
                     ?? BoneWorldPosition(beamItem.TargetBone)
                     ?? TargetDummyPosition);
+            // M755: "born on the character" emitters sample the character this viewport is showing
+            var emissionHost = PosedEmissionHost();
+            foreach (var psim in _particleSims) Services.VfxPlaybackSim.AttachHost(psim, emissionHost);
+            foreach (var (csim, _, _) in _childSims) Services.VfxPlaybackSim.AttachHost(csim, emissionHost);
             foreach (var psim in _particleSims)
             {
                 if (_expiredTravelSims.Contains(psim)) continue;
@@ -2156,6 +2160,36 @@ public sealed class ViewportControl : OpenGlControlBase
             }
             AnchorBoneSystemsToBindPose();
         }
+    }
+
+    private ReyEngine.Formats.Vfx.VfxHostSurface? _emissionHost;
+    private MeshAsset? _emissionHostMesh;
+    private ViewModels.VfxPlayback? _hostNeedFor;
+    private bool _hostNeeded;
+
+    /// <summary>
+    /// M755: the character on screen as an emission surface, posed on the clock and at the placement the
+    /// mesh is drawn with - or null. Only a SKINNED mesh with its skeleton qualifies: the map viewport binds
+    /// its terrain as <see cref="Mesh"/> too, and Map11's ward pads are host emitters, which would otherwise
+    /// be born all over the map. Only built when the playback has such an emitter, so a skin without one
+    /// pays no second CPU skin per frame. The D3D11 character preview does the same in
+    /// MeshPreviewViewModel.PosedEmissionHost.
+    /// </summary>
+    private ReyEngine.Formats.Vfx.VfxHostSurface? PosedEmissionHost()
+    {
+        if (!ReferenceEquals(_hostNeedFor, ParticlePlayback))
+        {
+            _hostNeedFor = ParticlePlayback;
+            _hostNeeded = Services.VfxPlaybackSim.NeedsHost(ParticlePlayback);
+        }
+        if (!_hostNeeded || Mesh is not { CanSkin: true } mesh || Skeleton is not { } skeleton) return null;
+        if (!ReferenceEquals(_emissionHostMesh, mesh))
+        {
+            _emissionHost = ReyEngine.Formats.Vfx.VfxHostSurface.For(mesh);
+            _emissionHostMesh = mesh;
+        }
+        _emissionHost?.Pose(skeleton, AnimationClip, (float)AnimationTime, ModelWorldTransform);
+        return _emissionHost;
     }
 
     /// <summary>The skeleton's bind-pose bone globals, computed once per skeleton.</summary>

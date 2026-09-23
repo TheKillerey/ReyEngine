@@ -223,6 +223,11 @@ public sealed class D3D11MapParticles
     /// moves live beams instead of needing a replay - the same reason GL pushes it (M183).</summary>
     public void SetBeamTarget(Vector3? worldTarget) => _beamTarget = worldTarget;
 
+    /// <summary>M755: the character the effects are attached to, already posed for this frame, or null.
+    /// Emitters born on "the character" sample it; null leaves them at their point.</summary>
+    public void SetEmissionHost(ReyEngine.Formats.Vfx.VfxHostSurface? host) => _emissionHost = host;
+    private ReyEngine.Formats.Vfx.VfxHostSurface? _emissionHost;
+
     /// <summary>M726: the world position of a named joint this frame, for an item whose event authored
     /// <c>mTargetBoneName</c>. Null when there is no skeleton or the name does not resolve, which falls the
     /// caller back to the dummy exactly as before.</summary>
@@ -599,6 +604,7 @@ public sealed class D3D11MapParticles
             // M726: the same precedence GL uses - an explicit world target, then the event's own target
             // BONE, then the dummy. Written as one expression in both renderers so the order cannot drift.
             sim.SetBeamTarget(item.BeamTarget ?? BoneWorldPosition(item.TargetBone) ?? _beamTarget);
+            VfxPlaybackSim.AttachHost(sim, _emissionHost);   // M755
             sim.Update(dt);
         }
         SimulateMs = phase.Elapsed.TotalMilliseconds;

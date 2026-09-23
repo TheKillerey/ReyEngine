@@ -348,6 +348,18 @@
                   </Border>
                 </StackPanel>
                 <TextBlock Text="{Binding RigNote}" FontSize="9" Opacity="0.5" TextWrapping="Wrap" />
+                <!-- M755: the character the effect is attached to, borrowed from the character window -->
+                <TextBlock Text="CHARACTER HOST" FontSize="10" FontWeight="Bold" Margin="0,6,0,0"
+                           Foreground="{DynamicResource ReyTextDimBrush}" />
+                <TextBlock Text="{Binding HostStatus}" FontSize="10" Opacity="0.8" TextTrimming="CharacterEllipsis" />
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                  <Button Classes="tool" Content="Use character window" FontSize="9" Padding="6,1"
+                          Command="{Binding UseCharacterWindowModelCommand}"
+                          ToolTip.Tip="Stand the character the character window shows - its skin, textures and current animation - in this preview. Emitters born on 'the character they are attached to' emit from its body." />
+                  <Button Classes="tool" Content="Clear" FontSize="9" Padding="6,1" IsEnabled="{Binding HasHost}"
+                          Command="{Binding ClearHostCommand}" />
+                </StackPanel>
+                <TextBlock Text="{Binding HostHint}" FontSize="9" Opacity="0.5" TextWrapping="Wrap" />
                 <!-- M753: the forces' reach, drawn in the view -->
                 <CheckBox Content="Show force shapes" FontSize="10" IsChecked="{Binding ShowForceShapes}"
                           ToolTip.Tip="Draw each force that acts: a wire ball the size of a Drag, Noise or Attraction radius at its centre, an arrow along an Acceleration, a ring about an Orbital's axis. Muted forces draw nothing. Still and Burst rigs only." />
@@ -490,6 +502,12 @@
                                      ParticleAutoStop="{Binding AutoStop}"
                                      ParticleRig="{Binding Rig}"
                                      GizmoPivot="{Binding GizmoPivot}"
+                                     Mesh="{Binding HostMesh}"
+                                     Skeleton="{Binding HostSkeleton}"
+                                     ModelTextures="{Binding HostTextures}"
+                                     ModelSubmeshMaterials="{Binding HostMaterials}"
+                                     AnimationClip="{Binding HostClip}"
+                                     AnimationTime="{Binding HostTime}"
                                      RangeRingLines="{Binding ForceShapeLines}" />
               <Border x:Name="PreviewInput" Background="Transparent" />
               <!-- M753: what the Move handle is on, or why there is none. Text only and not hit-testable:

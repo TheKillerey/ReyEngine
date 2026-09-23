@@ -355,6 +355,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     {
         RebuildPlaybackCore();
         RefreshGizmo();
+        NotifyHostCounts();   // M755
     }
 
     /// <summary>M754: what an emitter's particles are born on, in words, or null when it names no surface.
@@ -372,7 +373,9 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
                 + (s.Submeshes is { Count: > 0 } sub ? $" ({sub.Count} submesh(es))" : "")
                 + (s.AnimationName is not null ? ", in its bind pose - the preview does not play its animation yet" : ""),
             VfxEmissionSurfaceKind.Skeleton => $"Born on the joints of {file}" + (s.Joints is { Count: > 0 } j ? $" ({j.Count} in the mask)" : ""),
-            _ => "Born on the character this effect is attached to. The preview has no character host yet, so it emits from the emitter's point.",
+            _ => HostMesh is null
+                ? "Born on the character this effect is attached to. Pick a character host in the RIG panel to see it; until then it emits from the emitter's point."
+                : $"Born on the character this effect is attached to - here, the host {HostName}.",
         };
         if (s.Kind != VfxEmissionSurfaceKind.Host
             && ResolveEmissionSurfaces?.Invoke(def) is var loaded && (loaded is null || emitterIndex >= loaded.Count || loaded[emitterIndex] is null))
@@ -610,6 +613,7 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
     /// <summary>M754: what this emitter's particles are born on, when it names a surface.</summary>
     public string? EmissionNote => Entry is null ? null : _owner.EmissionNote(EmitterIndex);
     public bool HasEmissionNote => EmissionNote is not null;
+    internal void NotifyEmissionNote() { OnPropertyChanged(nameof(EmissionNote)); OnPropertyChanged(nameof(HasEmissionNote)); }
 
     /// <summary>M753: the Move handle is on this emitter's own position.</summary>
     public bool IsGizmoTarget => Entry is not null && _owner.IsGizmoTarget(ParticleEditorViewModel.EmitterKey(EmitterIndex));

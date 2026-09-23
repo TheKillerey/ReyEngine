@@ -6598,6 +6598,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.ResolveReflectionCubemaps = ResolveSystemReflectionCubemaps;   // M181 (2.12)
         ParticleEditor.ResolveMeshes = ResolveSystemMeshes;   // M47: .scb/.sco mesh primitives
         ParticleEditor.ResolveEmissionSurfaces = ResolveSystemEmissionSurfaces;   // M754
+        // M755: the host is whatever the character window shows - it owns the skin, the WADs and the clips
+        ParticleEditor.ResolveHost = () => MeshPreview.Mesh is { CanSkin: true } mesh && MeshPreview.Skeleton is { } skl
+            ? new ParticleHostModel(string.IsNullOrWhiteSpace(MeshPreview.Title) ? "character" : MeshPreview.Title,
+                mesh, skl, MeshPreview.Textures, MeshPreview.Materials, MeshPreview.CurrentAnimation)
+            : null;
 
         // M55: model-preview window — its own animation clock (AnimationInspectorViewModel) + VFX resolvers
         MeshPreview.Animation.ClipLoader = DecodeAnimation;

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using ReyEngine.App.ViewModels;
 using ReyEngine.Formats.Vfx;
@@ -167,6 +168,29 @@ public static class VfxPlaybackSim
             es.EmissionSampler = idx >= 0 && idx < surfaces.Count ? surfaces[idx] : null;
         }
     }
+
+    /// <summary>M755: give every "born on the character" emitter the host's surface, or take it away when
+    /// there is no host. Called per frame by both viewports - cheap, a flag per emitter - because the host
+    /// can arrive after the simulators were built and the child systems appear mid-run.</summary>
+    public static void AttachHost(VfxParticleSimulator sim, VfxHostSurface? host)
+    {
+        foreach (var es in sim.Emitters)
+        {
+            if (es.Def.EmissionSurface?.NeedsHost != true) continue;
+            es.EmissionSampler = host?.Sampler;
+            es.EmissionInWorld = host is not null;
+        }
+    }
+
+    /// <summary>M755: does anything in this playback - children included - emit from a host? Decides
+    /// whether a viewport pays for CPU-skinning the character at all.</summary>
+    public static bool NeedsHost(VfxPlayback? playback) =>
+        playback is not null && playback.Items.Any(i => NeedsHost(i, 0));
+
+    private static bool NeedsHost(VfxPlaybackItem item, int depth) =>
+        item.System.Emitters.Any(e => e.EmissionSurface?.NeedsHost == true)
+        || (depth < 4 && item.EmitterChildren is { } kids
+            && kids.Any(list => list is not null && list.Any(k => NeedsHost(k, depth + 1))));
 
     /// <summary>Map a live emitter state back to its AUTHORED index - the index every per-emitter list on a
     /// <see cref="VfxPlaybackItem"/> is aligned to. By REFERENCE, because SetSystem drops non-visual

@@ -39,6 +39,9 @@ public sealed class VfxParticleSimulator
         /// emitter whose surface did not load (or needs a character host nobody supplied) emits from its
         /// point, as it always did.</summary>
         public VfxSurfaceSampler? EmissionSampler;
+        /// <summary>M755: the sampler's points are WORLD positions - a character host, posed where it
+        /// stands - and replace the emitter's point instead of being added to it.</summary>
+        public bool EmissionInWorld;
         internal float SpawnAccum;
         /// <summary>M174 (2.14): per-instance start jitter from HasVariableStartTime (3,973 emitters).
         /// Without it, every repeat of an effect fires in lockstep and reads as mechanical.</summary>
@@ -783,7 +786,13 @@ public sealed class VfxParticleSimulator
         var localOffset = d.SpawnShape?.SampleOffset(_rng) ?? Vector3.Zero;
         // M754: born on the emission surface. The mesh is in the emitter's own space - the same frame the
         // spawn shape's offset is in - so it rides the placement and the rig exactly as the shape does.
-        if (s.EmissionSampler is { } surface) localOffset += surface.Sample(_rng);
+        // M755: a host's points are already in the world, so they take the place of the emitter's point.
+        Vector3? birthPoint = null;
+        if (s.EmissionSampler is { } surface)
+        {
+            if (s.EmissionInWorld) birthPoint = surface.Sample(_rng);
+            else localOffset += surface.Sample(_rng);
+        }
         // M174: emitterPosition carries probability tables on 37,220 of the 186,374 emitters that author
         // it (60-WAD sample), and its curve keys are all (0,0,0) on exactly those - so the scatter IS the
         // value. Rolled per particle here; the constant part is already baked into BasePos, so only the
@@ -796,7 +805,7 @@ public sealed class VfxParticleSimulator
 
         s.Particles.Add(new Particle
         {
-            Pos = s.BasePos + worldOffset,
+            Pos = (birthPoint ?? s.BasePos) + worldOffset,
             Vel = vel,
             BirthAccel = birthAccel,
             BirthOrbitalVelocity = birthOrbitalVelocity,
@@ -838,7 +847,7 @@ public sealed class VfxParticleSimulator
         // default is measured rather than assumed - the flag is Bool and true in all 178 instances that
         // carry it, so its ABSENCE is what means "at birth".
         if (d.Children is { EmitOnDeath: false } birthSet)
-            QueueChildSpawns(s, birthSet, s.BasePos + worldOffset, onDeath: false);
+            QueueChildSpawns(s, birthSet, (birthPoint ?? s.BasePos) + worldOffset, onDeath: false);
     }
 
     private static void BuildInstances(EmitterState s, Vector4 placementTint)

@@ -113,6 +113,10 @@ public sealed class Dx11ViewportSurface : IDisposable
     public System.Collections.Generic.IReadOnlyDictionary<string, System.Numerics.Matrix4x4>? BoneGlobals { get; set; }
     public System.Numerics.Matrix4x4 BoneModelWorld { get; set; } = System.Numerics.Matrix4x4.Identity;
 
+    /// <summary>M755: the character, posed for this frame, that "born on the character" emitters sample.
+    /// Null for a map, and for a character window whose playback has no such emitter.</summary>
+    public ReyEngine.Formats.Vfx.VfxHostSurface? EmissionHost { get; set; }
+
     /// <summary>M630: where beams terminate. Null leaves the simulator to resolve them from the emitter's
     /// own authored target offset, which is what a map wants.</summary>
     public System.Numerics.Vector3? BeamTarget { get; set; }
@@ -654,6 +658,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         // animated frame and the target moves whenever the user drags it.
         Particles?.SetBoneGlobals(BoneGlobals, BoneModelWorld);
         Particles?.SetBeamTarget(BeamTarget);
+        Particles?.SetEmissionHost(EmissionHost);   // M755
         // Gated on the DRIVER existing, not on it having a playback. SetPlayback(null) only marks the
         // driver dirty - the teardown that calls RemoveMaterials lives in Tick's Rebuild - so gating on
         // HasPlayback made retraction unreachable: switching Play All off left the last frame's quads
