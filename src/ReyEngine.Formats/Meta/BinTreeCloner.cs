@@ -39,12 +39,32 @@ public static class BinTreeCloner
         BinTreeContainer v => new BinTreeContainer(nameHash, v.ElementType, v.Elements.Select(e => Clone(e, 0))),
         BinTreeEmbedded v => new BinTreeEmbedded(nameHash, v.ClassHash, v.Properties.Select(kv => Clone(kv.Value, kv.Key))),
         BinTreeStruct v => new BinTreeStruct(nameHash, v.ClassHash, v.Properties.Select(kv => Clone(kv.Value, kv.Key))),
-        BinTreeOptional v => new BinTreeOptional(nameHash, v.Value is null ? null : Clone(v.Value, 0)),
+        BinTreeOptional v => v.Value is null ? EmptyOptional(nameHash, v.ValueType) : new BinTreeOptional(nameHash, Clone(v.Value, 0)),
         // M123: maps (shaderMacros on every StaticMaterialDef) — keys and values cloned pairwise
         BinTreeMap v => new BinTreeMap(nameHash, v.KeyType, v.ValueType,
             v.Select(kv => new KeyValuePair<BinTreeProperty, BinTreeProperty>(Clone(kv.Key, 0), Clone(kv.Value, 0)))),
         _ => throw new NotSupportedException($"Cannot duplicate a {p.Type} property yet."),
     };
+
+    private static readonly System.Reflection.FieldInfo? OptionalValueType =
+        typeof(BinTreeOptional).GetField("_valueType", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+    /// <summary>
+    /// M756: an EMPTY option that keeps its element type. LeagueToolkit's only public constructor infers the
+    /// type from the value, so an empty clone was written with element type None where Riot writes the
+    /// real one (emitterLinger is option&lt;f32&gt; whether or not it holds a value) - every duplicated emitter
+    /// shipped that divergence. The type is set on the private field the reader fills; should a
+    /// LeagueToolkit update rename it, the clone is refused rather than silently retyped.
+    /// </summary>
+    private static BinTreeOptional EmptyOptional(uint nameHash, BinPropertyType valueType)
+    {
+        var o = new BinTreeOptional(nameHash, null);
+        if (o.ValueType == valueType) return o;
+        if (OptionalValueType is null)
+            throw new NotSupportedException("Cannot duplicate an empty option with its element type on this LeagueToolkit version.");
+        OptionalValueType.SetValue(o, valueType);
+        return o;
+    }
 
     /// <summary>Can every part of this property be deep-copied?</summary>
     public static bool CanClone(BinTreeProperty p)
