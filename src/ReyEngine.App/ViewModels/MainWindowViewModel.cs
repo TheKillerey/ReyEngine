@@ -8118,7 +8118,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapTerrainExtras = null;
         CurrentLightmapScale = 1.0;
         CurrentSunProperties = null;
-        CurrentPostFog = null;   // M760
+        ApplyPostFog(null, declared: false);   // M760/M761: the panel too, not only what is drawn
         CurrentModelParticles = null;
         SelectedParticleTreeItem = null;
         ParticleMarkers = null;
@@ -12069,13 +12069,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M71: keep the authored sun (direction + any HDR fields) as the base; the manual sliders replace only
         // colour/scale on top of it. When the map has no sun component, fall back to the renderer's own
         // defaults (dir/0.75 sun/0.35 sky) so nothing changes visually until the user touches a slider.
-        _baseSun = sun ?? new MapSunProperties
-        {
-            SunDirection = new System.Numerics.Vector3(0.4f, 0.85f, 0.45f),
-            SunColor = new System.Numerics.Vector4(0.75f, 0.75f, 0.75f, 1f),
-            SkyLightColor = new System.Numerics.Vector4(0.35f, 0.35f, 0.35f, 1f),
-            SkyLightScale = 1f,
-        };
+        _baseSun = sun ?? NoMapSun();
         // M287: this whole block RESETS the panel to the map's authored values. That is correct as a
         // starting point, but it must not be mistaken for something the user chose - so capture is
         // suppressed across it, or opening a map would immediately overwrite that map's saved record with
@@ -12125,14 +12119,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     // M71: base sun (map-authored or default); the sliders replace colour/scale on top of it.
-    private MapSunProperties _baseSun = new()
+    private MapSunProperties _baseSun = NoMapSun();
+
+    /// <summary>The sun used when a map has none (and before any map): the renderer's own defaults.
+    ///
+    /// <para>ONE definition for both places that need it. M759 made the record's fog defaults the schema's
+    /// (fog on, 0..-2000) and fixed only the field initializer; the copy in ApplySunProperties kept the new
+    /// defaults, so a sun-less map - or Reset lighting on one - drew a fog the map never had, and its
+    /// captured record stopped matching the 0..0 signature <see cref="MapLightingArtefact"/> heals by.
+    /// Found in review (M761).</para></summary>
+    private static MapSunProperties NoMapSun() => new()
     {
         SunDirection = new System.Numerics.Vector3(0.4f, 0.85f, 0.45f),
         SunColor = new System.Numerics.Vector4(0.75f, 0.75f, 0.75f, 1f),
         SkyLightColor = new System.Numerics.Vector4(0.35f, 0.35f, 0.35f, 1f),
         SkyLightScale = 1f,
-        // M759: explicit, now that the record's own defaults are the schema's (fog on, 0..-2000). With no
-        // map there is no fog, and 0..0 is part of the signature MapLightingArtefact recognises.
         FogEnabled = false,
         FogStartAndEnd = System.Numerics.Vector2.Zero,
     };

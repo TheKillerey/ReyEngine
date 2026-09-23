@@ -158,6 +158,9 @@ public sealed unsafe partial class ShaderPreviewRenderer
         if (_sceneCopy.Handle is null || _sceneCopySrv.Handle is null || _depthCopy.Handle is null
             || _depthCopySrv.Handle is null || _depth.Handle is null) return;
         if (!EnsurePostFogPipeline()) return;
+        // a singular view-projection has no inverse, and NaNs in WorldViewProjInverse would fog the frame
+        // with garbage - skip the pass for that frame instead (M761)
+        if (!Matrix4x4.Invert(Matrix4x4.Multiply(view, proj), out _)) return;
 
         ComPtr<ID3D11RasterizerState> priorRaster = default;
         _ctx.RSGetState(ref priorRaster);
