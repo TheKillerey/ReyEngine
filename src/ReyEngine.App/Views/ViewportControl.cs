@@ -1224,12 +1224,10 @@ public sealed class ViewportControl : OpenGlControlBase
         // height-blend maps only, so the two never run together.
         _meshRenderer.SetNvrFourBlend(NvrFourBlend);
         _meshRenderer.SetVertexBakedLight(LegacyMap && !UseVertexLightmap, (float)NvrVertexLight);
-        // M145: distance fog straight from the map's MapSunProperties. Only fires when the toggle is on
-        // AND the map authored a usable range (TryGetFogRange normalises Riot's negative/reversed values).
-        float fogStart = 0f, fogEnd = 1f;
-        bool fog = false;
-        if (FogEnabled && SunProperties is { } fs) fog = fs.TryGetFogRange(out fogStart, out fogEnd);
-        _meshRenderer.SetFog(fog, fog ? SunProperties!.FogColor : Vector4.One, new Vector2(fogStart, fogEnd));
+        // M759: the map's environment (height) fog, on the toggle and the map's own fogEnabled
+        bool fog = FogEnabled && SunProperties is { FogEnabled: true };
+        _meshRenderer.SetFog(fog, SunProperties?.FogColor ?? Vector4.One, SunProperties?.FogAlternateColor ?? Vector4.One,
+            SunProperties?.FogStartAndEnd ?? new Vector2(0f, -2000f));
         _meshRenderer.SetDynamicLightsEnabled(DynamicLightsEnabled);
         _meshRenderer.SetLightIntensity((float)DynamicLightIntensity);
         _meshRenderer.SetLightRadiusScale((float)DynamicLightRadiusScale);

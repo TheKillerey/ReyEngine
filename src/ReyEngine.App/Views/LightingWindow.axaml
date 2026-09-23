@@ -315,32 +315,52 @@
           </StackPanel>
         </Border>
 
-        <!-- M463: fog is now editable rather than merely announced. No IsVisible gate any more - it was
-             bound to HasMapFog, which is derived from the range, so a map that authors no fog could never
-             be given one. -->
+        <!-- M463/M759: the map's environment fog, all six MapSunProperties fields. It is HEIGHT fog, read
+             from Riot's own map shaders: clear above Start, complete at End, fading from Fog colour to the
+             Alternate colour on the way down - the fog that fills the void under a map's edge. -->
         <Border Classes="card" Padding="12" CornerRadius="6">
           <StackPanel Spacing="4">
             <DockPanel>
+              <Border DockPanel.Dock="Right" Width="26" Height="13" CornerRadius="2" Margin="3,0,0,0"
+                      Background="{Binding FogAltSwatch}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" />
               <Border DockPanel.Dock="Right" Width="26" Height="13" CornerRadius="2"
                       Background="{Binding FogSwatch}" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" />
               <TextBlock Text="FOG" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource ReyTextDimBrush}" />
             </DockPanel>
+            <CheckBox Content="Fog enabled on this map" IsChecked="{Binding MapFogEnabled}" FontSize="11"
+                      ToolTip.Tip="MapSunProperties.fogEnabled. Off, the game draws no environment fog on this map at all - 153 of 201 shipped maps turn it off. This is the MAP's setting and is saved; the Fog toggle under MODE only shows or hides it in the viewport." />
+            <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}"
+                       Text="Height fog under the map: clear above Start, fully fogged at End, turning from the Fog colour into the Alternate colour on the way down." />
+            <TextBlock Text="Fog colour (just below Start)" FontSize="11" Margin="0,6,0,0" Foreground="{DynamicResource ReyTextBrush}" />
             <ColorPicker Color="{Binding FogColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
                          IsAlphaVisible="False" IsAlphaEnabled="False"
-                         ToolTip.Tip="MapSunProperties.fogColor. Drives the viewport (ENV_FOG_COLOR and ENV_FOG_ALT_COLOR) whenever the Fog toggle under MODE is on." />
-            <TextBlock Text="Range — raw, in Riot's own convention" FontSize="11" Margin="0,6,0,0"
+                         ToolTip.Tip="MapSunProperties.fogColor: the fog colour where it begins, just below the Start height (ENV_FOG_COLOR)." />
+            <TextBlock Text="Alternate colour (at End and below)" FontSize="11" Margin="0,6,0,0" Foreground="{DynamicResource ReyTextBrush}" />
+            <ColorPicker Color="{Binding FogAltColorPick, Mode=TwoWay}" HorizontalAlignment="Stretch"
+                         IsAlphaVisible="False" IsAlphaEnabled="False"
+                         ToolTip.Tip="MapSunProperties.fogAlternateColor: the colour the fog reaches at the End height and below (ENV_FOG_ALT_COLOR). Summoner's Rift uses a darker teal here than its fog colour." />
+            <TextBlock Text="Start and End heights (world Y)" FontSize="11" Margin="0,6,0,0"
                        Foreground="{DynamicResource ReyTextBrush}" />
             <UniformGrid Columns="2">
               <NumericUpDown Value="{Binding FogStartRaw}" Minimum="-1000000" Maximum="1000000" Increment="500"
                              FormatString="0.###" FontSize="11" Margin="0,0,3,0"
-                             ToolTip.Tip="MapSunProperties.fogStartAndEnd X. Drives the viewport when Fog is on. Shown RAW because the shader consumes it raw: Riot stores these negative and reversed (Twisted Treeline ships -10000, -50000, meaning fog from 10000 to 50000)." />
+                             ToolTip.Tip="fogStartAndEnd X: the height where the fog begins. Everything above it is clear. Summoner's Rift uses 0 - ground level." />
               <NumericUpDown Value="{Binding FogEndRaw}" Minimum="-1000000" Maximum="1000000" Increment="500"
                              FormatString="0.###" FontSize="11" Margin="3,0,0,0"
-                             ToolTip.Tip="MapSunProperties.fogStartAndEnd Y. Drives the viewport when Fog is on. Also raw — see the X box." />
+                             ToolTip.Tip="fogStartAndEnd Y: the height where the fog is complete - lower than Start. Summoner's Rift uses -19000; the game's default is -2000." />
+            </UniformGrid>
+            <TextBlock Text="Emissive in fog" FontSize="11" Margin="0,6,0,0" Foreground="{DynamicResource ReyTextBrush}" />
+            <UniformGrid Columns="2">
+              <NumericUpDown Value="{Binding FogEmissiveRemap}" Minimum="0" Maximum="10" Increment="0.1"
+                             FormatString="0.###" FontSize="11" Margin="0,0,3,0"
+                             ToolTip.Tip="fogEmissiveRemap: how much glowing (emissive) surface shows through the fog. 1 or more keeps it whole; lower lets the fog swallow it. Game default 1.9." />
+              <NumericUpDown Value="{Binding FogLowQualityEmissiveRemap}" Minimum="0" Maximum="10" Increment="0.01"
+                             FormatString="0.###" FontSize="11" Margin="3,0,0,0"
+                             ToolTip.Tip="fogLowQualityModeEmissiveRemap: the same, in the game's low-quality mode. Saved to the map; the viewport draws high quality. Game default 0.02." />
             </UniformGrid>
             <TextBlock FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0"
                        Foreground="{DynamicResource ReyTextDimBrush}"
-                       Text="Toggle fog on under MODE to see it. The toggle appears once the two numbers describe a real range." />
+                       Text="The Fog toggle under MODE shows it in both viewports. Save sun to map writes all six fields." />
           </StackPanel>
         </Border>
 

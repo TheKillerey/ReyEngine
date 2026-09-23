@@ -258,6 +258,13 @@ public sealed class MapLightingRecord
     public double? FogColorB { get; set; }
     public double? FogStartRaw { get; set; }
     public double? FogEndRaw { get; set; }
+    // M759: the rest of the environment fog, nullable for the same reason as the six above
+    public bool? FogEnabled { get; set; }
+    public double? FogAltColorR { get; set; }
+    public double? FogAltColorG { get; set; }
+    public double? FogAltColorB { get; set; }
+    public double? FogEmissiveRemap { get; set; }
+    public double? FogLowQualityEmissiveRemap { get; set; }
 
     // The Light.dat fit block - what "spread and shift this table onto this map" resolved to.
     public double LightIntensity { get; set; } = 1.0;

@@ -26,8 +26,66 @@ public sealed record MapSunProperties
     public float LightMapColorScale { get; init; } = 1f;
     public Vector4 HorizonColor { get; init; } = Vector4.One;
     public Vector4 GroundColor { get; init; } = Vector4.One;
-    public Vector4 FogColor { get; init; } = Vector4.One;
-    public Vector2 FogStartAndEnd { get; init; }
+    // ---------------------------------------------------------------- M759: the environment fog, all six
+    //
+    // Measured from Riot's compiled map shaders (staticmesh/defaultenv_flat ps blob 114,
+    // staticmesh/mantis_env_baked_pbr ps blob 9), and it is HEIGHT fog, not distance fog - the fog that
+    // fills the void under a map's edge. With t = saturate((worldY - end) / (start - end)):
+    //
+    //   legacy : a = max((1/exp2(smoothstep(t) * 2.88539) - 0.135335) * 1.156518, 0)   // 1 at end, 0 at start
+    //            fog = lerp(fogColor, fogAlternateColor, a);  pixel = lerp(lit, fog, a)
+    //   Mantis : s = smoothstep(t);  fog = lerp(fogAlternateColor, fogColor, s);  pixel = lerp(fog, lit, s)
+    //            emissive is added back weighted by saturate(s*s + ENV_FOG_..._EMISSIVE_REMAP.z)
+    //
+    // So above `start` a pixel is clear, and toward `end` (further down) it sinks into the alternate colour.
+    // Summoner's Rift authors (0, -19000): clear at ground level, gone into the void 19,000 units below.
+    //
+    // Defaults are the meta schema's, the value the game uses when a map leaves the field out - jade
+    // authors fogColor and no range, so it runs (0, -2000). 153 of 201 shipped sun blocks author
+    // fogEnabled = false.
+
+    /// <summary>fogEnabled. False draws no environment fog at all. Schema default true.</summary>
+    public bool FogEnabled { get; init; } = true;
+    /// <summary>fogColor: the fog just below <c>start</c>. Schema default (0.2, 0.2, 0.4, 1).</summary>
+    public Vector4 FogColor { get; init; } = new(0.2f, 0.2f, 0.4f, 1f);
+    /// <summary>fogAlternateColor: the fog at <c>end</c> and below. Schema default (0.1, 0.1, 0.2, 1).</summary>
+    public Vector4 FogAlternateColor { get; init; } = new(0.1f, 0.1f, 0.2f, 1f);
+    /// <summary>fogStartAndEnd: world HEIGHTS, start above end - fog begins below X and is complete at Y.
+    /// Schema default (0, -2000).</summary>
+    public Vector2 FogStartAndEnd { get; init; } = new(0f, -2000f);
+    /// <summary>fogEmissiveRemap: how much emissive survives inside the fog (the Mantis shader's
+    /// saturate(s*s + remap) weight; 1.9 keeps it whole). Schema default 1.9.</summary>
+    public float FogEmissiveRemap { get; init; } = 1.9f;
+    /// <summary>fogLowQualityModeEmissiveRemap: the same, in the game's low-quality mode. Saved, not
+    /// previewed - the preview draws high quality. Schema default 0.02.</summary>
+    public float FogLowQualityModeEmissiveRemap { get; init; } = 0.02f;
+
+    /// <summary>
+    /// M759: the environment-fog constants a map shader reads, from this sun - or the "no fog" constants
+    /// when fog is off (the viewport toggle, or the map's own fogEnabled). No fog is a range every real
+    /// height is above: t saturates to 1 and both formulas return the lit pixel untouched.
+    /// <c>.z</c> is filled from fogEmissiveRemap, the name's match; the shader uses it only as the emissive
+    /// floor above, where 1.9 and the old 1 both keep emissive whole. <c>.w</c> is read by no shader
+    /// measured and stays 1.
+    /// </summary>
+    public static (Vector4 StartEndScaleRemap, Vector3 Color, Vector3 AltColor) EnvFogConstants(MapSunProperties? sun, bool show)
+    {
+        if (!show || sun is null || !sun.FogEnabled)
+            return (new Vector4(-1e9f + 1e4f, -1e9f, sun?.FogEmissiveRemap ?? 1.9f, 1f), Vector3.Zero, Vector3.Zero);
+        return (new Vector4(sun.FogStartAndEnd.X, sun.FogStartAndEnd.Y, sun.FogEmissiveRemap, 1f),
+                new Vector3(sun.FogColor.X, sun.FogColor.Y, sun.FogColor.Z),
+                new Vector3(sun.FogAlternateColor.X, sun.FogAlternateColor.Y, sun.FogAlternateColor.Z));
+    }
+
+    /// <summary>M759: how much fog the LEGACY shader puts on a pixel at <paramref name="worldY"/>, 0..1 -
+    /// the expression of defaultenv_flat ps blob 114, for tests and the GL viewport's port.</summary>
+    public static float LegacyFogAmount(Vector2 startAndEnd, float worldY)
+    {
+        float t = Math.Clamp((worldY - startAndEnd.Y) * (1f / (startAndEnd.X - startAndEnd.Y)), 0f, 1f);
+        float s = t * t * (3f - 2f * t);
+        float a = (1f / MathF.Pow(2f, s * 2.88539f) - 0.135335f) * 1.156518f;
+        return MathF.Max(a, 0f);
+    }
 
     // ---------------------------------------------------------------- M467: the sun SHADOW half
     //
@@ -70,19 +128,9 @@ public sealed record MapSunProperties
     /// covers. Schema default 0.05; authored by 17 of 207 (0.1, 0.02, 0.025, 0.015, 0.03, 1).</summary>
     public float SurfaceAreaToShadowMapScale { get; init; } = 0.05f;
 
-    /// <summary>
-    /// M145: the fog range as usable positive world distances. Riot stores <c>fogStartAndEnd</c> in a
-    /// view-space depth convention — negative, and with the far value "smaller" (Twisted Treeline ships
-    /// <c>(-10000, -50000)</c>, i.e. fog from 10000 to 50000). Normalise by magnitude so callers get
-    /// (near, far) regardless of sign or ordering. False when the map authored no usable range.
-    /// </summary>
-    public bool TryGetFogRange(out float start, out float end)
-    {
-        float a = Math.Abs(FogStartAndEnd.X), b = Math.Abs(FogStartAndEnd.Y);
-        start = Math.Min(a, b);
-        end = Math.Max(a, b);
-        return end > start && end > 0f;
-    }
+    // M759: TryGetFogRange is gone. It read fogStartAndEnd as positive camera DISTANCES (M145), which no
+    // shader does - the values are world heights - and the GL viewport's distance fog built on it tinted
+    // Summoner's Rift blue with zoom where the game draws nothing.
 
     /// <summary>Find the MapContainer's MapSunProperties component. Never throws; null when absent.</summary>
     public static MapSunProperties? Extract(byte[] materialsBin)
@@ -109,8 +157,13 @@ public sealed record MapSunProperties
                         LightMapColorScale = F32(s, "lightMapColorScale", 1f),
                         HorizonColor = Vec4(s, "horizonColor", Vector4.One),
                         GroundColor = Vec4(s, "groundColor", Vector4.One),
-                        FogColor = Vec4(s, "fogColor", Vector4.One),
-                        FogStartAndEnd = Vec2(s, "fogStartAndEnd", Vector2.Zero),
+                        // M759: the schema defaults, where M145 read an absent field as white and (0, 0)
+                        FogEnabled = Bool(s, "fogEnabled", true),
+                        FogColor = Vec4(s, "fogColor", new Vector4(0.2f, 0.2f, 0.4f, 1f)),
+                        FogAlternateColor = Vec4(s, "fogAlternateColor", new Vector4(0.1f, 0.1f, 0.2f, 1f)),
+                        FogStartAndEnd = Vec2(s, "fogStartAndEnd", new Vector2(0f, -2000f)),
+                        FogEmissiveRemap = F32(s, "fogEmissiveRemap", 1.9f),
+                        FogLowQualityModeEmissiveRemap = F32(s, "fogLowQualityModeEmissiveRemap", 0.02f),
                         // M467. Defaults are the meta schema's, so an absent field reads back as whatever
                         // the game would use — the same contract every field above already keeps.
                         SunRadiusForShadows = F32(s, "SunRadiusForShadows", 0f),
@@ -199,6 +252,11 @@ public sealed record MapSunProperties
             Set("groundColor", new BinTreeVector4(HashAlgorithms.Fnv1a("groundColor"), sun.GroundColor), sun.GroundColor == defaults.GroundColor);
             Set("fogColor", new BinTreeVector4(HashAlgorithms.Fnv1a("fogColor"), sun.FogColor), sun.FogColor == defaults.FogColor);
             Set("fogStartAndEnd", new BinTreeVector2(HashAlgorithms.Fnv1a("fogStartAndEnd"), sun.FogStartAndEnd), sun.FogStartAndEnd == defaults.FogStartAndEnd);
+            // M759: the rest of the fog. fogEnabled is a Bool on this class (not a Flag), as the schema says.
+            Set("fogEnabled", new BinTreeBool(HashAlgorithms.Fnv1a("fogEnabled"), sun.FogEnabled), sun.FogEnabled == defaults.FogEnabled);
+            Set("fogAlternateColor", new BinTreeVector4(HashAlgorithms.Fnv1a("fogAlternateColor"), sun.FogAlternateColor), sun.FogAlternateColor == defaults.FogAlternateColor);
+            Set("fogEmissiveRemap", new BinTreeF32(HashAlgorithms.Fnv1a("fogEmissiveRemap"), sun.FogEmissiveRemap), sun.FogEmissiveRemap == defaults.FogEmissiveRemap);
+            Set("fogLowQualityModeEmissiveRemap", new BinTreeF32(HashAlgorithms.Fnv1a("fogLowQualityModeEmissiveRemap"), sun.FogLowQualityModeEmissiveRemap), sun.FogLowQualityModeEmissiveRemap == defaults.FogLowQualityModeEmissiveRemap);
             // M467. Case matters: these four are FNV-1a over the name AS RIOT SPELLS IT, and Riot spells
             // three of them capitalised and surfaceAreaToShadowMapScale lower — same inconsistency
             // SunIntensityScale already has above. The hashes were taken from the shipped hash list, not
@@ -233,4 +291,11 @@ public sealed record MapSunProperties
         Field(s.Properties, name) is BinTreeVector2 v ? v.Value : def;
     private static float F32(BinTreeStruct s, string name, float def) =>
         Field(s.Properties, name) is BinTreeF32 v ? v.Value : def;
+    /// <summary>M759: a Bool, or a BitBool should a writer have used one.</summary>
+    private static bool Bool(BinTreeStruct s, string name, bool def) => Field(s.Properties, name) switch
+    {
+        BinTreeBool b => b.Value,
+        BinTreeBitBool b => b.Value,
+        _ => def,
+    };
 }

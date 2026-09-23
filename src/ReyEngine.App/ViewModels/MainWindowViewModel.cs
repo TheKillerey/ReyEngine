@@ -3099,8 +3099,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     // M145: the fog toggle's visibility follows whichever map is loaded.
     partial void OnCurrentSunPropertiesChanged(MapSunProperties? value)
     {
-        OnPropertyChanged(nameof(HasMapFog));
-        if (!HasMapFog) ShowFog = false;   // don't carry a fog toggle onto a map that has none
+        OnPropertyChanged(nameof(HasMapFog));   // M759: the viewport toggle keeps its state across maps
     }
     [ObservableProperty] private AnimationClip? _currentAnimation;
     [ObservableProperty] private double _animationTime;
@@ -3289,8 +3288,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
     // M145: MapSunProperties distance fog. Off by default; only meaningful when the loaded map's sun
     // component authored a real fog range, which HasMapFog reflects so the toggle can hide itself.
-    [ObservableProperty] private bool _showFog;
-    public bool HasMapFog => CurrentSunProperties is { } s && s.TryGetFogRange(out _, out _);
+    // M759: on by default now that it is the game's own fog - off, the viewport shows a map the game
+    // never draws. HasMapFog follows the map's fogEnabled, which the panel edits.
+    [ObservableProperty] private bool _showFog = true;
+    public bool HasMapFog => CurrentSunProperties is { FogEnabled: true };
     [ObservableProperty] private double _dynamicLightIntensity = 1.0;
     [ObservableProperty] private double _dynamicLightRadiusScale = 1.0;   // M71: global light-radius multiplier
 
@@ -3419,6 +3420,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         rec.GroundColorR = GroundColorR; rec.GroundColorG = GroundColorG; rec.GroundColorB = GroundColorB;
         rec.FogColorR = FogColorR; rec.FogColorG = FogColorG; rec.FogColorB = FogColorB;
         rec.FogStartRaw = FogStartRaw; rec.FogEndRaw = FogEndRaw;
+        rec.FogEnabled = MapFogEnabled;   // M759
+        rec.FogAltColorR = FogAltColorR; rec.FogAltColorG = FogAltColorG; rec.FogAltColorB = FogAltColorB;
+        rec.FogEmissiveRemap = FogEmissiveRemap; rec.FogLowQualityEmissiveRemap = FogLowQualityEmissiveRemap;
 
         rec.LightIntensity = DynamicLightIntensity;
         rec.LightRadiusScale = DynamicLightRadiusScale;
@@ -3493,6 +3497,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (rec.FogColorB is { } fb) FogColorB = fb;
             if (rec.FogStartRaw is { } fs) FogStartRaw = fs;
             if (rec.FogEndRaw is { } fe) FogEndRaw = fe;
+            if (rec.FogEnabled is { } fon) MapFogEnabled = fon;   // M759: null = the record predates the field
+            if (rec.FogAltColorR is { } ar) FogAltColorR = ar;
+            if (rec.FogAltColorG is { } ag) FogAltColorG = ag;
+            if (rec.FogAltColorB is { } ab) FogAltColorB = ab;
+            if (rec.FogEmissiveRemap is { } er) FogEmissiveRemap = er;
+            if (rec.FogLowQualityEmissiveRemap is { } lq) FogLowQualityEmissiveRemap = lq;
 
             _suppressSunRebuild = false;
             RebuildSun();
@@ -6273,11 +6283,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private double _fogColorG = 1.0;
     [ObservableProperty] private double _fogColorB = 1.0;
 
-    // RAW, in Riot's own convention: negative and "reversed" (Twisted Treeline ships -10000, -50000).
-    // The shader consumes them unmodified, so they are edited unmodified. Normalising to a friendly
-    // (near, far) here would mean guessing how to put the sign back on save.
+    // RAW world HEIGHTS (M759), start above end: the fog begins below Start and is complete at End.
+    // Summoner's Rift authors (0, -19000). Edited as the shaders read them.
     [ObservableProperty] private double _fogStartRaw;
     [ObservableProperty] private double _fogEndRaw;
+
+    // M759: the four fog fields the panel could not reach. fogEnabled is the MAP's switch (153 of 201
+    // shipped sun blocks turn it off); ShowFog is only the viewport's.
+    [ObservableProperty] private bool _mapFogEnabled = true;
+    [ObservableProperty] private double _fogAltColorR = 0.1;
+    [ObservableProperty] private double _fogAltColorG = 0.1;
+    [ObservableProperty] private double _fogAltColorB = 0.2;
+    [ObservableProperty] private double _fogEmissiveRemap = 1.9;
+    [ObservableProperty] private double _fogLowQualityEmissiveRemap = 0.02;
 
     // M467: MapSunProperties' four SHADOW fields. These are the only map-side shadow controls that exist —
     // a sweep of the meta database finds `castShadows` on SkinMeshDataProperties (characters) alone, so
@@ -12079,6 +12097,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             GroundColorR = Clamp01(_baseSun.GroundColor.X); GroundColorG = Clamp01(_baseSun.GroundColor.Y); GroundColorB = Clamp01(_baseSun.GroundColor.Z);
             FogColorR = Clamp01(_baseSun.FogColor.X); FogColorG = Clamp01(_baseSun.FogColor.Y); FogColorB = Clamp01(_baseSun.FogColor.Z);
             FogStartRaw = _baseSun.FogStartAndEnd.X; FogEndRaw = _baseSun.FogStartAndEnd.Y;
+            // M759
+            MapFogEnabled = _baseSun.FogEnabled;
+            FogAltColorR = Clamp01(_baseSun.FogAlternateColor.X); FogAltColorG = Clamp01(_baseSun.FogAlternateColor.Y); FogAltColorB = Clamp01(_baseSun.FogAlternateColor.Z);
+            FogEmissiveRemap = _baseSun.FogEmissiveRemap;
+            FogLowQualityEmissiveRemap = _baseSun.FogLowQualityModeEmissiveRemap;
 
             // M467: the shadow four. Loaded here so the panel shows what the MAP authors rather than the
             // schema default - the difference between the two is the whole finding on Summoner's Rift,
@@ -12106,6 +12129,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SunColor = new System.Numerics.Vector4(0.75f, 0.75f, 0.75f, 1f),
         SkyLightColor = new System.Numerics.Vector4(0.35f, 0.35f, 0.35f, 1f),
         SkyLightScale = 1f,
+        // M759: explicit, now that the record's own defaults are the schema's (fog on, 0..-2000). With no
+        // map there is no fog, and 0..0 is part of the signature MapLightingArtefact recognises.
+        FogEnabled = false,
+        FogStartAndEnd = System.Numerics.Vector2.Zero,
     };
     private bool _suppressSunRebuild;
     private static double Clamp01(double v) => System.Math.Clamp(v, 0.0, 1.0);
@@ -12142,7 +12169,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             GroundColor = new System.Numerics.Vector4((float)GroundColorR, (float)GroundColorG, (float)GroundColorB, 1f),
             FogColor = new System.Numerics.Vector4((float)FogColorR, (float)FogColorG, (float)FogColorB, 1f),
             FogStartAndEnd = new System.Numerics.Vector2((float)FogStartRaw, (float)FogEndRaw),
+            // M759
+            FogEnabled = MapFogEnabled,
+            FogAlternateColor = new System.Numerics.Vector4((float)FogAltColorR, (float)FogAltColorG, (float)FogAltColorB, 1f),
+            FogEmissiveRemap = (float)FogEmissiveRemap,
+            FogLowQualityModeEmissiveRemap = (float)FogLowQualityEmissiveRemap,
         };
+        OnPropertyChanged(nameof(FogAltSwatch));
+        OnPropertyChanged(nameof(FogAltColorPick));
         OnPropertyChanged(nameof(SunSwatch));
         OnPropertyChanged(nameof(SkySwatch));
         OnPropertyChanged(nameof(SunColorPick));   // M155
@@ -12237,6 +12271,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public Avalonia.Media.IBrush HorizonSwatch => Swatch(HorizonColorR, HorizonColorG, HorizonColorB);
     public Avalonia.Media.IBrush GroundSwatch => Swatch(GroundColorR, GroundColorG, GroundColorB);
     public Avalonia.Media.IBrush FogSwatch => Swatch(FogColorR, FogColorG, FogColorB);
+    public Avalonia.Media.IBrush FogAltSwatch => Swatch(FogAltColorR, FogAltColorG, FogAltColorB);   // M759
+
+    public Avalonia.Media.Color FogAltColorPick
+    {
+        get => Col(FogAltColorR, FogAltColorG, FogAltColorB);
+        set
+        {
+            _suppressSunRebuild = true;
+            FogAltColorR = value.R / 255.0; FogAltColorG = value.G / 255.0; FogAltColorB = value.B / 255.0;
+            _suppressSunRebuild = false;
+            RebuildSun();
+        }
+    }
 
     private static Avalonia.Media.Color Col(double r, double g, double b) => Avalonia.Media.Color.FromRgb(
         (byte)Math.Clamp(Math.Round(r * 255), 0, 255),
@@ -12272,6 +12319,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnFogColorBChanged(double value) => RebuildSun();
     partial void OnFogStartRawChanged(double value) => RebuildSun();
     partial void OnFogEndRawChanged(double value) => RebuildSun();
+    partial void OnMapFogEnabledChanged(bool value) => RebuildSun();          // M759
+    partial void OnFogAltColorRChanged(double value) => RebuildSun();
+    partial void OnFogAltColorGChanged(double value) => RebuildSun();
+    partial void OnFogAltColorBChanged(double value) => RebuildSun();
+    partial void OnFogEmissiveRemapChanged(double value) => RebuildSun();
+    partial void OnFogLowQualityEmissiveRemapChanged(double value) => RebuildSun();
 
     /// <summary>M71: restore sun/sky/lightmap to the loaded map's authored values.</summary>
     [RelayCommand]
@@ -12323,6 +12376,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 GroundColor = new System.Numerics.Vector4((float)GroundColorR, (float)GroundColorG, (float)GroundColorB, 1f),
                 FogColor = new System.Numerics.Vector4((float)FogColorR, (float)FogColorG, (float)FogColorB, 1f),
                 FogStartAndEnd = new System.Numerics.Vector2((float)FogStartRaw, (float)FogEndRaw),
+                // M759: the rest of the fog, on the same rule
+                FogEnabled = MapFogEnabled,
+                FogAlternateColor = new System.Numerics.Vector4((float)FogAltColorR, (float)FogAltColorG, (float)FogAltColorB, 1f),
+                FogEmissiveRemap = (float)FogEmissiveRemap,
+                FogLowQualityModeEmissiveRemap = (float)FogLowQualityEmissiveRemap,
 
                 // M467: the shadow four, on the same rule as M463's six — written from the PANEL, because a
                 // control that edits the viewport and is dropped on save is the same defect as a control

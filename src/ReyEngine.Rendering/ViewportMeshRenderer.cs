@@ -24,7 +24,7 @@ public sealed class ViewportMeshRenderer : IDisposable
     private int _mHasVertexColor;                                  // M33: mapgeo PrimaryColor present
     private int _mVertexBakedLight, _mVertexBakedScale;            // M89: NVR vertex-colour baked light
     private int _mVertexLightmap, _mVertexLightmapScale;           // M142.4: PrimaryColor AS baked lightmap
-    private int _mFogEnabled, _mFogColor, _mFogStartEnd;           // M145: MapSunProperties distance fog
+    private int _mFogEnabled, _mFogColor, _mFogStartEnd, _mFogAltColor;   // M145/M759: MapSunProperties environment fog
     private int _mNvrFourBlend;                                    // M89: NVR ground four-blend flag
     private int _mCompositeGround;                                 // M142: Map10 baked height-blend ground (2nd-UV composite)
     private int _mLightmap, _mHasLightmap;                         // M33: baked lightmap atlas (slot 6, Texcoord7 UV)
@@ -71,9 +71,10 @@ public sealed class ViewportMeshRenderer : IDisposable
     private float _vertexBakedScale = 3f;
     private bool _vertexLightmap;                // M142.4: use PrimaryColor AS the baked lightmap (NVR statics)
     private float _vertexLightmapScale = 2f;
-    private bool _fogEnabled;                    // M145: MapSunProperties distance fog
+    private bool _fogEnabled;                    // M145/M759: MapSunProperties environment (height) fog
     private Vector4 _fogColor = Vector4.One;
-    private Vector2 _fogStartEnd = new(0f, 1f);
+    private Vector4 _fogAltColor = Vector4.One;
+    private Vector2 _fogStartEnd = new(0f, -2000f);
     private bool _nvrFourBlend;                  // M89: NVR ground four-blend (gated per submesh by uHasMask)
     private Matrix4x4 _worldModel = Matrix4x4.Identity;   // M89: world transform for the whole mesh (move/rotate map)
     private int _mLightsTex, _mNumLights, _mLightIntensity, _mLightRadiusScale, _mLightPosScale, _mLightPosScaleXZ, _mLightPosOffset;
@@ -362,10 +363,10 @@ uniform int uVertexBakedLight; // M89: 1 = add PrimaryColor as a baked light ter
 uniform float uVertexBakedScale;
 uniform int uVertexLightmap;   // M142.4: 1 = use PrimaryColor AS the baked lightmap (legacy NVR statics)
 uniform float uVertexLightmapScale;
-// M145: MapSunProperties distance fog - linear ramp from fogStartAndEnd.x to .y toward fogColor.
-// uFogEnabled gates it; alpha of uFogColor scales the maximum density (1 = fully fogged at the end).
+// M759: MapSunProperties environment fog - HEIGHT fog under the map, Riot's legacy curve (see SetFog).
 uniform int uFogEnabled;
 uniform vec4 uFogColor;
+uniform vec4 uFogAltColor;
 uniform vec2 uFogStartEnd;
 uniform int uNvrFourBlend;     // M89: 1 = CREATE_GROUND_MOSAIC_FOUR_BLEND (blend 4 colour maps by a mask)
 uniform int uCompositeGround;  // M142: 1 = Map10 baked height-blend ground atlas, sampled by the 2nd UV
@@ -912,13 +913,16 @@ void main() {
     if ((uAlphaMode == 1 || uAlphaMode == 3) && alpha < uAlphaCutoff) discard;
     float outA = (uAlphaMode == 2 || uAlphaMode == 3) ? clamp(alpha, 0.0, 1.0) : 1.0;
 
-    // M145: MapSunProperties distance fog, applied last so it blankets every lighting path (baked,
-    // lightmapped, composite ground, water). Linear on world distance from the camera; alpha of the
-    // fog colour caps the density so a map can fog partially rather than to a solid wall.
+    // M759: MapSunProperties environment fog, applied last so it covers every lighting path. It is the
+    // expression of staticmesh/defaultenv_flat ps blob 114 - height, not distance: clear above
+    // fogStartAndEnd.x, complete at .y, fading from fogColor to fogAlternateColor on the way down. (The
+    // Mantis family reaches the same ends with a plain smoothstep; the D3D11 viewport runs the real one.)
     if (uFogEnabled == 1) {
-        float span = max(uFogStartEnd.y - uFogStartEnd.x, 0.001);
-        float f = clamp((length(uCamPos - vWorld) - uFogStartEnd.x) / span, 0.0, 1.0);
-        col = mix(col, uFogColor.rgb, f * clamp(uFogColor.a, 0.0, 1.0));
+        float t = clamp((vWorld.y - uFogStartEnd.y) * (1.0 / (uFogStartEnd.x - uFogStartEnd.y)), 0.0, 1.0);
+        float s = t * t * (3.0 - 2.0 * t);
+        float a = max((1.0 / exp2(s * 2.88539) - 0.135335) * 1.156518, 0.0);
+        vec3 fogCol = mix(uFogColor.rgb, uFogAltColor.rgb, a);
+        col = mix(col, fogCol, a);
     }
     FragColor = vec4(col, outA);
 }";
@@ -1003,6 +1007,7 @@ void main() { FragColor = uColor; }";
         _mFogEnabled = gl.GetUniformLocation(_meshProgram, "uFogEnabled");
         _mFogColor = gl.GetUniformLocation(_meshProgram, "uFogColor");
         _mFogStartEnd = gl.GetUniformLocation(_meshProgram, "uFogStartEnd");
+        _mFogAltColor = gl.GetUniformLocation(_meshProgram, "uFogAltColor");
         _mNvrFourBlend = gl.GetUniformLocation(_meshProgram, "uNvrFourBlend");
         _mCompositeGround = gl.GetUniformLocation(_meshProgram, "uCompositeGround");
         _mLightmap = gl.GetUniformLocation(_meshProgram, "uLightmap");
@@ -1885,13 +1890,15 @@ void main(){
         _vertexLightmapScale = System.Math.Clamp(scale, 0f, 16f);
     }
 
-    /// <summary>M145: MapSunProperties distance fog. <paramref name="color"/>.a caps the density (1 = the
-    /// far plane is solid fog); start/end are world-space distances from the camera.</summary>
-    public void SetFog(bool enabled, Vector4 color, Vector2 startEnd)
+    /// <summary>M759: MapSunProperties environment fog - raw fogStartAndEnd (world heights, start above
+    /// end), fogColor and fogAlternateColor. Replaces M145's camera-distance fog, which no Riot shader
+    /// draws.</summary>
+    public void SetFog(bool enabled, Vector4 color, Vector4 altColor, Vector2 startEnd)
     {
-        _fogEnabled = enabled;
+        _fogEnabled = enabled && startEnd.X != startEnd.Y;
         _fogColor = color;
-        _fogStartEnd = startEnd.Y > startEnd.X ? startEnd : new Vector2(startEnd.X, startEnd.X + 1f);
+        _fogAltColor = altColor;
+        _fogStartEnd = startEnd;
     }
 
     /// <summary>M89: world transform (translation + rotation) applied to the whole mesh — used to slide and
@@ -2680,7 +2687,7 @@ void main(){
                 _gl.Uniform1(_mVertexLightmap, _vertexLightmap ? 1 : 0);       // M142.4
                 _gl.Uniform1(_mVertexLightmapScale, _vertexLightmapScale);
                 _gl.Uniform1(_mFogEnabled, _fogEnabled ? 1 : 0);               // M145
-                _gl.Uniform4(_mFogColor, _fogColor.X, _fogColor.Y, _fogColor.Z, _fogColor.W);
+                _gl.Uniform4(_mFogColor, _fogColor.X, _fogColor.Y, _fogColor.Z, _fogColor.W); _gl.Uniform4(_mFogAltColor, _fogAltColor.X, _fogAltColor.Y, _fogAltColor.Z, _fogAltColor.W);   // M759
                 _gl.Uniform2(_mFogStartEnd, _fogStartEnd.X, _fogStartEnd.Y);
                 _gl.Uniform1(_mNvrFourBlend, _nvrFourBlend ? 1 : 0);
                 _gl.Uniform3(_mLight, _lightDirection.X, _lightDirection.Y, _lightDirection.Z);
@@ -2849,7 +2856,7 @@ void main(){
             _gl.Uniform1(_mHasVertexColor, 0);
             _gl.Uniform1(_mVertexBakedLight, 0);   // M89: props never use the NVR baked-light term
             _gl.Uniform1(_mVertexLightmap, 0);     // M142.4: props are not NVR statics
-            _gl.Uniform4(_mFogColor, _fogColor.X, _fogColor.Y, _fogColor.Z, _fogColor.W);
+            _gl.Uniform4(_mFogColor, _fogColor.X, _fogColor.Y, _fogColor.Z, _fogColor.W); _gl.Uniform4(_mFogAltColor, _fogAltColor.X, _fogAltColor.Y, _fogAltColor.Z, _fogAltColor.W);   // M759
             _gl.Uniform2(_mFogStartEnd, _fogStartEnd.X, _fogStartEnd.Y);
             _gl.Uniform1(_mNvrFourBlend, 0);
             _gl.Uniform3(_mCamPos, camPos.X, camPos.Y, camPos.Z);

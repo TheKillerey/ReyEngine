@@ -50,6 +50,12 @@ public class MapSunWriterTests
         ScaleSunShadowIntensity = 0.4f,
         ShadowBias = 0.002f,
         SurfaceAreaToShadowMapScale = 0.02f,
+        // M759: the rest of the fog, non-default for the same reason. Summoner's Rift's own alternate
+        // colour; fogEnabled false as 153 of 201 shipped sun blocks author it.
+        FogEnabled = false,
+        FogAlternateColor = new Vector4(0.302f, 0.427f, 0.369f, 1f),
+        FogEmissiveRemap = 0.75f,
+        FogLowQualityModeEmissiveRemap = 0.1f,
     };
 
     [Fact]
@@ -65,15 +71,16 @@ public class MapSunWriterTests
         Assert.Equal(Authored, MapSunProperties.Extract(outBin!));
     }
 
-    /// <summary>Fields the record does not model must survive untouched — SunIntensityScale,
-    /// fogAlternateColor and friends are real authored data in shipped maps.</summary>
+    /// <summary>Fields the record does not model must survive untouched - the CharacterSunLight* family
+    /// is real authored data in shipped maps. (fogAlternateColor was the example here until M759 modelled
+    /// it; <see cref="The_alternate_fog_colour_is_written_now"/> pins the new behaviour.)</summary>
     [Fact]
     public void Unmodeled_fields_are_preserved()
     {
         byte[] bin = BinWith(
             new BinTreeVector4(H("sunColor"), Vector4.One),
             new BinTreeF32(H("sunIntensityScale"), 0.5f),
-            new BinTreeVector4(H("fogAlternateColor"), new Vector4(1f, 0f, 1f, 1f)));
+            new BinTreeVector4(H("CharacterSunLightColor"), new Vector4(1f, 0f, 1f, 1f)));
 
         byte[]? outBin = MapSunProperties.Write(bin, Authored, out _);
 
@@ -84,7 +91,109 @@ public class MapSunWriterTests
 
         Assert.Equal(0.5f, Assert.IsType<BinTreeF32>(sun.Properties[H("sunIntensityScale")]).Value);
         Assert.Equal(new Vector4(1f, 0f, 1f, 1f),
-            Assert.IsType<BinTreeVector4>(sun.Properties[H("fogAlternateColor")]).Value);
+            Assert.IsType<BinTreeVector4>(sun.Properties[H("CharacterSunLightColor")]).Value);
+    }
+
+    /// <summary>M759: the alternate colour is the deep end of the fog, so the panel edits it and a save
+    /// writes it - and an absent one reads as the schema default, not as the main colour.</summary>
+    [Fact]
+    public void The_alternate_fog_colour_is_written_now()
+    {
+        byte[] bin = BinWith(new BinTreeVector4(H("fogAlternateColor"), new Vector4(1f, 0f, 1f, 1f)));
+        var outBin = MapSunProperties.Write(bin, Authored, out _)!;
+        Assert.Equal(Authored.FogAlternateColor, MapSunProperties.Extract(outBin)!.FogAlternateColor);
+        Assert.Equal(new Vector4(0.1f, 0.1f, 0.2f, 1f), MapSunProperties.Extract(BinWith())!.FogAlternateColor);
+    }
+
+    /// <summary>M759: an absent fog field reads as the game's default - jade authors a colour and no
+    /// range, and runs (0, -2000); M145 read that as (0, 0), a range no shader treats as none.</summary>
+    [Fact]
+    public void Absent_fog_fields_read_as_the_schema_defaults()
+    {
+        var sun = MapSunProperties.Extract(BinWith())!;
+        Assert.True(sun.FogEnabled);
+        Assert.Equal(new Vector2(0f, -2000f), sun.FogStartAndEnd);
+        Assert.Equal(new Vector4(0.2f, 0.2f, 0.4f, 1f), sun.FogColor);
+        Assert.Equal(1.9f, sun.FogEmissiveRemap);
+        Assert.Equal(0.02f, sun.FogLowQualityModeEmissiveRemap);
+    }
+
+    /// <summary>M759: fogEnabled is written as the schema declares it, a Bool, under Riot's hash.</summary>
+    [Fact]
+    public void FogEnabled_is_a_bool_under_its_own_hash()
+    {
+        var outBin = MapSunProperties.Write(BinWith(), new MapSunProperties { FogEnabled = false }, out _)!;
+        var tree = new BinTree(new MemoryStream(outBin, false));
+        var sun = tree.Objects.Values.SelectMany(o => o.Properties.Values)
+            .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
+            .OfType<BinTreeStruct>().Single(s => s.ClassHash == H("MapSunProperties"));
+        Assert.False(Assert.IsType<BinTreeBool>(sun.Properties[H("fogEnabled")]).Value);
+        Assert.False(MapSunProperties.Extract(outBin)!.FogEnabled);
+    }
+
+    /// <summary>M759: Riot's own Summoner's Rift sun blocks, through the reader - base_srx fogs the void
+    /// in two tones from ground level down to -19000; base turns the fog off.</summary>
+    [Fact]
+    public void Summoners_Rift_reads_as_it_ships()
+    {
+        const string wad = @"C:\Riot Games\League of Legends\Game\DATA\FINAL\Maps\Shipping\Map11.wad.client";
+        if (!File.Exists(wad)) return;
+        var db = new ReyEngine.Core.Hashing.HashSyncService().LoadLocal(_ => { });
+        using var archive = ReyEngine.Core.Wad.WadArchive.Open(wad, new ReyEngine.Core.Hashing.WadPathResolver(db));
+        MapSunProperties Sun(string path) => MapSunProperties.Extract(archive.Extract(
+            archive.Entries.Single(e => e.PathHash == ReyEngine.Core.Hashing.HashAlgorithms.WadPath(path))))!;
+
+        var srx = Sun("data/maps/mapgeometry/map11/base_srx.materials.bin");
+        Assert.True(srx.FogEnabled);
+        Assert.Equal(new Vector2(0f, -19000f), srx.FogStartAndEnd);
+        Assert.Equal(0.447f, srx.FogColor.X, 3);
+        Assert.Equal(0.302f, srx.FogAlternateColor.X, 3);
+        Assert.NotEqual(srx.FogColor, srx.FogAlternateColor);   // two tones, which M229 flattened to one
+
+        var plain = Sun("data/maps/mapgeometry/map11/base.materials.bin");
+        Assert.False(plain.FogEnabled);
+        Assert.Equal(Vector3.Zero, MapSunProperties.EnvFogConstants(plain, show: true).Color);
+    }
+
+    // ---------------------------------------------------------------- M759: the fog the shaders draw
+
+    [Theory]
+    [InlineData(100f, 0f)]       // above Start: clear
+    [InlineData(0f, 0f)]         // at Start: still clear
+    [InlineData(-19000f, 1f)]    // at End: complete
+    [InlineData(-30000f, 1f)]    // below End: complete
+    public void The_legacy_curve_is_clear_above_start_and_complete_at_end(float y, float expected) =>
+        Assert.Equal(expected, MapSunProperties.LegacyFogAmount(new Vector2(0f, -19000f), y), 3);
+
+    [Fact]
+    public void The_legacy_curve_rises_smoothly_between()
+    {
+        float a1 = MapSunProperties.LegacyFogAmount(new Vector2(0f, -19000f), -2000f);
+        float a2 = MapSunProperties.LegacyFogAmount(new Vector2(0f, -19000f), -9500f);
+        float a3 = MapSunProperties.LegacyFogAmount(new Vector2(0f, -19000f), -17000f);
+        Assert.True(0f < a1 && a1 < a2 && a2 < a3 && a3 < 1f, $"{a1} {a2} {a3}");
+    }
+
+    [Fact]
+    public void Fog_off_is_a_range_every_height_is_above()
+    {
+        foreach (var sun in new MapSunProperties?[] { null, new() { FogEnabled = false } })
+            foreach (bool show in new[] { true, false })
+            {
+                var (c, _, _) = MapSunProperties.EnvFogConstants(sun, show);
+                // what the shader computes: t = saturate((y - end) / (start - end)) must be 1 at any real height
+                foreach (float y in new[] { -100000f, 0f, 50000f })
+                    Assert.Equal(0f, MapSunProperties.LegacyFogAmount(new Vector2(c.X, c.Y), y), 5);
+            }
+    }
+
+    [Fact]
+    public void The_constants_carry_both_colours_and_the_emissive_remap()
+    {
+        var (c, color, alt) = MapSunProperties.EnvFogConstants(Authored with { FogEnabled = true }, show: true);
+        Assert.Equal(new Vector4(-10000f, -50000f, 0.75f, 1f), c);
+        Assert.Equal(new Vector3(0.2f, 0.3f, 0.4f), color);
+        Assert.Equal(new Vector3(0.302f, 0.427f, 0.369f), alt);
     }
 
     /// <summary>A bin with no sun component (mod bins) gets one created — the same append-by-class-hash
@@ -212,9 +321,9 @@ public class MapSunWriterTests
         var declared = typeof(MapSunProperties).GetProperties()
             .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
             .ToList();
-        // Fourteen today: M463's ten plus M467's four shadow fields. A new field must be added to Extract
-        // AND Write, not just to the record.
-        Assert.Equal(14, declared.Count);
+        // Eighteen today: M463's ten, M467's four shadow fields and M759's four fog fields. A new field must
+        // be added to Extract AND Write, not just to the record.
+        Assert.Equal(18, declared.Count);
         foreach (var p in declared)
             Assert.Equal(p.GetValue(Authored), p.GetValue(back));
     }

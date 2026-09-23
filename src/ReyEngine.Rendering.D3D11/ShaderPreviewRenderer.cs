@@ -63,10 +63,11 @@ public sealed class PreviewSettings
     public Vector3? MapSunDirection;
     public float? MapLightMapScale;
 
-    /// <summary>M229: the map's depth-fog colour and its RAW fogStartAndEnd, in Riot's own convention -
-    /// the shader consumes them unmodified, so they must NOT be normalised to (near, far) here.</summary>
-    public Vector4? MapFogColor;
-    public Vector2? MapFogStartEnd;
+    /// <summary>M759: the environment fog constants, as <see cref="ReyEngine.Formats.MapGeo.MapSunProperties.EnvFogConstants"/>
+    /// builds them from the map's sun: (start, end, emissive remap, 1), fogColor and fogAlternateColor. Null
+    /// draws no environment fog. One function feeds both viewports, so the toggle, the map's own fogEnabled
+    /// and the alternate colour cannot drift between them.</summary>
+    public (Vector4 StartEndScaleRemap, Vector3 Color, Vector3 AltColor)? EnvFog;
 
     /// <summary>
     /// M463: the whole authored sun record, for the two inputs that are not single constants -
@@ -4798,16 +4799,17 @@ float4 psmain(VOut i) : SV_Target
                     // Riot stores fogStartAndEnd negative and "reversed" (Twisted Treeline ships
                     // -10000, -50000). The shader consumes them raw, so they are passed through raw rather
                     // than through TryGetFogRange's (near, far) normalisation.
-                    "ENV_FOG_START_END_SCALE_EMISSIVE_REMAP" => s.MapFogStartEnd is { } fse
-                        ? new[] { fse.X, fse.Y, 1f, 1f }
-                        // No map fog: pick a range wide enough that t saturates to 1 everywhere, so the
-                        // factor is the uniform 0.135 minimum and there is no cliff. The stage cannot be
-                        // switched off from the constants - 0.135 is the floor of 1/exp2(smoothstep*2.885).
-                        : new[] { 1f, -1e9f, 1f, 1f },
-
-                    "ENV_FOG_COLOR" or "ENV_FOG_ALT_COLOR" => s.MapFogColor is { } fc
-                        ? new[] { fc.X, fc.Y, fc.Z, fc.W }
-                        : new[] { 0f, 0f, 0f, 1f },
+                    // M759: the whole curve was read for this milestone (defaultenv_flat ps blob 114,
+                    // mantis_env_baked_pbr ps blob 9). The legacy amount is
+                    //     max((1/exp2(smoothstep(t) * 2.88539) - 0.135335) * 1.156518, 0)
+                    // - the 0.135 the note above stopped at is subtracted and the rest rescaled, so the
+                    // amount runs 1..0 and a t of 1 everywhere IS "no fog". The fog colour is
+                    // lerp(ENV_FOG_COLOR, ENV_FOG_ALT_COLOR, amount): the ALT colour is the deep end, and
+                    // feeding it the main colour (as M229 did) flattened every map's two-tone fog to one.
+                    "ENV_FOG_START_END_SCALE_EMISSIVE_REMAP" => (s.EnvFog ?? ReyEngine.Formats.MapGeo.MapSunProperties.EnvFogConstants(null, false)).StartEndScaleRemap
+                        is var f ? new[] { f.X, f.Y, f.Z, f.W } : null,
+                    "ENV_FOG_COLOR" => s.EnvFog is { } fc ? new[] { fc.Color.X, fc.Color.Y, fc.Color.Z, 1f } : new[] { 0f, 0f, 0f, 1f },
+                    "ENV_FOG_ALT_COLOR" => s.EnvFog is { } fa ? new[] { fa.AltColor.X, fa.AltColor.Y, fa.AltColor.Z, 1f } : new[] { 0f, 0f, 0f, 1f },
 
                     // M395: the environment-transition crossfade. Riot's shader already does
                     //     lerp(GRASS_TINT_MAP, GRASS_TINT_MAP_ALTERNATE, GRASS_INTERP)

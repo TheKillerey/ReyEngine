@@ -626,12 +626,11 @@ public sealed class Dx11ViewportSurface : IDisposable
             // through is the whole of the transition here.
             GrassInterp = GrassInterp,
 
-            // RAW fogStartAndEnd, not TryGetFogRange's normalised (near, far). Riot ships these negative
-            // and reversed and the shader consumes them unmodified - the GL path normalises only because
-            // its fog is our own reimplementation. Normalising here would put the fog cliff in the wrong
-            // place rather than fail loudly.
-            MapFogColor = FogEnabled ? MapSun?.FogColor : null,
-            MapFogStartEnd = FogEnabled ? MapSun?.FogStartAndEnd : null,
+            // M759: the raw heights, both colours and the emissive remap, off the toggle AND the map's own
+            // fogEnabled - the same function the GL viewport's port reads.
+            EnvFog = FogEnabled && MapSun is { FogEnabled: true }
+                ? ReyEngine.Formats.MapGeo.MapSunProperties.EnvFogConstants(MapSun, true)
+                : null,
 
             // M452: the point-light overlay. Ungated here beyond the toggle - the renderer applies the
             // same clamps the GL setters do, so the two viewports see identical values.
