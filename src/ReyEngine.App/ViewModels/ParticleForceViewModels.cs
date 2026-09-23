@@ -62,6 +62,17 @@ public sealed partial class ParticleForceViewModel : ObservableObject
         OnPropertyChanged(nameof(IsSoloed));
     }
 
+    /// <summary>M753: the Move handle is on this force's Position. Only Drag, Noise and Attraction have one.</summary>
+    public bool IsGizmoTarget => _owner.IsGizmoTarget(Key);
+    public bool CanMove => IsPositional && _owner.IsEditable;
+    internal void NotifyGizmo() => OnPropertyChanged(nameof(IsGizmoTarget));
+
+    [RelayCommand]
+    private void Move()
+    {
+        if (IsPositional) _owner.ToggleGizmoTarget(Key);
+    }
+
     [RelayCommand]
     private void Remove() => _owner.EditForce(_card, e => e.RemoveForce(Force.Kind, Force.Index),
         $"Removed {Title} from '{_card.Name}'.", structural: true);

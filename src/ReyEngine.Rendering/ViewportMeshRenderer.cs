@@ -154,6 +154,8 @@ public sealed class ViewportMeshRenderer : IDisposable
     /// </summary>
     public bool IconsThroughWalls { get; set; }
     private int _rangeVerts;
+    private Vector4 _rangeColor = RangeRingGreen;   // M753: the particle preview draws its force shapes in its own colour
+    public static readonly Vector4 RangeRingGreen = new(0.40f, 0.95f, 0.55f, 1f);
 
     private bool _hasGizmo;
     private Vector3 _gizmoPivot;
@@ -3013,7 +3015,7 @@ void main(){
             _gl.UniformMatrix4(_lMvp, 1, false, in m.M11);
             _gl.Enable(EnableCap.DepthTest);
             _gl.BindVertexArray(_rangeVao);
-            _gl.Uniform4(_lColor, 0.40f, 0.95f, 0.55f, 1f);
+            _gl.Uniform4(_lColor, _rangeColor.X, _rangeColor.Y, _rangeColor.Z, _rangeColor.W);
             _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_rangeVerts);
             _gl.BindVertexArray(0);
         }
@@ -3285,6 +3287,10 @@ void main(){
         }
         return v;
     }
+
+    /// <summary>M753: the colour <see cref="SetRangeRingLines"/> is drawn in. The cast-range ring keeps its
+    /// green; the particle preview's force shapes would read as the gizmo's Y arm in that colour.</summary>
+    public void SetRangeRingColor(Vector4 color) => _rangeColor = color;
 
     public unsafe void SetRangeRingLines(float[]? verts)
     {

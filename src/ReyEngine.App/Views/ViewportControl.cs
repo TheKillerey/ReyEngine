@@ -371,6 +371,9 @@ public sealed class ViewportControl : OpenGlControlBase
     public float[]? BushCellLines { get => GetValue(BushCellLinesProperty); set => SetValue(BushCellLinesProperty, value); }
     public float[]? SelectedFaceLines { get => GetValue(SelectedFaceLinesProperty); set => SetValue(SelectedFaceLinesProperty, value); }
     public float[]? RangeRingLines { get => GetValue(RangeRingLinesProperty); set => SetValue(RangeRingLinesProperty, value); }   // M639
+    /// <summary>M753: the colour of <see cref="RangeRingLines"/>; null keeps the cast-range ring's green.
+    /// Set once by the host that reuses the channel, so a plain property.</summary>
+    public System.Numerics.Vector4? RangeRingTint { get; set; }
     public (int Start, int Count, System.Numerics.Vector4 Color)[]? BushCellLayers
     { get => GetValue(BushCellLayersProperty); set => SetValue(BushCellLayersProperty, value); }
     /// <summary>Decoded placed prop meshes to render at their transforms (M41); null clears them.</summary>
@@ -1031,6 +1034,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _meshRenderer.SetParticleMarkers(pts, SelectedParticlePosition, _markerSize);
             _meshRenderer.SetTargetDummy(TargetDummyPosition, 120f);   // M114: ~melee-minion sized cube
             _meshRenderer.SetRangeRingLines(RangeRingLines);           // M639: the cast-range ring
+            _meshRenderer.SetRangeRingColor(RangeRingTint ?? ViewportMeshRenderer.RangeRingGreen);   // M753
             _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize);
             _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.4f);
             _meshRenderer.SetSoundMarkers(SoundMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.2f);

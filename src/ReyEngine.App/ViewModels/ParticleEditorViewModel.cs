@@ -148,9 +148,11 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         _mutedForces.Clear();
         _soloedForces.Clear();
         OnPropertyChanged(nameof(AnyForceSoloed));
+        _gizmoTarget = null;   // M753: a handle belongs to one system too
+        OnPropertyChanged(nameof(GizmoTarget));
         Cards.Clear();
         SelectedProperty = null;
-        if (value is null) { Playback = null; return; }
+        if (value is null) { Playback = null; RefreshGizmo(); return; }
         Cards.Add(new ParticleEmitterCardViewModel(value.Entry, this));   // M188 (3.5): the system's own fields
         for (int i = 0; i < value.Entry.Emitters.Count; i++)
             Cards.Add(new ParticleEmitterCardViewModel(value.Entry.Emitters[i], this, i));
@@ -298,6 +300,12 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
                 _mutedForces.RemoveWhere(k => k.StartsWith(prefix, StringComparison.Ordinal));
                 _soloedForces.RemoveWhere(k => k.StartsWith(prefix, StringComparison.Ordinal));
                 OnPropertyChanged(nameof(AnyForceSoloed));
+                // M753: the same shift would leave a force handle on its neighbour; the emitter's own stays
+                if (_gizmoTarget is { } t && t.StartsWith(prefix, StringComparison.Ordinal) && t != EmitterKey(card.EmitterIndex))
+                {
+                    _gizmoTarget = null;
+                    OnPropertyChanged(nameof(GizmoTarget));
+                }
             }
             Cards[at] = new ParticleEmitterCardViewModel(Document.RebuildRows(emitter), this, card.EmitterIndex);
             SelectedProperty = null;
@@ -339,7 +347,15 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         return kept.IsEmpty ? null : kept;
     }
 
+    /// <summary>Every edit, switch and selection ends here, so the M753 handle and force shapes are
+    /// refreshed with the preview rather than by each caller.</summary>
     private void RebuildPlayback()
+    {
+        RebuildPlaybackCore();
+        RefreshGizmo();
+    }
+
+    private void RebuildPlaybackCore()
     {
         if (SelectedSystem is null) { Playback = null; return; }
         if (!_defs.TryGetValue(SelectedSystem.Entry.PathHash, out var def)) { Playback = null; return; }
@@ -446,8 +462,10 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(IsRigMissile));
         OnPropertyChanged(nameof(IsRigTrail));
         OnPropertyChanged(nameof(Rig));
+        OnPropertyChanged(nameof(RigIsStatic));
+        RefreshGizmo();   // M753: a moving rig has no handle
     }
-    partial void OnRigHeightChanged(double value) => OnPropertyChanged(nameof(Rig));
+    partial void OnRigHeightChanged(double value) { OnPropertyChanged(nameof(Rig)); RefreshGizmo(); }
     partial void OnRigSpeedChanged(double value) => OnPropertyChanged(nameof(Rig));
     partial void OnRoleLinkChanged(VfxSystemLink? value) => OnPropertyChanged(nameof(RoleIsAuthored));
     partial void OnRigReplayChanged(bool value) => OnPropertyChanged(nameof(Rig));
@@ -563,6 +581,18 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
     public bool HasForces => Forces.Count > 0;
     public bool ShowForces => Entry is not null;
     public string ForcesHeader => Forces.Count == 0 ? "FORCES" : $"FORCES ({Forces.Count})";
+
+    /// <summary>M753: the Move handle is on this emitter's own position.</summary>
+    public bool IsGizmoTarget => Entry is not null && _owner.IsGizmoTarget(ParticleEditorViewModel.EmitterKey(EmitterIndex));
+    public bool CanMove => Entry is not null && _owner.IsEditable;
+    internal void NotifyGizmo() => OnPropertyChanged(nameof(IsGizmoTarget));
+
+    [RelayCommand]
+    private void Move()
+    {
+        if (Entry is null) return;
+        _owner.ToggleGizmoTarget(ParticleEditorViewModel.EmitterKey(EmitterIndex));
+    }
 
     public static IReadOnlyList<ParticleForceKindChoice> ForceKinds { get; } = new[]
     {
