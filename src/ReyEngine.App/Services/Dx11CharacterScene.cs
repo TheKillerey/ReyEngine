@@ -61,6 +61,12 @@ public sealed class PreparedCharacterScene
     public MaterialDriverState DriverState { get; init; } = MaterialDriverState.Rest;
     public List<string> Failures { get; } = new();
     public string Report { get; set; } = "";
+
+    /// <summary>M763: Riot's five bloom blobs, loaded here in the CPU half exactly as the map scene loads
+    /// them (<see cref="Dx11SceneBuilder.LoadBloomShaders"/>). Until M763 the character window never set
+    /// them, so its renderer had no chain and a champion's glow (diffuse_bloom tails, fresnel rims) was
+    /// discarded. Null switches the chain off.</summary>
+    public byte[]?[]? BloomShaders { get; set; }
 }
 
 /// <summary>
@@ -218,6 +224,7 @@ public static class Dx11CharacterScene
         sb.AppendLine($"{scene.Slices.Count} slice(s) resolved, {scene.Textures.Count} texture(s) decoded"
                       + (scene.Failures.Count > 0 ? $", {scene.Failures.Count} problem(s)" : ""));
         scene.Report = sb.ToString();
+        scene.BloomShaders = Dx11SceneBuilder.LoadBloomShaders(cache);   // M763
         return scene;
     }
 
@@ -248,6 +255,12 @@ public static class Dx11CharacterScene
         renderer.ClearMaterials();
         renderer.SetMesh(scene.Mesh);
         CommitSlices(renderer, scene);
+
+        // M763: the bloom chain, on the map scene's all-or-nothing contract
+        if (scene.BloomShaders is { } bs && bs.Length == 5)
+            renderer.SetBloomShaders(bs[0], bs[1], bs[2], bs[3], bs[4]);
+        else
+            renderer.SetBloomShaders(null, null, null, null, null);
 
         // The RENDERER's count, not the local one. Returning what this method built rather than what the
         // renderer holds is what let the bug hide: the window logged "after commit: 0 material(s)" and,

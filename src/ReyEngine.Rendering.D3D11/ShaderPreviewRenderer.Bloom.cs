@@ -382,16 +382,22 @@ public sealed unsafe partial class ShaderPreviewRenderer
         // same-size copy M282 already allocates for heat haze; every distortion draw finished long ago.
         _ctx.CopyResource(_sceneCopy, _rt);
 
-        var srvs = stackalloc ID3D11ShaderResourceView*[2];
-        srvs[0] = _sceneCopySrv; srvs[1] = _bloomMipSrv[1];
-        _ctx.PSSetShaderResources(0, 2, srvs);
-
         // No depth-stencil view: this pass tests nothing and writes nothing to depth, and leaving the DSV
         // bound while the editor furniture is about to want it changes nothing except what a debug layer
         // has to reason about.
+        //
+        // M763: the target is switched BEFORE the inputs are bound. The last blur pass leaves level 1 bound
+        // as the render target, and D3D11 refuses an SRV of a resource that is still bound for output - it
+        // silently binds NULL instead. From M460 until M763, BLOOM_TEXTURE therefore read black, the screen
+        // blend returned the scene unchanged, and the frame was byte-identical with bloom on or off while
+        // BloomPasses still counted 12. Measured: Ahri moves 0 px before this order and 64,095 px after.
         var target = stackalloc ID3D11RenderTargetView*[1];
         target[0] = _rtv;
         _ctx.OMSetRenderTargets(1, target, (ID3D11DepthStencilView*)null);
+
+        var srvs = stackalloc ID3D11ShaderResourceView*[2];
+        srvs[0] = _sceneCopySrv; srvs[1] = _bloomMipSrv[1];
+        _ctx.PSSetShaderResources(0, 2, srvs);
         var full = new Viewport(0, 0, _width, _height, 0, 1);
         _ctx.RSSetViewports(1, in full);
         _ctx.PSSetShader(_bloomCompositePs, null, 0);

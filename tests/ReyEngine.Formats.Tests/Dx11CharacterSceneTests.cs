@@ -463,6 +463,49 @@ public sealed class Dx11CharacterSceneTests
         Assert.Contains("GameReferenceLibrary.FindFinalDirectory", body);
     }
 
+    // ===================================================== bloom (M763)
+
+    [Fact]
+    public void AChampionsGlowReachesTheFrame()
+    {
+        // M763: two defects hid this. The character window never loaded the bloom chain, and the chain's
+        // composite bound its input while that texture was still the render target, so D3D11 bound NULL and
+        // the screen blend returned the scene unchanged. BloomPasses counted 12 throughout; only a pixel
+        // comparison can tell a chain that runs from one that shows.
+        if (Ahri() is not { } f) return;
+        using (f)
+        {
+            var scene = Prepare(f, Dx11CharacterScene.DefaultCharacterShader);
+            if (scene is null || scene.Slices.Count == 0) return;
+            Assert.NotNull(scene.BloomShaders);   // loaded with the scene, as the map path does
+
+            using var renderer = new Rendering.D3D11.ShaderPreviewRenderer();
+            if (!renderer.Initialize(out _)) return;   // no D3D11 here
+            Dx11CharacterScene.Commit(renderer, scene, "");
+
+            var mesh = Formats.Meshes.SkinnedMeshDecoder.Decode(f.Skn);
+            var centre = (mesh.BoundsMin + mesh.BoundsMax) * 0.5f;
+            float radius = (mesh.BoundsMax - mesh.BoundsMin).Length() * 0.5f;
+            var eye = centre + new System.Numerics.Vector3(0f, radius * 0.1f, -radius * 1.4f);   // from behind: the tails
+            byte[]? Frame(bool bloom) => renderer.RenderFrame(256, 256, new Rendering.D3D11.PreviewSettings
+            {
+                SuppliedView = System.Numerics.Matrix4x4.CreateLookAt(eye, centre, System.Numerics.Vector3.UnitY),
+                SuppliedProjection = System.Numerics.Matrix4x4.CreatePerspectiveFieldOfView(0.9f, 1f, radius * 0.02f, radius * 40f),
+                SuppliedCameraPosition = eye,
+                AlphaBlend = true, DepthTest = true, MirrorX = true, TransposeMatrices = true,
+                CullBackFaces = true, SortByPipeline = true, Shadows = false, Bloom = bloom, TimeSeconds = 1f,
+            }, out _)?.ToArray();   // RenderFrame reuses its buffer
+
+            var off = Frame(false);
+            var on = Frame(true);
+            if (off is null || on is null) return;
+            Assert.True(renderer.BloomPasses > 0, "the bloom chain did not run: " + string.Join(" | ", renderer.Diagnostics.TakeLast(6)));
+            int changed = 0;
+            for (int i = 0; i < on.Length; i++) if (on[i] != off[i]) changed++;
+            Assert.True(changed > 1000, $"bloom on changed {changed} byte(s) - the glow never reached the frame");
+        }
+    }
+
     // ===================================================== Commit, the seam everything stopped at
 
     [Fact]
