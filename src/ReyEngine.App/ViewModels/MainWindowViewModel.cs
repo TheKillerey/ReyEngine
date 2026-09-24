@@ -10929,16 +10929,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
             }
 
-            // 3) Blender-style pending deletion: remove only the selected mesh records. Their buffers stay
-            // in the file unreferenced so no surviving mesh ID has to be rewritten; bucket grids are then
+            // 3) Blender-style pending deletion: remove the selected mesh records and (M768) the buffers only
+            // they used - LTK Manager refuses a mapgeo with an unreferenced vertex buffer. Bucket grids are then
             // rebuilt from the remaining environment meshes.
             if (removedIndices.Count > 0)
             {
-                var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError);
+                var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError, ExtendedChannelMaterialsFor(entry.Path));
                 if (stripped is null) { _log.Error("MapGeo", $"Could not remove selected meshes: {removeError}"); return; }
                 var remainingMap = await Task.Run(() => MapGeoDecoder.Decode(stripped));
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
             }
+
+            // M768: whatever produced them, no save writes buffers no mesh references.
+            bytes = Formats.MapGeo.MapGeoBinary.CompactOrphans(bytes, ExtendedChannelMaterialsFor(entry.Path), out int orphanVb, out int orphanIb);
+            if (orphanVb + orphanIb > 0)
+                _log.Info("MapGeo", $"Dropped {orphanVb} vertex and {orphanIb} index buffer(s) no mesh uses.");
 
             // M417: same rule as the bin editor and placements - the project FILE wins when the project
             // ships this mapgeo, or the build discards the edit and the mod exports unchanged.
@@ -16848,6 +16853,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 files++;
             }
         }
+
+        // M768: no built map may carry vertex buffers no mesh uses - LTK Manager's loader refuses the whole
+        // mapgeo. The STAGED copy is compacted, so a project file saved before M768 still builds clean.
+        foreach (var (_, dir) in stagedFolders)
+            foreach (var geoPath in Directory.EnumerateFiles(dir, "*.mapgeo", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    var geo = File.ReadAllBytes(geoPath);
+                    string assetPath = Path.GetRelativePath(dir, geoPath).Replace('\\', '/');
+                    var clean = Formats.MapGeo.MapGeoBinary.CompactOrphans(geo, ExtendedChannelMaterialsFor(assetPath), out int vb, out int ib);
+                    if (ReferenceEquals(clean, geo)) continue;
+                    File.WriteAllBytes(geoPath, clean);
+                    _log.Warn("Build", $"{assetPath}: dropped {vb} vertex and {ib} index buffer(s) no mesh uses "
+                        + "(LTK Manager refuses a mapgeo that has them). The built copy is clean; the project file "
+                        + "still carries them until the map is next saved.");
+                }
+                catch (Exception ex) { _log.Warn("Build", $"Could not check {Path.GetFileName(geoPath)} for unused buffers: {ex.Message}"); }
+            }
 
         // Pack each staged folder into a distributable .wad.client.
         int packed = 0;

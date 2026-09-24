@@ -332,14 +332,18 @@ public sealed class MapGeoBinary
         }
 
         // A mesh resolves buffer i through declarations[base + i], so a declaration run must stay
-        // CONTIGUOUS. Keep whole runs, and remap each mesh's base to where its run lands.
+        // CONTIGUOUS. Keep whole runs, and remap each mesh's base to where its run lands. M768: a run is as
+        // long as the LONGEST stream list among the meshes sharing its base - keying on the first mesh alone
+        // dropped the extra declarations of a later mesh with more streams.
+        var runLength = new Dictionary<int, int>();
+        foreach (var m in Meshes)
+            runLength[m.VertexDeclarationBase] = Math.Max(runLength.GetValueOrDefault(m.VertexDeclarationBase), m.VertexBufferIds.Count);
         var declKeep = new List<int>();
         var declNewBase = new Dictionary<int, int>();
-        foreach (var m in Meshes.OrderBy(m => m.VertexDeclarationBase))
+        foreach (var (declBase, length) in runLength.OrderBy(kv => kv.Key))
         {
-            if (declNewBase.ContainsKey(m.VertexDeclarationBase)) continue;
-            declNewBase[m.VertexDeclarationBase] = declKeep.Count;
-            for (int i = 0; i < m.VertexBufferIds.Count; i++) declKeep.Add(m.VertexDeclarationBase + i);
+            declNewBase[declBase] = declKeep.Count;
+            for (int i = 0; i < length; i++) declKeep.Add(declBase + i);
         }
 
         var vbKeep = usedVb.OrderBy(i => i).ToList();
@@ -361,6 +365,34 @@ public sealed class MapGeoBinary
         VertexBuffers = newVb;
         IndexBuffers = newIb;
         Declarations = newDecl;
+    }
+
+    /// <summary>
+    /// M768: <paramref name="data"/> without the vertex/index buffers and declarations no mesh references -
+    /// or <paramref name="data"/> itself when there are none, or when the file cannot be re-read exactly.
+    ///
+    /// <para>LTK Manager's loader (ltk_mapgeo, read/mod.rs) refuses any mapgeo with a vertex buffer no mesh
+    /// uses ("Vertex buffer N is not referenced by any mesh"), and none of the 200 readable mapgeos Riot ships
+    /// has one. ReyEngine's mesh delete used to leave them behind on purpose; every map save and Build Package
+    /// now run this.</para>
+    /// </summary>
+    public static byte[] CompactOrphans(byte[] data, IReadOnlySet<string>? extendedChannelMaterials,
+        out int droppedVertexBuffers, out int droppedIndexBuffers)
+    {
+        droppedVertexBuffers = droppedIndexBuffers = 0;
+        if (!TryReadEditable(data, out var map, extendedChannelMaterials)) return data;
+        int vb = map.VertexBuffers.Count, ib = map.IndexBuffers.Count, decl = map.Declarations.Count;
+        map.Compact();
+        droppedVertexBuffers = vb - map.VertexBuffers.Count;
+        droppedIndexBuffers = ib - map.IndexBuffers.Count;
+        return droppedVertexBuffers == 0 && droppedIndexBuffers == 0 && decl == map.Declarations.Count ? data : map.Write();
+    }
+
+    /// <summary>M768: vertex buffers no mesh references - what LTK Manager's loader rejects.</summary>
+    public IReadOnlyList<int> UnreferencedVertexBuffers()
+    {
+        var used = Meshes.SelectMany(m => m.VertexBufferIds).ToHashSet();
+        return Enumerable.Range(0, VertexBuffers.Count).Where(i => !used.Contains(i)).ToList();
     }
 
     // ---- read ----
