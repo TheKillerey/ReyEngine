@@ -205,7 +205,7 @@ public sealed class ChampionSpellDataTests
 
         var w = aatrox[1];
         Assert.Equal(825f, w.CastRange, 3);
-        Assert.Equal(20f, w.Cooldown, 3);
+        Assert.Equal(18f, w.Cooldown, 3);   // 20 until the 2026-09-24 patch
         Assert.False(w.IsUnboundedRange);
 
         var e = aatrox[2];
