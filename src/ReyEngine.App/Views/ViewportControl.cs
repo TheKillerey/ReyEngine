@@ -794,19 +794,36 @@ public sealed class ViewportControl : OpenGlControlBase
     /// instead removes the question at both ends and is what every other editor does with a handle.</para>
     ///
     /// <para>Measured against <c>_lastViewProj</c> - the same MIRRORED matrix the hit test projects
-    /// through - so the drawn arm and the aimed-at arm cannot drift. The mirror is about X and the
-    /// measurement is vertical, so the camera's own up vector is the right probe direction. Falls back to
+    /// through - so the drawn arm and the aimed-at arm cannot drift. The probe is the camera's up in WORLD
+    /// space, i.e. mirrored (M767 - see the static overload). Falls back to
     /// the old distance rule before the first frame has cached its matrices.</para>
     /// </summary>
     private float GizmoArmLength(Vector3 pivot)
     {
         if (_lastViewportH > 0)
         {
-            float world = ReyEngine.Core.Rendering.ScreenSize.WorldSizeForPixels(
-                pivot, _camera.Up, GizmoArmPixels, _lastViewProj, (float)_lastViewportH);
+            float world = GizmoArmLength(pivot, _camera.Up, _lastViewProj, (float)_lastViewportH);
             if (world > 0f) return world;
         }
         return Math.Clamp(Vector3.Distance(_camera.Position, pivot) * 0.15f, 10f, 5000f);
+    }
+
+    /// <summary>
+    /// M767: the world length that draws <see cref="GizmoArmPixels"/> tall at <paramref name="pivot"/>.
+    ///
+    /// <para>The probe has to be the camera's up IN WORLD SPACE. The orbit camera lives in the mirrored space
+    /// (the map views draw world * Scale(-1,1,1) * view), so its world up is its own up with X negated. Until
+    /// M767 the camera's own up was projected through the mirrored matrix instead. Its screen height is then
+    /// 1 - 2*ux^2 of the true one, so as soon as the camera tilted (up leans toward where it looks) and faced
+    /// along X, the measure fell toward zero and the arm grew without bound - the gizmo "getting bigger when
+    /// I move my camera". The old comment reasoned that the mirror is about X and the probe vertical; a
+    /// tilted camera's up is not vertical.</para>
+    /// </summary>
+    public static float GizmoArmLength(Vector3 pivot, Vector3 cameraUp, Matrix4x4 mirroredViewProj, float viewportHeightPx)
+    {
+        var worldUp = new Vector3(-cameraUp.X, cameraUp.Y, cameraUp.Z);
+        return ReyEngine.Core.Rendering.ScreenSize.WorldSizeForPixels(
+            pivot, worldUp, GizmoArmPixels, mirroredViewProj, viewportHeightPx);
     }
 
     /// <summary>M658: how long a gizmo arm is on screen, in pixels, at any camera distance. Roughly a

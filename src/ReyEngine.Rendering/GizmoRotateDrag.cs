@@ -73,6 +73,60 @@ public static class GizmoRotateDrag
         return Vector2.Normalize(tangent);
     }
 
+    /// <summary>How nearly edge-on a ring may be seen (|cos| between the pick ray and the ring's axis) before
+    /// its plane stops being a usable target and the drag falls back to <see cref="ScreenTangent"/>.</summary>
+    public const float EdgeOnCos = 0.15f;
+
+    /// <summary>
+    /// M767: where the pick ray crosses the ring's plane, as an angle (radians) about <paramref name="axis"/>
+    /// in the ring's own basis - increasing in the direction a POSITIVE rotation turns. False when the ray
+    /// runs along the plane or meets it behind the camera.
+    ///
+    /// <para>This is the rotate mapping from M767 on. M764 counted only the drag component along the ring's
+    /// screen tangent at the press point, frozen for the drag: a drag across a ring's end rotated 0.2-1.7
+    /// degrees for 60 px, and following the ring round went up to +55 degrees and back to 0 at the half turn
+    /// (measured by the M767 debugger pass on a real Map453 mesh). Accumulating this angle between frames
+    /// keeps the grabbed point under the cursor for any number of turns; the pick ray already carries the
+    /// viewport's X mirror, so no special case is needed for it.</para>
+    /// </summary>
+    public static bool RingAngle(Vector3 rayOrigin, Vector3 rayDir, Vector3 pivot, Vector3 axis, out float angle)
+    {
+        angle = 0f;
+        if (axis.LengthSquared() < 1e-12f || rayDir.LengthSquared() < 1e-12f) return false;
+        var n = Vector3.Normalize(axis);
+        var d = Vector3.Normalize(rayDir);
+        float denom = Vector3.Dot(d, n);
+        if (MathF.Abs(denom) < 1e-4f) return false;
+        float t = Vector3.Dot(pivot - rayOrigin, n) / denom;
+        if (t <= 0f) return false;
+        var v = rayOrigin + d * t - pivot;
+        if (v.LengthSquared() < 1e-8f) return false;
+        var u = Vector3.Normalize(MathF.Abs(n.Y) < 0.99f ? Vector3.Cross(n, Vector3.UnitY) : Vector3.Cross(n, Vector3.UnitX));
+        var w = Vector3.Cross(n, u);   // u -> w is the direction +angle turns (cross(axis, g) at g = u)
+        angle = MathF.Atan2(Vector3.Dot(v, w), Vector3.Dot(v, u));
+        return true;
+    }
+
+    /// <summary>True when the ring is seen too nearly edge-on for <see cref="RingAngle"/> to be usable.</summary>
+    public static bool IsEdgeOn(Vector3 rayDir, Vector3 axis) =>
+        axis.LengthSquared() < 1e-12f || rayDir.LengthSquared() < 1e-12f
+        || MathF.Abs(Vector3.Dot(Vector3.Normalize(rayDir), Vector3.Normalize(axis))) < EdgeOnCos;
+
+    /// <summary>The change from <paramref name="previous"/> to <paramref name="current"/> (radians), taken the
+    /// short way round - what one frame of a ring drag adds.
+    ///
+    /// <para>The short way is always the right way between two mouse events, however fast: the cursor's straight
+    /// screen segment maps to a straight line in the ring's plane (projection keeps lines straight), and a
+    /// straight line that misses the pivot sweeps less than 180 degrees around it. Checked in review (M767)
+    /// against the same paths drawn a quarter pixel at a time; no sub-sampling is needed.</para></summary>
+    public static float AngleStep(float previous, float current)
+    {
+        float d = current - previous;
+        while (d > MathF.PI) d -= MathF.Tau;
+        while (d < -MathF.PI) d += MathF.Tau;
+        return d;
+    }
+
     /// <summary>The rotation for a drag of <paramref name="drag"/> pixels since the press: along the ring's
     /// screen tangent when there is one, horizontally otherwise (the pre-M764 mapping).</summary>
     public static float Degrees(Vector2 drag, Vector2? tangent) =>

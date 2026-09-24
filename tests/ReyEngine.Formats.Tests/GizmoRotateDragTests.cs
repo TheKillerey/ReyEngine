@@ -101,4 +101,112 @@ public sealed class GizmoRotateDragTests
         Assert.Null(GizmoRotateDrag.ScreenTangent(Vector3.Zero, Vector3.UnitY, 100f, Vector2.Zero, new Matrix4x4(), W, H));
         Assert.Equal(5f, GizmoRotateDrag.Degrees(new Vector2(10f, 40f), null));
     }
+
+    // ---------------------------------------------------------------- M767: the angle swept in the ring's plane
+
+    /// <summary>Follow the drawn ring round with the cursor, casting the real pick ray through the mirrored
+    /// matrix each step as the drag does, and return the total accumulated turn (degrees) - or null when the
+    /// ring is edge-on from this camera (the drag then uses the tangent fallback).</summary>
+    private static float? FollowRing(float yaw, float pitch, Vector3 axis, float followDegrees)
+    {
+        var cam = new OrbitCamera { Target = Vector3.Zero, Distance = 1000f, Yaw = yaw, Pitch = pitch };
+        var vp = Matrix4x4.CreateScale(-1f, 1f, 1f) * cam.ViewProjectionGl(W / H);
+        var eye = new Vector3(-cam.Position.X, cam.Position.Y, cam.Position.Z);
+        var u = Vector3.Normalize(MathF.Abs(axis.Y) < 0.99f ? Vector3.Cross(axis, Vector3.UnitY) : Vector3.Cross(axis, Vector3.UnitX));
+        var w = Vector3.Cross(axis, u);
+        // grab the front of the ring
+        Vector3 g = u * 100f; float best = float.MaxValue;
+        for (int i = 0; i < 360; i++)
+        {
+            var q = (u * MathF.Cos(i * D2R) + w * MathF.Sin(i * D2R)) * 100f;
+            float dist = Vector3.Distance(q, eye);
+            if (dist < best) { best = dist; g = q; }
+        }
+        bool Ray(Vector3 world, out Vector3 o, out Vector3 d)
+        {
+            o = d = default;
+            return ViewportPicking.ProjectToScreen(world, vp, W, H, out var s)
+                && ViewportPicking.TryGetRay(s, vp, W, H, out o, out d);
+        }
+        if (!Ray(g, out var o0, out var d0) || GizmoRotateDrag.IsEdgeOn(d0, axis)) return null;
+        Assert.True(GizmoRotateDrag.RingAngle(o0, d0, Vector3.Zero, axis, out float prev));
+        float turned = 0f;
+        for (float phi = 5f; phi <= followDegrees + 1e-3f; phi += 5f)
+        {
+            // where the grabbed point is after a POSITIVE turn of phi - the path the cursor follows
+            var at = Vector3.Transform(g, Matrix4x4.CreateFromAxisAngle(axis, phi * D2R));
+            if (!Ray(at, out var o, out var d) || !GizmoRotateDrag.RingAngle(o, d, Vector3.Zero, axis, out float now)) continue;
+            turned += GizmoRotateDrag.AngleStep(prev, now);
+            prev = now;
+        }
+        return turned / D2R;
+    }
+
+    [Theory]
+    [MemberData(nameof(Cameras))]
+    public void Following_the_ring_turns_by_exactly_the_angle_followed(float yaw, float pitch)
+    {
+        int measured = 0;
+        foreach (var axis in new[] { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ })
+            foreach (float follow in new[] { 45f, 90f, 180f, 270f, 360f, 720f })
+            {
+                if (FollowRing(yaw, pitch, axis, follow) is not { } turned) continue;   // edge-on: the fallback's job
+                measured++;
+                // M764's tangent mapping peaked near +55 and returned to 0 at a half turn; this must track exactly
+                Assert.True(MathF.Abs(turned - follow) < 2f, $"axis {axis}, followed {follow}: turned {turned:0.0}");
+            }
+        Assert.True(measured > 0, "every ring was edge-on from this camera, so nothing was measured");
+    }
+
+    [Fact]
+    public void A_ring_seen_edge_on_uses_the_tangent_fallback()
+    {
+        // looking straight along the ring's plane: no usable intersection, so the drag must not use it
+        Assert.True(GizmoRotateDrag.IsEdgeOn(new Vector3(1f, 0f, 0f), Vector3.UnitY));
+        Assert.False(GizmoRotateDrag.IsEdgeOn(new Vector3(0f, -1f, 0.2f), Vector3.UnitY));
+        Assert.Equal(MathF.PI / 2f, GizmoRotateDrag.AngleStep(3f * MathF.PI / 4f, -3f * MathF.PI / 4f), 4);   // 135 -> -135 is +90 the short way
+    }
+
+    [Theory]
+    [InlineData(0.2f, 200f, 0f)]      // a low camera: the Y ring seen steeply, |cos| ~ 0.2, just above the edge-on cut
+    [InlineData(0.2f, 0f, 120f)]
+    [InlineData(0.25f, 350f, 60f)]
+    [InlineData(0.7f, -300f, 40f)]
+    [InlineData(0.6f, float.NaN, 12f)]   // flicked past the pivot to the far side: the fastest sweep there is
+    [InlineData(1.2f, float.NaN, -12f)]
+    public void A_fast_straight_drag_sweeps_what_a_slow_one_does(float pitch, float dx, float dy)
+    {
+        // raised in review: could one mouse event move the plane angle past 180 degrees on a steeply-seen ring,
+        // so the short-way step reads it backwards? A straight screen segment is a straight line in the plane,
+        // which sweeps under 180 degrees about the pivot - so no. Pinned: ONE event carrying the whole path gives
+        // what the same path drawn a quarter pixel at a time gives.
+        var cam = new OrbitCamera { Target = Vector3.Zero, Distance = 1000f, Yaw = 0.4f, Pitch = pitch };
+        var vp = Matrix4x4.CreateScale(-1f, 1f, 1f) * cam.ViewProjectionGl(W / H);
+        (Vector3 Origin, Vector3 Dir)? Ray(Vector2 q) =>
+            ViewportPicking.TryGetRay(q, vp, W, H, out var o, out var d) ? (o, d) : null;
+        var axis = Vector3.UnitY;
+        var eye = new Vector3(-cam.Position.X, cam.Position.Y, cam.Position.Z);
+        var grab = Vector3.Normalize(new Vector3(eye.X, 0f, eye.Z)) * 100f;   // the front of the ring
+        Assert.True(ViewportPicking.ProjectToScreen(grab, vp, W, H, out var press));
+        var r0 = Ray(press)!.Value;
+        Assert.False(GizmoRotateDrag.IsEdgeOn(r0.Dir, axis), "the press must be on the plane path for this test");
+        Assert.True(GizmoRotateDrag.RingAngle(r0.Origin, r0.Dir, Vector3.Zero, axis, out float start));
+        Assert.True(ViewportPicking.ProjectToScreen(Vector3.Zero, vp, W, H, out var pivotOnScreen));
+        var across = pivotOnScreen - press;
+        var end = float.IsNaN(dx)
+            ? pivotOnScreen + across + Vector2.Normalize(new Vector2(-across.Y, across.X)) * dy   // past the pivot, dy to one side
+            : press + new Vector2(dx, dy);
+
+        var r1 = Ray(end)!.Value;
+        Assert.True(GizmoRotateDrag.RingAngle(r1.Origin, r1.Dir, Vector3.Zero, axis, out float last));
+        float swept = GizmoRotateDrag.AngleStep(start, last);   // one event, as the drag does it
+
+        float slow = start, truth = 0f;
+        int n = (int)(Vector2.Distance(press, end) * 4f);
+        for (int k = 1; k <= n; k++)
+            if (Ray(Vector2.Lerp(press, end, k / (float)n)) is { } r && GizmoRotateDrag.RingAngle(r.Origin, r.Dir, Vector3.Zero, axis, out float a))
+            { truth += GizmoRotateDrag.AngleStep(slow, a); slow = a; }
+
+        Assert.True(MathF.Abs(swept - truth) / D2R < 1f, $"swept {swept / D2R:0.0} deg, the path itself {truth / D2R:0.0}");
+    }
 }

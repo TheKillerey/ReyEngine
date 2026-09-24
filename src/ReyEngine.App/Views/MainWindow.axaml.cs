@@ -99,6 +99,9 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     private Vector2? _rotateScreenTangent; // M764: the ring's on-screen direction at the grab, for Rotate
     private Vector3 _rotateWorldAxis;      // M766: the ring's world direction, frozen at the press
     private Vector3 _rotateLastDegrees;    // M766: last frame's angles, keeping a long drag continuous
+    private bool _rotateOnPlane;           // M767: the drag reads the ray's angle in the ring's plane
+    private float _rotatePlaneAngle;       // M767: that angle last frame (radians)
+    private float _rotateTurned;           // M767: total turn so far (radians), accumulated frame by frame
 
     // Click-to-select: a press+release with almost no movement is a pick, not a camera drag.
     private Point _pressPos;
@@ -391,6 +394,12 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         // SyncPickMatrices refreshes below - but nothing DREW it, so there was nothing to see or aim at.
         // Built from ViewportMeshRenderer's own builder, at the arm length Viewport.HitTestGizmoAxis
         // measures against, so what is drawn and what is grabbable are the same geometry by construction.
+        // M263: the GL control is hidden and not rendering, so nothing else refreshes the matrices that
+        // mesh picking raycasts against. Same size the GL path caches - logical bounds, not pixels.
+        // M500: and the SAME rect the image is stretched over, so what is drawn and what is picked agree.
+        // M767: refreshed HERE, before the gizmo is built - the arm is sized from these matrices, and while
+        // the refresh sat after the render the gizmo lagged a frame behind every camera move.
+        Viewport.SyncPickMatrices(surface.Width, surface.Height);
         if (vm.GizmoPivot is { } gizmoPivot)
         {
             var axes = vm.GizmoAxes;
@@ -464,10 +473,6 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         Dx11Surface.Width = surface.Width;
         Dx11Surface.Height = surface.Height;
 
-        // M263: the GL control is hidden and not rendering, so nothing else refreshes the matrices that
-        // mesh picking raycasts against. Same size the GL path caches - logical bounds, not pixels.
-        // M500: and the SAME rect the image is stretched over, so what is drawn and what is picked agree.
-        Viewport.SyncPickMatrices(surface.Width, surface.Height);
         // M263: the toolbar shows the frame cost and nothing else.
         // M694: and where the CPU part of it went - the prop poses and the particle step - plus how many
         // systems are still warming up after a camera move
@@ -1213,6 +1218,14 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                         new Vector2((float)pt.Position.X, (float)pt.Position.Y), pickVp, pickW, pickH)
                     : null;
                 _rotateWorldAxis = Viewport.AxisDir(a);   // M766: Local axes turn during the drag; the drag must not
+                // M767: the angle the pick ray sweeps in the ring's plane - the grabbed point stays under the
+                // cursor, whole turns work. A ring seen nearly edge-on has no usable plane; it keeps M764's
+                // tangent mapping for the whole drag.
+                _rotateTurned = 0f;
+                _rotateOnPlane = vm.TransformMode == 1
+                    && Viewport.TryGetPickRay(pt.Position, out var rotRayO, out var rotRayD)
+                    && !ReyEngine.Rendering.GizmoRotateDrag.IsEdgeOn(rotRayD, _rotateWorldAxis)
+                    && ReyEngine.Rendering.GizmoRotateDrag.RingAngle(rotRayO, rotRayD, pivot, _rotateWorldAxis, out _rotatePlaneAngle);
                 // M567: faces first. In face mode the gizmo belongs to the face selection, and a mesh may
                 // well still be selected underneath - falling through would drag the whole object.
                 if (vm.FaceEditMode && vm.HasFaceGizmoTarget)
@@ -1284,8 +1297,21 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                 case 1: // ROTATE — drag along the grabbed ring → degrees about this axis (M764)
                 {
                     if (_gizmoTargetIsFaces) break;   // faces only move; the start rotation here is a leftover
-                    float deg = gvm.ApplyRotateSnap(ReyEngine.Rendering.GizmoRotateDrag.Degrees(
-                        new Vector2((float)(p.X - _pressPos.X), (float)(p.Y - _pressPos.Y)), _rotateScreenTangent));
+                    float raw;
+                    if (_rotateOnPlane)
+                    {
+                        // M767: add this frame's step in the ring's plane, the short way round
+                        if (Viewport.TryGetPickRay(p, out var ro, out var rd)
+                            && ReyEngine.Rendering.GizmoRotateDrag.RingAngle(ro, rd, _gizmoDragOrigin, _rotateWorldAxis, out var now))
+                        {
+                            _rotateTurned += ReyEngine.Rendering.GizmoRotateDrag.AngleStep(_rotatePlaneAngle, now);
+                            _rotatePlaneAngle = now;
+                        }
+                        raw = _rotateTurned * (180f / MathF.PI);
+                    }
+                    else raw = ReyEngine.Rendering.GizmoRotateDrag.Degrees(
+                        new Vector2((float)(p.X - _pressPos.X), (float)(p.Y - _pressPos.Y)), _rotateScreenTangent);
+                    float deg = gvm.ApplyRotateSnap(raw);
                     // M766: about exactly the ring's world direction, not "add to one Euler angle"
                     var rot = gvm.GizmoRotationAfter(_gizmoStartRotation, _rotateWorldAxis, deg, _rotateLastDegrees);
                     _rotateLastDegrees = rot;
