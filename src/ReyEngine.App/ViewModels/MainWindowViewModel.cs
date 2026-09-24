@@ -1361,6 +1361,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedParticleTreeItem is not null) SelectedParticleTreeItem = null;
         if (SelectedParticleNode is not null) SelectedParticleNode = null;   // M76: viewport picks bypass the tree item
         if (SelectedSound is not null) SelectedSound = null;   // M56
+        if (SelectedAddedMesh is not null) SelectedAddedMesh = null;   // M766: or a rotate drag reads one and writes the other
         SelectedParticleMarker = p.Position;   // M55b: highlight only — camera stays (use Focus)
         GizmoPivot = p.CurrentPosition;        // M699: the gizmo drives props too
         SelectedPlaceableInfo = $"{p.Name}\n{p.Info}\n({p.Position.X:0}, {p.Position.Y:0}, {p.Position.Z:0})";
@@ -1757,8 +1758,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// "offset" and DragSelectedPlacementTo writes start+delta straight back as the new position.</summary>
     public (System.Numerics.Vector3 Offset, System.Numerics.Vector3 Rotation, System.Numerics.Vector3 Scale) PlacementDragStart =>
         SelectedParticleNode is { } p ? (p.Offset, p.RotationDegrees, p.Scale)
-        : SelectedPropNode is { } r ? (r.Offset, r.RotationDegrees, r.Scale)   // M699
         : SelectedAddedMesh is { } a ? (a.Offset, a.RotationDegrees, a.Scale)
+        : SelectedPropNode is { } r ? (r.Offset, r.RotationDegrees, r.Scale)   // M699 (M766: after added meshes, as the write-back)
         : SelectedLight is { } l ? (l.Position, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One)
         : (SelectedSound?.Offset ?? System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
 
@@ -1860,6 +1861,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedParticleNode is { } p) p.RotationDegrees = rotationDegrees;
         else if (SelectedAddedMesh is { } a) { a.RotationDegrees = rotationDegrees; GizmoPivot = a.PivotWorld; PublishAddedMeshPreview(); }
         else if (SelectedPropNode is { } r) { r.RotationDegrees = rotationDegrees; RefreshPropInstanceTransforms(); }   // M699
+        if (GizmoLocalSpace) OnPropertyChanged(nameof(GizmoAxes));   // M766: local axes turn with the placement
     }
 
     /// <summary>Extra local scale for the selected particle/added-mesh (sounds are point emitters — no-op).</summary>
@@ -9203,6 +9205,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _selection.Clear();
                 if (SelectedParticleNode is not null) SelectedParticleNode = null;
                 if (SelectedSound is not null) SelectedSound = null;
+                if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;   // M766: exclusive, as for particles
+                if (SelectedPropNode is not null) SelectedPropNode = null;
                 SelectedAddedMesh = am;
                 GizmoPivot = am.PivotWorld;
                 SelectedPlaceableInfo = $"{am.Name}\n{am.Info}";
@@ -9665,6 +9669,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         RefreshMeshTransformFields(primary);
         RefreshSelectionVisuals();
         MeshVerticesRevision++;
+        if (GizmoLocalSpace) OnPropertyChanged(nameof(GizmoAxes));   // M766: local axes turn with the mesh
     }
 
     /// <summary>Live scale the selected mesh about its pivot (M42 gizmo). Single-select only.</summary>
@@ -9681,19 +9686,43 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public (System.Numerics.Vector3 rot, System.Numerics.Vector3 scale) SelectedMeshRotScale =>
         _selection.Primary is { } p ? (p.RotationDegrees, p.Scale) : (System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
 
-    /// <summary>The selected mesh's local axes (its rotation applied to world X/Y/Z) for Local-space gizmo.</summary>
+    /// <summary>The gizmo target's own axes for Local-space gizmo, world X/Y/Z otherwise.
+    ///
+    /// <para>M766: each object in its OWN convention (<see cref="GizmoRotationFrame"/>). Until M766 a mesh's
+    /// axes were drawn with the placements' yaw-pitch-roll although a mesh composes X, then Y, then Z, and
+    /// placements always showed world axes although their angles live inside the authored rotation.</para></summary>
     public (System.Numerics.Vector3 x, System.Numerics.Vector3 y, System.Numerics.Vector3 z) SelectedMeshLocalAxes
     {
         get
         {
-            if (!GizmoLocalSpace || _selection.Primary is not { } p)
+            if (!GizmoLocalSpace || GizmoRotationFrame() is not { } f)
                 return (System.Numerics.Vector3.UnitX, System.Numerics.Vector3.UnitY, System.Numerics.Vector3.UnitZ);
-            var r = p.RotationDegrees * (MathF.PI / 180f);
-            var q = System.Numerics.Quaternion.CreateFromYawPitchRoll(r.Y, r.X, r.Z);
-            return (System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitX, q),
-                    System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitY, q),
-                    System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitZ, q));
+            return ReyEngine.Rendering.GizmoRotation.LocalAxes(f.Degrees, f.Order, f.Base);
         }
+    }
+
+    /// <summary>M766: how the gizmo target stores its rotation - its angles, their Euler order, and the
+    /// rotation they sit inside. The same precedence as the gizmo press and the write-back: a selected mesh,
+    /// then a particle, an added mesh, a prop. Null when nothing rotatable is selected (sounds and lights).</summary>
+    private (System.Numerics.Vector3 Degrees, ReyEngine.Rendering.GizmoEulerOrder Order, System.Numerics.Matrix4x4 Base)? GizmoRotationFrame()
+    {
+        var identity = System.Numerics.Matrix4x4.Identity;
+        if (_selection.Primary is { } mesh) return (mesh.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.Xyz, identity);
+        if (SelectedParticleNode is { } p) return (p.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.YawPitchRoll, p.Placement.Transform);
+        if (SelectedAddedMesh is { } a) return (a.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.YawPitchRoll, identity);
+        if (SelectedPropNode is { } r) return (r.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.YawPitchRoll, r.Prop.Transform);
+        return null;
+    }
+
+    /// <summary>M766: the angles after a rotate drag of <paramref name="degrees"/> about the ring's WORLD
+    /// direction <paramref name="worldAxis"/> (frozen at the press), from the drag-start angles. The object
+    /// turns about exactly the drawn axis, whatever its current rotation. <paramref name="near"/> is last
+    /// frame's result, so the numbers stay continuous through a long drag.</summary>
+    public System.Numerics.Vector3 GizmoRotationAfter(System.Numerics.Vector3 start, System.Numerics.Vector3 worldAxis,
+        float degrees, System.Numerics.Vector3 near)
+    {
+        if (GizmoRotationFrame() is not { } f) return start;
+        return ReyEngine.Rendering.GizmoRotation.RotateAbout(start, f.Order, f.Base, worldAxis, degrees, near);
     }
 
     /// <summary>The three gizmo axis directions (world, or the selected mesh's local axes) for the viewport.</summary>

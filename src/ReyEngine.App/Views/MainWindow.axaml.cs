@@ -97,6 +97,8 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     private Vector3 _gizmoStartScale;
     private bool _gizmoTargetIsPlacement; // M75: this drag targets a particle/sound placement, not a mesh
     private Vector2? _rotateScreenTangent; // M764: the ring's on-screen direction at the grab, for Rotate
+    private Vector3 _rotateWorldAxis;      // M766: the ring's world direction, frozen at the press
+    private Vector3 _rotateLastDegrees;    // M766: last frame's angles, keeping a long drag continuous
 
     // Click-to-select: a press+release with almost no movement is a pick, not a camera drag.
     private Point _pressPos;
@@ -1210,6 +1212,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                     ? ReyEngine.Rendering.GizmoRotateDrag.ScreenTangent(pivot, Viewport.AxisDir(a), Viewport.GizmoArmLengthFor(pivot),
                         new Vector2((float)pt.Position.X, (float)pt.Position.Y), pickVp, pickW, pickH)
                     : null;
+                _rotateWorldAxis = Viewport.AxisDir(a);   // M766: Local axes turn during the drag; the drag must not
                 // M567: faces first. In face mode the gizmo belongs to the face selection, and a mesh may
                 // well still be selected underneath - falling through would drag the whole object.
                 if (vm.FaceEditMode && vm.HasFaceGizmoTarget)
@@ -1233,6 +1236,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                     _gizmoTargetIsFaces = false;
                     var (rot, scale) = vm.SelectedMeshRotScale;
                     _gizmoStartRotation = rot;
+                    _rotateLastDegrees = rot;   // M766
                     _gizmoStartScale = scale;
                     vm.BeginMeshDrag();         // capture the before-state → the whole drag = ONE undo step
                     return; // gizmo drag takes over this stroke — don't also start camera fly
@@ -1246,6 +1250,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                     var (off, rot, scale) = vm.PlacementDragStart;
                     _gizmoDragStartOffset = off;
                     _gizmoStartRotation = rot;
+                    _rotateLastDegrees = rot;   // M766
                     _gizmoStartScale = scale;
                     vm.BeginPlacementDrag();   // M76: capture before-state → whole drag = ONE undo step
                     return;
@@ -1281,7 +1286,9 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                     if (_gizmoTargetIsFaces) break;   // faces only move; the start rotation here is a leftover
                     float deg = gvm.ApplyRotateSnap(ReyEngine.Rendering.GizmoRotateDrag.Degrees(
                         new Vector2((float)(p.X - _pressPos.X), (float)(p.Y - _pressPos.Y)), _rotateScreenTangent));
-                    var rot = WithComponent(_gizmoStartRotation, comp, ComponentOf(_gizmoStartRotation, comp) + deg);
+                    // M766: about exactly the ring's world direction, not "add to one Euler angle"
+                    var rot = gvm.GizmoRotationAfter(_gizmoStartRotation, _rotateWorldAxis, deg, _rotateLastDegrees);
+                    _rotateLastDegrees = rot;
                     if (_gizmoTargetIsPlacement) gvm.RotateSelectedPlacementTo(rot);   // M75
                     else gvm.RotateSelectedMeshTo(rot);
                     break;
