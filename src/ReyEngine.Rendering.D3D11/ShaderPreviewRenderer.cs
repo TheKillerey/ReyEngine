@@ -696,6 +696,20 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     /// fallback mesh is showing".</summary>
     public int MaterialCount => _materials.Count;
     public int DrawCalls { get; private set; }
+
+    /// <summary>
+    /// M769: what the preview feeds <c>FOG_OF_WAR_ALWAYS_BELOW_Y</c>. The only reader in the whole shader cache is
+    /// particlesystem/mesh_vs (96 of 192 blobs): <c>t = saturate(worldY * .z + .w)</c>, and mesh_ps then scales
+    /// the colour by <c>lerp(FOW_EDGE_CONTROL.w, fogOfWar.a, t)</c> with the alpha left alone.
+    ///
+    /// <para>Until M769 this was 1e9 in every lane, written as if .x were a height threshold. The shader reads
+    /// only .zw, so it became a hard step at world Y = -1: below it t = 0, the colour took the unfed
+    /// FOW_EDGE_CONTROL.w = 0, and an alpha-blended mesh emitter drew as a solid BLACK shape - the user's
+    /// waterfalls and SRX_Infernal_Dragon_Pit_Bottom at Y -69.7 (lit again when moved to Y 151). Scale 0,
+    /// bias 1 gives t = 1 at every height, so the colour is just the fog-of-war alpha (1 from the white stand-in),
+    /// which is what quad_ps already does. Quads, ribbons and the environment fog never read it.</para>
+    /// </summary>
+    public static readonly float[] FogOfWarAlwaysBelowY = { 0f, 0f, 0f, 1f };
     public double LastFrameMs { get; private set; }
     public PreviewMesh? Mesh { get; private set; }
 
@@ -4868,9 +4882,8 @@ float4 psmain(VOut i) : SV_Target
                     // ("GrassDistortSpheres", "GrassVelocities", "VelocityStrength") are unreachable.
                     "GRASS_INTERP" => new[] { s.GrassInterp, 0f, 0f, 0f },
 
-                    // Below this world height the engine treats everything as permanently visible. Nothing
-                    // in the preview should ever be force-fogged, so push it above any real geometry.
-                    "FOG_OF_WAR_ALWAYS_BELOW_Y" => new[] { 1e9f, 1e9f, 1e9f, 1e9f },
+                    // M769: see FogOfWarAlwaysBelowY - a scale and bias on world Y, not a height.
+                    "FOG_OF_WAR_ALWAYS_BELOW_Y" => (float[])FogOfWarAlwaysBelowY.Clone(),
 
                     // M230: the ten grass-flattening spheres - one per nearby unit, the reason grass parts as
                     // a champion walks through it. Leaving them zero did not merely disable the effect, it
