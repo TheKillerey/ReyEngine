@@ -34,8 +34,9 @@ public class MapVisibilityTests
     }
 
     [Fact]
-    public void InitialMaskIsActiveAlongsideSelectedState()
+    public void A_multi_bit_initial_mask_stays_active_alongside_the_selected_stage()
     {
+        // Map22's shape (initial 67 beside Stage1-4): staged maps keep the additive rule (M770 leaves it)
         var axis = new MapVisibilityAxis(MapVisibility.PrimaryAxisHash, "Map Visibility", 67, true,
             new[] { new VisibilityLayer("Stage 2", 8) });
 
@@ -123,5 +124,47 @@ public class MapVisibilityTests
         using var stream = new MemoryStream();
         tree.Write(stream);
         return stream.ToArray();
+    }
+}
+
+/// <summary>
+/// M770: on Summoner's Rift a dragon state REPLACES Base. The user: "SRU_DragonPit_WaterFall_01_1 - if I guess
+/// correctly it should not display on infernal dragon layer." Its mask is 25 = Base, Ocean, Cloud.
+/// </summary>
+public sealed class DragonStateReplacesBaseTests
+{
+    private static readonly MapVisibilityAxis Rift = new(MapVisibility.PrimaryAxisHash, "Map Visibility", 1, true, new[]
+    {
+        new VisibilityLayer("Base", 1), new VisibilityLayer("Infernal", 2), new VisibilityLayer("Mountain", 4),
+        new VisibilityLayer("Ocean", 8), new VisibilityLayer("Cloud", 16), new VisibilityLayer("Hextech", 32),
+        new VisibilityLayer("Chemtech", 64), new VisibilityLayer("Void", 128),
+    });
+
+    [Theory]
+    [InlineData(1, true)]     // Base
+    [InlineData(2, false)]    // Infernal - the user's case
+    [InlineData(4, false)]    // Mountain
+    [InlineData(8, true)]     // Ocean
+    [InlineData(16, true)]    // Cloud
+    [InlineData(32, false)]   // Hextech
+    public void The_dragon_pit_waterfall_follows_its_own_mask(int selected, bool visible) =>
+        Assert.Equal(visible, MapVisibility.VisibleForMask(25, Rift, selected));
+
+    [Fact]
+    public void The_base_pit_and_the_infernal_pit_never_draw_together()
+    {
+        // base_srx mesh 19 (Base-only pit ground) and mesh 12 (Infernal-only, the same place)
+        Assert.True(MapVisibility.VisibleForMask(1, Rift, 1));
+        Assert.False(MapVisibility.VisibleForMask(2, Rift, 1));
+        Assert.False(MapVisibility.VisibleForMask(1, Rift, 2));
+        Assert.True(MapVisibility.VisibleForMask(2, Rift, 2));
+    }
+
+    [Fact]
+    public void Every_state_but_Infernal_hides_on_Infernal()
+    {
+        Assert.False(MapVisibility.VisibleForMask(125, Rift, 2));
+        Assert.True(MapVisibility.VisibleForMask(125, Rift, 8));
+        Assert.True(MapVisibility.VisibleForMask(255, Rift, 2));   // all layers stays everywhere
     }
 }

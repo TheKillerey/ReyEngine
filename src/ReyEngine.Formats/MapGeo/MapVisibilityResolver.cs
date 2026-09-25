@@ -65,10 +65,10 @@ public sealed class MapVisibilityResolver
             bool axisVisible;
             if (controllerBits != 0)
             {
-                // InitialVisibilityMask is the permanent foundation for the PRIMARY mapgeo mask. Secondary
-                // controller axes are exclusive states: selecting Cup/Tunnel/Upgraded must not also match
-                // their initial Base controller. This is the same split used by Riot's MapgeoAddon.
-                int activeMask = selected | (axis.IsPrimary ? axis.InitialMask : 0);
+                // Secondary controller axes are exclusive states: selecting Cup/Tunnel/Upgraded must not also
+                // match their initial Base controller. M770: so is a primary axis whose initial mask is one of
+                // its own states (Summoner's Rift's Base) - see MapVisibility.ActiveMask.
+                int activeMask = axis.IsPrimary ? MapVisibility.ActiveMask(axis, selected) : selected;
                 bool inSet = (controllerBits & activeMask) != 0;
                 axisVisible = controller.NotVisible ? !inSet : inSet;
                 if (!axisVisible) reasons.Add($"controller hides {axis.Name} '{selectedName}'");
@@ -76,7 +76,7 @@ public sealed class MapVisibilityResolver
             else if (axis.IsPrimary)
             {
                 axisVisible = MapVisibility.VisibleForMask(flags, axis, selected);
-                if (!axisVisible) reasons.Add($"mesh mask {flags} does not include {axis.Name} '{selectedName}' or initial mask {axis.InitialMask}");
+                if (!axisVisible) reasons.Add($"mesh mask {flags} does not include {axis.Name} '{selectedName}' (active mask {MapVisibility.ActiveMask(axis, selected)})");
             }
             else axisVisible = true;
             visible &= axisVisible;
