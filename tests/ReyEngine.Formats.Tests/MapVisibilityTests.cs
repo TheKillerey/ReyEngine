@@ -34,8 +34,9 @@ public class MapVisibilityTests
     }
 
     [Fact]
-    public void InitialMaskIsActiveAlongsideSelectedState()
+    public void A_multi_bit_initial_mask_stays_active_alongside_the_selected_stage()
     {
+        // Map22's shape (initial 67 beside Stage1-4): staged maps keep the additive rule, unmeasured
         var axis = new MapVisibilityAxis(MapVisibility.PrimaryAxisHash, "Map Visibility", 67, true,
             new[] { new VisibilityLayer("Stage 2", 8) });
 
@@ -123,5 +124,55 @@ public class MapVisibilityTests
         using var stream = new MemoryStream();
         tree.Write(stream);
         return stream.ToArray();
+    }
+}
+
+/// <summary>
+/// M771: Summoner's Rift's dragon-layer rule, confirmed by the user from the game. All-layers and Base-only content
+/// persists under every dragon; a mask that names any dragon is decided by those dragons.
+/// </summary>
+public sealed class DragonLayerMaskTests
+{
+    private static readonly MapVisibilityAxis Rift = new(MapVisibility.PrimaryAxisHash, "Map Visibility", 1, true, new[]
+    {
+        new VisibilityLayer("Base", 1), new VisibilityLayer("Infernal", 2), new VisibilityLayer("Mountain", 4),
+        new VisibilityLayer("Ocean", 8), new VisibilityLayer("Cloud", 16), new VisibilityLayer("Hextech", 32),
+        new VisibilityLayer("Chemtech", 64), new VisibilityLayer("Void", 128),
+    });
+
+    [Theory]
+    [InlineData(1, true)]     // Base
+    [InlineData(2, false)]    // Infernal - the user's case
+    [InlineData(4, false)]    // Mountain
+    [InlineData(8, true)]     // Ocean
+    [InlineData(16, true)]    // Cloud
+    [InlineData(32, false)]   // Hextech
+    public void The_dragon_pit_waterfall_follows_its_dragon_bits(int selected, bool visible) =>
+        Assert.Equal(visible, MapVisibility.VisibleForMask(25, Rift, selected));
+
+    [Theory]
+    [InlineData(2)] [InlineData(4)] [InlineData(8)] [InlineData(128)]
+    public void Base_only_and_all_layer_content_persists_under_every_dragon(int dragon)
+    {
+        // M770 hid these and the whole map vanished on Infernal
+        Assert.True(MapVisibility.VisibleForMask(1, Rift, dragon));
+        Assert.True(MapVisibility.VisibleForMask(255, Rift, dragon));
+        Assert.True(MapVisibility.VisibleForMask(0, Rift, dragon));
+    }
+
+    [Fact]
+    public void Every_state_but_Infernal_hides_on_Infernal_only()
+    {
+        Assert.False(MapVisibility.VisibleForMask(125, Rift, 2));
+        Assert.False(MapVisibility.VisibleForMask(253, Rift, 2));
+        Assert.True(MapVisibility.VisibleForMask(125, Rift, 8));
+        Assert.True(MapVisibility.VisibleForMask(125, Rift, 1));
+    }
+
+    [Fact]
+    public void Dragon_only_content_is_not_on_the_base_map()
+    {
+        Assert.False(MapVisibility.VisibleForMask(2, Rift, 1));
+        Assert.True(MapVisibility.VisibleForMask(2, Rift, 2));
     }
 }

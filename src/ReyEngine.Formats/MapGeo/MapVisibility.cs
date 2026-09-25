@@ -97,8 +97,30 @@ public static class MapVisibility
     public static bool VisibleForMask(int flags, MapVisibilityAxis? axis, int selectedBit)
     {
         if (selectedBit == 0 || flags is 0 or 255) return true;
-        int activeMask = (axis?.InitialMask ?? 0) | selectedBit;
-        return (flags & activeMask) != 0;
+        int initial = axis?.InitialMask ?? 0;
+        if (!IsSingleStateInitial(axis))
+            return (flags & (initial | selectedBit)) != 0;   // Map22-style staged axes: unmeasured, additive
+
+        // M771: Summoner's Rift's rule, confirmed by the user from the game. Content on all layers or on
+        // Base alone persists under every dragon. Once a mask names ANY dragon, those dragons decide, and its
+        // Base bit only means "also before the terraform": SRU_DragonPit_WaterFall_01_1 (25 = Base, Ocean,
+        // Cloud) is not on Infernal, and Riot's 125 / 253 ("every state but Infernal") hide there. Objects
+        // with a visibility controller never get here - the controller overrides the mask (MapVisibilityResolver).
+        //
+        // Not "a dragon replaces Base" (M770, reverted): that removed every Base-only mesh on Infernal, the
+        // whole map. Not "any Base bit shows" (MapgeoAddon's rule, used until M771): that showed 25 and 125
+        // on Infernal.
+        if (selectedBit == initial) return (flags & initial) != 0;
+        int dragons = flags & ~initial;
+        return dragons != 0 ? (dragons & selectedBit) != 0 : (flags & initial) != 0;
+    }
+
+    /// <summary>M771: an axis whose initial mask is exactly ONE of its own states - Summoner's Rift's Base,
+    /// Map12's Default - as opposed to a multi-bit staged start like Map22's 67.</summary>
+    public static bool IsSingleStateInitial(MapVisibilityAxis? axis)
+    {
+        int initial = axis?.InitialMask ?? 0;
+        return initial != 0 && (initial & (initial - 1)) == 0 && axis!.Layers.Any(l => l.Bit == initial);
     }
 
     public static string Label(int flags, MapVisibilityAxis? axis)
