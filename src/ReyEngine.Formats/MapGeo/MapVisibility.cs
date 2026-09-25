@@ -97,30 +97,8 @@ public static class MapVisibility
     public static bool VisibleForMask(int flags, MapVisibilityAxis? axis, int selectedBit)
     {
         if (selectedBit == 0 || flags is 0 or 255) return true;
-        return (flags & ActiveMask(axis, selectedBit)) != 0;
-    }
-
-    /// <summary>
-    /// M770: the bits that are on when <paramref name="selectedBit"/> is the selected state.
-    ///
-    /// <para>When the initial mask is exactly ONE of the axis's own states - Summoner's Rift's Base, Map12's
-    /// Default - picking another state REPLACES it. Until M770 the initial mask was always added, copied from
-    /// the community MapgeoAddon ("mask &amp; 1 -> visible"), so Base content stayed on under every dragon.
-    /// Riot's own data rules that out: base_srx ships the dragon pit twice at the same place - Base-only
-    /// Ground_D4_DragonPit_A (mesh 19) and Infernal-only Ground_D4_DragonPit_Fire_A (mesh 12), 100% overlap, and
-    /// the same for the Order_Dragon statues - which the additive rule drew on top of each other; and 67 of its
-    /// masks pair Base with SOME dragons only (125 / 253 = every state but Infernal, 25 = Base, Ocean and Cloud,
-    /// the user's SRU_DragonPit_WaterFall_01_1), which the additive rule made mean "everywhere".</para>
-    ///
-    /// <para>A multi-bit initial mask (Map22: 67, beside Stage1-4) keeps the additive rule; staged maps are not
-    /// measured, and their initial bits plausibly persist.</para>
-    /// </summary>
-    public static int ActiveMask(MapVisibilityAxis? axis, int selectedBit)
-    {
-        int initial = axis?.InitialMask ?? 0;
-        bool initialIsOneState = initial != 0 && (initial & (initial - 1)) == 0
-                                 && axis!.Layers.Any(l => l.Bit == initial);
-        return initialIsOneState ? selectedBit : initial | selectedBit;
+        int activeMask = (axis?.InitialMask ?? 0) | selectedBit;
+        return (flags & activeMask) != 0;
     }
 
     public static string Label(int flags, MapVisibilityAxis? axis)
