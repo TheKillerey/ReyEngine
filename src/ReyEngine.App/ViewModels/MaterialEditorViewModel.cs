@@ -717,15 +717,39 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     [ObservableProperty] private bool _hasIssue;
     [ObservableProperty] private string? _issueTip;
 
+    /// <summary>
+    /// M777: true when this material lives in a bin the skin only LINKS to (<c>tree.Dependencies</c>) —
+    /// Nexus skin31's Glass_inst, resolved from <c>Nexus_Multi_Skins_Skin30_Skins_Skin31.bin</c>. Shown as
+    /// an external, read-only summary rather than the normal editable rows: nothing typed into it can ever
+    /// reach <see cref="MaterialDocument.Serialize"/>, because the object it describes is not part of
+    /// this document's tree — editing it here would look saved and quietly not be. Open the linked bin
+    /// itself (by its own path, below) to edit it for real.
+    /// </summary>
+    public bool IsLinked => Model.IsLinked;
+    public string? LinkedFromBin => Model.LinkedFromBin;
+
+    /// <summary>Read-only content summary for an <see cref="IsLinked"/> material — sampler/parameter/
+    /// switch/macro values as parsed, since none of them have an editable row here.</summary>
+    public IReadOnlyList<string> LinkedSummary { get; private set; } = Array.Empty<string>();
+
     public MaterialBindingViewModel(MaterialBinding model, MaterialEditorViewModel owner)
     {
         Model = model;
         Owner = owner;
         _editedShader = model.RenderShader ?? "";
-        foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
-        foreach (var p in model.Parameters) AddParameterRow(p);
-        foreach (var w in model.AllSwitches) Switches.Add(new MaterialSwitchViewModel(w, this));   // M103
-        foreach (var m in model.AllMacros) Macros.Add(new MaterialMacroViewModel(m, this));        // M150
+        if (model.IsLinked)
+        {
+            // No editable rows: every one of these would mutate the LINKED bin's own in-memory tree
+            // (never this document's), so the edit would look saved and vanish on the next parse.
+            LinkedSummary = BuildLinkedSummary(model);
+        }
+        else
+        {
+            foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
+            foreach (var p in model.Parameters) AddParameterRow(p);
+            foreach (var w in model.AllSwitches) Switches.Add(new MaterialSwitchViewModel(w, this));   // M103
+            foreach (var m in model.AllMacros) Macros.Add(new MaterialMacroViewModel(m, this));        // M150
+        }
         RefreshMissingMacros();
         LoadRenderState();   // M106
         // M351j: seed the editable UV fields from the parse-time profile
@@ -737,6 +761,20 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         Schema = MetaSchemaPanelViewModel.Build(
             model.ClassHash, model.PresentHashes, owner.DeclaredProperties, owner.ClassName,
             AddSchemaField, model.CanAddSchemaField);
+    }
+
+    private static List<string> BuildLinkedSummary(MaterialBinding model)
+    {
+        var lines = new List<string>
+        {
+            $"Shader: {model.RenderShader ?? model.ShaderName}",
+            $"Depth: {(model.DepthEnable ? "test" : "no test")}, {(model.WritesDepth ? "writes" : "no write")}",
+        };
+        foreach (var s in model.Slots) lines.Add($"sampler {s.SamplerName} = {s.Path}");
+        foreach (var p in model.Parameters) lines.Add($"param {p.Name} = {p.CurrentText}");
+        foreach (var sw in model.SwitchEntries) lines.Add($"switch {sw.Name} = {(sw.On ? "on" : "off")}");
+        foreach (var m in model.MacroEntries) lines.Add($"macro {m.Name} = {m.Value}");
+        return lines;
     }
 
     /// <summary>M775: route a parameter to its dedicated editor when its name is a submesh-name list -

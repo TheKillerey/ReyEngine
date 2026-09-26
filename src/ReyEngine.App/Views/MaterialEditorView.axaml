@@ -329,7 +329,27 @@
                     </StackPanel>
                   </StackPanel>
                 </Grid>
-      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+
+                <!-- M777: a material resolved from a LINKED bin (skin31's Glass_inst, e.g.) has no editable
+                     rows below - everything about it is shown here instead, read-only. -->
+                <Border Background="{DynamicResource ReyWarningSoftBrush}" CornerRadius="4" Padding="6,4"
+                        IsVisible="{Binding IsLinked}">
+                  <StackPanel Spacing="3">
+                    <TextBlock Text="{Binding LinkedFromBin, StringFormat='External material - from {0} (read-only)'}"
+                               FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource ReyWarningBrush}" TextWrapping="Wrap" />
+                    <TextBlock Text="Open the linked bin itself to edit this material." FontSize="9"
+                               Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                    <ItemsControl ItemsSource="{Binding LinkedSummary}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                          <TextBlock Text="{Binding}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Border>
+
+      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0" IsVisible="{Binding !IsLinked}">
         <Expander.Header><TextBlock Classes="cardTitle" Text="GENERAL" /></Expander.Header>
         <StackPanel Spacing="3" Margin="0,4,0,0">
         <StackPanel IsVisible="{Binding CanChangeShader}">
@@ -376,7 +396,7 @@
                     <TextBlock Text="{Binding RenderModeLabel, StringFormat='Blend mode: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
         </StackPanel>
       </Expander>
-      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0">
+      <Expander IsExpanded="True" FontSize="11" Margin="0,2,0,0" IsVisible="{Binding !IsLinked}">
         <Expander.Header><TextBlock Classes="cardTitle" Text="SAMPLERS" /></Expander.Header>
         <StackPanel Spacing="3" Margin="0,4,0,0">
                 <ItemsControl ItemsSource="{Binding Slots}">
@@ -655,26 +675,39 @@
                 </Expander>
                 <Expander Header="Submesh Render Order" FontSize="11" Margin="0,4,0,0"
                           IsVisible="{Binding HasSubmeshOrderField}">
-                  <StackPanel Margin="0,4,0,0" Spacing="2">
-                    <TextBlock Text="The draw order submeshRenderOrder authors. Move entries up/down to reorder; this edits the authored string only."
-                               FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-                    <ItemsControl ItemsSource="{Binding SubmeshOrderField.Items}">
-                      <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:SubmeshOrderItemViewModel">
-                          <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,1">
-                            <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="9" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            <Button Grid.Column="1" Classes="tool" Content="▲" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding MoveUpCommand}" ToolTip.Tip="Move earlier in the draw order" />
-                            <Button Grid.Column="2" Classes="tool" Content="▼" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding MoveDownCommand}" ToolTip.Tip="Move later in the draw order" />
-                            <Button Grid.Column="3" Classes="tool" Content="✕" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding RemoveCommand}" ToolTip.Tip="Remove from the list" />
+                  <!-- M777: a ContentControl keyed on SubmeshOrderField itself (not a StackPanel gated only
+                       by the Expander's IsVisible) - a material with no such field leaves it null, and a
+                       collapsed Expander still realises its content's bindings, so every SubmeshOrderField.*
+                       path below logged a binding warning for EVERY material without one (measured: also
+                       Aatrox's Sword_inst, nothing to do with this milestone's linked materials - this was
+                       a pre-existing M775 gap the read-only-marking UiProbe card happened to surface).
+                       The template below only materialises when there is something to bind it to. -->
+                  <ContentControl Content="{Binding SubmeshOrderField}">
+                    <ContentControl.ContentTemplate>
+                      <DataTemplate x:DataType="vm:SubmeshOrderFieldViewModel">
+                        <StackPanel Margin="0,4,0,0" Spacing="2">
+                          <TextBlock Text="The draw order submeshRenderOrder authors. Move entries up/down to reorder; this edits the authored string only."
+                                     FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                          <ItemsControl ItemsSource="{Binding Items}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:SubmeshOrderItemViewModel">
+                                <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,1">
+                                  <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="9" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                  <Button Grid.Column="1" Classes="tool" Content="▲" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding MoveUpCommand}" ToolTip.Tip="Move earlier in the draw order" />
+                                  <Button Grid.Column="2" Classes="tool" Content="▼" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding MoveDownCommand}" ToolTip.Tip="Move later in the draw order" />
+                                  <Button Grid.Column="3" Classes="tool" Content="✕" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding RemoveCommand}" ToolTip.Tip="Remove from the list" />
+                                </Grid>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                          <Grid ColumnDefinitions="*,Auto" Margin="0,3,0,0" IsVisible="{Binding HasAddable}">
+                            <ComboBox Grid.Column="0" ItemsSource="{Binding Addable}" SelectedItem="{Binding SelectedAddable}" FontSize="9" HorizontalAlignment="Stretch" PlaceholderText="submesh not yet listed…" />
+                            <Button Grid.Column="1" Content="+ Add" Command="{Binding AddSelectedCommand}" FontSize="10" Padding="6,1" Margin="3,0,0,0" />
                           </Grid>
-                        </DataTemplate>
-                      </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <Grid ColumnDefinitions="*,Auto" Margin="0,3,0,0" IsVisible="{Binding SubmeshOrderField.HasAddable}">
-                      <ComboBox Grid.Column="0" ItemsSource="{Binding SubmeshOrderField.Addable}" SelectedItem="{Binding SubmeshOrderField.SelectedAddable}" FontSize="9" HorizontalAlignment="Stretch" PlaceholderText="submesh not yet listed…" />
-                      <Button Grid.Column="1" Content="+ Add" Command="{Binding SubmeshOrderField.AddSelectedCommand}" FontSize="10" Padding="6,1" Margin="3,0,0,0" />
-                    </Grid>
-                  </StackPanel>
+                        </StackPanel>
+                      </DataTemplate>
+                    </ContentControl.ContentTemplate>
+                  </ContentControl>
                 </Expander>
                 <Expander Header="Parameters" IsVisible="{Binding HasParameters}" FontSize="11" Margin="0,4,0,0">
                   <StackPanel>

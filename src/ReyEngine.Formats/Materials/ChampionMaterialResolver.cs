@@ -15,7 +15,11 @@ public static class ChampionMaterialResolver
         Dictionary<string, string> SubmeshEmissive, string? DefaultEmissive,
         Dictionary<string, string> SubmeshMatCap, string? DefaultMatCap,
         Dictionary<string, string> SubmeshMatCapMask, string? DefaultMatCapMask,
-        Dictionary<string, MaterialProfile> SubmeshProfile, MaterialProfile DefaultProfile)
+        Dictionary<string, MaterialProfile> SubmeshProfile, MaterialProfile DefaultProfile,
+        /// <summary>M777: submeshes with their OWN material, even a sampler-less one (Glass_inst). These
+        /// must never fall back to the default diffuse/secondary samplers below, unlike a submesh that
+        /// simply has no material of its own.</summary>
+        HashSet<string>? SubmeshesWithOwnMaterial = null)
     {
         /// <summary>Preview profile (features + UV transform) for a submesh — its own material, else the default (M32).</summary>
         public MaterialProfile Profile(string submesh) =>
@@ -27,8 +31,10 @@ public static class ChampionMaterialResolver
             || !string.IsNullOrEmpty(DefaultMask) || !string.IsNullOrEmpty(DefaultGradient)
             || !string.IsNullOrEmpty(DefaultEmissive) || !string.IsNullOrEmpty(DefaultMatCap);
 
-        private static string? Pick(Dictionary<string, string> map, string? def, string submesh) =>
-            map.TryGetValue(submesh, out var p) ? p : def;
+        private string? Pick(Dictionary<string, string> map, string? def, string submesh) =>
+            map.TryGetValue(submesh, out var p) ? p
+            : SubmeshesWithOwnMaterial?.Contains(submesh) == true ? null   // M777: own material, no sampler - don't inherit
+            : def;
 
         /// <summary>Diffuse path for a submesh: its own material, else the base-mesh default.</summary>
         public string? For(string submesh) => Pick(SubmeshDiffuse, DefaultDiffuse, submesh);
@@ -48,12 +54,16 @@ public static class ChampionMaterialResolver
     /// MIXED fields - both String and WadChunkLink ship - so without this a link-form skin's diffuse,
     /// mask, gradient, emissive and matcap all come back as bare 0x… hashes and the model renders white.
     /// It fails per-skin rather than uniformly, which is the harder version to notice.</param>
+    /// <param name="readBin">M777: read another .bin by wad path (the host's ReadAsset). Passed straight
+    /// through to <see cref="MaterialDocument.Parse"/> so a materialOverride pointing into a LINKED bin
+    /// (Nexus skin31's Glass_inst) resolves here too, not just on the D3D11 path. Null keeps the old,
+    /// skin-bin-only behaviour.</param>
     public static Result Resolve(byte[] skinBin, Func<uint, string?> resolve,
-        Func<ulong, string?>? resolveWadPath = null)
+        Func<ulong, string?>? resolveWadPath = null, Func<string, byte[]?>? readBin = null)
     {
         try
         {
-            var doc = MaterialDocument.Parse(skinBin, resolve, resolveWadPath);
+            var doc = MaterialDocument.Parse(skinBin, resolve, resolveWadPath, readBin);
             return new Result(
                 doc.SubmeshDiffuse(), doc.DefaultDiffusePath,
                 doc.SubmeshSampler(b => b.Mask), doc.DefaultMaskPath,
@@ -61,7 +71,8 @@ public static class ChampionMaterialResolver
                 doc.SubmeshSampler(b => b.Emissive), doc.DefaultEmissivePath,
                 doc.SubmeshSampler(b => b.MatCap), doc.DefaultMatCapPath,
                 doc.SubmeshSampler(b => b.MatCapMask), doc.DefaultMatCapMaskPath,
-                doc.SubmeshProfiles(), doc.DefaultProfile);
+                doc.SubmeshProfiles(), doc.DefaultProfile,
+                doc.SubmeshesWithOwnMaterial());
         }
         catch
         {

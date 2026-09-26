@@ -65,6 +65,14 @@ public sealed class MaterialDocument
     /// <summary>Champion: submesh name → diffuse texture path (live). Each material's submeshes resolve to its diffuse slot.</summary>
     public Dictionary<string, string> SubmeshDiffuse() => SubmeshSampler(b => b.Diffuse);
 
+    /// <summary>M777: submeshes that have their OWN material (a real StaticMaterialDef, local or linked
+    /// through <see cref="Parse"/>'s <c>readBin</c>) — regardless of whether that material authors a
+    /// diffuse-like sampler at all. Glass_inst authors none. Lets a caller tell "no material of its own"
+    /// from "its material has no diffuse", which — unlike the first case — must NOT fall back to the
+    /// skin's default texture.</summary>
+    public HashSet<string> SubmeshesWithOwnMaterial() =>
+        new(Materials.Where(m => m.IsStaticMaterialDef).SelectMany(m => m.Submeshes), StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Generic submesh → secondary-sampler path map (mask/gradient/emissive), live.</summary>
     public Dictionary<string, string> SubmeshSampler(Func<MaterialBinding, TextureSlot?> pick)
     {
@@ -146,6 +154,13 @@ public sealed class MaterialDocument
                     if (n == "initialSubmeshToHide" && !hide.Contains(part, StringComparer.OrdinalIgnoreCase))
                         hide.Add(part);
 
+        // M777: submeshRenderOrder — space/comma-separated submesh names, front to back of the intended
+        // DRAW order (glass over the dome it's drawn on, for instance). Names it doesn't list keep their
+        // file order, after the ones it does.
+        var renderOrder = S("submeshRenderOrder") is { } ro
+            ? Skeletons.ChampionAnimationData.SplitSubmeshList(ro).ToList()
+            : new List<string>();
+
         info = new SkinMeshProperties
         {
             Skeleton = S("skeleton"),
@@ -163,6 +178,7 @@ public sealed class MaterialDocument
             ReflectionFresnel = F("reflectionFresnel"),
             ReflectionFresnelColor = C("reflectionFresnelColor"),
             InitialSubmeshesToHide = hide,
+            SubmeshRenderOrder = renderOrder,
         };
     }
 
@@ -177,8 +193,13 @@ public sealed class MaterialDocument
     /// <param name="resolveWadPath">M590: 64-bit wad-path lookup, so a texturePath stored as a
     /// WadChunkLink (every shipped material since 16.17) reports its PATH rather than a bare hash.
     /// Null still works - such a slot then reads as 0x…, which round-trips.</param>
+    /// <param name="readBin">M777: read another .bin by its wad path (the host's ReadAsset, so project
+    /// overrides apply) - used to follow this skin's <c>tree.Dependencies</c> when a
+    /// <c>skinMeshProperties.material</c>/<c>materialOverride[].material</c> link points at a
+    /// StaticMaterialDef this bin does not itself define. Null skips linked-bin resolution entirely
+    /// (every existing caller that doesn't pass one behaves exactly as before).</param>
     public static MaterialDocument Parse(byte[] data, Func<uint, string?> resolve,
-        Func<ulong, string?>? resolveWadPath = null)
+        Func<ulong, string?>? resolveWadPath = null, Func<string, byte[]?>? readBin = null)
     {
         var tree = SafeBinTree.Parse(data, out var issues);
         bool champion = tree.Objects.Values.Any(o => Field(o.Properties, "skinMeshProperties") is not null);
@@ -254,10 +275,56 @@ public sealed class MaterialDocument
             }
         }
 
-        // Every StaticMaterialDef (shared by champions and maps).
-        // (pendingSkinMesh is attached to the document at the end.)
-        foreach (var (pathHash, o) in tree.Objects)
+        // M777: a materialOverride/skinMeshProperties link that names a StaticMaterialDef this bin does
+        // NOT itself define - Riot puts it in a bin named in tree.Dependencies instead (Nexus skin31's
+        // Glass_inst lives only in Nexus_Multi_Skins_Skin30_Skins_Skin31.bin). Resolved by HASH, not by
+        // path/name, and only for links this bin leaves unresolved - an object present locally always
+        // wins even if a same-named one exists in a dependency.
+        var linkedMaterials = new Dictionary<uint, (BinTreeObject Obj, string From)>();
+        if (champion && readBin is not null)
         {
+            var missing = new HashSet<uint>();
+            if (defaultMaterialHash is { } dmh && dmh != 0 && !tree.Objects.ContainsKey(dmh)) missing.Add(dmh);
+            foreach (var link in assignment.Keys)
+                if (link != 0 && !tree.Objects.ContainsKey(link)) missing.Add(link);
+
+            if (missing.Count > 0)
+            {
+                // Dependency paths are case-insensitive (WAD lookups hash the lowercased path); dedupe on
+                // that basis so a bin listing the same dependency twice with different casing is read once.
+                var seenDeps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var dep in tree.Dependencies)
+                {
+                    if (missing.Count == 0) break;
+                    if (string.IsNullOrWhiteSpace(dep) || !seenDeps.Add(dep)) continue;
+
+                    byte[]? depBytes;
+                    try { depBytes = readBin(dep); } catch { depBytes = null; }
+                    if (depBytes is not { Length: > 0 }) continue;
+
+                    BinTree depTree;
+                    try { depTree = SafeBinTree.Parse(depBytes); }
+                    catch { continue; }
+
+                    foreach (var hash in missing.ToList())
+                    {
+                        if (!depTree.Objects.TryGetValue(hash, out var obj)) continue;
+                        if (!string.Equals(resolve(obj.ClassHash), "StaticMaterialDef", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        linkedMaterials[hash] = (obj, dep);
+                        missing.Remove(hash);
+                    }
+                }
+            }
+        }
+
+        // Every StaticMaterialDef (shared by champions and maps), plus any resolved from a linked bin above.
+        // (pendingSkinMesh is attached to the document at the end.)
+        var allMaterialObjects = tree.Objects.Select(kv => (Hash: kv.Key, Obj: kv.Value, LinkedFrom: (string?)null))
+            .Concat(linkedMaterials.Select(kv => (Hash: kv.Key, Obj: kv.Value.Obj, LinkedFrom: (string?)kv.Value.From)));
+        foreach (var (pathHash, o, linkedFrom) in allMaterialObjects)
+        {
+            bool isLinked = linkedFrom is not null;
             var samplers = Field(o.Properties, "samplerValues") as BinTreeContainer;
             // Also parse sampler-LESS StaticMaterialDefs — effect/indicator materials (e.g. FaeLights:
             // no textures, just TintColor + blend) so they get a real profile instead of the opaque grey
@@ -292,7 +359,10 @@ public sealed class MaterialDocument
                     // Capture the diffuse sampler's addressU/V (else the first sampler) — decals use Clamp (1).
                     if (diffuseAddrU == 0 && (sampler.Contains("Diffuse", StringComparison.OrdinalIgnoreCase) || slots.Count == 0))
                     { diffuseAddrU = AsByte(Field(s.Properties, "addressU")); diffuseAddrV = AsByte(Field(s.Properties, "addressV")); }
-                    slots.Add(new TextureSlot(sampler, pathProp, el, resolveWadPath));
+                    // M777: a linked-bin material has no live element IN THIS tree — leaving Element null
+                    // here (rather than the struct from the dependency's own tree) is what makes
+                    // TextureSlot.IsRemovable false for it, on top of MaterialObject already being null.
+                    slots.Add(new TextureSlot(sampler, pathProp, isLinked ? null : el, resolveWadPath));
                 }
 
             var parameters = new List<MaterialParameter>();
@@ -311,7 +381,7 @@ public sealed class MaterialDocument
                         var value = Field(ps.Properties, "value");
                         parameters.Add(new MaterialParameter(pn.Value,
                             value ?? new BinTreeVector4(HashAlgorithms.Fnv1a("value"), System.Numerics.Vector4.Zero),
-                            ps, value is null));
+                            isLinked ? null : ps, value is null));
                     }
             }
 
@@ -322,7 +392,7 @@ public sealed class MaterialDocument
             BinTreeContainer? switchContainer = null;
             if (Field(o.Properties, "switches") is BinTreeContainer sw)
             {
-                switchContainer = sw;
+                switchContainer = isLinked ? null : sw;
                 foreach (var el in sw.Elements)
                     if (el is BinTreeStruct ss && Field(ss.Properties, "name") is BinTreeString sn)
                     {
@@ -348,7 +418,7 @@ public sealed class MaterialDocument
             BinTreeMap? macroMap = null;
             if (Field(o.Properties, "shaderMacros") is BinTreeMap mm)
             {
-                macroMap = mm;
+                macroMap = isLinked ? null : mm;
                 foreach (var e in mm)
                     if (e.Key is BinTreeString mk)
                     {
@@ -364,6 +434,8 @@ public sealed class MaterialDocument
             bool blendEnable = false;
             bool? cullEnable = null;
             int srcBlend = -1, dstBlend = -1;
+            bool depthEnable = true;    // StaticMaterialPassDef.depthEnable schema default (M777)
+            int writeMask = 31;         // StaticMaterialPassDef.writeMask schema default (M777)
             BinTreeObjectLink? shaderLink = null;   // M52: kept live so the shader can be CHANGED
             BinTreeStruct? passStruct = null;       // M106: kept live so the render state can be EDITED
             if (Field(o.Properties, "techniques") is BinTreeContainer techs
@@ -371,10 +443,10 @@ public sealed class MaterialDocument
                 && Field(tech0.Properties, "passes") is BinTreeContainer passes
                 && passes.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } pass0)
             {
-                passStruct = pass0;
+                passStruct = isLinked ? null : pass0;
                 if (Field(pass0.Properties, "shader") is BinTreeObjectLink shLink)
                 {
-                    shaderLink = shLink;
+                    shaderLink = isLinked ? null : shLink;
                     renderShader = resolve(shLink.Value) ?? $"0x{shLink.Value:x8}";
                 }
                 blendEnable = Field(pass0.Properties, "blendEnable") switch
@@ -393,6 +465,17 @@ public sealed class MaterialDocument
                 };
                 srcBlend = AsByte(Field(pass0.Properties, "srcColorBlendFactor"));
                 dstBlend = AsByte(Field(pass0.Properties, "dstColorBlendFactor"));
+                // M777: the depth TEST and depth WRITE flags — carried through so a preview can stop
+                // testing/writing depth for a material that authors depthEnable=false (glass) instead of
+                // hardcoding both true. Absent means the schema default (true / 31, i.e. writes).
+                depthEnable = Field(pass0.Properties, "depthEnable") switch
+                {
+                    BinTreeBool db => db.Value,
+                    BinTreeBitBool dbb => dbb.Value,
+                    _ => true,
+                };
+                int wm = AsByte(Field(pass0.Properties, "writeMask"));
+                if (wm >= 0) writeMask = wm;
             }
 
             var subs = assignment.TryGetValue(pathHash, out var list2)
@@ -407,9 +490,10 @@ public sealed class MaterialDocument
             {
                 ObjectPathHash = pathHash,
                 DynamicParameters = dynamicParameters,
-                MaterialObject = isStaticMat ? o : null,
+                MaterialObject = isStaticMat && !isLinked ? o : null,
+                LinkedFromBin = linkedFrom,   // M777: never null-checked against _tree - Serialize() cannot see it
                 ResolveName = resolve,   // M706
-                SamplerContainer = samplers,
+                SamplerContainer = isLinked ? null : samplers,
                 NameFieldHash = nameFieldHash,
                 PathFieldHash = pathFieldHash,
                 ResolveWadPath = resolveWadPath,   // M590
@@ -422,13 +506,15 @@ public sealed class MaterialDocument
                 PassStruct = passStruct,
                 RenderShader = renderShader,
                 ShaderLink = shaderLink,
-                ParamContainer = paramContainer,
+                ParamContainer = isLinked ? null : paramContainer,
                 BlendEnable = blendEnable,
                 CullEnable = cullEnable,
                 SrcBlendFactor = srcBlend,
                 DstBlendFactor = dstBlend,
                 DiffuseAddressU = diffuseAddrU,
                 DiffuseAddressV = diffuseAddrV,
+                DepthEnable = depthEnable,
+                WriteMask = writeMask,
             });
         }
 
@@ -493,6 +579,11 @@ public sealed class SkinMeshProperties
 
     /// <summary>Submeshes the skin hides by default — Kalista hides Altar_Spear, which otherwise draws.</summary>
     public IReadOnlyList<string> InitialSubmeshesToHide { get; init; } = Array.Empty<string>();
+
+    /// <summary>M777: <c>submeshRenderOrder</c> — the front-to-back DRAW order this skin authors for its
+    /// submeshes (e.g. glass drawn after the dome it sits on). Empty when the skin authors none, which is
+    /// most of them; a caller should keep file order in that case.</summary>
+    public IReadOnlyList<string> SubmeshRenderOrder { get; init; } = Array.Empty<string>();
 }
 
 public sealed class MaterialBinding
@@ -507,6 +598,22 @@ public sealed class MaterialBinding
     /// <summary>M125: the bin object this binding came from (0 for champion pseudo-bindings) —
     /// links repair issues back to the material they live in.</summary>
     public uint ObjectPathHash { get; init; }
+
+    /// <summary>
+    /// M777: the WAD path of the LINKED bin (a <c>tree.Dependencies</c> entry of the skin bin this
+    /// document was parsed from) this StaticMaterialDef actually lives in — null for every material that
+    /// is part of THIS document's own tree. Nexus skin31's <c>glass</c>/<c>glass_out</c> submeshes point
+    /// at <c>Glass_inst</c>, which exists only in <c>Nexus_Multi_Skins_Skin30_Skins_Skin31.bin</c>.
+    ///
+    /// <para>Such a binding is external and READ-ONLY by construction: its <see cref="MaterialObject"/>,
+    /// <see cref="SettingsStruct"/> and every live container (<see cref="SamplerContainer"/>,
+    /// <see cref="ParamContainer"/>, the switch/macro/pass fields) are left null even though the
+    /// underlying data is real, so every <c>CanEdit*</c>/<c>CanAddSchemaField</c> gate on this binding is
+    /// false and nothing here can ever be written back into THIS document's <see cref="MaterialDocument.Serialize"/>
+    /// - the object lives in a BinTree this document never touches. Open the linked bin itself to edit it.</para>
+    /// </summary>
+    public string? LinkedFromBin { get; init; }
+    public bool IsLinked => LinkedFromBin is not null;
     public IReadOnlyList<TextureSlot> Slots => _slots;
     public IReadOnlyList<MaterialParameter> Parameters => _params;
 
@@ -1016,6 +1123,26 @@ public sealed class MaterialBinding
     public int DiffuseAddressU { get; init; }
     public int DiffuseAddressV { get; init; }
 
+    /// <summary>M777: first pass's <c>depthEnable</c> — the depth TEST, off on 19 linked champion glass
+    /// materials (Nexus's Glass_inst among them). Schema default true, so a material that authors nothing
+    /// here reads exactly as it always has.</summary>
+    private readonly bool _depthEnableInit = true;
+    public bool DepthEnable
+    {
+        get => PassStruct is null ? _depthEnableInit : GetPassBool("depthEnable", _depthEnableInit);
+        init => _depthEnableInit = value;
+    }
+
+    /// <summary>M777: first pass's <c>writeMask</c> — the depth WRITE. Schema default 31 (writes); 0 means
+    /// the pass writes nothing. <see cref="WritesDepth"/> is the boolean a renderer actually wants.</summary>
+    private readonly int _writeMaskInit = 31;
+    public int WriteMask
+    {
+        get { if (PassStruct is null) return _writeMaskInit; int v = GetPassU32("writeMask"); return v >= 0 ? v : _writeMaskInit; }
+        init => _writeMaskInit = value;
+    }
+    public bool WritesDepth => WriteMask != 0;
+
     /// <summary>M646: the parameters this material's <c>dynamicMaterial</c> drives at runtime. For these
     /// the authored paramValues entry is the editor's value, not the game's - see
     /// <see cref="MaterialDynamicParameter"/>. Empty for materials without a DynamicMaterialDef.</summary>
@@ -1024,8 +1151,10 @@ public sealed class MaterialBinding
     /// <summary>The derived RiotApprox preview profile (features + UV transform). Set during parse (M32).</summary>
     public MaterialProfile Profile { get; internal set; } = MaterialProfile.Default;
 
-    /// <summary>True for real StaticMaterialDef bindings (they carry the switches/params that drive the profile).</summary>
-    public bool IsStaticMaterialDef => MaterialObject is not null;
+    /// <summary>True for real StaticMaterialDef bindings (they carry the switches/params that drive the
+    /// profile) — including a <see cref="IsLinked"/> one: its data is just as real, only its container
+    /// lives in another bin.</summary>
+    public bool IsStaticMaterialDef => MaterialObject is not null || IsLinked;
 
     public MaterialBinding(string name, string shaderName, IReadOnlyList<string> submeshes, bool isDefault,
         List<TextureSlot> slots, IReadOnlyList<MaterialParameter> parameters)

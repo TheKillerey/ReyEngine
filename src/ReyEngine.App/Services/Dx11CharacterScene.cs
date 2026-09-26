@@ -149,9 +149,21 @@ public static class Dx11CharacterScene
             // coordinates and let the shared camera frame it, which is the only way the two can agree.
             recentre: false);
 
+        // M777: follow a materialOverride/skinMeshProperties link into a LINKED bin (tree.Dependencies)
+        // when the skin bin does not define the target itself - Nexus skin31's glass/glass_out point at
+        // Glass_inst, which lives only in Nexus_Multi_Skins_Skin30_Skins_Skin31.bin. Dependency paths are
+        // plain wad paths (never the texture "0x…" hex form), so they hash with WadPath, not
+        // BinTexturePath.HashOfReference. Goes through the SAME readAsset as every texture here, so a
+        // project override on the linked bin is honoured.
+        byte[]? ReadBin(string path)
+        {
+            try { return readAsset(HashAlgorithms.WadPath(path)); }
+            catch { return null; }
+        }
+
         MaterialDocument? document = null;
         if (skinBinBytes is { Length: > 0 })
-            try { document = MaterialDocument.Parse(skinBinBytes, resolveBinName, resolveWadPath); }
+            try { document = MaterialDocument.Parse(skinBinBytes, resolveBinName, resolveWadPath, ReadBin); }
             catch (Exception ex) { sb.AppendLine($"skin bin: {ex.Message}"); }
 
         var bindings = document?.Materials ?? (IReadOnlyList<MaterialBinding>)Array.Empty<MaterialBinding>();
@@ -202,6 +214,17 @@ public static class Dx11CharacterScene
             // the D3D11 character had no way to be told which range to stop drawing, and every hide - the
             // checkboxes, Show All / None, and every per-clip visibility event - moved only the GL image.
             if (slice is not null) scene.Slices.Add(slice with { SubmeshIndex = submeshIndex });
+        }
+
+        // M777: submeshRenderOrder - the skin's own front-to-back DRAW order (glass drawn after the dome
+        // it sits on, for instance). Named submeshes move to that order; everything else keeps its file
+        // order, after the named ones.
+        if (scene.SkinMesh?.SubmeshRenderOrder is { Count: > 0 } order)
+        {
+            var reordered = ApplySubmeshRenderOrder(scene.Slices, s => s.Submesh, order);
+            scene.Slices.Clear();       // Slices is `init`-only - reorder the existing list in place
+            scene.Slices.AddRange(reordered);
+            sb.AppendLine($"submeshRenderOrder applied: {string.Join(' ', order)}");
         }
 
         // Every distinct texture the scene will ask for, decoded once. Failures are recorded rather than
@@ -287,7 +310,17 @@ public static class Dx11CharacterScene
                 continue;
             }
 
-            mat.SortableByPipeline = StateDescription.Geometry.DepthWrite;
+            // M777: the pass's OWN depthEnable/writeMask (schema default true/31 when the material
+            // authors neither, which is most of them - so this changes nothing for a material that
+            // authors nothing). Only 19 linked champion glass materials author depthEnable=false today,
+            // but every material is read the same way rather than special-casing linked ones.
+            mat.TestsDepth = slice.Profile.AuthoredDepthTest;
+            mat.WritesDepth = slice.Profile.AuthoredWritesDepth;
+            // A material that doesn't write depth keeps SUBMISSION order rather than sorting by pipeline -
+            // the same M279 rule the map path's Dx11SceneBuilder applies off its own depthWrite flag
+            // (mat.SortableByPipeline = depthWrite), for the same reason: a transparent slice sorted by
+            // pipeline can land in front of the opaque geometry it is meant to composite over.
+            mat.SortableByPipeline = mat.WritesDepth;
             mat.Visible = !slice.Hidden;
             // M724: which submesh this material is, so the host can drive Visible per frame from the same
             // array the GL viewport reads. Without it the line above was the only thing that ever set
@@ -341,6 +374,27 @@ public static class Dx11CharacterScene
             made.Add(mat);
         }
         return made;
+    }
+
+    /// <summary>
+    /// M777: reorder <paramref name="items"/> per a skin's authored <c>submeshRenderOrder</c> - named
+    /// submeshes move to that order (front to back); everything else keeps its original position, placed
+    /// after every named one. A stable sort over (listed rank, original index) does exactly that: listed
+    /// names by their rank in <paramref name="order"/>, unlisted names by <see cref="int.MaxValue"/> so
+    /// they sort after all of them, and ties (unlisted vs. unlisted) keep file order because the sort is
+    /// stable. Pulled out of <see cref="Prepare"/> so the rule can be tested on its own, without a shader
+    /// cache or a decoded mesh.
+    /// </summary>
+    public static List<T> ApplySubmeshRenderOrder<T>(
+        IReadOnlyList<T> items, Func<T, string> submeshOf, IReadOnlyList<string> order)
+    {
+        var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < order.Count; i++) rank.TryAdd(order[i], i);
+        return items
+            .Select((item, fileIndex) => (Item: item, Rank: rank.TryGetValue(submeshOf(item), out var r) ? r : int.MaxValue, fileIndex))
+            .OrderBy(x => x.Rank).ThenBy(x => x.fileIndex)
+            .Select(x => x.Item)
+            .ToList();
     }
 
     // ---- resolution ---------------------------------------------------------------------------------

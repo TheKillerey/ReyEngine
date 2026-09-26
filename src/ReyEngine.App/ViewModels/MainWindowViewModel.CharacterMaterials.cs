@@ -184,7 +184,10 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            var resolved = ChampionMaterialResolver.Resolve(bytes, ResolveBinName, ResolveWadPath);
+            // M777: readBin follows tree.Dependencies for a material link this bin does not itself define
+            // (Nexus skin31's glass/glass_out -> Glass_inst, which lives only in a linked bin) - through the
+            // SAME asset path the rest of the preview uses, so a project override on the linked bin applies.
+            var resolved = ChampionMaterialResolver.Resolve(bytes, ResolveBinName, ResolveWadPath, ReadAssetByPath);
             MeshPreview.Textures = ResolveSubmeshDiffuse(mesh, resolved);
             MeshPreview.Materials = ResolveSubmeshMaterials(mesh, resolved);   // M664: and its render state
         }

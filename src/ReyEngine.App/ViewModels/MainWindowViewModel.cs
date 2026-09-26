@@ -1093,14 +1093,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (sknBytes is null) return null;
 
             var mesh = SkinnedMeshDecoder.Decode(sknBytes);
-            var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName, ResolveWadPath);
+            var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName, ResolveWadPath, ReadAssetByPath);   // M777
 
             // M676: the skin's own scale, which the game applies to the whole model and this preview never
             // did - Baron and the camps drew at the mesh's authored size whatever the bin said.
             float skinScale = 1f;
             try
             {
-                var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName, ResolveWadPath);
+                var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName, ResolveWadPath, ReadAssetByPath);
                 if (doc.SkinMesh?.SkinScale is { } authored && authored > 0f) skinScale = authored;
             }
             catch { /* an unparseable skin keeps scale 1 rather than losing the prop */ }
@@ -7978,7 +7978,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         BinEditorDocument? binDoc = null;
         await Task.Run(() =>
         {
-            try { matDoc = MaterialDocument.Parse(bytes, ResolveBinName, ResolveWadPath); } catch { matDoc = null; }
+            // M777: readBin so a champion skin's Materials tab (Character Editor and content browser
+            // alike) lists a materialOverride target resolved from a LINKED bin - without it Glass_inst
+            // rendered correctly (every other caller here was fixed) but never appeared in the list to be
+            // marked read-only/external, which is the whole point of that marking.
+            try { matDoc = MaterialDocument.Parse(bytes, ResolveBinName, ResolveWadPath, ReadAssetByPath); } catch { matDoc = null; }
             if (alsoRawBin) { try { binDoc = BinEditorDocument.Parse(bytes, ResolveBinName, ResolveWadPath); } catch { binDoc = null; } }
         });
 
@@ -8030,7 +8034,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             if (MaterialEditor.Kind == MaterialSourceKind.ChampionSkin && CurrentMesh is { } mesh)
             {
-                var resolved = ChampionMaterialResolver.Resolve(bytes, ResolveBinName, ResolveWadPath);
+                var resolved = ChampionMaterialResolver.Resolve(bytes, ResolveBinName, ResolveWadPath, ReadAssetByPath);   // M777
                 CurrentModelTextures = BuildSubmeshTextures(mesh, resolved, "material preview");
             }
             else if (MaterialEditor.Kind == MaterialSourceKind.MapMaterials && _currentMap is { } map && CurrentMesh is not null)
@@ -11860,7 +11864,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!ContentLoaded || !skn.IsResolved) return (null, null);
         var binPath = SkinPaths.PreviewBinPath(skinBin, skn.Path);   // M728: the chosen skin's textures
         if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return (null, null);
-        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath);
+        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath, ReadAssetByPath);   // M777
         // M642: shared with the character editor's live preview
         return (ResolveSubmeshDiffuse(mesh, resolved), ResolveSubmeshMaterials(mesh, resolved));
     }
@@ -12664,7 +12668,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("Material", $"No skin .bin found for {skn.DisplayName} (flat shading).");
             return null;
         }
-        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath);
+        var resolved = ChampionMaterialResolver.Resolve(GetAssetBytes(binEntry), ResolveBinName, ResolveWadPath, ReadAssetByPath);   // M777
         if (!resolved.HasAny)
         {
             _log.Info("Material", $"No skin material found for {skn.DisplayName} (flat shading).");

@@ -94,7 +94,14 @@ public sealed record MaterialProfile(
     // It decides which BRDF a dynamic point light runs: the PBR family evaluates GGX/Smith-Schlick/Schlick
     // and reads the per-light intensity, the env family (DefaultEnv_Flat) evaluates plain Lambert and
     // ignores it. Set from ExtendedChannelRule.IsExtendedShader so there is ONE Mantis test in the app.
-    bool IsPbrShader = false)
+    bool IsPbrShader = false,
+    // M777: the pass's OWN depthEnable/writeMask, straight off MaterialBinding - separate from the
+    // RenderMode-derived DepthWrite below (which only 68 of 420 base-skin materials would even affect,
+    // per M624's measurement, and which M557/M558 confirmed the game does NOT key depth-write off).
+    // Defaults match the StaticMaterialPassDef schema default (true / 31, i.e. tests and writes), so a
+    // material that authors neither reads exactly as every caller already assumed.
+    bool AuthoredDepthTest = true,
+    bool AuthoredWritesDepth = true)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
@@ -271,6 +278,14 @@ public static class MaterialProfiles
             foreach (var p in b.Parameters)
                 if (Norm(p.Name) == "tintcolor" && p.TryGetVector4(out var tv)) { tint = tv; break; }
 
+        // M777: a champion glass material (Shaders/SkinnedMesh/Glass — Nexus's Glass_inst among 195
+        // others) has NO samplers at all and no TintColor either; its own colour lives in Glass_Color1/2.
+        // Only consulted when nothing textures this material AND TintColor didn't already answer, so it
+        // cannot re-tint an otherwise-normal material that merely happens to also carry a Glass_Color1.
+        if (tint is null && b.Slots.Count == 0)
+            foreach (var p in b.Parameters)
+                if (Norm(p.Name) == "glasscolor1" && p.TryGetVector4(out var gv)) { tint = gv; break; }
+
         // Texture wrap: decals use Clamp (address 1; also treat D3D Clamp 3 / Border 4 as clamp) so their
         // out-of-[0,1] UVs don't tile the decal over the whole mesh. Everything else (Wrap/Mirror) tiles.
         static bool IsClamp(int a) => a == 1 || a == 3 || a == 4;
@@ -311,7 +326,8 @@ public static class MaterialProfiles
             b.SrcBlendFactor,
             b.DstBlendFactor,
             // M458: reuse the app's single Mantis test rather than adding a second name check here.
-            MapGeo.ExtendedChannelRule.IsExtendedShader(shaderName));
+            MapGeo.ExtendedChannelRule.IsExtendedShader(shaderName),
+            b.DepthEnable, b.WritesDepth);   // M777
     }
 
     /// <summary>Detect shader 0xe25b830f and read its authored terrain layer paths, tiling, and RGB mask weights.</summary>
