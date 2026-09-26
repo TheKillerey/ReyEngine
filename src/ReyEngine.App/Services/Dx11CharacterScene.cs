@@ -95,6 +95,31 @@ public static class Dx11CharacterScene
     /// 4 submeshes resolved without it, 4 of 4 with it - half the character was simply absent.</para></summary>
     public const string DefaultCharacterShader = "shaders/skinnedmesh/diffuse_alpha";
 
+    /// <summary>M779: what a STAND-IN slice (see <see cref="DefaultCharacterShader"/>) actually draws
+    /// with — the engine's own default pair for a submesh whose material names no shader at all, living
+    /// under <c>assets/shaders/hlsl/</c> rather than <c>assets/shaders/generated/</c> because no material
+    /// ever names it (so it has no generated/ entry of its own).
+    ///
+    /// <para>Not <see cref="DefaultCharacterShader"/>'s generated/diffuse_alpha pair, which is what this
+    /// used to load. Verified against a real D3D11 device (Inhibitor Skin26's cage, the stand-in
+    /// submesh): diffuse_alpha's PS samples only the diffuse texture's <c>.rgb</c> and discards on the
+    /// MATERIAL's own <c>Alpha</c> constant, never the texture's alpha channel — so a cutout texture (the
+    /// cage is 5.0% alpha-0 texels) drew fully opaque, reported as "still not transparent". lit_uber_ps
+    /// discards on <c>DIFFUSE_MAP__TX.a == 0</c>, which is what a cutout needs, and made the cage
+    /// see-through when swapped in (centre pixel (0,0,0,255) opaque black -> (255,62,215) over a magenta
+    /// clear colour).</para></summary>
+    public const string DefaultStandInVertexShader = "assets/shaders/hlsl/skinnedmesh/default_vs";
+    public const string DefaultStandInPixelShader = "assets/shaders/hlsl/skinnedmesh/lit_uber_ps";
+
+    /// <summary>M779: not a real texture path — a synthetic key so a stand-in slice's unauthored
+    /// EMISSIVE_MAP__TX binds to BLACK instead of falling through to the renderer's unbound-texture
+    /// fallback, which is a 1x1 WHITE SRV (<c>ShaderPreviewRenderer._white</c>). lit_uber_ps treats
+    /// EMISSIVE_MAP__TX as a lighting bypass — sampling white drives the term to fully self-lit — so an
+    /// unbound slot would make every stand-in submesh full-bright regardless of the scene's actual
+    /// lights. <see cref="Prepare"/> resolves this key to a 1x1 opaque-black pixel directly, without going
+    /// through <c>readAsset</c>.</summary>
+    private const string BlackEmissiveKey = "reyengine://stand-in/black-emissive";
+
     /// <summary>Decode and resolve. Returns null only when the mesh itself will not decode — a scene with
     /// materials missing is still a scene, and reports what it could not resolve.</summary>
     /// <param name="fallbackShader">Used for materials that author no <c>renderShader</c> of their own.
@@ -232,6 +257,12 @@ public static class Dx11CharacterScene
         foreach (var key in scene.Slices.SelectMany(s => s.Textures).Select(t => t.Key).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (scene.Textures.ContainsKey(key)) continue;
+            // M779: the stand-in emissive fallback is not a wad asset — see BlackEmissiveKey.
+            if (key.Equals(BlackEmissiveKey, StringComparison.OrdinalIgnoreCase))
+            {
+                scene.Textures[key] = new TextureImage(1, 1, new byte[] { 0, 0, 0, 255 });
+                continue;
+            }
             try
             {
                 var data = readAsset(BinTexturePath.HashOfReference(key));
@@ -445,36 +476,98 @@ public static class Dx11CharacterScene
             usedFallback = true;
         }
 
-        string full = "assets/shaders/generated/" + shader!.Trim('/');
-        string vsPath = ShaderCacheReader.TocPathFor(full, DxbcStage.Vertex);
-        string psPath = ShaderCacheReader.TocPathFor(full, DxbcStage.Pixel);
+        // M779: which two blobs actually get bound, and under which names. A stand-in slice (usedFallback)
+        // does NOT resolve `shader` (still "shaders/skinnedmesh/diffuse_alpha") through generated/ - it
+        // draws through the engine's own default_vs/lit_uber_ps pair instead (DefaultStandInVertexShader/
+        // DefaultStandInPixelShader; see their doc comments for why). `shader` stays the fallback name
+        // below only because parameter/feature DEFAULTS are still looked up under it - both pixel shaders
+        // declare the same CharacterPerDrawPS cbuffer (kGrassFade, SELF_ILLUMINATION, LIGHTGRID_SCALE, ...),
+        // so those defaults still apply to lit_uber_ps.
+        string vsFull, psFull, vsPath, psPath;
+        ShaderPermutation vsPerm, psPerm;
+        DxbcShader vs, ps;
+        IReadOnlyDictionary<string, string> vsDefines, psDefines;
 
-        var vsToc = cache.ReadToc(vsPath);
-        var psToc = cache.ReadToc(psPath);
-        if (vsToc is null || psToc is null)
+        if (usedFallback)
         {
-            scene.Failures.Add($"{b.Name}: '{shader}' is missing a stage in the shader cache");
-            return null;
+            vsFull = DefaultStandInVertexShader;
+            psFull = DefaultStandInPixelShader;
+            vsPath = ShaderCacheReader.TocPathFor(vsFull, DxbcStage.Vertex);
+            psPath = ShaderCacheReader.TocPathFor(psFull, DxbcStage.Pixel);
+
+            var vsToc = cache.ReadToc(vsPath);
+            var psToc = cache.ReadToc(psPath);
+            if (vsToc is null || psToc is null)
+            {
+                scene.Failures.Add($"{b.Name}: the stand-in shader pair is missing from the shader cache");
+                return null;
+            }
+
+            // Fixed permutations, not resolved from the material: this pair belongs to no material and
+            // carries no macros/switches of its own. NUM_BLEND_WEIGHTS=4 matches every League skinned mesh
+            // (4 blend weights per vertex); the pixel shader's base permutation authors no defines at all.
+            ulong vsKey = ShaderCacheReader.PermutationKey(new[] { "NUM_BLEND_WEIGHTS=4" });
+            ulong psKey = ShaderCacheReader.PermutationKey(Array.Empty<string>());
+            var vsFound = vsToc.Permutations.FirstOrDefault(p => p.Key == vsKey);
+            var psFound = psToc.Permutations.FirstOrDefault(p => p.Key == psKey);
+            if (vsFound is null || psFound is null)
+            {
+                scene.Failures.Add($"{b.Name}: the stand-in shader pair has no cooked base permutation");
+                return null;
+            }
+            vsPerm = vsFound;
+            psPerm = psFound;
+            vsDefines = new Dictionary<string, string> { ["NUM_BLEND_WEIGHTS"] = "4" };
+            psDefines = new Dictionary<string, string>();
+
+            var loadedVs = cache.LoadShader(vsPath, vsPerm.BlobIndex, out var vsErr0);
+            var loadedPs = cache.LoadShader(psPath, psPerm.BlobIndex, out var psErr0);
+            if (loadedVs is null || loadedPs is null)
+            {
+                scene.Failures.Add($"{b.Name}: stand-in bytecode would not load ({(loadedVs is null ? vsErr0 : psErr0)})");
+                return null;
+            }
+            vs = loadedVs;
+            ps = loadedPs;
         }
-
-        IReadOnlyDictionary<string, string>? feat = null;
-        IReadOnlyDictionary<string, bool>? swDef = null;
-        perms?.TryGetShaderDefs(shader, out feat, out swDef);
-
-        var vsPerm = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out var vwhy);
-        var psPerm = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out var pwhy);
-        if (vsPerm is null || psPerm is null)
+        else
         {
-            scene.Failures.Add($"{b.Name}: no cooked permutation ({(vsPerm is null ? vwhy : pwhy)})");
-            return null;
-        }
+            vsFull = psFull = "assets/shaders/generated/" + shader!.Trim('/');
+            vsPath = ShaderCacheReader.TocPathFor(vsFull, DxbcStage.Vertex);
+            psPath = ShaderCacheReader.TocPathFor(psFull, DxbcStage.Pixel);
 
-        var vs = cache.LoadShader(vsPath, vsPerm.BlobIndex, out var vsErr);
-        var ps = cache.LoadShader(psPath, psPerm.BlobIndex, out var psErr);
-        if (vs is null || ps is null)
-        {
-            scene.Failures.Add($"{b.Name}: bytecode would not load ({(vs is null ? vsErr : psErr)})");
-            return null;
+            var vsToc = cache.ReadToc(vsPath);
+            var psToc = cache.ReadToc(psPath);
+            if (vsToc is null || psToc is null)
+            {
+                scene.Failures.Add($"{b.Name}: '{shader}' is missing a stage in the shader cache");
+                return null;
+            }
+
+            IReadOnlyDictionary<string, string>? feat = null;
+            IReadOnlyDictionary<string, bool>? swDef = null;
+            perms?.TryGetShaderDefs(shader, out feat, out swDef);
+
+            var vsFound = ShaderCacheReader.ResolvePermutation(vsToc, b.Macros, b.Switches, feat, swDef, out var vwhy);
+            var psFound = ShaderCacheReader.ResolvePermutation(psToc, b.Macros, b.Switches, feat, swDef, out var pwhy);
+            if (vsFound is null || psFound is null)
+            {
+                scene.Failures.Add($"{b.Name}: no cooked permutation ({(vsFound is null ? vwhy : pwhy)})");
+                return null;
+            }
+            vsPerm = vsFound;
+            psPerm = psFound;
+            vsDefines = psDefines = b.Macros;
+
+            var loadedVs = cache.LoadShader(vsPath, vsPerm.BlobIndex, out var vsErr1);
+            var loadedPs = cache.LoadShader(psPath, psPerm.BlobIndex, out var psErr1);
+            if (loadedVs is null || loadedPs is null)
+            {
+                scene.Failures.Add($"{b.Name}: bytecode would not load ({(loadedVs is null ? vsErr1 : psErr1)})");
+                return null;
+            }
+            vs = loadedVs;
+            ps = loadedPs;
         }
 
         var textures = new List<(string Target, string Key)>();
@@ -485,6 +578,21 @@ public static class Dx11CharacterScene
             string key = slot.Path!.ToLowerInvariant();
             textures.RemoveAll(t => t.Target.Equals(target, StringComparison.OrdinalIgnoreCase));
             textures.Add((target, key));
+        }
+
+        if (usedFallback)
+        {
+            // M779: lit_uber_ps reads EMISSIVE_MAP__TX as a lighting bypass (sampling white drives the
+            // term fully self-lit), and the renderer's fallback for an unbound texture is a 1x1 WHITE SRV -
+            // so leaving this slot unbound would draw every stand-in submesh full-bright regardless of the
+            // scene's actual lights. The ordinary slot loop above never reaches it: an authored
+            // "emissiveTexture" field does not resolve against lit_uber_ps by name (only the literal
+            // "texture" sampler gets the generic diffuse fallback - see ResolveTextureTarget), so it has to
+            // be bound explicitly here - to the skin's own emissive texture when authored, else black.
+            string? emissivePath = b.Emissive?.Path;
+            textures.RemoveAll(t => t.Target.Equals("EMISSIVE_MAP__TX", StringComparison.OrdinalIgnoreCase));
+            textures.Add(("EMISSIVE_MAP__TX",
+                !string.IsNullOrWhiteSpace(emissivePath) ? emissivePath!.ToLowerInvariant() : BlackEmissiveKey));
         }
 
         var parameters = new List<(string Name, float[] Value)>();
@@ -543,12 +651,11 @@ public static class Dx11CharacterScene
             .Any(h => h.Equals(sub.Material, StringComparison.OrdinalIgnoreCase)) == true;
         if (hidden) sb.AppendLine($"   '{sub.Material}' hidden by initialSubmeshToHide");
 
-        var macros = b.Macros;
         return new CharacterSlice(
             sub.Material, b.Name, sub.StartIndex, sub.IndexCount,
             vs, ps,
-            new ShaderDescription(full, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, macros, vs),
-            new ShaderDescription(full, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, macros, ps),
+            new ShaderDescription(vsFull, DxbcStage.Vertex, vsPerm.Key, vsPerm.BlobIndex, vsDefines, vs),
+            new ShaderDescription(psFull, DxbcStage.Pixel, psPerm.Key, psPerm.BlobIndex, psDefines, ps),
             textures, parameters, hidden, usedFallback, b.Profile);
     }
 

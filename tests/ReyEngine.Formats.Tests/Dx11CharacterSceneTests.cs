@@ -342,6 +342,45 @@ public sealed class Dx11CharacterSceneTests
     }
 
     [Fact]
+    public void AStandInSliceDrawsWithTheEngineDefaultPairAndABlackEmissiveWhenNoneIsAuthored()
+    {
+        // M779: a submesh with no renderShader of its own used to draw with generated/diffuse_alpha,
+        // whose PS discards only on the material's Alpha constant and never reads the diffuse texture's
+        // alpha channel - a cutout texture (an alpha mask) then drew fully opaque (Inhibitor Skin26's
+        // cage, reported "still not transparent"). It has to resolve to the engine's own
+        // default_vs/lit_uber_ps pair instead, and that PS treats EMISSIVE_MAP__TX as a lighting bypass
+        // (sampling white drives it fully self-lit), so an unauthored emissive has to be bound to
+        // something dark rather than left to the renderer's unbound-texture fallback, which is WHITE.
+        if (Ahri() is not { } f) return;
+        using (f)
+        {
+            var scene = Prepare(f, fallback: Dx11CharacterScene.DefaultCharacterShader);
+            if (scene is null) return;
+
+            var standIns = scene.Slices.Where(s => s.UsedFallbackShader).ToList();
+            Assert.NotEmpty(standIns);   // Ahri's default diffuse binding is exactly this case
+
+            Assert.All(standIns, s =>
+            {
+                Assert.Equal(Dx11CharacterScene.DefaultStandInVertexShader, s.VsDesc.ShaderName);
+                Assert.Equal(Dx11CharacterScene.DefaultStandInPixelShader, s.PsDesc.ShaderName);
+
+                Assert.Contains(s.Textures, t => t.Target.Equals("EMISSIVE_MAP__TX", StringComparison.OrdinalIgnoreCase));
+                var emissive = s.Textures.First(t => t.Target.Equals("EMISSIVE_MAP__TX", StringComparison.OrdinalIgnoreCase));
+                Assert.True(scene.Textures.TryGetValue(emissive.Key, out var img), $"{emissive.Key} was never decoded");
+
+                // Ahri authors no emissiveTexture on her default binding, so this must be the synthetic
+                // black fallback rather than a real asset or the renderer's unbound-texture default.
+                Assert.Equal(1, img!.Width);
+                Assert.Equal(1, img.Height);
+                Assert.Equal(0, img.Rgba[0]);
+                Assert.Equal(0, img.Rgba[1]);
+                Assert.Equal(0, img.Rgba[2]);
+            });
+        }
+    }
+
+    [Fact]
     public void TheHostSuppliesTheStandInShader()
     {
         // Without this the constant exists and nothing passes it, which is the failure it was written for.
