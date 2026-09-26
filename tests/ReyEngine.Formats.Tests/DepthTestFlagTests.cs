@@ -100,7 +100,13 @@ public sealed class DepthTestFlagTests
         // one chooser over three states, and both draw sites go through it - the two-state expression was
         // hand-copied at both, which is how a third state gets added to one of them and not the other
         Assert.Contains("private ComPtr<ID3D11DepthStencilState> DepthStateFor(PreviewMaterial mat)", dx11);
-        Assert.Equal(2, dx11!.Split("OMSetDepthStencilState(DepthStateFor(mat), 0);").Length - 1);
+        // Stencil masking (particle stencilMode/stencilRef): the second argument is no longer a hard-coded
+        // 0 - D3D11 keeps the numeric stencil reference outside the state object, so every draw through
+        // DepthStateFor now passes the material's own StencilRef. Three sites share the chooser: the M283
+        // legacy mesh-particle draw, the heat-haze distortion draw (folded into it alongside this work), and
+        // the main per-material loop.
+        Assert.Equal(3, dx11!.Split("OMSetDepthStencilState(DepthStateFor(mat), (uint)mat.StencilRef);").Length - 1);
+        Assert.DoesNotContain("OMSetDepthStencilState(DepthStateFor(mat), 0);", dx11);
         Assert.DoesNotContain("mat.WritesDepth || _depthStateNoWrite.Handle is null ? _depthState : _depthStateNoWrite, 0);", dx11);
         // the no-test state is the no-write state with the test off, so the two cannot drift on the
         // comparison function

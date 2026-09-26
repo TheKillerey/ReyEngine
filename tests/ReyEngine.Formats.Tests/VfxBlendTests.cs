@@ -320,7 +320,9 @@ public sealed class VfxBlendTests
 
         string? ribbon = Source("src", "ReyEngine.Rendering.D3D11", "ShaderPreviewRenderer.Ribbon.cs");
         Assert.NotNull(ribbon);
-        Assert.Contains("_ctx.OMSetDepthStencilState(DepthStateFor(mat), 0);", ribbon);
+        // Stencil masking: the ribbon shares the one chooser, and the numeric ref is the material's own -
+        // D3D11 keeps it outside the state object, so a stencil-testing beam/trail is not left unmasked.
+        Assert.Contains("_ctx.OMSetDepthStencilState(DepthStateFor(mat), (uint)mat.StencilRef);", ribbon);
         Assert.Contains("ParticleBlendState(ribbonBlend)", ribbon);
     }
 

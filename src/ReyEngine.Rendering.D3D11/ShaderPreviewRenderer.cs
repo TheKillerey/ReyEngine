@@ -334,6 +334,20 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// off for every particle through <see cref="WritesDepth"/>. Everything else leaves this true.</summary>
     public bool TestsDepth { get; set; } = true;
 
+    /// <summary>Particle stencil masking, mirroring GL's <c>ApplyStencil</c> (VfxParticleRenderer.cs) off the
+    /// same <c>VfxEmitterDefinition.StencilMode</c>. 0 (the default, every non-particle material included) is
+    /// "leave the stencil alone" - the draw neither writes nor tests it. 1 WRITEs: replace the stencil with
+    /// <see cref="StencilRef"/> wherever the draw passes. 2/3 TEST equal/not-equal against
+    /// <see cref="StencilRef"/> without writing. <see cref="VfxD3D11EmitterPipeline.Build"/> is the one place
+    /// that folds mode 4 and an unresolved (ref &lt; 0) mode 2/3 back to 0, so nothing downstream has to know
+    /// that GL's ApplyStencil treats those the same way.</summary>
+    public int StencilMode { get; set; }
+
+    /// <summary>The value a mode-1 draw writes, or a mode-2/3 draw compares against. Meaningless at mode 0.
+    /// Passed as the second (stencil ref) argument of <c>OMSetDepthStencilState</c> - D3D11 keeps the numeric
+    /// reference OUTSIDE the state object, so one state per mode serves every ref value.</summary>
+    public int StencilRef { get; set; }
+
     /// <summary>Address mode for the material's ordinary texture samplers. Explicit clamp samplers and
     /// comparison samplers still take precedence when the shader declares them.</summary>
     public PreviewSamplerAddress SamplerAddress { get; set; }
@@ -675,6 +689,15 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11DepthStencilState> _depthStateNoWrite;
     /// <summary>M711: neither tested nor written - the DISABLE_ZBUFFER particle.</summary>
     private ComPtr<ID3D11DepthStencilState> _depthStateNoTest;
+
+    /// <summary>Stencil masking: the WRITE/EQUAL/NOT-EQUAL twin of each of the three depth states above,
+    /// indexed [base, stencilMode] with base 0 = <see cref="_depthState"/>, 1 = <see cref="_depthStateNoWrite"/>,
+    /// 2 = <see cref="_depthStateNoTest"/>, and stencilMode 1/2/3 matching <see cref="PreviewMaterial.StencilMode"/>
+    /// (index 0 is never populated - mode 0 uses the plain state above instead, so DepthStateFor never
+    /// indexes here for "no stencil"). One state per (depth kind, stencil mode) pair, not per stencil REF -
+    /// D3D11 keeps the numeric reference outside the state object and takes it as OMSetDepthStencilState's
+    /// second argument, so 12 states cover every authored ref value.</summary>
+    private readonly ComPtr<ID3D11DepthStencilState>[,] _stencilDepthStates = new ComPtr<ID3D11DepthStencilState>[3, 4];
 
     /// <summary>The scene. One entry for the single-shader bench, one per submesh for a loaded model.</summary>
     private readonly List<PreviewMaterial> _materials = new();
@@ -3715,7 +3738,7 @@ float4 psmain(VOut i) : SV_Target
                 : meshParticleState.Handle is not null ? meshParticleState
                 : mat.Additive && _blendAdditive.Handle is not null ? _blendAdditive : _blend,
             stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
-        _ctx.OMSetDepthStencilState(DepthStateFor(mat), 0);
+        _ctx.OMSetDepthStencilState(DepthStateFor(mat), (uint)mat.StencilRef);
 
         // M295: a prop material may draw only ONE SUBMESH of a shared geometry, because a prop's submeshes
         // each carry their own diffuse. Particles leave these at 0 and get the whole buffer, as before.
@@ -3811,11 +3834,20 @@ float4 psmain(VOut i) : SV_Target
     /// multiply texture when the diffuse was wanted, silently, on exactly the emitters that author both.</summary>
     /// <summary>M711: which of the three depth states this material draws with. One chooser, because the two
     /// draw sites had hand-copied the two-state expression and a third state would have been added to one of
-    /// them.</summary>
+    /// them.
+    ///
+    /// <para>Stencil masking: the base choice (test/write/no-test) is exactly as before; on top of it, a
+    /// material carrying <see cref="PreviewMaterial.StencilMode"/> 1/2/3 gets that base's WRITE/EQUAL/
+    /// NOT-EQUAL twin from <see cref="_stencilDepthStates"/> instead of the plain state. Mode 0 (everything
+    /// that is not a stencil-authoring particle) is untouched - same object, same behaviour as before this
+    /// existed.</para></summary>
     private ComPtr<ID3D11DepthStencilState> DepthStateFor(PreviewMaterial mat)
     {
-        if (!mat.TestsDepth && _depthStateNoTest.Handle is not null) return _depthStateNoTest;
-        return mat.WritesDepth || _depthStateNoWrite.Handle is null ? _depthState : _depthStateNoWrite;
+        int b = !mat.TestsDepth && _depthStateNoTest.Handle is not null ? 2
+            : mat.WritesDepth || _depthStateNoWrite.Handle is null ? 0 : 1;
+        if (mat.StencilMode is >= 1 and <= 3 && _stencilDepthStates[b, mat.StencilMode].Handle is not null)
+            return _stencilDepthStates[b, mat.StencilMode];
+        return b switch { 2 => _depthStateNoTest, 1 => _depthStateNoWrite, _ => _depthState };
     }
 
     private ComPtr<ID3D11ShaderResourceView> BoundTexture(PreviewMaterial mat, string sampler)
@@ -4066,10 +4098,10 @@ float4 psmain(VOut i) : SV_Target
         // blendMode must not reach this draw. Depth is tested but not written, as for every particle.
         _ctx.OMSetBlendState(_blend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
         // M720: still never a depth write, whatever the mode - but the M711 test flag reaches heat haze now,
-        // as it reaches every other particle draw.
-        _ctx.OMSetDepthStencilState(
-            !mat.TestsDepth && _depthStateNoTest.Handle is not null ? _depthStateNoTest
-            : _depthStateNoWrite.Handle is not null ? _depthStateNoWrite : _depthState, 0);
+        // as it reaches every other particle draw. Routed through the one chooser (stencil masking) rather
+        // than the hand-copied expression this used to be, so a heat-haze emitter that also carries a
+        // stencil mode is not the one draw in the renderer that silently ignores it.
+        _ctx.OMSetDepthStencilState(DepthStateFor(mat), (uint)mat.StencilRef);
 
         _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
 
@@ -4159,13 +4191,16 @@ float4 psmain(VOut i) : SV_Target
         }
         else Log("distortion: the scene-copy texture could not be created; heat haze will be skipped");
 
-        // M363: R32_TYPELESS, not D32_FLOAT. Identical precision and identical depth behaviour, but a fully
-        // typed depth format can never carry a shader-resource view, and soft particles have to SAMPLE this.
-        // The DSV below names D32_FLOAT explicitly, which is what the typeless format defers.
+        // Stencil masking: R32_TYPELESS carried no stencil plane at all, so every DepthStencilDesc in this
+        // renderer had StencilEnable = 0 and a particle authoring stencilMode/stencilRef drew unmasked - the
+        // portal orb/rectangle/stripes bug. R32G8X24_TYPELESS is the combined depth+stencil typeless format
+        // (32-bit float depth, 8-bit stencil, 24 unused) - same depth precision as before, plus a stencil
+        // plane. The DSV below names D32_FLOAT_S8X24_UINT explicitly, which is what the typeless format
+        // defers; the depth-only SRV a few lines down reads the depth channel of the same bit layout.
         var dd = new Texture2DDesc
         {
             Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1,
-            Format = Format.FormatR32Typeless, SampleDesc = new SampleDesc(1, 0),
+            Format = Format.FormatR32G8X24Typeless, SampleDesc = new SampleDesc(1, 0),
             Usage = Usage.Default, BindFlags = (uint)BindFlag.DepthStencil,
         };
         ComPtr<ID3D11Texture2D> depth = default;
@@ -4173,7 +4208,7 @@ float4 psmain(VOut i) : SV_Target
         _depth = depth;
         var dsvDesc = new DepthStencilViewDesc
         {
-            Format = Format.FormatD32Float,
+            Format = Format.FormatD32FloatS8X24Uint,
             ViewDimension = DsvDimension.Texture2D,
         };
         ComPtr<ID3D11DepthStencilView> dsv = default;
@@ -4192,7 +4227,11 @@ float4 psmain(VOut i) : SV_Target
             _depthCopy = dcopy;
             var dsrv = new ShaderResourceViewDesc
             {
-                Format = Format.FormatR32Float,
+                // R32_FLOAT_X8X24_TYPELESS: the depth-channel view of the combined depth+stencil format
+                // above. Every depth reader here (soft particles, the postfog blob) samples .r/.x, which is
+                // exactly the depth float this view exposes - the 8 stencil bits and 24 unused ones are not
+                // part of this view at all.
+                Format = Format.FormatR32FloatX8X24Typeless,
                 ViewDimension = D3DSrvDimension.D3D11SrvDimensionTexture2D,
                 Anonymous = new ShaderResourceViewDescUnion
                 {
@@ -4325,10 +4364,19 @@ float4 psmain(VOut i) : SV_Target
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _raster = default; _blend = default; _blendOpaque = default; _depthState = default;
 
+        // Cull toggle fix: _raster is now ALWAYS CullMode.None. It used to take the global toggle directly
+        // (s.CullBackFaces ? Back : None), which meant that with the toggle ON, _raster culled too - and
+        // the draw-loop selection `s.CullBackFaces && mat.CullBackFaces ? _rasterCull : _raster` picks
+        // _raster for exactly the materials that are NOT single-sided (mat.CullBackFaces false: particles,
+        // props, double-sided map surfaces, characters). So turning the toggle on culled two-sided
+        // geometry too, contradicting the M354/M540 comment below and GL's own rule
+        // (cullBackfaces && !DoubleSided, ViewportMeshRenderer). The toggle's only job is to gate
+        // _rasterCull's selection at draw time, which it already does; the two states below no longer need
+        // to read s.CullBackFaces to express it.
         var rd = new RasterizerDesc
         {
             FillMode = s.Wireframe ? FillMode.Wireframe : FillMode.Solid,
-            CullMode = s.CullBackFaces ? CullMode.Back : CullMode.None,
+            CullMode = CullMode.None,
             // M223: a mirrored view reverses triangle winding, so the front face has to swap with it or
             // backface culling removes exactly the faces it should keep. ViewportMeshRenderer does the same
             // thing off the model determinant.
@@ -4441,6 +4489,43 @@ float4 psmain(VOut i) : SV_Target
         ComPtr<ID3D11DepthStencilState> dsnt = default;
         _device.CreateDepthStencilState(in dsdNoTest, ref dsnt);
         _depthStateNoTest = dsnt;
+
+        // Stencil masking: the WRITE/EQUAL/NOT-EQUAL twin of each of the three depth bases above. The
+        // numeric stencil REF is not part of this desc at all - see PreviewMaterial.StencilRef and
+        // DepthStateFor - so one state per (depth kind, mode) pair is every state this renderer ever needs.
+        var bases = new[] { dsd, dsdNoWrite, dsdNoTest };
+        for (int b = 0; b < 3; b++)
+        for (int mode = 1; mode <= 3; mode++)
+        {
+            var d = bases[b];
+            d.StencilEnable = 1;
+            switch (mode)
+            {
+                case 1:   // WRITE: replace unconditionally, matching GL's StencilFunc(Always) + Replace
+                    d.StencilReadMask = 0xFF; d.StencilWriteMask = 0xFF;
+                    var writeOp = new DepthStencilopDesc
+                    {
+                        StencilFailOp = StencilOp.Keep, StencilDepthFailOp = StencilOp.Keep,
+                        StencilPassOp = StencilOp.Replace, StencilFunc = ComparisonFunc.Always,
+                    };
+                    d.FrontFace = writeOp; d.BackFace = writeOp;
+                    break;
+                default:  // 2 EQUAL / 3 NOT-EQUAL: test only, matching GL's StencilMask(0x00) + Keep
+                    d.StencilReadMask = 0xFF; d.StencilWriteMask = 0x00;
+                    var testOp = new DepthStencilopDesc
+                    {
+                        StencilFailOp = StencilOp.Keep, StencilDepthFailOp = StencilOp.Keep,
+                        StencilPassOp = StencilOp.Keep,
+                        StencilFunc = mode == 2 ? ComparisonFunc.Equal : ComparisonFunc.NotEqual,
+                    };
+                    d.FrontFace = testOp; d.BackFace = testOp;
+                    break;
+            }
+            _stencilDepthStates[b, mode].Dispose();
+            ComPtr<ID3D11DepthStencilState> st = default;
+            _device.CreateDepthStencilState(in d, ref st);
+            _stencilDepthStates[b, mode] = st;
+        }
     }
 
     // ---------------------------------------------------------------- constants
@@ -5250,7 +5335,10 @@ float4 psmain(VOut i) : SV_Target
                 var glowClear = stackalloc float[4] { 0f, 0f, 0f, 1f };
                 _ctx.ClearRenderTargetView(_glowRtv, glowClear);
             }
-            _ctx.ClearDepthStencilView(_dsv, (uint)ClearFlag.Depth, 1f, 0);
+            // Stencil masking: clear the stencil plane every frame too, not just depth. A stale mask from
+            // the previous frame would let a mode-2/3 tester draw against last frame's writer footprint for
+            // one frame before its own writer redraws it.
+            _ctx.ClearDepthStencilView(_dsv, (uint)(ClearFlag.Depth | ClearFlag.Stencil), 1f, 0);
 
             // M362: the sky, FIRST and before any geometry - exactly where the GL viewport draws it. It
             // writes no depth and tests none, so the scene simply paints over it; drawing it here rather
@@ -5410,7 +5498,7 @@ float4 psmain(VOut i) : SV_Target
             // M266: and so is the depth WRITE, for the same reason. A particle quad tests against the map
             // but must not deposit depth, or the next additive quad behind it is rejected and the map is
             // occluded by something the artist authored as transparent.
-            _ctx.OMSetDepthStencilState(DepthStateFor(mat), 0);
+            _ctx.OMSetDepthStencilState(DepthStateFor(mat), (uint)mat.StencilRef);
 
             if (mat.PipelineId != lastPipeline) { PipelineSwitches++; lastPipeline = mat.PipelineId; }
             _ctx.IASetInputLayout(mat.Layout);
@@ -5850,6 +5938,9 @@ float4 psmain(VOut i) : SV_Target
         _particleBlendStates.Clear();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _blendAdditive.Dispose(); _depthStateNoWrite.Dispose(); _depthStateNoTest.Dispose();
+        for (int b = 0; b < 3; b++)
+        for (int mode = 0; mode < 4; mode++)
+            _stencilDepthStates[b, mode].Dispose();
         _linearMirror.Dispose();
         _ctx.Dispose(); _device.Dispose();
         _d3d?.Dispose();

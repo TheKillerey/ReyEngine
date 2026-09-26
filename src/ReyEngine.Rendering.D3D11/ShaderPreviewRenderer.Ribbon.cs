@@ -261,7 +261,7 @@ float4 psmain(VOut i) : SV_Target
         _ctx.RSSetState(_raster);
         // M720: through the one depth chooser, so a NONE ribbon writes depth and an M711 no-test ribbon stops
         // testing - both were hard-coded to test-and-no-write here - and through the particle blend state.
-        _ctx.OMSetDepthStencilState(DepthStateFor(mat), 0);
+        _ctx.OMSetDepthStencilState(DepthStateFor(mat), (uint)mat.StencilRef);
         var factor = stackalloc float[4] { 0f, 0f, 0f, 0f };
         var ribbonState = mat.ParticleBlend is { } ribbonBlend ? ParticleBlendState(ribbonBlend) : default;
         _ctx.OMSetBlendState(ribbonState.Handle is not null ? ribbonState : mat.Additive ? _blendAdditive : _blend,

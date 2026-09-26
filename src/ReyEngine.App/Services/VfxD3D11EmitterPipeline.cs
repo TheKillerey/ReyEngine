@@ -220,6 +220,26 @@ public static class VfxD3D11EmitterPipeline
         // being occluded by it - 613,808 emitters in the installed game, and until now every one of them
         // tested depth here.
         mat.TestsDepth = !ReyEngine.Formats.Vfx.VfxMiscRenderFlags.DisablesDepthTest(e);
+
+        // Stencil masking: the same three rules GL's ApplyStencil applies (VfxParticleRenderer.cs), decided
+        // here once so the quad, Riot-mesh and legacy-mesh materials this Build serves all inherit them -
+        // every one of them is built through this method.
+        //   1 (WRITE) always enables, even at an absent (clamped to 0) ref - a writer with no authored ref
+        //     replaces the stencil with 0, which is what a cleared buffer already holds, so it is a no-op
+        //     rather than a hazard.
+        //   2/3 (EQUAL/NOT-EQUAL) with StencilRef < 0 name an unresolved symbolic StencilReferenceId this
+        //     code does not read; GL draws those unmasked rather than testing against a defaulted 0, which
+        //     for mode 3 ("not equal to 0") would fail everywhere on a freshly cleared buffer and delete the
+        //     emitter outright. Folded to mode 0 here for the same reason.
+        //   4 and anything else are UNRESOLVED (6 authored instances) and draw with the stencil untouched -
+        //     also mode 0.
+        int stencilMode = e.StencilMode;
+        int stencilRef = Math.Max(0, e.StencilRef);
+        if (stencilMode is 2 or 3 && e.StencilRef < 0) stencilMode = 0;
+        else if (stencilMode is not (1 or 2 or 3)) stencilMode = 0;
+        mat.StencilMode = stencilMode;
+        mat.StencilRef = stencilRef;
+
         // Say WHICH rule decided it, in the engine's own words (M720): "additive" and "alpha" are two answers
         // for nine modes, and a two-word log would mislead the next bisect.
         log.AppendLine($"     blend: {blend.Describe()} - blendMode {e.BlendMode}: {blend.Why}"

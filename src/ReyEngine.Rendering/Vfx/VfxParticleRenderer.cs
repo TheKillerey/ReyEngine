@@ -1129,6 +1129,14 @@ public sealed class VfxParticleRenderer
             _gl.ActiveTexture(TextureUnit.Texture0);
         }
         ApplyBlend(es.Def, es.Texture);   // M720
+        // Stencil masking: a mesh emitter used to fall straight into the draw below with whatever stencil
+        // state the PREVIOUS quad in the frame left bound - ApplyStencil is called once per quad emitter
+        // (below, before its DrawArraysInstanced) but the mesh branch `continue`s out of the main loop
+        // before ever reaching it (see the branch at the top of Render). A mesh writer therefore never
+        // wrote the stencil, and a mesh tester inherited whatever mask a quad happened to leave active - or
+        // none, if no quad had drawn yet this frame. Applying it here, per mesh draw, is the same fix
+        // ApplyDepthTest already got for the same branch (M711).
+        ApplyStencil(es.Def);
         // M47c: mesh particles animate by SCROLLING their texture along the mesh UVs (waterfall flow) -
         // matches Riot's particle-system shader (Scrolling_Rate cbuffer + birthUvScrollRate data).
         var scroll = es.Def.UvScrollRate * es.Age;
