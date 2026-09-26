@@ -213,7 +213,10 @@ public sealed class MaterialDocument
                     // what this view already represents elsewhere: the mesh and rig it points at, and the
                     // per-submesh overrides, which are the other rows of this very list
                     if (field is "skeleton" or "simpleSkin" or "materialOverride" or "material") continue;
-                    if (BinTexturePath.Is(value)) skinSlots.Add(new TextureSlot(field, value, null, resolveWadPath));
+                    // M775: classify by content/name, not merely "is this a string or a link" - a skin's
+                    // own block carries submesh-name lists (initialSubmeshToHide, submeshRenderOrder, …)
+                    // alongside its real texture fields, and BinTexturePath.Is() accepted both alike.
+                    if (BinTexturePath.IsTextureField(field, value)) skinSlots.Add(new TextureSlot(field, value, null, resolveWadPath));
                     else if (BinValueEditor.KindOf(value) != BinValueKind.ReadOnly) skinSettings.Add(new MaterialParameter(field, value));
                 }
                 // the diffuse first, because it is the one every skin has and the one people look for
@@ -640,7 +643,7 @@ public sealed class MaterialBinding
         // schema panel said so and the editor still listed nothing, so the value the user came to set was
         // in the bin and out of reach until the document was parsed again.
         string fieldName = ResolveName?.Invoke(nameHash) ?? $"0x{nameHash:x8}";
-        if (BinTexturePath.Is(prop!)) _slots.Add(new TextureSlot(fieldName, prop!, null, ResolveWadPath));
+        if (BinTexturePath.IsTextureField(fieldName, prop!)) _slots.Add(new TextureSlot(fieldName, prop!, null, ResolveWadPath));
         else if (BinValueEditor.KindOf(prop!) != BinValueKind.ReadOnly)
             _params.Add(new MaterialParameter(fieldName, prop!));
         return true;

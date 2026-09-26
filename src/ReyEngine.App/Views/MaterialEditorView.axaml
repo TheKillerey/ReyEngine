@@ -619,6 +619,63 @@
                   </StackPanel>
         </StackPanel>
       </Expander>
+                <!-- M775: initialSubmeshToHide / submeshRenderOrder and their siblings are submesh-name
+                     LISTS, not texture paths - a checklist and a reorder list against this mesh's real
+                     submeshes, not a free-text box with an Open/Copy/Replace Texture… row. -->
+                <Expander Header="Submesh Visibility &amp; Order" FontSize="11" Margin="0,4,0,0"
+                          IsVisible="{Binding HasSubmeshHideFields}">
+                  <ItemsControl ItemsSource="{Binding SubmeshHideFields}" Margin="0,4,0,0">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SubmeshSetFieldViewModel">
+                        <StackPanel Spacing="2" Margin="0,0,0,8">
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{Binding Name}" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" />
+                            <Ellipse Width="6" Height="6" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" />
+                          </StackPanel>
+                          <TextBlock Text="A set of submesh names hidden from spawn. Tick to hide, untick to show."
+                                     FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                          <ItemsControl ItemsSource="{Binding Items}">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:SubmeshCheckItemViewModel">
+                                <CheckBox IsChecked="{Binding IsChecked}" FontSize="9" Margin="0,0,8,2" Padding="4,0">
+                                  <TextBlock Text="{Binding Name}" FontSize="9" />
+                                </CheckBox>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                          <TextBlock Text="{Binding UnknownSummary}" FontSize="8" TextWrapping="Wrap"
+                                     Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding HasUnknown}"
+                                     ToolTip.Tip="Names this field already lists that the mesh doesn't have a submesh for - kept as-is, never dropped by ticking another box." />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </Expander>
+                <Expander Header="Submesh Render Order" FontSize="11" Margin="0,4,0,0"
+                          IsVisible="{Binding HasSubmeshOrderField}">
+                  <StackPanel Margin="0,4,0,0" Spacing="2">
+                    <TextBlock Text="The draw order submeshRenderOrder authors. Move entries up/down to reorder; this edits the authored string only."
+                               FontSize="8" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                    <ItemsControl ItemsSource="{Binding SubmeshOrderField.Items}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SubmeshOrderItemViewModel">
+                          <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,1">
+                            <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="9" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <Button Grid.Column="1" Classes="tool" Content="▲" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding MoveUpCommand}" ToolTip.Tip="Move earlier in the draw order" />
+                            <Button Grid.Column="2" Classes="tool" Content="▼" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding MoveDownCommand}" ToolTip.Tip="Move later in the draw order" />
+                            <Button Grid.Column="3" Classes="tool" Content="✕" FontSize="8" Padding="4,0" Margin="2,0" Command="{Binding RemoveCommand}" ToolTip.Tip="Remove from the list" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,3,0,0" IsVisible="{Binding SubmeshOrderField.HasAddable}">
+                      <ComboBox Grid.Column="0" ItemsSource="{Binding SubmeshOrderField.Addable}" SelectedItem="{Binding SubmeshOrderField.SelectedAddable}" FontSize="9" HorizontalAlignment="Stretch" PlaceholderText="submesh not yet listed…" />
+                      <Button Grid.Column="1" Content="+ Add" Command="{Binding SubmeshOrderField.AddSelectedCommand}" FontSize="10" Padding="6,1" Margin="3,0,0,0" />
+                    </Grid>
+                  </StackPanel>
+                </Expander>
                 <Expander Header="Parameters" IsVisible="{Binding HasParameters}" FontSize="11" Margin="0,4,0,0">
                   <StackPanel>
                   <!-- M55: add a parameter (clones an existing one's schema; edit the value after) -->

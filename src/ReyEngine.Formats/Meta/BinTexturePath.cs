@@ -29,6 +29,49 @@ public static class BinTexturePath
     public static bool Is(BinTreeProperty? property) => property is BinTreeString or BinTreeWadChunkLink;
 
     /// <summary>
+    /// M775: is this FIELD a texture slot, given its name and value — not merely "is this a string or a
+    /// link". <see cref="Is"/> answers that narrower question and is right everywhere the caller already
+    /// filtered to path-shaped fields by name (texturePath, textureName, the champion 'texture' field). Two
+    /// GENERIC callers instead ran <see cref="Is"/> over EVERY field a skin's <c>skinMeshProperties</c>
+    /// block carries, so any string was shown as a texture slot — including
+    /// <c>initialSubmeshToHide</c> ("orb") and <c>submeshRenderOrder</c> ("body top bowl orb frame glass
+    /// glass_out"), space-separated SETS/LISTS of submesh names, not paths. Both got the Open/Copy/Replace
+    /// Texture… slot UI and a "path not found" warning triangle for a value that was never a path.
+    ///
+    /// <para>Censused across all 174 champion WADs' skin bins (15,043 <c>skinMeshProperties</c> blocks):
+    /// every OTHER string field found is one of these same submesh-name lists —
+    /// <c>initialSubmeshShadowsToHide</c>, <c>initialSubmeshMouseOversToHide</c>,
+    /// <c>InitialSubmeshAvatarToHide</c>, <c>EmitterSubmeshAvatarToHide</c> — never a texture path. On the
+    /// current patch <c>texture</c>/<c>glossTexture</c>/<c>reflectionMap</c> are all WadChunkLink (M590), so
+    /// this rule's string-path branches are exercised by older content and by fields the schema panel can
+    /// add fresh, not by anything this census could sample as String today.</para>
+    /// </summary>
+    public static bool IsTextureField(string fieldName, BinTreeProperty? value)
+    {
+        switch (value)
+        {
+            case BinTreeWadChunkLink:
+                return true;
+            case BinTreeString s:
+                string v = s.Value;
+                if (IsTextureReference(v)) return true;
+                if (v.Length == 0)
+                    return fieldName.Equals("texture", StringComparison.OrdinalIgnoreCase)
+                        || fieldName.EndsWith("Texture", StringComparison.Ordinal)
+                        || fieldName.EndsWith("texture", StringComparison.Ordinal)
+                        || fieldName.EndsWith("Map", StringComparison.Ordinal);
+                // An asset path: a directory separator AND a real file extension. Riot's submesh-name
+                // lists (initialSubmeshToHide, submeshRenderOrder, …) are space/comma-separated bare
+                // names with neither — this is what tells them apart from an authored path.
+                bool hasSeparator = v.Contains('/') || v.Contains('\\');
+                string ext = System.IO.Path.GetExtension(v);
+                return hasSeparator && ext.Length > 1;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
     /// The path to show and to look assets up by. An unresolvable hash stays hex — which is honest
     /// (the path genuinely is not known) and round-trips, because <see cref="Write"/> parses that form back.
     /// </summary>

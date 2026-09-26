@@ -257,6 +257,241 @@ public sealed partial class MaterialParameterViewModel : ViewModelBase
     private void Revert() { Model.Revert(); ResetFromModel(); _owner.NotifyChanged(); }
 }
 
+/// <summary>
+/// M775: <c>initialSubmeshToHide</c> and its siblings (<c>initialSubmeshShadowsToHide</c>,
+/// <c>initialSubmeshMouseOversToHide</c>, …) — a space-separated SET of submesh names, shown as a
+/// checklist against the mesh's real submeshes instead of a free-text box (which is what made it look
+/// like a texture path before M775's classification fix). Writes back through the SAME
+/// <see cref="MaterialParameter"/> the plain text editor would have used, so Save/undo/dirty behave
+/// identically - only the widget differs.
+///
+/// <para>A name the field already carries that this mesh does NOT declare as a submesh is never dropped:
+/// it round-trips as <see cref="UnknownSummary"/>, appended after the checked names on write-back.</para>
+/// </summary>
+public sealed partial class SubmeshSetFieldViewModel : ViewModelBase
+{
+    private readonly MaterialEditorViewModel _owner;
+    private bool _loading;
+    private List<string> _unknown = new();
+
+    public MaterialParameter Model { get; }
+    public string Name => Model.Name;
+    public bool IsDirty => Model.IsDirty;
+    public void RaiseDirty() => OnPropertyChanged(nameof(IsDirty));
+
+    public ObservableCollection<SubmeshCheckItemViewModel> Items { get; } = new();
+    public bool HasUnknown => _unknown.Count > 0;
+    public string UnknownSummary => HasUnknown ? $"Also names (not on this mesh): {string.Join(' ', _unknown)}" : "";
+
+    public SubmeshSetFieldViewModel(MaterialParameter model, MaterialEditorViewModel owner)
+    {
+        Model = model;
+        _owner = owner;
+        RebuildFrom(Array.Empty<string>(), Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(model.CurrentText));
+    }
+
+    /// <summary>The mesh's real submesh names arrived (or changed) - rebuild the checklist against them,
+    /// keeping whatever the field currently says.</summary>
+    public void SetKnownSubmeshes(IReadOnlyList<string> submeshNames) =>
+        RebuildFrom(submeshNames, Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(Model.CurrentText));
+
+    /// <summary>Put the checklist back to what the file authored (after Model.Revert()).</summary>
+    public void ResetFromModel()
+    {
+        var known = Items.Select(i => i.Name).ToList();
+        RebuildFrom(known, Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(Model.CurrentText));
+        RaiseDirty();
+    }
+
+    private void RebuildFrom(IReadOnlyList<string> submeshNames, IReadOnlyList<string> current)
+    {
+        _loading = true;
+        Items.Clear();
+        var known = new HashSet<string>(submeshNames, StringComparer.OrdinalIgnoreCase);
+        foreach (var n in submeshNames)
+            Items.Add(new SubmeshCheckItemViewModel(n,
+                current.Any(c => c.Equals(n, StringComparison.OrdinalIgnoreCase)), this));
+        _unknown = current.Where(c => !known.Contains(c)).ToList();
+        _loading = false;
+        OnPropertyChanged(nameof(HasUnknown));
+        OnPropertyChanged(nameof(UnknownSummary));
+    }
+
+    /// <summary>A checkbox flipped - recompute the field text (checked known names, in mesh order, then
+    /// whatever unknown names it already had) and write it through the normal parameter path.</summary>
+    internal void OnItemToggled()
+    {
+        if (_loading) return;
+        string oldText = Model.CurrentText;
+        string newText = string.Join(' ', Items.Where(i => i.IsChecked).Select(i => i.Name).Concat(_unknown));
+        if (string.Equals(newText, oldText, StringComparison.Ordinal)) return;
+        Model.Apply(newText);
+        _owner.UndoService?.PushApplied(new MaterialParamEditCommand(_owner.DocContext, Model, oldText, newText, SyncFromCommand));
+        AfterChange(newText);
+    }
+
+    private void SyncFromCommand(string appliedText)
+    {
+        var known = Items.Select(i => i.Name).ToList();
+        RebuildFrom(known, Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(appliedText));
+        RaiseDirty();
+        _owner.NotifyChanged();
+        _owner.NotifySubmeshHideChanged(Name, appliedText);
+    }
+
+    private void AfterChange(string newText)
+    {
+        RaiseDirty();
+        _owner.NotifyChanged();
+        _owner.NotifySubmeshHideChanged(Name, newText);
+    }
+}
+
+/// <summary>One checkbox row in a <see cref="SubmeshSetFieldViewModel"/>.</summary>
+public sealed partial class SubmeshCheckItemViewModel : ViewModelBase
+{
+    private readonly SubmeshSetFieldViewModel _owner;
+    public string Name { get; }
+    [ObservableProperty] private bool _isChecked;
+
+    public SubmeshCheckItemViewModel(string name, bool isChecked, SubmeshSetFieldViewModel owner)
+    {
+        Name = name;
+        _owner = owner;
+        _isChecked = isChecked;
+    }
+
+    /// <summary>Set from an undo/redo sync without re-triggering a write.</summary>
+    internal void SetCheckedSilently(bool value) { _isChecked = value; OnPropertyChanged(nameof(IsChecked)); }
+
+    partial void OnIsCheckedChanged(bool value) => _owner.OnItemToggled();
+}
+
+/// <summary>
+/// M775: <c>submeshRenderOrder</c> — an ORDERED space-separated list of submesh names (the draw order).
+/// Move up/down, remove, and add any submesh the mesh has that isn't listed yet. Writes back through the
+/// same <see cref="MaterialParameter"/> as the plain text editor. Deliberately does not affect rendering —
+/// that is a separate diagnosis (see the task note on Dx11CharacterScene) — this only edits the string.
+/// </summary>
+public sealed partial class SubmeshOrderFieldViewModel : ViewModelBase
+{
+    private readonly MaterialEditorViewModel _owner;
+    private bool _loading;
+    private IReadOnlyList<string> _known = Array.Empty<string>();
+
+    public MaterialParameter Model { get; }
+    public string Name => Model.Name;
+    public bool IsDirty => Model.IsDirty;
+    public void RaiseDirty() => OnPropertyChanged(nameof(IsDirty));
+
+    public ObservableCollection<SubmeshOrderItemViewModel> Items { get; } = new();
+    /// <summary>Submeshes the mesh has that this list doesn't name yet — offered for one-click append.</summary>
+    public ObservableCollection<string> Addable { get; } = new();
+    public bool HasAddable => Addable.Count > 0;
+    [ObservableProperty] private string? _selectedAddable;
+
+    public SubmeshOrderFieldViewModel(MaterialParameter model, MaterialEditorViewModel owner)
+    {
+        Model = model;
+        _owner = owner;
+        RebuildItems(Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(model.CurrentText));
+    }
+
+    public void SetKnownSubmeshes(IReadOnlyList<string> submeshNames)
+    {
+        _known = submeshNames;
+        RefreshAddable();
+    }
+
+    public void ResetFromModel() => RebuildItems(Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(Model.CurrentText));
+
+    private void RebuildItems(IEnumerable<string> names)
+    {
+        _loading = true;
+        Items.Clear();
+        foreach (var n in names) Items.Add(new SubmeshOrderItemViewModel(n, this));
+        _loading = false;
+        RefreshAddable();
+        RaiseDirty();
+    }
+
+    private void RefreshAddable()
+    {
+        Addable.Clear();
+        var have = Items.Select(i => i.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var n in _known) if (!have.Contains(n)) Addable.Add(n);
+        OnPropertyChanged(nameof(HasAddable));
+    }
+
+    internal void MoveUp(SubmeshOrderItemViewModel item)
+    {
+        int i = Items.IndexOf(item);
+        if (i <= 0) return;
+        Items.Move(i, i - 1);
+        Commit();
+    }
+
+    internal void MoveDown(SubmeshOrderItemViewModel item)
+    {
+        int i = Items.IndexOf(item);
+        if (i < 0 || i >= Items.Count - 1) return;
+        Items.Move(i, i + 1);
+        Commit();
+    }
+
+    internal void Remove(SubmeshOrderItemViewModel item)
+    {
+        if (!Items.Remove(item)) return;
+        RefreshAddable();
+        Commit();
+    }
+
+    [RelayCommand]
+    private void AddSelected()
+    {
+        if (string.IsNullOrWhiteSpace(SelectedAddable)) return;
+        Items.Add(new SubmeshOrderItemViewModel(SelectedAddable, this));
+        SelectedAddable = null;
+        RefreshAddable();
+        Commit();
+    }
+
+    private void Commit()
+    {
+        if (_loading) return;
+        string oldText = Model.CurrentText;
+        string newText = string.Join(' ', Items.Select(i => i.Name));
+        if (string.Equals(newText, oldText, StringComparison.Ordinal)) return;
+        Model.Apply(newText);
+        _owner.UndoService?.PushApplied(new MaterialParamEditCommand(_owner.DocContext, Model, oldText, newText, SyncFromCommand));
+        RaiseDirty();
+        _owner.NotifyChanged();
+    }
+
+    private void SyncFromCommand(string appliedText)
+    {
+        RebuildItems(Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(appliedText));
+        _owner.NotifyChanged();
+    }
+}
+
+/// <summary>One row in a <see cref="SubmeshOrderFieldViewModel"/> — a submesh name with move/remove.</summary>
+public sealed partial class SubmeshOrderItemViewModel : ViewModelBase
+{
+    private readonly SubmeshOrderFieldViewModel _owner;
+    public string Name { get; }
+
+    public SubmeshOrderItemViewModel(string name, SubmeshOrderFieldViewModel owner)
+    {
+        Name = name;
+        _owner = owner;
+    }
+
+    [RelayCommand] private void MoveUp() => _owner.MoveUp(this);
+    [RelayCommand] private void MoveDown() => _owner.MoveDown(this);
+    [RelayCommand] private void Remove() => _owner.Remove(this);
+}
+
 /// <summary>M103: one editable shader feature switch (checkbox row).</summary>
 /// <summary>M150: one shaderMacros define (NO_BAKED_LIGHTING, DISABLE_DEPTH_FOG, …) as a live toggle.
 /// Separate from switches: macros are map entries with "0"/"1" values, and REMOVING one is not the same
@@ -468,6 +703,13 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public ObservableCollection<MaterialSwitchViewModel> Switches { get; } = new();
     /// <summary>M150: the material's shaderMacros defines, editable.</summary>
     public ObservableCollection<MaterialMacroViewModel> Macros { get; } = new();
+    /// <summary>M775: submesh-name SET fields (initialSubmeshToHide, …), each its own checklist rather
+    /// than a row in <see cref="Parameters"/>.</summary>
+    public ObservableCollection<SubmeshSetFieldViewModel> SubmeshHideFields { get; } = new();
+    /// <summary>M775: submeshRenderOrder, when this binding has one — an ordered list, not a text row.</summary>
+    public SubmeshOrderFieldViewModel? SubmeshOrderField { get; private set; }
+    public bool HasSubmeshHideFields => SubmeshHideFields.Count > 0;
+    public bool HasSubmeshOrderField => SubmeshOrderField is not null;
 
     [ObservableProperty] private bool _isVisible = true;
 
@@ -481,7 +723,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         Owner = owner;
         _editedShader = model.RenderShader ?? "";
         foreach (var s in model.Slots) Slots.Add(new TextureSlotViewModel(s, owner) { Binding = this });
-        foreach (var p in model.Parameters) Parameters.Add(Row(p));
+        foreach (var p in model.Parameters) AddParameterRow(p);
         foreach (var w in model.AllSwitches) Switches.Add(new MaterialSwitchViewModel(w, this));   // M103
         foreach (var m in model.AllMacros) Macros.Add(new MaterialMacroViewModel(m, this));        // M150
         RefreshMissingMacros();
@@ -497,6 +739,36 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
             AddSchemaField, model.CanAddSchemaField);
     }
 
+    /// <summary>M775: route a parameter to its dedicated editor when its name is a submesh-name list -
+    /// every OTHER caller that used to write straight into <see cref="Parameters"/> goes through this now,
+    /// so a schema-added or shader-added field gets the same treatment as one found at parse time.</summary>
+    private void AddParameterRow(MaterialParameter p)
+    {
+        if (MaterialEditorViewModel.IsSubmeshHideField(p.Name))
+        {
+            var vm = new SubmeshSetFieldViewModel(p, Owner!);
+            vm.SetKnownSubmeshes(Owner!.KnownSubmeshNames);
+            SubmeshHideFields.Add(vm);
+            OnPropertyChanged(nameof(HasSubmeshHideFields));
+        }
+        else if (MaterialEditorViewModel.IsSubmeshOrderField(p.Name))
+        {
+            var vm = new SubmeshOrderFieldViewModel(p, Owner!);
+            vm.SetKnownSubmeshes(Owner!.KnownSubmeshNames);
+            SubmeshOrderField = vm;
+            OnPropertyChanged(nameof(HasSubmeshOrderField));
+        }
+        else Parameters.Add(Row(p));
+    }
+
+    /// <summary>M775: the mesh's real submesh names arrived (or changed) - refresh every checklist/reorder
+    /// editor this binding owns against them.</summary>
+    public void SetKnownSubmeshNames(IReadOnlyList<string> names)
+    {
+        foreach (var f in SubmeshHideFields) f.SetKnownSubmeshes(names);
+        SubmeshOrderField?.SetKnownSubmeshes(names);
+    }
+
     /// <summary>M706: write the field AND show it. The document appends the row; this puts it on screen and
     /// marks the document edited, so the value can be set straight away instead of after a reload.</summary>
     private bool AddSchemaField(uint nameHash, string fieldType, string? defaultJson, out string? reason)
@@ -506,7 +778,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         for (int i = slotsBefore; i < Model.Slots.Count; i++)
             Slots.Add(new TextureSlotViewModel(Model.Slots[i], Owner!) { Binding = this });
         for (int i = paramsBefore; i < Model.Parameters.Count; i++)
-            Parameters.Add(Row(Model.Parameters[i]));
+            AddParameterRow(Model.Parameters[i]);
         OnPropertyChanged(nameof(HasParameters));
         Owner?.NotifyChanged();
         return true;
@@ -736,7 +1008,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         var p = Model.AddParameter(def.Name);
         if (p is null) return;
         try { p.Apply(def.DefaultText); } catch { /* keep the cloned prototype value */ }
-        Parameters.Add(Row(p));
+        AddParameterRow(p);
         OnPropertyChanged(nameof(HasParameters));
         RaiseDirty();
         Owner!.NotifyChanged();
@@ -770,8 +1042,12 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     internal void SynchronizeCommonSetup(ShaderCatalog? catalog)
     {
         Parameters.Clear();
+        SubmeshHideFields.Clear();
+        SubmeshOrderField = null;
         foreach (var parameter in Model.Parameters)
-            Parameters.Add(Row(parameter));
+            AddParameterRow(parameter);
+        OnPropertyChanged(nameof(HasSubmeshHideFields));
+        OnPropertyChanged(nameof(HasSubmeshOrderField));
         Switches.Clear();
         foreach (var feature in Model.AllSwitches)
             Switches.Add(new MaterialSwitchViewModel(feature, this));
@@ -1097,6 +1373,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         foreach (var s in Slots) s.RaiseDirty();
         foreach (var p in Parameters) p.RaiseDirty();
         foreach (var w in Switches) w.RaiseDirty();
+        foreach (var f in SubmeshHideFields) f.RaiseDirty();
+        SubmeshOrderField?.RaiseDirty();
     }
 
     // ---- M55: parameter add/remove ----
@@ -1109,7 +1387,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         if (name.Length == 0) return;
         var p = Model.AddParameter(name);
         if (p is null) return;   // no prototype param to clone the schema from
-        Parameters.Add(Row(p));
+        AddParameterRow(p);
         NewParamName = "";
         OnPropertyChanged(nameof(HasParameters));
         RaiseDirty();
@@ -1137,6 +1415,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         Model.Revert();
         foreach (var s in Slots) s.ResetFromModel();
         foreach (var p in Parameters) p.ResetFromModel();
+        foreach (var f in SubmeshHideFields) f.ResetFromModel();
+        SubmeshOrderField?.ResetFromModel();
         LoadRenderState();
         RaiseRenderStateText();
         Owner!.NotifyChanged();
@@ -1345,6 +1625,35 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
             AddableSubmeshes.Add(new AddableSubmeshViewModel { Name = name, Add = AddSubmeshMaterial });
         OnPropertyChanged(nameof(CanAddSubmeshMaterial));
     }
+
+    // ---- M775: submesh-name list fields (initialSubmeshToHide, submeshRenderOrder, …) ----
+
+    /// <summary>Names ending this way are a SET of submesh names to hide, not a texture path — measured
+    /// across all 174 champion WADs' skin bins: initialSubmeshToHide, initialSubmeshShadowsToHide,
+    /// initialSubmeshMouseOversToHide, InitialSubmeshAvatarToHide, EmitterSubmeshAvatarToHide.</summary>
+    internal static bool IsSubmeshHideField(string name) =>
+        name.EndsWith("ToHide", StringComparison.Ordinal);
+
+    /// <summary>submeshRenderOrder — an ORDERED list, not a set; gets its own reorder editor.</summary>
+    internal static bool IsSubmeshOrderField(string name) =>
+        name.Equals("submeshRenderOrder", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The mesh's real submesh names, supplied by the host (the character window's outliner) so
+    /// the checklist/reorder editors above can be built against them rather than only against whatever a
+    /// field already lists.</summary>
+    public IReadOnlyList<string> KnownSubmeshNames { get; private set; } = Array.Empty<string>();
+
+    public void SetKnownSubmeshNames(IEnumerable<string> names)
+    {
+        KnownSubmeshNames = names.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        foreach (var m in Materials) m.SetKnownSubmeshNames(KnownSubmeshNames);
+    }
+
+    /// <summary>M775: fired when a submesh-hide SET field is edited here, so the host can refresh whatever
+    /// reads that list for live preview visibility (initialSubmeshToHide drives it today).</summary>
+    public Action<string, string>? SubmeshHideFieldChanged { get; set; }
+    internal void NotifySubmeshHideChanged(string fieldName, string newText) => SubmeshHideFieldChanged?.Invoke(fieldName, newText);
+
     /// <summary>Only shaders currently assigned in this document; used by the bulk replacement source.</summary>
     public ObservableCollection<string> UsedShaders { get; } = new();
     private readonly Dictionary<string, HashSet<string>> _shaderSamplers = new(StringComparer.OrdinalIgnoreCase);
@@ -1933,6 +2242,8 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
             m.Model.Revert();
             foreach (var s in m.Slots) s.ResetFromModel();
             foreach (var p in m.Parameters) p.ResetFromModel();
+            foreach (var f in m.SubmeshHideFields) f.ResetFromModel();
+            m.SubmeshOrderField?.ResetFromModel();
         }
         NotifyChanged();
     }

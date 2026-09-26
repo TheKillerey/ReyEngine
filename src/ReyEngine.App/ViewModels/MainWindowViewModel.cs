@@ -6632,6 +6632,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M703/M704: the submesh row in the outliner and the offer in the Materials tab are the same step
         MeshPreview.AddSubmeshMaterial = row => AddCharacterSubmeshMaterialAsync(row.Name);
         MeshPreview.MaterialEditor.AddSubmeshMaterial = AddCharacterSubmeshMaterialAsync;
+        // M775: initialSubmeshToHide keeps driving the preview's own visibility computation when it is
+        // edited here, the same as it does when read fresh off the skin bin at load.
+        MeshPreview.MaterialEditor.SubmeshHideFieldChanged = (field, text) =>
+        {
+            if (field.Equals("initialSubmeshToHide", StringComparison.OrdinalIgnoreCase))
+                MeshPreview.RefreshInitialHide(text);
+        };
         MeshPreview.RequestDriverState = () => RebuildCharacterDx11Scene();   // M647: the state switch
         Inspector.CopyHandler = Dialogs.CopyAsync;   // M351c: copy button beside the asset path
         InitShaderEnvironments();

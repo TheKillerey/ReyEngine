@@ -60,5 +60,8 @@ public sealed partial class MeshPreviewViewModel
         // M704: the Materials tab offers the same step for the submeshes that have no material of their
         // own, because that tab is where a person finds out the default block has no shader to change.
         MaterialEditor.SetAddableSubmeshes(Submeshes.Where(r => !r.HasOwnMaterial).Select(r => r.Name));
+        // M775: the checklist/reorder editors for initialSubmeshToHide/submeshRenderOrder need this
+        // mesh's real submesh names, not just whatever the field already lists.
+        MaterialEditor.SetKnownSubmeshNames(Submeshes.Select(r => r.Name));
     }
 }

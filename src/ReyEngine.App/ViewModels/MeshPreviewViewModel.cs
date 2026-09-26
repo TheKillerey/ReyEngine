@@ -424,6 +424,18 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     partial void OnAutoSubmeshVisibilityChanged(bool value) { if (value) ApplyAutoVisibility(); }
 
+    /// <summary>M775: the material editor just wrote a new <c>initialSubmeshToHide</c> — re-derive the
+    /// base picture from it, the same list <see cref="SetSubmeshRules"/> is given at load, so an edit here
+    /// keeps driving the preview's visibility exactly like the skin bin's own authored value does.</summary>
+    public void RefreshInitialHide(string spaceSeparated)
+    {
+        _initialHide = Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(spaceSeparated);
+        // RebuildVisibilityTimeline only re-runs when the clip or submesh count changed; force it here so
+        // the new initial-hide list is not skipped by that cache guard.
+        _visBuiltFor = new object();
+        ApplyAutoVisibility();
+    }
+
     /// <summary>M86/M91: the playing clip's ParticleEventData → play those VFX bone-attached, like in-game.
     /// Each item carries its StartFrame as a sim delay, so effects fire at their authored moment.</summary>
     private void ApplyClipParticles()
