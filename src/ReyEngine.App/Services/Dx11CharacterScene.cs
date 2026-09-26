@@ -107,8 +107,18 @@ public static class Dx11CharacterScene
     /// cage is 5.0% alpha-0 texels) drew fully opaque, reported as "still not transparent". lit_uber_ps
     /// discards on <c>DIFFUSE_MAP__TX.a == 0</c>, which is what a cutout needs, and made the cage
     /// see-through when swapped in (centre pixel (0,0,0,255) opaque black -> (255,62,215) over a magenta
-    /// clear colour).</para></summary>
-    public const string DefaultStandInVertexShader = "assets/shaders/hlsl/skinnedmesh/default_vs";
+    /// clear colour).</para>
+    ///
+    /// <para>M780: the vertex half is <c>lit_uber_vs</c>, lit_uber_ps's own partner - NOT <c>default_vs</c>,
+    /// which M779 paired it with. default_vs (NUM_BLEND_WEIGHTS=4, blob 1) writes only SV_Position and
+    /// TEXCOORD0.xy, while lit_uber_ps reads TEXCOORD1.zw (the fog-of-war UV) and COLOR0 (the lightgrid
+    /// ambient cube, from LIGHTGRID_COLORS). Those inputs were never written, so every stand-in submesh lit
+    /// from undefined values: on the real Map12 lightgrid the turrets, inhibitors and nexus came out at
+    /// 0.24-0.71 of their pre-M779 luminance, reported as "now a bit more dark". lit_uber_vs
+    /// (NUM_BLEND_WEIGHTS=4, blob 39) outputs exactly the signature lit_uber_ps reads, and computes COLOR0
+    /// with the same six-face cube the old generated diffuse_alpha VS did - measured through the map prop
+    /// path, turrets and nexus are back to a luminance ratio of 1.000, and the cage stays see-through.</para></summary>
+    public const string DefaultStandInVertexShader = "assets/shaders/hlsl/skinnedmesh/lit_uber_vs";
     public const string DefaultStandInPixelShader = "assets/shaders/hlsl/skinnedmesh/lit_uber_ps";
 
     /// <summary>M779: not a real texture path — a synthetic key so a stand-in slice's unauthored
@@ -478,8 +488,8 @@ public static class Dx11CharacterScene
 
         // M779: which two blobs actually get bound, and under which names. A stand-in slice (usedFallback)
         // does NOT resolve `shader` (still "shaders/skinnedmesh/diffuse_alpha") through generated/ - it
-        // draws through the engine's own default_vs/lit_uber_ps pair instead (DefaultStandInVertexShader/
-        // DefaultStandInPixelShader; see their doc comments for why). `shader` stays the fallback name
+        // draws through the engine's own lit_uber_vs/lit_uber_ps pair instead (DefaultStandInVertexShader/
+        // DefaultStandInPixelShader; see their doc comments for why - M780 for the vertex half). `shader` stays the fallback name
         // below only because parameter/feature DEFAULTS are still looked up under it - both pixel shaders
         // declare the same CharacterPerDrawPS cbuffer (kGrassFade, SELF_ILLUMINATION, LIGHTGRID_SCALE, ...),
         // so those defaults still apply to lit_uber_ps.

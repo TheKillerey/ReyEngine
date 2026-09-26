@@ -348,7 +348,8 @@ public sealed class Dx11CharacterSceneTests
         // whose PS discards only on the material's Alpha constant and never reads the diffuse texture's
         // alpha channel - a cutout texture (an alpha mask) then drew fully opaque (Inhibitor Skin26's
         // cage, reported "still not transparent"). It has to resolve to the engine's own
-        // default_vs/lit_uber_ps pair instead, and that PS treats EMISSIVE_MAP__TX as a lighting bypass
+        // lit_uber_vs/lit_uber_ps pair instead (M780: vertex half corrected from default_vs, see
+        // TheStandInVertexShaderWritesEveryInputTheStandInPixelShaderReads), and that PS treats EMISSIVE_MAP__TX as a lighting bypass
         // (sampling white drives it fully self-lit), so an unauthored emissive has to be bound to
         // something dark rather than left to the renderer's unbound-texture fallback, which is WHITE.
         if (Ahri() is not { } f) return;
@@ -376,6 +377,50 @@ public sealed class Dx11CharacterSceneTests
                 Assert.Equal(0, img.Rgba[0]);
                 Assert.Equal(0, img.Rgba[1]);
                 Assert.Equal(0, img.Rgba[2]);
+            });
+        }
+    }
+
+    [Fact]
+    public void TheStandInVertexShaderWritesEveryInputTheStandInPixelShaderReads()
+    {
+        // M780: M779 paired lit_uber_ps with default_vs, whose output signature is only SV_Position and
+        // TEXCOORD0.xy. lit_uber_ps also reads TEXCOORD1.zw (fog-of-war UV) and COLOR0 (the lightgrid
+        // ambient cube), so both were undefined in the pixel shader and every stand-in submesh lit from
+        // garbage - measured on the Map12 turrets, inhibitors and nexus at 0.24-0.71 of their earlier
+        // luminance. D3D11 does not refuse such a draw without the debug layer; it just draws wrong. So the
+        // pairing is pinned here from the bytecode itself: every non-system input the pixel shader READS
+        // must be written by the vertex shader, same semantic, index and register, covering the components
+        // read.
+        if (Ahri() is not { } f) return;
+        using (f)
+        {
+            var scene = Prepare(f, fallback: Dx11CharacterScene.DefaultCharacterShader);
+            if (scene is null) return;
+
+            var standIns = scene.Slices.Where(s => s.UsedFallbackShader).ToList();
+            Assert.NotEmpty(standIns);
+
+            Assert.All(standIns, s =>
+            {
+                var reads = s.Ps.Inputs
+                    .Where(i => i.IsRead && !i.Semantic.StartsWith("SV_", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                // lit_uber_ps base reads the diffuse UV, the fog-of-war UV and the lighting colour at least
+                Assert.Contains(reads, i => i.Semantic.Equals("COLOR", StringComparison.OrdinalIgnoreCase) && i.Index == 0);
+
+                foreach (var input in reads)
+                {
+                    byte needed = (byte)(input.Mask & input.ReadWriteMask & 0xF);
+                    var written = s.Vs.Outputs.FirstOrDefault(o =>
+                        o.Semantic.Equals(input.Semantic, StringComparison.OrdinalIgnoreCase)
+                        && o.Index == input.Index && o.Register == input.Register);
+                    Assert.True(written is not null,
+                        $"{s.VsDesc.ShaderName} (blob {s.VsDesc.BlobIndex}) never writes {input.FullSemantic} "
+                        + $"(v{input.Register}.{input.ReadWriteMaskString}), which {s.PsDesc.ShaderName} reads");
+                    Assert.True((written!.Mask & needed) == needed,
+                        $"{input.FullSemantic}: the vertex shader writes .{written.MaskString}, the pixel shader reads .{input.ReadWriteMaskString}");
+                }
             });
         }
     }
