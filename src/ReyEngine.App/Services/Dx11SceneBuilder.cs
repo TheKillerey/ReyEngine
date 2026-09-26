@@ -231,7 +231,7 @@ public static class Dx11SceneBuilder
             foreach (var slot in b.Slots)
             {
                 if (string.IsNullOrWhiteSpace(slot.Path)) continue;
-                string? target = ResolveTextureTarget(slot.SamplerName, ps);
+                string? target = ResolveTextureTarget(slot.SamplerName, ps, vs);
                 if (target is not null) wanted.Add((target, slot.Path!.ToLowerInvariant()));
             }
             // Mapgeo v17+ texture overrides are per mesh and supersede the shared material binding.
@@ -240,7 +240,7 @@ public static class Dx11SceneBuilder
             foreach (var (sampler, path) in slice.TextureOverrides)
             {
                 if (string.IsNullOrWhiteSpace(path)) continue;
-                string? target = ResolveTextureTarget(sampler, ps);
+                string? target = ResolveTextureTarget(sampler, ps, vs);
                 if (target is null) continue;
                 wanted.RemoveAll(x => x.Target.Equals(target, StringComparison.OrdinalIgnoreCase));
                 wanted.Add((target, path.ToLowerInvariant()));
@@ -869,14 +869,28 @@ public static class Dx11SceneBuilder
     }
 
     /// <summary>M210: a material sampler binds to the shader texture named after it plus "__TX". Anything
-    /// ending _SharedTexture is engine-supplied and never material-bound.</summary>
-    private static string? ResolveTextureTarget(string sampler, DxbcShader ps)
+    /// ending _SharedTexture is engine-supplied and never material-bound.
+    ///
+    /// <para>M774: the VERTEX shader's textures are searched too, after the pixel shader's. Until M774 only
+    /// the pixel shader was, so a texture only the vertex shader reads was dropped and the vertex stage got
+    /// the white stand-in. Cloth_Base_StaticMesh weights its sway by floor(Mask_Texture.G * DeformMaskStrength)
+    /// in the VS: on Arena F the brazier (mask G = 0) swayed with the banner beside it, because white
+    /// gave every vertex weight 1 (292 of the material's 368 pieces should be still). A census found 43 map
+    /// materials with a vertex-only texture - SRX_DynamicEffect FlagMask_Texture (SR/ARAM kites and foliage),
+    /// TFT_FlowMap_Masked / TFT_Blink WPO_Texture, TFT_FixedUVSpace_Bloom, the cloth. The character builder has
+    /// always searched both stages (Dx11CharacterScene.ResolveTextureTarget).</para></summary>
+    public static string? ResolveTextureTarget(string sampler, DxbcShader ps, DxbcShader vs)
     {
-        var exact = ps.Textures.FirstOrDefault(t =>
-            t.Name.Equals(sampler + "__TX", StringComparison.OrdinalIgnoreCase));
-        if (exact is not null) return exact.Name;
-        return ps.Textures.FirstOrDefault(t =>
-            t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase))?.Name;
+        foreach (var refl in new[] { ps, vs })
+        {
+            var exact = refl.Textures.FirstOrDefault(t =>
+                t.Name.Equals(sampler + "__TX", StringComparison.OrdinalIgnoreCase));
+            if (exact is not null) return exact.Name;
+            var plain = refl.Textures.FirstOrDefault(t =>
+                t.Name.Equals(sampler, StringComparison.OrdinalIgnoreCase));
+            if (plain is not null) return plain.Name;
+        }
+        return null;
     }
 
     /// <summary>M386: the reflected slots a map's grass tint binds to. Shared by Prepare and
