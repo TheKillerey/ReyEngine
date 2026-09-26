@@ -15,7 +15,7 @@ namespace ReyEngine.Formats.Tests;
 /// </summary>
 public sealed class VfxBlendTests
 {
-    private const int Stride = 19;
+    private const int Stride = 20;
     private const int OffColor = 5;
 
     private static string? Source(params string[] parts)

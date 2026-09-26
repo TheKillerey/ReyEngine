@@ -63,6 +63,12 @@ public sealed record VfxEmitterDefinition(
     VfxCurve3? BirthRotation = null,
     bool IsDirectionOriented = false,
     bool IsArbitraryQuad = false,
+    /// <summary>M778: primitive class VfxPrimitiveRay - a streak that lies along the particle's own +Z
+    /// axis (after birth rotation, in the placement frame), not a screen billboard. Riot's data carries no
+    /// fields on the primitive at all - the shape comes entirely from birthScale (X width, Y length along
+    /// the axis, Z the ground offset the streak starts at) and birthRotation, which every emitter already
+    /// authors. See ParticleQuadBuilder.Append for the geometry this drives.</summary>
+    bool IsRay = false,
     VfxCurveF? BirthFrameRate = null,
     float? FrameRate = null,
     string? TextureMultPath = null,

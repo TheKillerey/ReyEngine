@@ -23,11 +23,11 @@ namespace ReyEngine.App.Services;
 /// </summary>
 public sealed class D3D11ParticlePlayback
 {
-    /// <summary>19 floats per particle, defined by VfxParticleRenderer.Stride and filled by
+    /// <summary>20 floats per particle, defined by VfxParticleRenderer.Stride and filled by
     /// VfxParticleSimulator.BuildInstances: pos(0-2) sizeX(3) sizeY(4) rgba(5-8) rot(9) frame(10)
-    /// age(11) vel(12-14) euler(15-17) erosionDrive(18).</summary>
-    private const int Stride = 19;
-    private const int PosX = 0, SizeX = 3, SizeY = 4, ColR = 5, Rot = 9, Frame = 10, Erosion = 18;
+    /// age(11) vel(12-14) euler(15-17) erosionDrive(18) scaleZ(19, M778).</summary>
+    private const int Stride = 20;
+    private const int PosX = 0, SizeX = 3, SizeY = 4, ColR = 5, Rot = 9, Frame = 10, Erosion = 18, ScaleZ = 19;
 
     /// <summary>A hard ceiling on quads per frame, so a pathological system cannot grow the buffer without
     /// bound. Reported rather than silently applied - see <see cref="Report"/>.</summary>
@@ -331,7 +331,7 @@ public sealed class D3D11ParticlePlayback
             // PLACEMENT frame, which the simulator computed when the system was placed.
             var orient = new ParticleQuadBuilder.QuadOrientation(
                 es.Def.IsArbitraryQuad, es.Def.IsDirectionOriented,
-                es.PlacementRight, es.PlacementUp, es.PlacementForward);
+                es.PlacementRight, es.PlacementUp, es.PlacementForward, es.Def.IsRay);
 
             // M719: this host passed no uv transform at all - not even M634's scroll - so a scrolling sprite
             // stood still in the preview window while it moved on the map. The same factory as the map host.

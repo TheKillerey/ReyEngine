@@ -3639,7 +3639,7 @@ float4 psmain(VOut i) : SV_Target
             mat.MeshForward.X, mat.MeshForward.Y, mat.MeshForward.Z, 0f,
             0f, 0f, 0f, 1f);
 
-        const int S = 19;   // ParticleQuadBuilder.Stride - the simulator's packed instance
+        const int S = MeshInstanceStride;   // ParticleQuadBuilder.Stride - the simulator's packed instance
         for (int i = 0; i < count; i++)
         {
             int o = i * S;

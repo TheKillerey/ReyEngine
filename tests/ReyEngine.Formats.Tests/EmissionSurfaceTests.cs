@@ -16,7 +16,7 @@ namespace ReyEngine.Formats.Tests;
 public sealed class EmissionSurfaceTests
 {
     private static uint H(string s) => HashAlgorithms.Fnv1a(s);
-    private const int Stride = 19;   // VfxParticleRenderer.Stride; position is the first three floats
+    private const int Stride = 20;   // VfxParticleRenderer.Stride; position is the first three floats
 
     // ------------------------------------------------------------------ what the file says
 

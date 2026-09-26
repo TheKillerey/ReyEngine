@@ -795,7 +795,8 @@ public sealed class D3D11MapParticles
                 ms.BeamTransforms.Clear();
                 for (int i = 0; i < es.InstanceCount; i++)
                     ms.BeamTransforms.Add(VfxBeamMesh.Transform(es.BeamSource, es.BeamTarget, range,
-                        new Vector2(es.Instances[i * 19 + 3], es.Instances[i * 19 + 4])));
+                        new Vector2(es.Instances[i * ParticleQuadBuilder.Stride + ParticleQuadBuilder.OffSizeX],
+                                    es.Instances[i * ParticleQuadBuilder.Stride + ParticleQuadBuilder.OffSizeY])));
                 mat.MeshParticleTransforms = ms.BeamTransforms;
             }
 
@@ -1074,7 +1075,7 @@ public sealed class D3D11MapParticles
 
                 var orient = new ParticleQuadBuilder.QuadOrientation(
                     es.Def.IsArbitraryQuad, es.Def.IsDirectionOriented,
-                    es.PlacementRight, es.PlacementUp, es.PlacementForward);
+                    es.PlacementRight, es.PlacementUp, es.PlacementForward, es.Def.IsRay);
 
                 // M634: the authored UV scrolls, baked into the vertices because quad_vs has no constant
                 // for them. The multiplier's matters most: 184 of the 401 multiplier emitters across eight

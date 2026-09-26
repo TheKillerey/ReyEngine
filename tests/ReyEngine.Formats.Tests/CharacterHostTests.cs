@@ -18,7 +18,7 @@ namespace ReyEngine.Formats.Tests;
 /// </summary>
 public sealed class CharacterHostTests
 {
-    private const int Stride = 19;   // VfxParticleRenderer.Stride; position is the first three floats
+    private const int Stride = 20;   // VfxParticleRenderer.Stride; position is the first three floats
     private static uint H(string s) => HashAlgorithms.Fnv1a(s);
 
     /// <summary>One triangle standing at x 500..510, z 0..10.</summary>

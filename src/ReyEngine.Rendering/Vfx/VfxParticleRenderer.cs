@@ -24,7 +24,7 @@ public sealed class VfxParticleRenderer
     private int _uUvOffset, _uUvScale, _uUvScrollInt, _uUvRotation, _uUvClamp;
     private int _uUvOffsetMult, _uUvScrollIntMult, _uEmitterUvScrollMult, _uUvClampMult;   // M719
     private int _uEmitterUvScroll, _uUvFlip, _uUvRotInt, _uUvRotRate, _uUvCenter, _uEmitterAge;
-    private int _uDirectionOriented, _uArbitraryQuad;
+    private int _uDirectionOriented, _uArbitraryQuad, _uRay;
     private int _uPlacementRight, _uPlacementUp, _uPlacementForward;
     // M175: soft particles (2.2), palette (2.6), depth push/pull (2.8)
     private int _uDepthTex, _uDepthConv, _uSoftParams, _uSoftControl, _uHasSoft;
@@ -50,7 +50,11 @@ public sealed class VfxParticleRenderer
     // buffer this describes, and until M174 it carried its own hardcoded copy of the number - so bumping
     // the stride here left the simulator allocating one float per particle too few and overrunning the
     // array on the first spawn. One constant, referenced from both sides, is what prevents that.
-    internal const int Stride = 19;
+    //
+    // M778: the 20th float is scale.z, always written (see VfxParticleSimulator.BuildInstances).
+    // VfxPrimitiveRay reads it as the ground offset its streak starts at, along its own axis; every other
+    // primitive ignores it.
+    internal const int Stride = 20;
 
     private bool _gles;
 
@@ -97,6 +101,7 @@ public sealed class VfxParticleRenderer
         _uEmitterAge = gl.GetUniformLocation(_program, "uEmitterAge");
         _uDirectionOriented = gl.GetUniformLocation(_program, "uDirectionOriented");
         _uArbitraryQuad = gl.GetUniformLocation(_program, "uArbitraryQuad");
+        _uRay = gl.GetUniformLocation(_program, "uRay");
         _uPlacementRight = gl.GetUniformLocation(_program, "uPlacementRight");
         _uPlacementUp = gl.GetUniformLocation(_program, "uPlacementUp");
         _uPlacementForward = gl.GetUniformLocation(_program, "uPlacementForward");
@@ -134,7 +139,11 @@ public sealed class VfxParticleRenderer
         gl.EnableVertexAttribArray(4); gl.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, bstride, (void*)(9 * sizeof(float)));
         gl.EnableVertexAttribArray(5); gl.VertexAttribPointer(5, 4, VertexAttribPointerType.Float, false, bstride, (void*)(11 * sizeof(float)));
         gl.EnableVertexAttribArray(6); gl.VertexAttribPointer(6, 3, VertexAttribPointerType.Float, false, bstride, (void*)(15 * sizeof(float)));
-        gl.EnableVertexAttribArray(7); gl.VertexAttribPointer(7, 1, VertexAttribPointerType.Float, false, bstride, (void*)((Stride - 1) * sizeof(float)));
+        // M174: erosion drive is slot 18 - a fixed offset, not "the last float", now that M778 appends a
+        // 20th slot after it.
+        gl.EnableVertexAttribArray(7); gl.VertexAttribPointer(7, 1, VertexAttribPointerType.Float, false, bstride, (void*)(18 * sizeof(float)));
+        // M778: slot 19 - VfxPrimitiveRay's scale.z.
+        gl.EnableVertexAttribArray(8); gl.VertexAttribPointer(8, 1, VertexAttribPointerType.Float, false, bstride, (void*)(19 * sizeof(float)));
         gl.VertexAttribDivisor(1, 1);
         gl.VertexAttribDivisor(2, 1);
         gl.VertexAttribDivisor(3, 1);
@@ -142,6 +151,7 @@ public sealed class VfxParticleRenderer
         gl.VertexAttribDivisor(5, 1);
         gl.VertexAttribDivisor(6, 1);
         gl.VertexAttribDivisor(7, 1);
+        gl.VertexAttribDivisor(8, 1);
 
         gl.BindVertexArray(0);
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
@@ -524,6 +534,7 @@ public sealed class VfxParticleRenderer
             _gl.Uniform1(_uEmitterAge, es.Age);
             _gl.Uniform1(_uDirectionOriented, es.Def.IsDirectionOriented ? 1 : 0);
             _gl.Uniform1(_uArbitraryQuad, es.Def.IsArbitraryQuad ? 1 : 0);
+            _gl.Uniform1(_uRay, es.Def.IsRay ? 1 : 0);
             _gl.Uniform1(_uIsDistortion, isDistortion ? 1 : 0);
             _gl.Uniform1(_uDistortionStrength, es.Def.Distortion?.Strength ?? 0f);
             _gl.Uniform3(_uPlacementRight, es.PlacementRight.X, es.PlacementRight.Y, es.PlacementRight.Z);
@@ -1766,6 +1777,7 @@ layout(location=4) in vec2 aRotFrame;  // per-instance rotation (rad), flipbook 
 layout(location=5) in vec4 aAgeVelX;   // age, velocity xyz
 layout(location=6) in vec3 aRotation;  // Euler xyz in radians
 layout(location=7) in float aErosionDrive;  // M174 (2.1): per-particle erosion drive
+layout(location=8) in float aRayScaleZ;  // M778: VfxPrimitiveRay's scale.z (axis offset from spawn point)
 uniform mat4 uViewProj;
 uniform vec3 uCamRight;
 uniform vec3 uCamUp;
@@ -1791,6 +1803,7 @@ uniform int uUvClampMult;
 " + ReyEngine.Formats.Vfx.VfxUvTransform.Glsl + @"
 uniform int uDirectionOriented;
 uniform int uArbitraryQuad;
+uniform int uRay;   // M778: VfxPrimitiveRay
 uniform vec3 uPlacementRight;
 uniform vec3 uPlacementUp;
 uniform vec3 uPlacementForward;
@@ -1815,7 +1828,7 @@ vec3 rotateEuler(vec3 p, vec3 r){
     return p;
 }
 void main(){
-    float rotation = uArbitraryQuad != 0 ? 0.0 : aRotFrame.x;
+    float rotation = (uArbitraryQuad != 0 || uRay != 0) ? 0.0 : aRotFrame.x;
     if (uDirectionOriented != 0) {
         float vx = dot(aAgeVelX.yzw, uCamRight);
         float vy = dot(aAgeVelX.yzw, uCamUp);
@@ -1830,7 +1843,28 @@ void main(){
     vec3 placedUp = uPlacementRight * localUp.x + uPlacementUp * localUp.y + uPlacementForward * localUp.z;
     vec3 right = uArbitraryQuad != 0 ? placedRight : uCamRight;
     vec3 up = uArbitraryQuad != 0 ? placedUp : uCamUp;
-    vec3 world = aCenter + right * (rc.x * aSize.x) + up * (rc.y * aSize.y);
+    vec3 center = aCenter;
+    // M778: VfxPrimitiveRay - a streak along the particle's own rotated +Z axis (in the placement frame),
+    // not a screen billboard. base = spawn point + axis*scale.z, tip = base + axis*scale.y, width =
+    // scale.x across the axis, turned to face the camera (an axial billboard). See
+    // ParticleQuadBuilder.Append (D3D11/CPU) for the reference this mirrors.
+    if (uRay != 0) {
+        vec3 localAxis = rotateEuler(vec3(0.0, 0.0, 1.0), aRotation);
+        vec3 axis = uPlacementRight * localAxis.x + uPlacementUp * localAxis.y + uPlacementForward * localAxis.z;
+        float axisLen = length(axis);
+        axis = axisLen > 0.0001 ? axis / axisLen : uPlacementForward;
+        // uCamRight/uCamUp/toCamera (their cross product) form the same orthonormal camera basis the CPU
+        // builder receives as (right, up, normal) - see ParticleQuadBuilder.Basis.
+        vec3 toCamera = cross(uCamRight, uCamUp);
+        vec3 across = cross(axis, toCamera);
+        float acrossLen = length(across);
+        if (acrossLen < 0.0001) { across = cross(axis, uPlacementUp); acrossLen = length(across); }
+        across = acrossLen > 0.0001 ? across / acrossLen : uCamRight;
+        center = aCenter + axis * (aRayScaleZ + aSize.y * 0.5);
+        right = across;
+        up = axis;
+    }
+    vec3 world = center + right * (rc.x * aSize.x) + up * (rc.y * aSize.y);
     // M175 (2.8): depthPushPull. DECODED from particlesystem/quad_vs, which does exactly this:
     //     12: add r0.xyz, v0.xyz, -cb2[4].xyz     // vCamera
     //     13-15: normalize

@@ -26,6 +26,9 @@ public static class VfxPrimitiveSupport
         [HashAlgorithms.Fnv1a("VfxPrimitiveCameraTrail")] = "drawn as a camera-facing trail",
         [HashAlgorithms.Fnv1a("VfxPrimitiveArbitraryTrail")] = "drawn as a world-oriented trail",
         [HashAlgorithms.Fnv1a("VfxPrimitiveArbitraryQuad")] = "drawn as a world-oriented quad",
+        // M778: a placement-axis streak (base at birthScale.z along the particle's own rotated +Z, tip
+        // birthScale.y further along it, width birthScale.x) - not a billboard. See ParticleQuadBuilder.
+        [HashAlgorithms.Fnv1a("VfxPrimitiveRay")] = "drawn as a placement-oriented ray",
     };
 
     /// <summary>VfxPrimitiveAttachedMesh only gains geometry when it names a mesh FILE. Most instances

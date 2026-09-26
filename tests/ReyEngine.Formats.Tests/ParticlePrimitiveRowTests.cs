@@ -103,14 +103,18 @@ public sealed class ParticlePrimitiveRowTests
     [Fact]
     public void APrimitiveThePreviewCannotDrawSaysSoOnTheRow()
     {
-        // A ray is not a billboard, and the preview has no case for it. Before this the row said nothing.
-        var ray = Row(Primitive("VfxPrimitiveRay"));
-        Assert.True(ray.IgnoredByPreview);
-        Assert.Contains("billboard", ray.PreviewNote!, StringComparison.OrdinalIgnoreCase);
+        // A planar projection is not a billboard, and the preview has no case for it.
+        var planar = Row(Primitive("VfxPrimitivePlanarProjection"));
+        Assert.True(planar.IgnoredByPreview);
+        Assert.Contains("billboard", planar.PreviewNote!, StringComparison.OrdinalIgnoreCase);
 
         // A mesh IS drawn as itself, so it carries no warning.
         var mesh = Row(Primitive("VfxPrimitiveMesh"));
         Assert.False(mesh.IgnoredByPreview);
+
+        // M778: so is a ray now - it draws its own placement-oriented streak instead of falling back.
+        var ray = Row(Primitive("VfxPrimitiveRay"));
+        Assert.False(ray.IgnoredByPreview);
     }
 
     [Fact]
@@ -121,7 +125,9 @@ public sealed class ParticlePrimitiveRowTests
         var note = VfxPrimitiveSupport.DegradeNote(H("VfxPrimitiveNonRenderable"));
         Assert.NotNull(note);
         Assert.Contains("does not", note!, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("does not", VfxPrimitiveSupport.DegradeNote(H("VfxPrimitiveRay"))!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("does not", VfxPrimitiveSupport.DegradeNote(H("VfxPrimitivePlanarProjection"))!, StringComparison.OrdinalIgnoreCase);
+        // M778: a ray is drawn as itself now, so it carries no degrade note at all.
+        Assert.Null(VfxPrimitiveSupport.DegradeNote(H("VfxPrimitiveRay")));
     }
 
     [Fact]
@@ -153,7 +159,7 @@ public sealed class ParticlePrimitiveRowTests
         foreach (string cls in new[]
                  {
                      "VfxPrimitiveMesh", "VfxPrimitiveBeam", "VfxPrimitiveCameraTrail",
-                     "VfxPrimitiveArbitraryTrail", "VfxPrimitiveArbitraryQuad",
+                     "VfxPrimitiveArbitraryTrail", "VfxPrimitiveArbitraryQuad", "VfxPrimitiveRay",
                  })
         {
             Assert.Null(VfxPrimitiveSupport.DegradeNote(H(cls)));
@@ -161,7 +167,6 @@ public sealed class ParticlePrimitiveRowTests
             Assert.Contains(cls, resolver, StringComparison.Ordinal);
         }
         // and the ones it does not implement stay badged
-        Assert.NotNull(VfxPrimitiveSupport.DegradeNote(H("VfxPrimitiveRay")));
         Assert.NotNull(VfxPrimitiveSupport.DegradeNote(H("VfxPrimitivePlanarProjection")));
     }
 

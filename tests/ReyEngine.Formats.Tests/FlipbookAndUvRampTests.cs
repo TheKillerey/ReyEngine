@@ -16,7 +16,7 @@ namespace ReyEngine.Formats.Tests;
 /// </summary>
 public sealed class FlipbookAndUvRampTests
 {
-    private const int Stride = 19;
+    private const int Stride = 20;
     private const int OffFrame = 10;
 
     private static string? Source(params string[] parts)

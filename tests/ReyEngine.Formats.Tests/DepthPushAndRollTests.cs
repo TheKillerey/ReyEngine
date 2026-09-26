@@ -19,7 +19,7 @@ namespace ReyEngine.Formats.Tests;
 /// </summary>
 public sealed class DepthPushAndRollTests
 {
-    private const int Stride = 19;
+    private const int Stride = 20;
 
     private static string? Source(params string[] parts)
     {

@@ -328,4 +328,96 @@ public class ParticleQuadBuilderTests
         var normal = Vector3.Cross(basisR, basisU);
         Assert.True(MathF.Abs(normal.Y) > 0.9f, $"expected the normal to face up or down, got {normal}");
     }
+
+    // ---- M778: VfxPrimitiveRay ----
+
+    /// <summary>A ray particle with pos(3), sizeX/sizeY (width/length), a birth Euler (slots 15-17) and
+    /// scale.z (slot 19, the ground offset). Colour/rot/frame default to whatever OneParticle leaves them.</summary>
+    private static float[] OneRayParticle(Vector3 pos, float width, float length, float scaleZ, Vector3 eulerRadians = default)
+    {
+        var a = OneParticle(pos, width, length, Vector4.One);
+        a[ParticleQuadBuilder.OffEuler + 0] = eulerRadians.X;
+        a[ParticleQuadBuilder.OffEuler + 1] = eulerRadians.Y;
+        a[ParticleQuadBuilder.OffEuler + 2] = eulerRadians.Z;
+        a[ParticleQuadBuilder.OffScaleZ] = scaleZ;
+        return a;
+    }
+
+    /// <summary>Corners 0/1 carry v=0 (Corner(): the tip), corners 2/3 carry v=1 (the base) - see
+    /// ParticleQuadBuilder.Append's Ray branch and Corner()'s dy/v pairing.</summary>
+    private static (Vector3 Base0, Vector3 Base1, Vector3 Tip0, Vector3 Tip1) RaySplit(PreviewVertex[] v) =>
+        (v[3].Position, v[2].Position, v[0].Position, v[1].Position);
+
+    [Fact]
+    public void Ray_base_sits_at_scale_z_and_the_tip_a_further_scale_y_along_the_axis()
+    {
+        // axis = +Z (identity placement frame, no birth rotation): base = pos + axis*scaleZ,
+        // tip = base + axis*scaleY. The camera looks along +X, so it never lines up with the ray's axis.
+        var inst = OneRayParticle(Vector3.Zero, width: 6f, length: 40f, scaleZ: 10f);
+        var orient = new ParticleQuadBuilder.QuadOrientation(
+            false, false, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ, Ray: true);
+        var verts = new PreviewVertex[4];
+        var idx = new uint[6];
+        int vc = 0, ic = 0;
+        var (right, up, normal) = ParticleQuadBuilder.Basis(Vector3.UnitX, Vector3.UnitY);
+        ParticleQuadBuilder.Append(inst, 1, verts, ref vc, idx, ref ic, right, up, normal, orient);
+
+        var (base0, base1, tip0, tip1) = RaySplit(verts);
+        var baseMid = (base0 + base1) / 2f;
+        var tipMid = (tip0 + tip1) / 2f;
+
+        Assert.Equal(10f, baseMid.Z, 3);                          // scale.z along the axis
+        Assert.Equal(50f, tipMid.Z, 3);                           // scale.z + scale.y
+        Assert.Equal(40f, Vector3.Distance(baseMid, tipMid), 3);  // the streak's length is scale.y
+        Assert.Equal(6f, Vector3.Distance(base0, base1), 3);      // its width is scale.x
+        Assert.Equal(6f, Vector3.Distance(tip0, tip1), 3);        // constant across the whole streak
+    }
+
+    [Fact]
+    public void Ray_turns_about_its_own_axis_to_face_the_camera()
+    {
+        // The "across" (width) direction must be perpendicular to both the axis AND the view direction -
+        // exactly what an axial billboard (across = axis x toCamera) guarantees, and what tells a ray
+        // apart from a quad that merely sits in a fixed plane.
+        var inst = OneRayParticle(Vector3.Zero, width: 4f, length: 10f, scaleZ: 0f);
+        var orient = new ParticleQuadBuilder.QuadOrientation(
+            false, false, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ, Ray: true);
+
+        foreach (var toCamera in new[] { Vector3.UnitX, new Vector3(1f, 0.4f, 0.2f), -Vector3.UnitX })
+        {
+            var verts = new PreviewVertex[4];
+            var idx = new uint[6];
+            int vc = 0, ic = 0;
+            var (right, up, normal) = ParticleQuadBuilder.Basis(toCamera, Vector3.UnitY);
+            ParticleQuadBuilder.Append(inst, 1, verts, ref vc, idx, ref ic, right, up, normal, orient);
+
+            var (base0, base1, _, _) = RaySplit(verts);
+            var across = Vector3.Normalize(base1 - base0);
+            Assert.True(MathF.Abs(Vector3.Dot(across, Vector3.UnitZ)) < 1e-3f, "across must be perpendicular to the axis");
+            Assert.True(MathF.Abs(Vector3.Dot(across, Vector3.Normalize(normal))) < 1e-3f,
+                $"across must be perpendicular to the view direction {normal}, got {across}");
+        }
+    }
+
+    [Fact]
+    public void Ray_pointed_straight_at_the_camera_still_produces_a_real_quad()
+    {
+        // Degenerate case: the axis (+Z, identity frame) IS the camera direction, so axis x toCamera is
+        // zero. The builder must fall back rather than collapse the streak to a line.
+        var inst = OneRayParticle(Vector3.Zero, width: 4f, length: 10f, scaleZ: 0f);
+        var orient = new ParticleQuadBuilder.QuadOrientation(
+            false, false, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ, Ray: true);
+        var verts = new PreviewVertex[4];
+        var idx = new uint[6];
+        int vc = 0, ic = 0;
+        var (right, up, normal) = ParticleQuadBuilder.Basis(Vector3.UnitZ, Vector3.UnitY);   // toCamera == axis
+        ParticleQuadBuilder.Append(inst, 1, verts, ref vc, idx, ref ic, right, up, normal, orient);
+
+        var (base0, base1, _, _) = RaySplit(verts);
+        foreach (var vert in verts)
+        {
+            Assert.True(float.IsFinite(vert.Position.X) && float.IsFinite(vert.Position.Y) && float.IsFinite(vert.Position.Z));
+        }
+        Assert.Equal(4f, Vector3.Distance(base0, base1), 3);   // still the authored width, not collapsed
+    }
 }

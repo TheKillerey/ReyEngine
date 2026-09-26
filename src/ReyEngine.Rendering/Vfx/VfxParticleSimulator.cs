@@ -954,6 +954,10 @@ public sealed class VfxParticleSimulator
             // through a vertex attribute (quad_vs: mov o3.z, v2.w), which is why the curve is
             // evaluated here on the CPU rather than in the shader.
             buf[k++] = d.AlphaErosion is { } ero ? ero.Drive.Sample(t) : 0f;
+            // M778: scale.z, always written (not gated on IsRay) so the slot is uniform across every
+            // non-mesh primitive - a mesh already carries its own Z scale in slot 10. VfxPrimitiveRay reads
+            // this as the ground offset its streak starts at, along its own rotated +Z axis.
+            buf[k++] = p.BirthSizeZ * scaleMul.Z;
         }
         s.InstanceCount = n;
     }

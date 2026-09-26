@@ -23,11 +23,11 @@ namespace ReyEngine.Rendering.D3D11;
 public static class ParticleQuadBuilder
 {
     /// <summary>Field offsets inside one instance record, as VfxParticleSimulator.BuildInstances writes it.
-    /// 19 floats: pos(0-2) sizeX(3) sizeY(4) rgba(5-8) rot(9) frame(10) age(11) vel(12-14) euler(15-17)
-    /// erosionDrive(18).</summary>
-    public const int Stride = 19;
+    /// 20 floats: pos(0-2) sizeX(3) sizeY(4) rgba(5-8) rot(9) frame(10) age(11) vel(12-14) euler(15-17)
+    /// erosionDrive(18) scaleZ(19, M778 - VfxPrimitiveRay's ground offset along its own axis).</summary>
+    public const int Stride = 20;
     public const int OffPos = 0, OffSizeX = 3, OffSizeY = 4, OffColor = 5, OffRot = 9, OffFrame = 10;
-    public const int OffVel = 12, OffEuler = 15, OffErosion = 18;
+    public const int OffVel = 12, OffEuler = 15, OffErosion = 18, OffScaleZ = 19;
 
     /// <summary>An orthonormal billboard basis facing <paramref name="toCamera"/>. Falls back to fixed axes
     /// when the direction is degenerate or parallel to up, so a quad never collapses to a line.</summary>
@@ -41,13 +41,16 @@ public static class ParticleQuadBuilder
         return (right, Vector3.Normalize(Vector3.Cross(n, right)), n);
     }
 
-    /// <summary>How a quad is oriented, mirroring the OpenGL renderer's three cases.</summary>
+    /// <summary>How a quad is oriented, mirroring the OpenGL renderer's cases.</summary>
     public readonly record struct QuadOrientation(
         bool ArbitraryQuad,
         bool DirectionOriented,
         Vector3 PlacementRight,
         Vector3 PlacementUp,
-        Vector3 PlacementForward)
+        Vector3 PlacementForward,
+        /// <summary>M778: VfxPrimitiveRay - a streak along the particle's own rotated +Z axis, base-to-tip
+        /// rather than centred on the particle. See Append for the geometry.</summary>
+        bool Ray = false)
     {
         /// <summary>Plain camera billboard - what every emitter got before M238.</summary>
         public static QuadOrientation Billboard => default;
@@ -118,8 +121,10 @@ public static class ParticleQuadBuilder
             //                     suppressed (GL: `rotation = uArbitraryQuad != 0 ? 0.0 : aRotFrame.x`)
             //   directionOriented the spin instead points the quad along the particle's screen-space
             //                     velocity, so a spark leans the way it travels
+            //   ray               (M778) no spin at all - the quad's own axis comes from its Euler
+            //                     rotation instead, exactly like arbitraryQuad
             //   otherwise         a plain camera billboard
-            float rot = orientation.ArbitraryQuad ? 0f : instances[o + OffRot];
+            float rot = orientation.ArbitraryQuad || orientation.Ray ? 0f : instances[o + OffRot];
             if (orientation.DirectionOriented)
             {
                 var vel = new Vector3(instances[o + OffVel], instances[o + OffVel + 1], instances[o + OffVel + 2]);
@@ -138,6 +143,31 @@ public static class ParticleQuadBuilder
                 var lu = RotateEuler(Vector3.UnitY, euler);
                 basisR = orientation.PlacementRight * lr.X + orientation.PlacementUp * lr.Y + orientation.PlacementForward * lr.Z;
                 basisU = orientation.PlacementRight * lu.X + orientation.PlacementUp * lu.Y + orientation.PlacementForward * lu.Z;
+                var cr = Vector3.Cross(basisR, basisU);
+                if (cr.LengthSquared() > 1e-8f) basisN = Vector3.Normalize(cr);
+            }
+            else if (orientation.Ray)
+            {
+                // M778: VfxPrimitiveRay. axis = placement frame * RotateEuler(+Z, euler) - the same Euler
+                // reader arbitraryQuad uses, applied to +Z instead of +X/+Y since the streak lies along its
+                // OWN forward axis, not across it. base = particle position + axis*scale.z (the ground
+                // offset), tip = base + axis*scale.y (the streak length); the quad spans base to tip rather
+                // than being centred on the particle, so `pos` below is shifted to their midpoint and
+                // basisU (length sy) reaches base at ry=-0.5 and tip at ry=+0.5 - see Corner().
+                var euler = new Vector3(instances[o + OffEuler], instances[o + OffEuler + 1], instances[o + OffEuler + 2]);
+                var localAxis = RotateEuler(Vector3.UnitZ, euler);
+                var axis = orientation.PlacementRight * localAxis.X + orientation.PlacementUp * localAxis.Y + orientation.PlacementForward * localAxis.Z;
+                axis = axis.LengthSquared() > 1e-8f ? Vector3.Normalize(axis) : orientation.PlacementForward;
+                float scaleZ = instances[o + OffScaleZ];
+                pos += axis * (scaleZ + sy * 0.5f);
+                basisU = axis;
+                // across = axis x toCamera (the axial billboard - turns about its own axis to face the
+                // eye). `normal` is the camera-facing direction the caller's Basis() derived it from.
+                // Degenerate only when the ray points straight at/away from the camera; PlacementUp is the
+                // fallback perpendicular, and the shared camera `right` after that.
+                var acrossRaw = Vector3.Cross(axis, normal);
+                if (acrossRaw.LengthSquared() < 1e-8f) acrossRaw = Vector3.Cross(axis, orientation.PlacementUp);
+                basisR = acrossRaw.LengthSquared() > 1e-8f ? Vector3.Normalize(acrossRaw) : right;
                 var cr = Vector3.Cross(basisR, basisU);
                 if (cr.LengthSquared() > 1e-8f) basisN = Vector3.Normalize(cr);
             }

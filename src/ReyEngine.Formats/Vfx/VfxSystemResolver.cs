@@ -253,6 +253,10 @@ public static class VfxSystemResolver
     // primitive class hashes we treat as "mesh" (billboarded as fallback)
     private static readonly uint PrimMesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");
     private static readonly uint PrimArbitraryQuad = HashAlgorithms.Fnv1a("VfxPrimitiveArbitraryQuad");
+    // M778: an empty struct in 100% of its measured instances (support-report + Troybin Rosetta both name
+    // it) - the shape comes entirely from the emitter's own birthScale/birthRotation, not from any field
+    // on the primitive itself.
+    private static readonly uint PrimRay = HashAlgorithms.Fnv1a("VfxPrimitiveRay");
 
     // M86: skin bins carry a top-level ResourceResolver object whose resourceMap links effect KEYS
     // (what animation ParticleEventData.mEffectKey hashes) to VfxSystemDefinitionData object hashes.
@@ -364,6 +368,7 @@ public static class VfxSystemResolver
         uint primClass = prim is BinTreeStruct pc ? pc.ClassHash : 0u;
         bool meshCapablePrim = primClass == PrimMesh || primClass == C_primAttachedMesh || primClass == C_primBeam;
         bool isArbitraryQuad = primClass == PrimArbitraryQuad;
+        bool isRay = primClass == PrimRay;
         // M47: the mesh primitive carries its .scb/.sco path (VfxMeshDefinitionData.mSimpleMeshName) or,
         // for skinned primitives (butterflies), mMeshName (.skn) + skeleton (.skl) + mAnimationName (.anm).
         string? meshPath = null, meshSkl = null, meshAnm = null;
@@ -448,6 +453,7 @@ public static class VfxSystemResolver
             BirthRotation: birthRotation,
             IsDirectionOriented: GetBool(p, F_direction),
             IsArbitraryQuad: isArbitraryQuad,
+            IsRay: isRay,
             BirthFrameRate: ReadCurveF(p, F_birthFrameRate),
             FrameRate: GetF32(p, F_frameRate),
             TextureMultPath: textureMultPath,

@@ -27,7 +27,7 @@ public class ParticleFlipbookAndWarmupTests
 {
     /// <summary>The instance-buffer stride and the slot the flipbook cell lands in, as
     /// <c>BuildInstances</c> writes them: pos(3) size(2) colour(4) rot(1) frame(1).</summary>
-    private const int Stride = 19;
+    private const int Stride = 20;
     private const int OffFrame = 10;
 
     private static VfxSystemDefinition One(string name, float rate, float lifetime, int numFrames,
