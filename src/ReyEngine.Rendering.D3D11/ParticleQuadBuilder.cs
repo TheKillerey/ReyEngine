@@ -151,6 +151,19 @@ public static class ParticleQuadBuilder
             for (int k = 0; k < 4; k++)
             {
                 var (dx, dy, u, v) = Corner(k);
+                if (orientation.ArbitraryQuad)
+                {
+                    // M773: the arbitrary-quad UV is mirrored across the anti-diagonal relative to the
+                    // camera-billboard mapping - LTK Manager's quad.ts:21-31 builds it as
+                    // u = y + 0.5, v = 0.5 - x, which is NOT the (x + 0.5, 0.5 - y) every other orientation
+                    // uses. A census over 42 WADs found arbitrary quads authored with their size aspect
+                    // swapped relative to the texture (1,355 vs 389 at roll 0), which only makes sense if the
+                    // quad reads its texture on the other diagonal; billboards were not swapped (2,952 vs
+                    // 780). Confirmed on Cherry_GoH_Portal_Noxus_1 (Map30 arenashop.materials.bin): the
+                    // Immortal Bastion painting and the Noxus sigil render upright only with this swap.
+                    u = dy + 0.5f;
+                    v = 0.5f - dx;
+                }
                 float rx = dx * cs - dy * sn;
                 float ry = dx * sn + dy * cs;
                 ref var vert = ref verts[vertexCursor++];
@@ -176,15 +189,21 @@ public static class ParticleQuadBuilder
         return written;
     }
 
-    /// <summary>Euler xyz in radians, in the same order the GL shader applies them (x, then y, then z).</summary>
+    /// <summary>Euler xyz in radians, roll-pitch-yaw - Z first, then X, then Y. M773: the arbitrary-quad
+    /// basis was composing X, then Y, then Z, which disagreed with both the mesh path (M765, decoded from
+    /// the four SR gate shields' authored birthRotation0) and LTK Manager's own builder
+    /// (engine/utils/basis.ts:22-56, Ry*Rx*Rz for every primitive). Light1/7/8's birth rotation
+    /// (90,0,-90) - ground glows authored to lie flat - rendered as invisible vertical sheets under the old
+    /// order and lie flat under this one; the Noxus sigil's (0,180,90) also comes out upright only here.
+    /// Matches <c>rotateEuler</c> in the GL quad vertex shader and the mesh HLSL/GLSL of the same name.</summary>
     private static Vector3 RotateEuler(Vector3 v, Vector3 r)
     {
         float sx = MathF.Sin(r.X), cx = MathF.Cos(r.X);
         float sy = MathF.Sin(r.Y), cy = MathF.Cos(r.Y);
         float sz = MathF.Sin(r.Z), cz = MathF.Cos(r.Z);
+        v = new Vector3(v.X * cz - v.Y * sz, v.X * sz + v.Y * cz, v.Z);
         v = new Vector3(v.X, v.Y * cx - v.Z * sx, v.Y * sx + v.Z * cx);
-        v = new Vector3(v.X * cy + v.Z * sy, v.Y, -v.X * sy + v.Z * cy);
-        return new Vector3(v.X * cz - v.Y * sz, v.X * sz + v.Y * cz, v.Z);
+        return new Vector3(v.X * cy + v.Z * sy, v.Y, -v.X * sy + v.Z * cy);
     }
 
     /// <summary>

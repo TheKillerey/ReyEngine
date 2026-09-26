@@ -227,4 +227,105 @@ public class ParticleQuadBuilderTests
         Assert.True(MathF.Abs(Vector3.Dot(r, u)) < 1e-4f);
         Assert.True(MathF.Abs(Vector3.Dot(r, n)) < 1e-4f);
     }
+
+    // ---- M773: arbitrary-quad UV mirror + Euler order fixes ----
+
+    /// <summary>A billboard's corner UV is untouched: u = x + 0.5, v = 0.5 - y (the camera-quad mapping,
+    /// LTK Manager quad.ts:80). Corner order is (-.5,.5) (.5,.5) (.5,-.5) (-.5,-.5).</summary>
+    [Fact]
+    public void Billboard_corner_uv_is_the_camera_mapping()
+    {
+        var (v, _, _, _) = Build(OneParticle(Vector3.Zero, 1f, 1f, Vector4.One));
+        Assert.Equal(new Vector2(0f, 0f), new Vector2(v[0].Uv0.X, v[0].Uv0.Y));
+        Assert.Equal(new Vector2(1f, 0f), new Vector2(v[1].Uv0.X, v[1].Uv0.Y));
+        Assert.Equal(new Vector2(1f, 1f), new Vector2(v[2].Uv0.X, v[2].Uv0.Y));
+        Assert.Equal(new Vector2(0f, 1f), new Vector2(v[3].Uv0.X, v[3].Uv0.Y));
+    }
+
+    /// <summary>M773: the arbitrary-quad corner UV is mirrored across the anti-diagonal relative to a
+    /// billboard's: u = y + 0.5, v = 0.5 - x (LTK Manager quad.ts:21-31), applied to BOTH texture layers
+    /// (UV0 and UV1/mult) since the swap happens on the corner, before VfxUvTransform.Cell.</summary>
+    [Fact]
+    public void Arbitrary_quad_corner_uv_is_mirrored_across_the_anti_diagonal()
+    {
+        var orient = new ParticleQuadBuilder.QuadOrientation(
+            true, false, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ);
+        var v = BuildWith(OneParticle(Vector3.Zero, 1f, 1f, Vector4.One), orient);
+
+        Assert.Equal(new Vector2(1f, 1f), new Vector2(v[0].Uv0.X, v[0].Uv0.Y));
+        Assert.Equal(new Vector2(1f, 0f), new Vector2(v[1].Uv0.X, v[1].Uv0.Y));
+        Assert.Equal(new Vector2(0f, 0f), new Vector2(v[2].Uv0.X, v[2].Uv0.Y));
+        Assert.Equal(new Vector2(0f, 1f), new Vector2(v[3].Uv0.X, v[3].Uv0.Y));
+
+        // the mult layer (UV1) rides the same swapped corner
+        Assert.Equal(new Vector2(1f, 1f), v[0].Uv1);
+        Assert.Equal(new Vector2(0f, 0f), v[2].Uv1);
+    }
+
+    /// <summary>The independent reference for the mesh path's Euler order (M765): Z, then X, then Y,
+    /// composed as row-vector * (RotZ * RotX * RotY) so RotZ applies first. Mirrors
+    /// ShaderPreviewRenderer.DrawRiotMeshInstances' <c>CreateRotationZ * CreateRotationX * CreateRotationY</c>
+    /// exactly, so a pass here means the arbitrary-quad basis and the mesh basis cannot disagree.</summary>
+    private static Vector3 MeshReferenceRotate(Vector3 v, Vector3 eulerRadians)
+    {
+        var m = Matrix4x4.CreateRotationZ(eulerRadians.Z)
+                * Matrix4x4.CreateRotationX(eulerRadians.X)
+                * Matrix4x4.CreateRotationY(eulerRadians.Y);
+        return Vector3.Transform(v, m);
+    }
+
+    /// <summary>Extracts the arbitrary quad's right/up basis vectors from the four corners of a unit
+    /// (sizeX=sizeY=1), unrotated (rot suppressed for arbitrary quads regardless), identity-placement
+    /// (Right=X, Up=Y, Forward=Z) quad: corner 1 - corner 0 isolates basisR, corner 0 - corner 3 isolates
+    /// basisU (see Corner()'s dx/dy table).</summary>
+    private static (Vector3 Right, Vector3 Up) ArbitraryQuadBasis(Vector3 eulerRadians)
+    {
+        var orient = new ParticleQuadBuilder.QuadOrientation(
+            true, false, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ);
+        var inst = OneParticle(Vector3.Zero, 1f, 1f, Vector4.One);
+        inst[ParticleQuadBuilder.OffEuler + 0] = eulerRadians.X;
+        inst[ParticleQuadBuilder.OffEuler + 1] = eulerRadians.Y;
+        inst[ParticleQuadBuilder.OffEuler + 2] = eulerRadians.Z;
+        var v = BuildWith(inst, orient);
+        return (v[1].Position - v[0].Position, v[0].Position - v[3].Position);
+    }
+
+    public static System.Collections.Generic.IEnumerable<object[]> EulerTriplesDegrees()
+    {
+        yield return new object[] { new Vector3(0f, 0f, 0f) };
+        yield return new object[] { new Vector3(90f, 0f, -90f) };   // Light1/7/8: ground glows lie flat
+        yield return new object[] { new Vector3(0f, 180f, 90f) };  // the Noxus sigil: comes out upright
+        yield return new object[] { new Vector3(-90f, 0f, 0f) };
+        yield return new object[] { new Vector3(1f, 90f, 90f) };
+    }
+
+    [Theory]
+    [MemberData(nameof(EulerTriplesDegrees))]
+    public void Arbitrary_quad_basis_matches_the_mesh_Z_X_Y_composition(Vector3 degrees)
+    {
+        var r = degrees * (MathF.PI / 180f);
+        var (basisR, basisU) = ArbitraryQuadBasis(r);
+        var expectedR = MeshReferenceRotate(Vector3.UnitX, r);
+        var expectedU = MeshReferenceRotate(Vector3.UnitY, r);
+
+        Assert.Equal(expectedR.X, basisR.X, 4);
+        Assert.Equal(expectedR.Y, basisR.Y, 4);
+        Assert.Equal(expectedR.Z, basisR.Z, 4);
+        Assert.Equal(expectedU.X, basisU.X, 4);
+        Assert.Equal(expectedU.Y, basisU.Y, 4);
+        Assert.Equal(expectedU.Z, basisU.Z, 4);
+    }
+
+    /// <summary>(90,0,-90) is authored on ground glows (Light1/7/8): under the fixed Z-X-Y order the quad
+    /// lies flat (both basis vectors have no world-Y component) instead of standing as an invisible vertical
+    /// sheet, which is what the old X-Y-Z order produced.</summary>
+    [Fact]
+    public void Euler_90_0_neg90_lies_the_quad_flat_facing_up_or_down()
+    {
+        var (basisR, basisU) = ArbitraryQuadBasis(new Vector3(90f, 0f, -90f) * (MathF.PI / 180f));
+        Assert.Equal(0f, basisR.Y, 4);
+        Assert.Equal(0f, basisU.Y, 4);
+        var normal = Vector3.Cross(basisR, basisU);
+        Assert.True(MathF.Abs(normal.Y) > 0.9f, $"expected the normal to face up or down, got {normal}");
+    }
 }

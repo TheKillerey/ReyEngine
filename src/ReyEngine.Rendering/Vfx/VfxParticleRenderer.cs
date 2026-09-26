@@ -1772,13 +1772,19 @@ out float vErosionDrive;   // M174 (2.1): per-particle erosion drive -> fragment
 out vec2 vUv;
 out vec2 vUvMult;
 out vec4 vColor;
+// M773: roll-pitch-yaw - Z first, then X, then Y. This quad path composed X, then Y, then Z, which
+// disagreed with the mesh program's rotateEuler (M765) and with LTK Manager's own builder
+// (engine/utils/basis.ts:22-56, Ry*Rx*Rz for every primitive). Light1/7/8's birth rotation (90,0,-90) -
+// ground glows authored to lie flat - rendered as invisible vertical sheets under the old order and lie
+// flat under this one; the Noxus sigil's (0,180,90) also comes out upright only here.
 vec3 rotateEuler(vec3 p, vec3 r){
     float sx = sin(r.x); float cx = cos(r.x);
     float sy = sin(r.y); float cy = cos(r.y);
     float sz = sin(r.z); float cz = cos(r.z);
+    p = vec3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
     p = vec3(p.x, p.y * cx - p.z * sx, p.y * sx + p.z * cx);
     p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
-    return vec3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
+    return p;
 }
 void main(){
     float rotation = uArbitraryQuad != 0 ? 0.0 : aRotFrame.x;
@@ -1811,7 +1817,6 @@ void main(){
         if (len > 1e-4) world += (away / len) * uDepthPushPull;
     }
     gl_Position = uViewProj * vec4(world, 1.0);
-    vec2 cell = aCorner + vec2(0.5, 0.5);      // [0,1] within the frame cell
     // M174: sign is preserved so a negative divisor mirrors the axis, but the flipbook GRID has to be
     // counted with the magnitude - a -2 divisor is still a 2-cell axis.
     float cols = uTexDiv.x == 0.0 ? 1.0 : uTexDiv.x;
@@ -1840,7 +1845,15 @@ void main(){
     float age = aAgeVelX.x;
     // NB: named uvc, not c - this function already has a `float c = cos(rotation)` for the billboard
     // spin, and shadowing it here made every line below a type error.
-    vec2 cellCorner = vec2(cell.x, 1.0 - cell.y);
+    // M773: the arbitrary quad reads its texture across the anti-diagonal from a camera billboard - LTK
+    // Manager's quad.ts:21-31 builds it as u = y + 0.5, v = 0.5 - x, not (x + 0.5, 0.5 - y). A census over
+    // 42 WADs found arbitrary quads authored with their size aspect swapped relative to the texture (1,355
+    // vs 389 at roll 0, 1,632 vs 111 at roll +-90) while billboards were not (2,952 vs 780); confirmed on
+    // Cherry_GoH_Portal_Noxus_1 (Map30 arenashop.materials.bin), whose painting and sigil render upright
+    // only with this swap.
+    vec2 cellCorner = uArbitraryQuad != 0
+        ? vec2(aCorner.y + 0.5, 0.5 - aCorner.x)
+        : vec2(aCorner.x + 0.5, 0.5 - aCorner.y);
     // particleUVRotateRate is INTEGRATED; for the constant rate we read that is also rate * age.
     float uvAngle = uUvRotation + uUvRotRate * age + uUvRotInt * age;
     vec2 uvc = reyUvCell(cellCorner, age, uEmitterAge, uUvOffset, uUvScrollRate, uUvScrollInt, uEmitterUvScroll,
