@@ -219,8 +219,11 @@ public sealed class D3D11ParticlePlayback
                 }
                 catch { /* bind pose fallback, exactly as the view-model's resolver does */ }
             }
+            // M776: .skn carries vertex colours too (M646's Colors, file order b,g,r,a) - plumbed through
+            // for completeness, though this window's mesh emitters still draw on the legacy MeshHlsl
+            // pipeline (see the class remarks), which has no COLOR0 input to consume it.
             return new ReyEngine.Formats.Meshes.StaticMeshData(m.Positions, m.Uvs, m.Indices,
-                System.IO.Path.GetFileName(e.MeshPath)) { Animation = anim };
+                System.IO.Path.GetFileName(e.MeshPath)) { Animation = anim, Colors = m.Colors };
         }
         catch (Exception ex) { sb.AppendLine($"     skn decode failed: {ex.Message}"); return null; }
     }

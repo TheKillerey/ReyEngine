@@ -709,11 +709,11 @@ public sealed class D3D11MapParticles
         if (_meshTocs is { } meshTocs && mesh.Animation is null)
         {
             int riotId = _renderer.CreateRiotMeshGeometry(mesh.Positions, null, mesh.Uvs,
-                mesh.Indices is { Length: > 0 } ? mesh.Indices : null);
+                mesh.Indices is { Length: > 0 } ? mesh.Indices : null, mesh.Colors);
             if (riotId >= 0)
             {
                 var riotMat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, meshTocs, def,
-                    sampler => ResolveSprite(sampler, item, def), sb);
+                    sampler => ResolveSprite(sampler, item, def), sb, meshHasVertexColors: mesh.Colors is not null);
                 if (riotMat is not null)
                 {
                     riotMat.RiotMeshGeometryId = riotId;

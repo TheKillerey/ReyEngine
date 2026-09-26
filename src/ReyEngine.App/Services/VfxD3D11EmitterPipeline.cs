@@ -103,7 +103,7 @@ public static class VfxD3D11EmitterPipeline
     /// </summary>
     public static PreviewMaterial? Build(
         ShaderPreviewRenderer renderer, ShaderCacheReader cache, Tocs tocs, VfxEmitterDefinition e,
-        Func<string, Sprite?> sprites, StringBuilder log)
+        Func<string, Sprite?> sprites, StringBuilder log, bool meshHasVertexColors = false)
     {
         // The whole point of the milestone: the define set comes from the emitter's own flags.
         var defines = VfxShaderFlags.For(e, out var why);
@@ -137,6 +137,15 @@ public static class VfxD3D11EmitterPipeline
         {
             defines["SEPARATE_ALPHA_UV"] = "1";
             why.Add("SEPARATE_ALPHA_UV  <- uvMode 2 (LOCK_ALPHA) on a mesh emitter");
+        }
+
+        // M776: mesh_vs's USE_VERTEX_COLORS axis (mul o1.xyzw, v2.zyxw, cb1[7].xyzw - vertex colour times
+        // kColorFactor). Selected from the MESH ITSELF, not an emitter flag - the .scb/.sco carries its own
+        // colours or it does not, and that is what decides whether the permutation declares COLOR0 at all.
+        if (tocs.VsName == MeshVsName && meshHasVertexColors)
+        {
+            defines["USE_VERTEX_COLORS"] = "1";
+            why.Add("USE_VERTEX_COLORS  <- the mesh primitive carries per-vertex colour (COLOR0)");
         }
 
         var vsPerm = ShaderCacheReader.ResolvePermutation(tocs.Vs, defines, null, null, null, out var vw);

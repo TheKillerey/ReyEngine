@@ -579,4 +579,85 @@ public sealed class RiotMeshEmitterTests
         Assert.True(covered > 1000, $"the Riot path covered {covered} px");
         Assert.True(changed > 1000, $"the Riot path moved only {changed} px against the approximation");
     }
+
+    // ===================================================== M776: per-vertex colour (USE_VERTEX_COLORS)
+
+    /// <summary>Crepe_Brush_Piltover_1_SmokeMesh.scb (Map12's ground-smoke mesh emitter) carries a vertex
+    /// colour on every vertex: RGB white, alpha 0 on the outer rim and the inner lip, up to ~0.89 elsewhere.
+    /// That alpha IS the feather - dropping it draws the mesh as a hard-edged opaque slab.</summary>
+    [Fact]
+    public void DecodingCrepesSmokeMeshYieldsPerVertexColoursWithTheRimAlphaZero()
+    {
+        if (!Installed) return;
+        const string mapWad = Final + @"\Maps\Shipping\Map12.wad.client";
+        if (!File.Exists(mapWad)) return;
+        var database = new HashSyncService().LoadLocal(_ => { });
+        using var archive = WadArchive.Open(mapWad, new WadPathResolver(database));
+
+        const string meshPath = "ASSETS/Maps/Particles/Crepe/Crepe_Brush_Piltover_1_SmokeMesh.scb";
+        ulong h = HashAlgorithms.WadPath(meshPath.ToLowerInvariant());
+        if (!archive.TryGetEntry(h, out _)) return;
+        var mesh = StaticObjectDecoder.Decode(archive.Extract(h), meshPath);
+
+        Assert.NotNull(mesh);
+        Assert.NotNull(mesh!.Colors);
+        // Face-soup, not the LTK mesh's own (indexed) vertex count - one colour per soup vertex.
+        Assert.Equal(mesh.Positions.Length / 3 * 4, mesh.Colors!.Length);
+
+        float minAlpha = 2f, maxAlpha = -1f;
+        bool anyNonWhiteRgb = false;
+        for (int i = 0; i < mesh.Colors.Length / 4; i++)
+        {
+            float b = mesh.Colors[i * 4], g = mesh.Colors[i * 4 + 1], r = mesh.Colors[i * 4 + 2], a = mesh.Colors[i * 4 + 3];
+            minAlpha = MathF.Min(minAlpha, a);
+            maxAlpha = MathF.Max(maxAlpha, a);
+            if (r < 0.99f || g < 0.99f || b < 0.99f) anyNonWhiteRgb = true;
+        }
+        Assert.True(minAlpha < 0.01f, $"expected a rim vertex at alpha 0, min was {minAlpha}");
+        Assert.True(maxAlpha is > 0.8f and < 1.0f, $"expected the feathered peak around 0.89, got {maxAlpha}");
+        Assert.False(anyNonWhiteRgb, "Crepe's smoke mesh authors white vertices - a non-white channel means B/G/R got swapped");
+    }
+
+    /// <summary>Riot's mesh_vs USE_VERTEX_COLORS permutation (disassembly: <c>mul o1.xyzw, v2.zyxw,
+    /// cb1[7].xyzw</c>) must be selected exactly when the mesh being drawn carries vertex colours - not
+    /// from an emitter flag - and must resolve against the real shader cache, not merely get logged.</summary>
+    [Fact]
+    public void AMeshWithVertexColoursSelectsUseVertexColorsAgainstTheRealShaderCache()
+    {
+        if (!Installed) return;
+        var database = new HashSyncService().LoadLocal(_ => { });
+        using var cache = ShaderCacheReader.Open(Final, new WadPathResolver(database), out _);
+        if (cache is null) return;
+        var tocs = VfxD3D11EmitterPipeline.ReadMeshTocs(cache, out _);
+        if (tocs is null) return;
+
+        using var renderer = new ShaderPreviewRenderer();
+        if (!renderer.Initialize(out _)) return;   // no D3D11 device on this machine - nothing to build
+
+        var emitter = new VfxEmitterDefinition(
+            Name: "m", Rate: VfxCurveF.Const(1f), ParticleLifetime: VfxCurveF.Const(5f), EmitterLifetime: null,
+            ParticleLinger: 0f, TimeBeforeFirstEmission: 0f, IsSingleParticle: true, Disabled: false, BlendMode: 1,
+            BirthScale: VfxCurve3.Const(Vector3.One), ScaleOverLife: null,
+            BirthColor: VfxCurve4.Const(Vector4.One), ColorOverLife: null,
+            BirthVelocity: null, Acceleration: null, BirthRotationalVelocity: null,
+            EmitterPosition: VfxCurve3.Const(Vector3.Zero),
+            TexturePath: "ASSETS/Test/p.dds", TexDiv: Vector2.One, NumFrames: 1, RandomStartFrame: false,
+            IsMeshPrimitive: true, MeshPath: "ASSETS/Test/m.scb");
+        var dummyTex = new TextureImage(4, 4, new byte[4 * 4 * 4]);
+
+        var logWith = new StringBuilder();
+        var matWith = VfxD3D11EmitterPipeline.Build(renderer, cache, tocs, emitter,
+            sampler => sampler == "TEXTURE" ? VfxD3D11EmitterPipeline.Sprite.Decoded(dummyTex, "test") : null,
+            logWith, meshHasVertexColors: true);
+        Assert.True(matWith is not null, "USE_VERTEX_COLORS did not resolve against the real shader cache: " + logWith);
+        Assert.Contains("USE_VERTEX_COLORS", logWith.ToString());
+        Assert.DoesNotContain("UNRESOLVED", logWith.ToString());
+
+        var logWithout = new StringBuilder();
+        var matWithout = VfxD3D11EmitterPipeline.Build(renderer, cache, tocs, emitter,
+            sampler => sampler == "TEXTURE" ? VfxD3D11EmitterPipeline.Sprite.Decoded(dummyTex, "test") : null,
+            logWithout, meshHasVertexColors: false);
+        Assert.True(matWithout is not null, "the base permutation did not resolve: " + logWithout);
+        Assert.DoesNotContain("USE_VERTEX_COLORS", logWithout.ToString());
+    }
 }

@@ -838,8 +838,9 @@ public sealed class VfxParticleRenderer
     /// killed the whole app the moment any mesh emitter uploaded. Mesh particles just stay invisible.</summary>
     private bool _meshProgramFailed;
 
-    /// <summary>M178: pos3 + uv2 + normal3 per mesh-particle vertex.</summary>
-    private const int MeshStride = 8;
+    /// <summary>M178: pos3 + uv2 + normal3 per mesh-particle vertex. M776: + colour4 (file order b,g,r,a -
+    /// see <see cref="UploadEmitterMesh"/>), white when the mesh carries none.</summary>
+    private const int MeshStride = 12;
 
     /// <summary>M178 (2.12): per-vertex normals for a VFX mesh, accumulated from face normals and
     /// normalised. .scb/.sco carry none, so without this the fresnel stage has no surface to work from.
@@ -959,8 +960,11 @@ public sealed class VfxParticleRenderer
     }
 
     /// <summary>Upload an emitter's mesh (pos3 + uv2 per vertex). Pass <paramref name="indices"/> for
-    /// indexed (.skn) meshes — drawn with DrawElements; triangle-soup .scb meshes draw sequentially.</summary>
-    public unsafe void UploadEmitterMesh(VfxParticleSimulator.EmitterState es, float[] positions, float[] uvs, uint[]? indices = null)
+    /// indexed (.skn) meshes — drawn with DrawElements; triangle-soup .scb meshes draw sequentially.
+    /// <paramref name="colors"/> is <see cref="ReyEngine.Formats.Meshes.StaticMeshData.Colors"/> verbatim
+    /// (M776: FILE order b,g,r,a per vertex, matching the D3D11 upload); null or a short array fills
+    /// white, which the mesh fragment stage's <c>.zyxw</c> unswizzle leaves as (1,1,1,1).</summary>
+    public unsafe void UploadEmitterMesh(VfxParticleSimulator.EmitterState es, float[] positions, float[] uvs, uint[]? indices = null, float[]? colors = null)
     {
         if (!_ready) return;
         EnsureMeshProgram();
@@ -982,6 +986,19 @@ public sealed class VfxParticleRenderer
             inter[o + 5] = normals[i * 3 + 0];
             inter[o + 6] = normals[i * 3 + 1];
             inter[o + 7] = normals[i * 3 + 2];
+            // M776: uploaded in FILE order (b, g, r, a); the fragment shader un-swizzles it (.zyxw), the
+            // same recombination Riot's own mesh_vs performs on COLOR0.
+            if (colors is not null && i * 4 + 3 < colors.Length)
+            {
+                inter[o + 8] = colors[i * 4 + 0];
+                inter[o + 9] = colors[i * 4 + 1];
+                inter[o + 10] = colors[i * 4 + 2];
+                inter[o + 11] = colors[i * 4 + 3];
+            }
+            else
+            {
+                inter[o + 8] = 1f; inter[o + 9] = 1f; inter[o + 10] = 1f; inter[o + 11] = 1f;
+            }
         }
         var vao = _gl.GenVertexArray();
         var vbo = _gl.GenBuffer();
@@ -995,6 +1012,8 @@ public sealed class VfxParticleRenderer
         _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, MeshStride * sizeof(float), (void*)(3 * sizeof(float)));
         _gl.EnableVertexAttribArray(2);
         _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, MeshStride * sizeof(float), (void*)(5 * sizeof(float)));
+        _gl.EnableVertexAttribArray(3);
+        _gl.VertexAttribPointer(3, 4, VertexAttribPointerType.Float, false, MeshStride * sizeof(float), (void*)(8 * sizeof(float)));
         uint ebo = 0;
         if (indices is { Length: > 0 })
         {
@@ -1548,6 +1567,7 @@ void main(){
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec2 aUv;
 layout(location=2) in vec3 aNormal;
+layout(location=3) in vec4 aColor;    // M776: file order (b, g, r, a) - see UploadEmitterMesh
 uniform mat4 uViewProj;
 uniform vec3 uCamPosMesh;
 uniform float uMeshDepthPushPull;   // M714
@@ -1575,6 +1595,7 @@ out vec2 vUvMult;
 out vec2 vUvAlpha;   // M765: tiled-only UV for SEPARATE_ALPHA_UV mesh emitters (uvMode 2), no scroll/offset
 out vec3 vFresnel;
 out vec4 vReflect;   // M181: xyz = reflection vector, w = reflection opacity
+out vec4 vVertexColor;   // M776: un-swizzled to true RGBA below - see mesh_vs USE_VERTEX_COLORS
 vec3 rotateEuler(vec3 p, vec3 r){
     float sx = sin(r.x); float cx = cos(r.x);
     float sy = sin(r.y); float cy = cos(r.y);
@@ -1643,6 +1664,10 @@ void main(){
     // 137-138). Computed unconditionally; it costs nothing and is only sampled when uMeshSeparateAlphaUv
     // selects it in the fragment stage.
     vUvAlpha = aUv * max(uMeshTexDiv, vec2(0.0001));
+    // M776: Riot's mesh_vs USE_VERTEX_COLORS reads COLOR0 as v2.zyxw - the vertex buffer holds the file's
+    // byte order (b, g, r, a), so the same swizzle recovers (r, g, b, a) here. A colourless mesh uploads
+    // (1,1,1,1), which the swizzle leaves unchanged.
+    vVertexColor = aColor.zyxw;
 }";
 
     private const string MeshFrag = @"
@@ -1651,6 +1676,7 @@ in vec2 vUvMult;
 in vec2 vUvAlpha;   // M765: SEPARATE_ALPHA_UV's tiled-only UV
 in vec3 vFresnel;
 in vec4 vReflect;
+in vec4 vVertexColor;   // M776: already true RGBA (unswizzled in the vertex stage)
 uniform samplerCube uReflCube;
 uniform vec4 uReflTint;
 uniform highp int uHasRefl;   // see MeshVert - the precision must match the vertex declaration
@@ -1704,7 +1730,9 @@ void main(){
         float eb = clamp( te                    * uErosionParams.w, 0.0, 1.0);
         texel.a *= (ea - eb);
     }
-    vec4 outColor = texel * uColor;
+    // M776: kColorFactor (uColor) times the vertex colour - the same product Riot's mesh_vs computes per
+    // vertex before rasterising; associative, so doing it here per pixel gives an identical result.
+    vec4 outColor = texel * uColor * vVertexColor;
     // M641: the alpha test, on the ERODED alpha as Riot orders it. mesh_ps carries an ALPHA_TEST axis and
     // the D3D11 path has been selecting it from alphaRef since M232, so GL not testing was a divergence
     // between the two previews rather than a missing feature.

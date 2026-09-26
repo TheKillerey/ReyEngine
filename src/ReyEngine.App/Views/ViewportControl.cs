@@ -1905,7 +1905,8 @@ public sealed class ViewportControl : OpenGlControlBase
             if (mesh is not null && img is not null)
             {
                 _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs,
-                    mesh.Animation is not null ? mesh.Indices : null);   // skn = indexed; scb = triangle soup
+                    mesh.Animation is not null ? mesh.Indices : null,    // skn = indexed; scb = triangle soup
+                    mesh.Colors);
                 if (mesh.Animation is { } anim) _particleMeshAnimations[es] = anim;   // M48 wing flap
             }
             else if (mesh is not null)

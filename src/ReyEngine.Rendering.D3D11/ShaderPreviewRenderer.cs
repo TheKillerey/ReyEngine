@@ -3436,8 +3436,14 @@ float4 psmain(VOut i) : SV_Target
     /// world-space normal with <c>rsq</c> for the fresnel term, and a zero normal makes that NaN, which
     /// the pixel stage then adds into the colour. .scb/.sco primitives carry no normals, so when
     /// <paramref name="normals"/> is null they are computed here from the triangles, area-weighted.</para>
+    ///
+    /// <para>M776: <paramref name="colors"/> is <see cref="ReyEngine.Formats.Meshes.StaticMeshData.Colors"/>
+    /// verbatim - FILE order (b, g, r, a) per vertex - uploaded into COLOR0 unchanged. The USE_VERTEX_COLORS
+    /// permutation's own <c>v2.zyxw</c> swizzle recovers RGBA from it; the base permutation never reads
+    /// COLOR0 at all, so an untouched upload is correct for both. Null (or a short array) fills white,
+    /// which is a no-op for the base permutation and neutral once USE_VERTEX_COLORS is selected.</para>
     /// </summary>
-    public int CreateRiotMeshGeometry(float[] positions, float[]? normals, float[] uvs, uint[]? indices)
+    public int CreateRiotMeshGeometry(float[] positions, float[]? normals, float[] uvs, uint[]? indices, float[]? colors = null)
     {
         int vertexCount = positions.Length / 3;
         if (vertexCount == 0) return -1;
@@ -3456,7 +3462,9 @@ float4 psmain(VOut i) : SV_Target
                 Normal = new Vector3(n[v * 3], n[v * 3 + 1], n[v * 3 + 2]),
                 Uv0 = new Vector4(u, w, 0f, 0f),
                 Uv1 = new Vector2(u, w),
-                Color = Vector4.One,
+                Color = colors is not null && v * 4 + 3 < colors.Length
+                    ? new Vector4(colors[v * 4], colors[v * 4 + 1], colors[v * 4 + 2], colors[v * 4 + 3])
+                    : Vector4.One,
             };
         }
 
