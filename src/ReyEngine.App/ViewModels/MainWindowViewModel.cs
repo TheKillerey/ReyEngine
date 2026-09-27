@@ -6712,6 +6712,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ParticleEditor.ResolveRole = def =>
             _particleRoles.TryGetValue(def.PathHash, out var link) ? link : null;
 
+        // M783: the same D3D11 particle path the map viewport draws through, in place of the GL
+        // approximation the editor previewed with since M46. Same default as the map viewport
+        // (_useDx11Viewport above) - GL is the fallback, not the default, for whichever renderer a user has
+        // not deliberately switched away from.
+        ParticleEditor.UseDx11Preview = !Settings.UseOpenGlViewport;
+        ParticleEditor.ResolveDx11ShaderCache = () => OpenDx11ShaderCache(out _);
+        ParticleEditor.LogDx11 = (cat, msg) => _log.Info(cat, msg);
+
         // M138: the wem encoder reuses vgmstream for input formats Media Foundation can't read
         Encoder.VgmstreamPath = Sound.VgmstreamPath;
         Encoder.ConsolePathSetting = Settings.WwiseConsolePath;

@@ -42,6 +42,8 @@ public partial class ParticleEditorView : UserControl
 
         // M753: the force shapes reuse the cast-range line channel, in a colour no gizmo arm uses
         PreviewViewport.RangeRingTint = new System.Numerics.Vector4(0.85f, 0.5f, 1f, 0.9f);
+
+        HookDx11();   // M783: the Direct3D 11 surface, off until the toggle turns it on
     }
 
     /// <summary>The row the graph shows: its Times and Channels are bound to SelectedProperty.</summary>

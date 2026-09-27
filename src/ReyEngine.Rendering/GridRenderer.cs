@@ -71,7 +71,11 @@ void main() { FragColor = uColor; }";
         _gl.UseProgram(0);
     }
 
-    private static float[] BuildGeometry(int halfCells, float cell, out int gridVerts, out int axisOffset)
+    /// <summary>M783: widened from private so the D3D11 particle preview can draw the SAME floor shape
+    /// through its own overlay pipeline (<c>ShaderPreviewRenderer.SetGroundGridLines</c>) - pushed from the
+    /// App layer, which is the one place that references both renderers; <c>ReyEngine.Rendering.D3D11</c>
+    /// deliberately has no reference back to this project (see the M210 remark on that class).</summary>
+    public static float[] BuildGeometry(int halfCells, float cell, out int gridVerts, out int axisOffset)
     {
         var list = new List<float>();
         float ext = halfCells * cell;

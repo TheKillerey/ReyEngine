@@ -1904,9 +1904,15 @@ public sealed class ViewportControl : OpenGlControlBase
             var mesh = item.EmitterMeshes is { } ms && idx >= 0 && idx < ms.Count ? ms[idx] : null;
             if (mesh is not null && img is not null)
             {
-                _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs,
-                    mesh.Animation is not null ? mesh.Indices : null,    // skn = indexed; scb = triangle soup
-                    mesh.Colors);
+                // M783: ALWAYS pass indices when the mesh has them, rather than only when an animation
+                // resolved. A .skn with no paired .skl/.anm - measured on Map22's 7yanniversary skybox:
+                // Background_A/B/C and every building/tree mesh, dozens of emitters - used to draw with its
+                // indices stripped, which reads a REAL indexed (shared-vertex) buffer as unindexed triangle
+                // soup: exactly the "shattered triangles" the user reported, where the D3D11 driver (which
+                // always passes indices) drew correctly. A .scb/.sco's own indices are already sequential
+                // (StaticObjectDecoder unshares its faces into a soup), so passing them changes nothing
+                // there; an animated .skn already passed its indices, so that path is unchanged too.
+                _particleRenderer.UploadEmitterMesh(es, mesh.Positions, mesh.Uvs, mesh.Indices, mesh.Colors);
                 if (mesh.Animation is { } anim) _particleMeshAnimations[es] = anim;   // M48 wing flap
             }
             else if (mesh is not null)

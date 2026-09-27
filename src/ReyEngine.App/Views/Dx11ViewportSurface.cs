@@ -420,6 +420,25 @@ public sealed class Dx11ViewportSurface : IDisposable
         }
     }
 
+    /// <summary>
+    /// <para>M783: multiplies the LIVE particle simulation step - never a capture's, which steps by the
+    /// shot's own delta - so a host can offer a Speed control without the map viewport or the character
+    /// window growing one. Default 1 leaves both of those exactly as they render today.</para>
+    /// </summary>
+    public double ParticleTimeScale { get; set; } = 1.0;
+
+    /// <summary>M712: the preview rig, forwarded to <see cref="Particles"/> every frame. Null everywhere
+    /// except the Particle Editor's D3D11 preview.</summary>
+    public ReyEngine.Formats.Vfx.VfxPreviewRig? Rig { get; set; }
+
+    /// <summary>M185: the manual Stop toggle, forwarded to <see cref="Particles"/>. False everywhere except
+    /// the Particle Editor's preview.</summary>
+    public bool Stopped { get; set; }
+
+    /// <summary>M186: the auto-stop loop, forwarded to <see cref="Particles"/>. False everywhere except the
+    /// Particle Editor's preview.</summary>
+    public bool AutoStop { get; set; }
+
     /// <summary>M266: call after a scene build. <c>Dx11SceneBuilder.Commit</c> calls ClearMaterials, which
     /// disposes the particle materials and empties the texture pool along with the map's - so the retained
     /// playback has to be registered again, AFTER the commit.</summary>
@@ -671,13 +690,24 @@ public sealed class Dx11ViewportSurface : IDisposable
         // run against a null playback, so this costs nothing when there is nothing to draw.
         if (Particles is not null)
         {
+            // M783: the rig / manual-stop / auto-stop cycle. Pushed every frame, like the sun and the
+            // lightmap scale - a live preview drags the rig's height and flips these toggles while playing.
+            // Every host but the Particle Editor's D3D11 preview leaves all three at their defaults (null,
+            // false, false), so this is a no-op push for the map viewport and the character window.
+            Particles.Rig = Rig;
+            Particles.Stopped = Stopped;
+            Particles.AutoStop = AutoStop;
+
             var particleView = _capture?.View ?? PreviewPose?.ViewMatrix ?? camera.View;
             if (settings.MirrorX) particleView = Matrix4x4.CreateScale(-1f, 1f, 1f) * particleView;
             var particleClock = Stopwatch.StartNew();
             // M736: a captured frame steps by the shot's own delta; a live frame drawn while a capture
             // runs steps by nothing, so only the export advances the simulation. Outside a capture this is
             // the ordinary wall-clock difference.
-            float particleDt = _capture is { } cap ? cap.Delta : (liveFrameDuringCapture ? 0f : ParticleDelta(t));
+            // M783: ParticleTimeScale multiplies only the LIVE step - a capture's own delta is the shot's
+            // timeline and must not speed up with an editor Speed slider that has nothing to do with it.
+            float particleDt = _capture is { } cap ? cap.Delta
+                : (liveFrameDuringCapture ? 0f : ParticleDelta(t) * (float)ParticleTimeScale);
             Particles.Tick(particleDt, particleView,
                 particleView * settings.SuppliedProjection!.Value,
                 _capture?.Position ?? PreviewPose?.Position ?? camera.Position, camera.Distance);

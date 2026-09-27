@@ -59,8 +59,9 @@ public partial class MeshPreviewWindow
         {
             // Turned back off rather than left ticking against a device that does not exist: an unticked
             // box beside the reason is a state the user can act on, a frozen image is not.
-            vm.Dx11Status = "D3D11 unavailable: " + (_dx11.Error ?? "unknown");
+            // M783: the toggle goes off FIRST - turning it off clears Dx11Status, which erased the reason.
             vm.UseDx11Preview = false;
+            vm.Dx11Status = "D3D11 unavailable: " + (_dx11.Error ?? "unknown");
             return;
         }
 

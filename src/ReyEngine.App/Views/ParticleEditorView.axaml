@@ -492,9 +492,20 @@
           <GridSplitter Grid.Column="1" Background="{DynamicResource ReyBorderBrush}" />
           <Border Grid.Column="2" Background="Black">
             <DockPanel>
-            <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="3D VIEW" />
+            <DockPanel DockPanel.Dock="Top">
+              <!-- M783: the renderer toggle + status live in the header, not over the view - M721's own
+                   reason for keeping controls off the 3D surface applies here too. -->
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="0,0,10,0">
+                <CheckBox Content="D3D11" IsChecked="{Binding UseDx11Preview}" FontSize="10"
+                          ToolTip.Tip="Render this preview through the same Direct3D 11 particle path as the main viewport, instead of the OpenGL approximation." />
+                <TextBlock Text="{Binding Dx11Status}" FontSize="9" Opacity="0.6" TextTrimming="CharacterEllipsis"
+                           MaxWidth="260" VerticalAlignment="Center" />
+              </StackPanel>
+              <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="3D VIEW" />
+            </DockPanel>
             <Grid>
               <views:ViewportControl x:Name="PreviewViewport"
+                                     IsVisible="{Binding !UseDx11Preview}"
                                      ParticlePlayback="{Binding Playback}"
                                      ParticleSpeed="{Binding Speed}"
                                      ParticlePaused="{Binding Paused}"
@@ -509,6 +520,13 @@
                                      AnimationClip="{Binding HostClip}"
                                      AnimationTime="{Binding HostTime}"
                                      RangeRingLines="{Binding ForceShapeLines}" />
+              <!-- M783: the D3D11 surface and the GL control are siblings that swap by visibility, the
+                   pattern the map viewport (M248) and the character window (M618) both use. Stretch=Fill,
+                   not None: the frame is rendered at device pixels and wrapped in a 96-dpi bitmap, and None
+                   centre-crops that mismatch. -->
+              <Image x:Name="Dx11Preview" Stretch="Fill"
+                     RenderOptions.BitmapInterpolationMode="None"
+                     IsVisible="{Binding UseDx11Preview}" />
               <Border x:Name="PreviewInput" Background="Transparent" />
               <!-- M753: what the Move handle is on, or why there is none. Text only and not hit-testable:
                    M721 keeps controls off the view so the camera can be used everywhere under it. -->

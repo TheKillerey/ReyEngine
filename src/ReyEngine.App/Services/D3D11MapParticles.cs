@@ -238,6 +238,32 @@ public sealed class D3D11MapParticles
         return (_boneModelWorld.IsIdentity ? bm : bm * _boneModelWorld).Translation;
     }
 
+    // ---- M783: the preview cycle (rig re-anchor, manual Stop, auto-stop) --------------------------
+    //
+    // ViewportControl carries this for the GL preview (M712/M185/M186); the map host and the character
+    // window never wired it here, so a champion or map placement always ran free-standing and never
+    // stopped on its own. All three default to "off", which is what makes this optional: a caller that
+    // never sets them - the map viewport, the character window - gets EXACTLY today's Tick.
+    private readonly VfxPreviewCycle _cycle = new();
+
+    /// <summary>Every (item, simulator) pair this playback holds, rebuilt once per <see cref="Rebuild"/> -
+    /// the rig re-anchors ALL of them regardless of the camera gate, matching ViewportControl's own loop
+    /// over its full item cache. Reused every <see cref="Tick"/> rather than projected from <see cref="_sims"/>
+    /// so a 60 Hz preview does not allocate a list per frame.</summary>
+    private readonly List<(VfxPlaybackItem Item, VfxParticleSimulator Sim)> _allPairs = new();
+
+    /// <summary>M712: the preview rig, or null to re-anchor nothing. Only the Particle Editor's D3D11
+    /// preview sets this; a map or a character host leaves it null and this driver behaves exactly as it
+    /// did before M783.</summary>
+    public VfxPreviewRig? Rig { get; set; }
+
+    /// <summary>M185: the manual Stop toggle. False everywhere except the Particle Editor's preview.</summary>
+    public bool Stopped { get; set; }
+
+    /// <summary>M186: the auto-stop loop. False everywhere except the Particle Editor's preview, which
+    /// opens with it on to match the GL editor's own default.</summary>
+    public bool AutoStop { get; set; }
+
     public bool HasPlayback => _playback is not null;
     public int Placements { get; private set; }
     public int ActivePlacements { get; private set; }
@@ -364,6 +390,8 @@ public sealed class D3D11MapParticles
         _byEmitter.Clear();
         _noPipeline.Clear();
         _sims.Clear();
+        _allPairs.Clear();
+        _cycle.Reset();   // M783: a rebuilt playback starts its rig run and its auto-stop cycle over
         _warmed.Clear(); _warmup.Clear();   // M694: a rebuilt set warms from scratch
         _active.Clear();
         _activeSet.Clear();
@@ -398,6 +426,7 @@ public sealed class D3D11MapParticles
             if (sim is null) { emptySystems++; continue; }
             VfxPlaybackSim.ApplySimulationAssets(sim, item);
             _sims[item] = sim;
+            _allPairs.Add((item, sim));   // M783: the rig's own re-anchor walks every placement, not just the active ones
 
             var tally = systems.GetValueOrDefault(item.System.PathHash);
             systems[item.System.PathHash] = (item.System.Name, tally.Placements + 1, sim.Emitters.Count);
@@ -595,6 +624,10 @@ public sealed class D3D11MapParticles
         // M630: re-anchor BEFORE the step, so a bone-attached system is simulated from where its bone is
         // this frame rather than from where it was last frame.
         Reanchor(dt);
+        // M783: the rig / manual-stop / auto-stop cycle - AFTER Reanchor (a bone attachment or a travelling
+        // missile owns its own transform every frame; the rig explicitly skips both) and BEFORE the update
+        // loop below, which is what actually steps the simulators the cycle just stopped or reset.
+        _cycle.Tick(dt, Rig, Stopped, AutoStop, _allPairs, _active);
         GateMs = phase.Elapsed.TotalMilliseconds;   // M734: the camera gate, the warm-up pump and the re-anchor
 
         for (int i = _active.Count - 1; i >= 0; i--)

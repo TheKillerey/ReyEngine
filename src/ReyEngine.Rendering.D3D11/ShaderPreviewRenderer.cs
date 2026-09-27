@@ -2943,6 +2943,14 @@ float4 psmain(VOut i) : SV_Target
         return 1;
     }
 
+    /// <summary>
+    /// M783: the colour <see cref="DrawRangeLines"/> draws with. Defaults to the map viewport's own green
+    /// (the value this replaces was a hardcoded literal) - the Particle Editor's D3D11 preview repaints
+    /// this to the SAME violet the GL editor's force-shape channel already uses
+    /// (<c>ViewportControl.RangeRingTint</c>), so a force ring reads the same colour on either renderer.
+    /// </summary>
+    public Vector4 RangeLineColor { get; set; } = new(0.40f, 0.95f, 0.55f, 1f);
+
     /// <summary>M639: the cast-range ring as a line list (xyz pairs). Null or short clears it.</summary>
     public void SetRangeLines(float[]? verts)
     {
@@ -2988,10 +2996,94 @@ float4 psmain(VOut i) : SV_Target
         // should hide the part behind it.
         _ctx.OMSetDepthStencilState(_overlayDepth, 0);
 
-        SetOverlayCb(mvp, new Vector4(0.40f, 0.95f, 0.55f, 1f));
+        SetOverlayCb(mvp, RangeLineColor);
         _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
         _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
         _ctx.Draw((uint)_rangeVerts, 0);
+
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
+        return 1;
+    }
+
+    // ---- M783: the editor's floor reference grid ---------------------------------------------------
+    //
+    // GL's toggle (ViewportControl.ShowGrid, default true) has never had a D3D11 counterpart. OFF by
+    // default here: the map viewport already has its own ground (the terrain) and the character window
+    // never offered the toggle either, so a host that never touches these two members must keep drawing
+    // exactly as it does today. The Particle Editor's D3D11 preview is the first caller to turn it on.
+    //
+    // The GEOMETRY is supplied by the caller rather than built in here, unlike the gizmo/dummy/range
+    // channels' shapes which also come from outside - ReyEngine.Rendering.D3D11 is deliberately kept free
+    // of a ProjectReference to ReyEngine.Rendering (see the M210 remark on this class), so the one place
+    // that already knows how to build GL's exact grid shape (GridRenderer.BuildGeometry, in the App layer
+    // that references both) is where this one is built too, and pushed down the same way SetRangeLines'
+    // caller builds its ring.
+
+    private ComPtr<ID3D11Buffer> _groundGridVb;
+    private int _groundGridVbCapacity;
+    private int _groundGridVerts;
+
+    /// <summary>Off by default; see the remarks above.</summary>
+    public bool GroundGrid { get; set; }
+
+    /// <summary>The floor grid as a line list (xyz pairs), or null to clear it. The geometry never
+    /// changes in practice, so the caller uploads it once; like <see cref="SetRangeLines"/> this always
+    /// re-maps on a call rather than diffing against the last array, which is fine for a one-time push.</summary>
+    public void SetGroundGridLines(float[]? verts)
+    {
+        _groundGridVerts = 0;
+        if (verts is null || verts.Length < 6 || !EnsureOverlay()) return;
+
+        int bytes = verts.Length * sizeof(float);
+        if (_groundGridVbCapacity < bytes || _groundGridVb.Handle is null)
+        {
+            _groundGridVb.Dispose();
+            var desc = new BufferDesc
+            {
+                ByteWidth = (uint)bytes, Usage = Usage.Dynamic,
+                BindFlags = (uint)BindFlag.VertexBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            };
+            ComPtr<ID3D11Buffer> vb = default;
+            if (_device.CreateBuffer(in desc, null, ref vb) < 0) { Log("ground grid vertex buffer failed"); return; }
+            _groundGridVb = vb; _groundGridVbCapacity = bytes;
+        }
+
+        var map = new MappedSubresource();
+        if (_ctx.Map(_groundGridVb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (float* p = verts)
+            System.Buffer.MemoryCopy(p, map.PData, (long)bytes, (long)bytes);
+        _ctx.Unmap(_groundGridVb, 0);
+        _groundGridVerts = verts.Length / 3;
+    }
+
+    /// <summary>
+    /// Drawn as a SINGLE colour rather than GL's three (grid cells plus a teal X axis and a violet Z
+    /// axis) - the overlay pipeline this renders through binds one colour per buffer, like every other
+    /// line channel here, and the grid cells are the overwhelming majority of the geometry (164 of 168
+    /// vertices at GridRenderer's default 20-cell half-extent). "Match roughly", not "reproduce exactly".
+    /// </summary>
+    private int DrawGroundGrid(Matrix4x4 view, Matrix4x4 proj)
+    {
+        if (!GroundGrid || _groundGridVerts == 0 || _groundGridVb.Handle is null || !EnsureOverlay()) return 0;
+
+        var mvp = Matrix4x4.Multiply(view, proj);
+        _ctx.IASetInputLayout(_overlayLayout);
+        _ctx.VSSetShader(_overlayVs, null, 0);
+        _ctx.PSSetShader(_overlayPs, null, 0);
+        _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyLinelist);
+
+        uint stride = 3 * sizeof(float), offset = 0;
+        _ctx.IASetVertexBuffers(0, 1, ref _groundGridVb, in stride, in offset);
+        _ctx.OMSetBlendState(_overlayBlend, stackalloc float[] { 0f, 0f, 0f, 0f }, 0xFFFFFFFF);
+        // Depth-tested like the range ring and the dummy box: the floor should hide behind real geometry
+        // rather than draw through it. The Particle Editor's preview has none while no host is set (M783
+        // falls back to GL for that case), so in practice this draws unobstructed there.
+        _ctx.OMSetDepthStencilState(_overlayDepth, 0);
+
+        SetOverlayCb(mvp, new Vector4(0.16f, 0.19f, 0.27f, 1f));   // GL's own grid-cell colour
+        _ctx.VSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.PSSetConstantBuffers(0, 1, ref _overlayCb);
+        _ctx.Draw((uint)_groundGridVerts, 0);
 
         _ctx.IASetPrimitiveTopology(D3DPrimitiveTopology.D3D11PrimitiveTopologyTrianglelist);
         return 1;
@@ -5680,6 +5772,7 @@ float4 psmain(VOut i) : SV_Target
             int gizmoDraws = DrawGizmo(view, proj);
  DrawBrushRing(view, proj);   // M361: after the gizmo, same overlay pipeline      // M296, last so it is over everything
             DrawBakeBox(view, proj);     // M412: same overlay pipeline
+            DrawGroundGrid(view, proj);  // M783: the editor's floor reference grid, off by default
             DrawBoneLines(view, proj);   // M619: the skeleton, same overlay pipeline
             DrawDummyLines(view, proj);  // M628: the target dummy box, same overlay pipeline
             DrawRangeLines(view, proj);  // M639: the cast-range ring
@@ -5950,6 +6043,7 @@ float4 psmain(VOut i) : SV_Target
         _boneVb.Dispose();   // M619
         _dummyVb.Dispose();  // M628
         _rangeVb.Dispose();  // M639
+        _groundGridVb.Dispose();   // M783
         DisposeSky();
         DisposeBackdrop();   // M727
         DisposeRibbon();
