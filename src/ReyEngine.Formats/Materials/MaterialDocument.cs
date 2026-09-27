@@ -662,19 +662,30 @@ public sealed class MaterialBinding
     /// Quinn's Wings_Mat (skins 14-23) the per-skin Idle_Color is always the LAST copy while the first is the
     /// same on all ten. That is intent, not client behaviour. So the FIRST wins, which matches every by-name
     /// lookup here already (MacroOn, SetVectorParameter, Diffuse, and the profile's "first matching name
-    /// wins"). Dx11SceneBuilder and Dx11CharacterScene still bind parameters and textures in list order, one
-    /// per shader slot, so on those two paths the LAST parameter or sampler copy wins. That is a known
-    /// divergence, not changed here.</para>
+    /// wins"). M790: the two D3D11 builders follow it too, through <see cref="FirstOfEach"/> - they used to
+    /// bind every copy in list order, one per shader slot, so the LAST won there.</para>
     ///
     /// <para>Nothing is dropped. Every entry keeps its own row and element, and Serialize writes the lists
     /// back exactly as read. Only the name-keyed views collapse.</para>
     /// </summary>
     internal static Dictionary<string, TValue> FirstByName<TEntry, TValue>(IEnumerable<TEntry> entries,
-        Func<TEntry, string> name, Func<TEntry, TValue> value)
+        Func<TEntry, string> name, Func<TEntry, TValue> value) =>
+        FirstOfEach(entries, name).ToDictionary(name, value, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// M790: <see cref="FirstByName"/>'s rule for a caller that needs the ENTRIES back, in list order - every
+    /// entry whose key no earlier entry took. FirstByName is built on it, and so are the D3D11 builders
+    /// (<c>Dx11SceneBuilder.MaterialTextures</c> / <c>MaterialParameters</c>). Parse's switch and macro
+    /// snapshots apply the same rule with TryAdd, so changing the rule means this method and those two lines.
+    ///
+    /// <para>The key need not be the entry's own name. A D3D11 builder keys a sampler by the shader texture
+    /// it RESOLVES to, because that slot is what one binding occupies.</para>
+    /// </summary>
+    public static IEnumerable<TEntry> FirstOfEach<TEntry>(IEnumerable<TEntry> entries, Func<TEntry, string> key)
     {
-        var map = new Dictionary<string, TValue>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in entries) map.TryAdd(name(entry), value(entry));
-        return map;
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+            if (taken.Add(key(entry))) yield return entry;
     }
 
     /// <summary>M150: shaderMacros (name → "0"/"1") — the preprocessor defines, separate from

@@ -227,13 +227,8 @@ public static class Dx11SceneBuilder
             if (vs is null || ps is null)
             { scene.Fail("bytecode would not load", (vs is null ? vsErr : psErr) ?? "(no reason given)"); continue; }
 
-            var wanted = new List<(string Target, string Key)>();
-            foreach (var slot in b.Slots)
-            {
-                if (string.IsNullOrWhiteSpace(slot.Path)) continue;
-                string? target = ResolveTextureTarget(slot.SamplerName, ps, vs);
-                if (target is not null) wanted.Add((target, slot.Path!.ToLowerInvariant()));
-            }
+            // M790: one texture per slot, the FIRST copy of a repeated sampler - see MaterialTextures.
+            var wanted = MaterialTextures(b, sampler => ResolveTextureTarget(sampler, ps, vs));
             // Mapgeo v17+ texture overrides are per mesh and supersede the shared material binding.
             // This is what lets legacy ports collapse thousands of source objects to a few materials
             // without collapsing their distinct diffuse/grass/terrain textures with them.
@@ -275,14 +270,9 @@ public static class Dx11SceneBuilder
             //     mul r2.xyz, diffuse, cb0[0].xyzx
             // so an unwritten TintColor is zero and everything multiplied by it is black. Any material
             // whose shader multiplies by an authored parameter has the same failure.
-            var parameters = new List<(string, float[])>();
-            var authored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var prm in b.Parameters)
-                if (prm.TryGetVector4(out var pv))
-                {
-                    parameters.Add((prm.Name, new[] { pv.X, pv.Y, pv.Z, pv.W }));
-                    authored.Add(prm.Name);
-                }
+            // M790: one value per name, the FIRST copy of a repeated parameter - see MaterialParameters.
+            var parameters = MaterialParameters(b);
+            var authored = new HashSet<string>(parameters.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
 
             // M257: fall back to the SHADER's declared default for anything the material leaves out.
             // shaders.bin records these on 343 of its 347 definitions, as parameters[].name + .data.
@@ -889,6 +879,47 @@ public static class Dx11SceneBuilder
         foreach (var (name, _) in toc.Axes)
             if (name.Equals(axis, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
+    }
+
+    /// <summary>
+    /// <para>M790: the material's OWN textures, one per shader slot. Both D3D11 builders start from this
+    /// list: this one, and <see cref="Dx11CharacterScene"/> with its own target resolver.</para>
+    ///
+    /// <para>Riot repeats a sampler name inside one material (26 StaticMaterialDefs in the install).
+    /// Summoner's Rift's Earth_*_Island_A_MAT list DiffuseTexture twice: jungle_*_1bitalpha.tex, then
+    /// earth_*.tex. Both copies used to reach Commit, which binds in list order, so the LAST won on D3D11,
+    /// while GL and every name-keyed view of the material keep the FIRST. The evidence for that choice is on
+    /// <see cref="MaterialBinding.FirstOfEach"/>, the rule applied here. The key is the RESOLVED slot, not
+    /// the sampler name, because the slot is what a binding occupies.</para>
+    ///
+    /// <para>An entry with no path, or with no slot in this shader, is skipped first, as before, so it takes
+    /// nothing. Whatever a builder appends afterwards (mapgeo texture overrides, the M319 baked paint, the
+    /// lightmap, the terrain mask, grass tint, the stand-in emissive) still replaces these. Commit keeps
+    /// binding in list order, and those are appended last.</para>
+    /// </summary>
+    public static List<(string Target, string Key)> MaterialTextures(MaterialBinding b, Func<string, string?> targetOf)
+    {
+        var resolved = new List<(string Target, string Key)>();
+        foreach (var slot in b.Slots)
+            if (!string.IsNullOrWhiteSpace(slot.Path) && targetOf(slot.SamplerName) is { } target)
+                resolved.Add((target, slot.Path.ToLowerInvariant()));
+        return MaterialBinding.FirstOfEach(resolved, t => t.Target).ToList();
+    }
+
+    /// <summary>M790: the parameter half of <see cref="MaterialTextures"/>: the material's OWN numeric
+    /// parameters, one per name, the FIRST copy. 34 materials repeat one, among them Quinn skin14-23's
+    /// Wings_Mat Idle_Color and Soraka skin53-61's MaxSpec. A copy that is not numeric is skipped first, as
+    /// ShaderMaterialSetups.Capture does. The M257 shader defaults then fill only the names this leaves out,
+    /// and the M319/M320 transforms and the material drivers still replace entries after that.</summary>
+    public static List<(string Name, float[] Value)> MaterialParameters(MaterialBinding b)
+    {
+        var parameters = new List<(string Name, float[] Value)>();
+        foreach (var prm in MaterialBinding.FirstOfEach(b.Parameters.Where(x => x.TryGetVector4(out _)), x => x.Name))
+        {
+            prm.TryGetVector4(out var v);
+            parameters.Add((prm.Name, new[] { v.X, v.Y, v.Z, v.W }));
+        }
+        return parameters;
     }
 
     /// <summary>M210: a material sampler binds to the shader texture named after it plus "__TX". Anything

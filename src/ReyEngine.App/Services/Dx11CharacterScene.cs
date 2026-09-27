@@ -580,15 +580,9 @@ public static class Dx11CharacterScene
             ps = loadedPs;
         }
 
-        var textures = new List<(string Target, string Key)>();
-        foreach (var slot in b.Slots)
-        {
-            if (string.IsNullOrWhiteSpace(slot.Path)) continue;
-            if (ResolveTextureTarget(slot.SamplerName, ps, vs) is not { } target) continue;
-            string key = slot.Path!.ToLowerInvariant();
-            textures.RemoveAll(t => t.Target.Equals(target, StringComparison.OrdinalIgnoreCase));
-            textures.Add((target, key));
-        }
+        // M790: one texture per slot, and a repeated sampler's FIRST copy takes it (the map path's rule, from
+        // the same helper). This loop used to replace, so the LAST copy won.
+        var textures = Dx11SceneBuilder.MaterialTextures(b, sampler => ResolveTextureTarget(sampler, ps, vs));
 
         if (usedFallback)
         {
@@ -605,14 +599,9 @@ public static class Dx11CharacterScene
                 !string.IsNullOrWhiteSpace(emissivePath) ? emissivePath!.ToLowerInvariant() : BlackEmissiveKey));
         }
 
-        var parameters = new List<(string Name, float[] Value)>();
-        var authored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var p in b.Parameters)
-            if (p.TryGetVector4(out var v))
-            {
-                parameters.Add((p.Name, new[] { v.X, v.Y, v.Z, v.W }));
-                authored.Add(p.Name);
-            }
+        // M790: likewise one value per name, the FIRST copy.
+        var parameters = Dx11SceneBuilder.MaterialParameters(b);
+        var authored = new HashSet<string>(parameters.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
 
         // The shader's own declared defaults for anything the material leaves out. Unwritten is not
         // "unspecified" - it is zero, and zero is a value the shader multiplies by.
