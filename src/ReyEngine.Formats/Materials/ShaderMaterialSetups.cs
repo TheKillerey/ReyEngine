@@ -18,11 +18,14 @@ public sealed record ShaderMaterialSetupApplyResult(
 /// without replacing the user's diffuse/normal/mask assets.</summary>
 public static class ShaderMaterialSetups
 {
+    // M789: FirstByName rather than ToDictionary. Riot ships materials that repeat a parameter or switch
+    // name (Quinn's Wings_Mat, Soraka skin53-61), and a single repeat made the Workshop catalog drop the
+    // whole bin and made the bulk common-setup pass throw.
     public static ShaderMaterialSetup Capture(MaterialBinding material) => new(
-        material.Parameters.Where(p => p.TryGetVector4(out _)).ToDictionary(
-            p => p.Name, p => { p.TryGetVector4(out var value); return value; }, StringComparer.OrdinalIgnoreCase),
-        material.AllSwitches.ToDictionary(s => s.Name, s => s.On, StringComparer.OrdinalIgnoreCase),
-        material.AllMacros.ToDictionary(m => m.Name, m => m.Value, StringComparer.OrdinalIgnoreCase),
+        MaterialBinding.FirstByName(material.Parameters.Where(p => p.TryGetVector4(out _)),
+            p => p.Name, p => { p.TryGetVector4(out var value); return value; }),
+        MaterialBinding.FirstByName(material.AllSwitches, s => s.Name, s => s.On),
+        MaterialBinding.FirstByName(material.AllMacros, m => m.Name, m => m.Value),
         material.BlendEnable, material.CullEnable, material.SrcBlendFactor, material.DstBlendFactor)
     { ExampleMaterial = material.Name };
 

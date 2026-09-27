@@ -402,7 +402,7 @@ public sealed class MaterialDocument
                             BinTreeBitBool obb => obb.Value,
                             _ => true, // an entry with no explicit 'on' is enabled
                         };
-                        switches[sn.Value] = on;
+                        switches.TryAdd(sn.Value, on);   // M789: a repeated name keeps its FIRST value - see FirstByName
                         switchList.Add(new MaterialSwitch(sn.Value, on, ss));
                     }
             }
@@ -423,7 +423,7 @@ public sealed class MaterialDocument
                     if (e.Key is BinTreeString mk)
                     {
                         string mv = e.Value is BinTreeString ms ? ms.Value : e.Value?.ToString() ?? "";
-                        macros[mk.Value] = mv;
+                        macros.TryAdd(mk.Value, mv);   // M789: first wins, like the switches above
                         macroList.Add(new MaterialMacro(mk.Value, mv));
                     }
             }
@@ -632,16 +632,50 @@ public sealed class MaterialBinding
     internal BinTreeContainer? ParamContainer { get => _paramContainer; init => _paramContainer = value; }
 
     /// <summary>Shader feature switches (name → on). Static materials expose the live edited values;
-    /// champion pseudo-bindings retain their parse-time snapshot.</summary>
+    /// champion pseudo-bindings retain their parse-time snapshot. A name the material lists twice reads
+    /// as its FIRST entry (M789, <see cref="FirstByName"/>); both entries stay in <see cref="AllSwitches"/>.</summary>
     private IReadOnlyDictionary<string, bool> _switchesInit = EmptySwitches;
     public IReadOnlyDictionary<string, bool> Switches
     {
         get => MaterialObject is null
             ? _switchesInit
-            : AllSwitches.ToDictionary(s => s.Name, s => s.On, StringComparer.OrdinalIgnoreCase);
+            : FirstByName(AllSwitches, s => s.Name, s => s.On);
         init => _switchesInit = value;
     }
     private static readonly IReadOnlyDictionary<string, bool> EmptySwitches = new Dictionary<string, bool>();
+
+    /// <summary>
+    /// M789: name → value over entries that may NAME THE SAME THING TWICE, keeping the FIRST.
+    ///
+    /// <para>Riot ships StaticMaterialDefs that repeat a name inside one list. Censused over every PROP bin
+    /// in the install (47,956 bins, 31,116 StaticMaterialDefs): 16 materials repeat a switch, 34 a parameter
+    /// and 26 a sampler; none repeats a shaderMacro (LeagueToolkit's map is a Dictionary, so an exact
+    /// duplicate key cannot even load). Six of the switch repeats DISAGREE: Map22 thelastdrop's
+    /// TheLastDrop_Level9_Wave* flags list UNLIT_MODE off then on, and USE_CUSTOM_OBJECT_NORMAL on then off.
+    /// The ToDictionary this replaced threw on all 16, and it took the whole bin down with it:
+    /// thelastdrop.materials.bin, Soraka skin53-61, and TFTSet18's DA_18_Soraka.</para>
+    ///
+    /// <para>The shipped data does NOT show which copy the client honours. The shader cache cannot tell:
+    /// both readings of the thelastdrop flags are cooked, and the 8 duplicate-free TFT_Flag_Wave materials
+    /// already account for all four keys. Every texture of every repeated sampler ships, so presence cannot
+    /// tell either. The authoring pattern leans the other way: the second copies are appended blocks, and on
+    /// Quinn's Wings_Mat (skins 14-23) the per-skin Idle_Color is always the LAST copy while the first is the
+    /// same on all ten. That is intent, not client behaviour. So the FIRST wins, which matches every by-name
+    /// lookup here already (MacroOn, SetVectorParameter, Diffuse, and the profile's "first matching name
+    /// wins"). Dx11SceneBuilder and Dx11CharacterScene still bind parameters and textures in list order, one
+    /// per shader slot, so on those two paths the LAST parameter or sampler copy wins. That is a known
+    /// divergence, not changed here.</para>
+    ///
+    /// <para>Nothing is dropped. Every entry keeps its own row and element, and Serialize writes the lists
+    /// back exactly as read. Only the name-keyed views collapse.</para>
+    /// </summary>
+    internal static Dictionary<string, TValue> FirstByName<TEntry, TValue>(IEnumerable<TEntry> entries,
+        Func<TEntry, string> name, Func<TEntry, TValue> value)
+    {
+        var map = new Dictionary<string, TValue>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries) map.TryAdd(name(entry), value(entry));
+        return map;
+    }
 
     /// <summary>M150: shaderMacros (name → "0"/"1") — the preprocessor defines, separate from
     /// <see cref="Switches"/>. Carries NO_BAKED_LIGHTING and DISABLE_DEPTH_FOG.</summary>
@@ -650,7 +684,8 @@ public sealed class MaterialBinding
     {
         get => MaterialObject is null
             ? _macrosInit
-            : AllMacros.ToDictionary(m => m.Name, m => m.Value, StringComparer.OrdinalIgnoreCase);
+            // M789: keys differing only in case load fine and would still collide here
+            : FirstByName(AllMacros, m => m.Name, m => m.Value);
         init => _macrosInit = value;
     }
     private static readonly IReadOnlyDictionary<string, string> EmptyMacros = new Dictionary<string, string>();
