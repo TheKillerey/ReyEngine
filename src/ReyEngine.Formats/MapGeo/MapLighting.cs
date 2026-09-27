@@ -104,11 +104,53 @@ public static class MapLighting
     /// is not proven. It is preferred to the status quo only because the status quo is already known to be
     /// wrong for those scenes.</para>
     /// </summary>
-    public static MapSunProperties? EffectiveSun(byte[] materialsBin)
+    /// <param name="initialVisibilityMask">M785: the map's <c>InitialVisibilityMask</c> (the shipping
+    /// <c>mapNN.bin</c>'s primary axis), asked for lazily and only when <see cref="ActiveAtStart"/> needs it.
+    /// Null keeps the M207 behaviour exactly.</param>
+    public static MapSunProperties? EffectiveSun(byte[] materialsBin, Func<int?>? initialVisibilityMask = null)
     {
         var global = MapSunProperties.Extract(materialsBin);
         var (volumes, _) = Extract(materialsBin, global);
-        return volumes.Count == 1 ? volumes[0].Lighting : global;
+        if (volumes.Count == 1) return volumes[0].Lighting;
+        // M785: several volumes at ONE transform - the TFT boards - are not a spatial choice at all, so M207's
+        // extent question cannot bite; the visibility layer that is on at the start picks the one volume.
+        if (initialVisibilityMask is not null && ActiveAtStart(volumes, initialVisibilityMask) is { } active)
+            return active.Lighting;
+        return global;
+    }
+
+    /// <summary>
+    /// M785: the volume a multi-volume bin lights its scene with at the start of a game, or null when that is
+    /// not decidable - in which case the caller stays on the global sun, as M207 does.
+    ///
+    /// <para><b>Only co-located volumes.</b> Every volume must carry the identical transform. Then no box can
+    /// tell them apart and <c>mVisibilityFlags</c> is the only thing left that can, so M207's half- vs
+    /// full-extent question does not arise. Volumes at different places are still left alone.</para>
+    ///
+    /// <para><b>The layer that is on at the start.</b> A volume is active when its flags share a bit with the
+    /// map's InitialVisibilityMask; exactly one may be, or the answer is null (which of two wins is not
+    /// known). Measured, not guessed: Map22 starts at 67 (bit 6 = "base"), and anniversary.materials.bin's
+    /// two volumes sit at the same transform with flags 64 and 8. Its own MapBehaviors say how they are used -
+    /// BoardReady sets the flags to 68 (base + Stage1); LevelUp7Planning fades LightingVolume1 (FNV-1a
+    /// 0x7367c3b6) toward LightingVolume2's fog range (200, -1400) and then sets the flags to 8 - so the
+    /// level-1 board is lit by the flag-64 volume: lightMapColorScale 2 where the global sun says 1. Of the
+    /// shipped bins, 15 carry co-located volumes and 13 of them resolve to exactly one this way (all Map22
+    /// arena skins).</para>
+    /// </summary>
+    public static MapLightingVolume? ActiveAtStart(IReadOnlyList<MapLightingVolume> volumes, Func<int?> initialVisibilityMask)
+    {
+        ArgumentNullException.ThrowIfNull(volumes);
+        ArgumentNullException.ThrowIfNull(initialVisibilityMask);
+        if (volumes.Count < 2 || volumes.Any(v => v.Transform != volumes[0].Transform)) return null;
+        if (initialVisibilityMask() is not { } mask || mask == 0) return null;
+        MapLightingVolume? active = null;
+        foreach (var v in volumes)
+        {
+            if ((v.VisibilityFlags & mask) == 0) continue;
+            if (active is not null) return null;   // two volumes on at once: which one wins is not known
+            active = v;
+        }
+        return active;
     }
 
     private static MapSunProperties ReadVolumeLighting(BinTreeStruct s, MapSunProperties? global)

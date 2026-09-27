@@ -12110,7 +12110,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
-        var (materialToTexture, profiles, sunProperties) = ResolveMapMaterials(binEntry, names);
+        var (materialToTexture, profiles, sunProperties) = ResolveMapMaterials(binEntry, names,
+            () => ShippingInitialVisibilityMask(mapEntry.Path));   // M785
         if (materialToTexture.Count == 0)
         {
             _log.Info("MapGeo", "Materials .bin didn't resolve any textures — rendering flat.");
@@ -12122,8 +12123,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Resolve map material→texture (+ M32 profiles), falling back to the original game
     /// .materials.bin when the project's copy is broken (malformed .bin) or resolves nothing.</summary>
+    /// <param name="initialVisibilityMask">M785: see <see cref="Formats.MapGeo.MapLighting.EffectiveSun"/>.
+    /// Only the map-open path passes it; callers that discard the sun leave it null and never pay for it.</param>
     private (Dictionary<string, string> textures, Dictionary<string, MaterialProfile> profiles,
-        Formats.MapGeo.MapSunProperties? sunProperties) ResolveMapMaterials(WadAssetEntry binEntry, List<string> names)
+        Formats.MapGeo.MapSunProperties? sunProperties) ResolveMapMaterials(WadAssetEntry binEntry, List<string> names,
+        Func<int?>? initialVisibilityMask = null)
     {
         try
         {
@@ -12132,7 +12136,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (r.Count > 0)
             {
                 return (r, MaterialProfiles.ForMapMaterials(bytes, names, ResolveBinName, ResolveWadPath),
-                    Formats.MapGeo.MapLighting.EffectiveSun(bytes));
+                    Formats.MapGeo.MapLighting.EffectiveSun(bytes, initialVisibilityMask));
             }
         }
         catch (Exception ex) { _log.Warn("MapGeo", $"project materials.bin parse failed: {ex.Message}"); }
@@ -12147,13 +12151,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 {
                     _log.Info("MapGeo", "Used the original game materials.bin (the project's copy was broken/empty).");
                     return (r, MaterialProfiles.ForMapMaterials(fb, names, ResolveBinName, ResolveWadPath),
-                        Formats.MapGeo.MapLighting.EffectiveSun(fb));
+                        Formats.MapGeo.MapLighting.EffectiveSun(fb, initialVisibilityMask));
                 }
             }
             catch (Exception ex) { _log.Warn("MapGeo", $"game materials.bin parse failed: {ex.Message}"); }
         }
         return (new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, MaterialProfile>(StringComparer.OrdinalIgnoreCase), null);
+    }
+
+    /// <summary>M785: the map's InitialVisibilityMask, from the shipping <c>mapNN.bin</c> that
+    /// <see cref="BuildMapVisibility"/> reads. Only <see cref="Formats.MapGeo.MapLighting.EffectiveSun"/>
+    /// asks for it, and only for a bin with co-located lighting volumes - parsing Map22's shipping bin
+    /// costs about half a second, which no other map pays. Null when the path names no mapNN folder or
+    /// the bin declares no axis.</summary>
+    private int? ShippingInitialVisibilityMask(string mapgeoPath)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(mapgeoPath, @"/mapgeometry/map(?<id>\d+)/",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!match.Success) return null;
+        string id = match.Groups["id"].Value;
+        try
+        {
+            var mapBin = ReadAssetByPath($"data/maps/shipping/map{id}/map{id}.bin");
+            return MapVisibility.Parse(mapBin, ResolveBinName).Primary?.InitialMask;
+        }
+        catch { return null; }
     }
 
     /// <summary>M45: read the MapContainer's MapSunProperties component and publish what the renderer uses
