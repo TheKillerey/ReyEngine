@@ -15491,7 +15491,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     private static string ShaderCatalogCachePath(string environment) =>
-        Path.Combine(ReyEngine.Core.ReyPaths.DataRoot, "shader_catalogs", $"{environment}.json");
+        Path.Combine(ReyEngine.Core.ReyPaths.ShaderCatalogsDir, $"{environment}.json");
 
     /// <summary>Scan (or load from cache) one install's shader definitions for the Material Editor.</summary>
     private async Task LoadShaderCatalogAsync(string environment)

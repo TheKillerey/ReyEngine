@@ -26,6 +26,19 @@ public static class ReyPaths
     public static string MetaDir => Path.Combine(DataRoot, "meta");
     public static string MetaDbFile => Path.Combine(MetaDir, "meta.db.json");
 
+    /// <summary>M103/M475: the shader catalogue cache, one <c>&lt;environment&gt;.json</c> per install. The Material
+    /// Editor serves a file while its stamp matches that install's Global.wad and otherwise rescans and writes it
+    /// back. The Live and PBE files are committed (M687), so in the app this is deliberately the tracked folder.</summary>
+    public static string ShaderCatalogsDir => _shaderCatalogsDir ?? Path.Combine(DataRoot, "shader_catalogs");
+
+    private static string? _shaderCatalogsDir;
+
+    /// <summary>M790: keep the shader catalogue cache somewhere else for the rest of this process. Exists so a
+    /// test run never rewrites the committed catalogues: every headless MainWindowViewModel loads one, and after
+    /// any Riot patch the committed stamp is stale, so the load rescans and saves over the repo's file (M784,
+    /// M789). The test assembly calls this before its first test.</summary>
+    public static void RedirectShaderCatalogs(string directory) => _shaderCatalogsDir = directory;
+
     public static void EnsureHashDirs()
     {
         Directory.CreateDirectory(HashesDir);
