@@ -101,10 +101,36 @@ public sealed record MaterialProfile(
     // Defaults match the StaticMaterialPassDef schema default (true / 31, i.e. tests and writes), so a
     // material that authors neither reads exactly as every caller already assumed.
     bool AuthoredDepthTest = true,
-    bool AuthoredWritesDepth = true)
+    bool AuthoredWritesDepth = true,
+    // M788: the pass's RAW writeMask (StaticMaterialPassDef.writeMask), kept alongside the two booleans
+    // above rather than folded into them. Censused over every shipped map materials.bin (8,717
+    // StaticMaterialDef bindings across Map11/12/22/30/453 + Common): bits 0-3 are the D3D11 colour
+    // channel write mask (RenderTargetWriteMask numerically matches Riot's own bit order - R=1,G=2,B=4,
+    // A=8), bit 4 (16) is depth write, bit 5 (32) is stencil write. Every non-default value in the corpus
+    // decomposes cleanly under that layout: 7/15 are shadow-receiver/water passes that already read as
+    // no-depth-write blends (RGB or RGBA, no depth), 16 is a depth-only occluder, 23 is RGB+depth, 32 is
+    // stencil-only (TFT's TheLastDrop_Stencil01_MAT/Transition01_MAT - depthEnable false, stencilEnable
+    // true: writes NEITHER colour NOR depth, so it must draw nothing visible), 40 is alpha+stencil, 63 is
+    // everything. <see cref="AuthoredWritesDepth"/> stays <c>WriteMask != 0</c> (M777's original, coarser
+    // rule the D3D11 CHARACTER pipeline already reads) - deliberately NOT redefined in terms of bit 4 here:
+    // the same census over 19,607 champion skin materials found 441 (writeMask 7/15) where the two rules
+    // would disagree, and changing what an existing, consumed property means is a bigger and riskier move
+    // than adding this one. The D3D11 MAP path (<c>Dx11SceneBuilder</c>) reads bit 4 directly off this raw
+    // value instead. Schema default/absent is 31 (RGBA + depth, no stencil).
+    int AuthoredWriteMask = 31)
 {
     public static readonly MaterialProfile Default =
         new(PreviewProfileKind.Unknown, false, false, false, false, Vector2.One, Vector2.Zero, 0f, null, null);
+
+    /// <summary>M788: bits 0-3 of <see cref="AuthoredWriteMask"/> - the colour channels this pass writes,
+    /// already in D3D11's own <c>RenderTargetWriteMask</c> numbering (R=1,G=2,B=4,A=8, so 15 = all four,
+    /// the schema default). A map material with this at 0 authors no colour output at all.</summary>
+    public byte AuthoredColorWriteMask => (byte)(AuthoredWriteMask & 0xF);
+
+    /// <summary>M788: bit 4 of <see cref="AuthoredWriteMask"/> - the pass's own depth-WRITE bit, straight off
+    /// the real data. Distinct from <see cref="AuthoredWritesDepth"/> (M777's <c>WriteMask != 0</c>, which
+    /// also reads true for e.g. writeMask 7 even though bit 4 is clear there).</summary>
+    public bool AuthoredWriteMaskHasDepthBit => (AuthoredWriteMask & 16) != 0;
 
     // ---- M34 render state (only cullEnable + blendEnable exist in the .bin; the rest are derived) ----
     /// <summary>Backface culling flag (true = single-sided/cull; the .bin default when cullEnable is absent).</summary>
@@ -327,7 +353,8 @@ public static class MaterialProfiles
             b.DstBlendFactor,
             // M458: reuse the app's single Mantis test rather than adding a second name check here.
             MapGeo.ExtendedChannelRule.IsExtendedShader(shaderName),
-            b.DepthEnable, b.WritesDepth);   // M777
+            b.DepthEnable, b.WritesDepth,   // M777
+            b.WriteMask);   // M788
     }
 
     /// <summary>Detect shader 0xe25b830f and read its authored terrain layer paths, tiling, and RGB mask weights.</summary>

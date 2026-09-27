@@ -511,7 +511,7 @@ public static class Dx11SceneBuilder
         else
             renderer.SetPostFogShaders(null, null);
 
-        int ok = 0, textures = 0, failed = scene.Failed, transparent = 0, clamped = 0;
+        int ok = 0, textures = 0, failed = scene.Failed, transparent = 0, clamped = 0, colorMasked = 0;
         var reasons = new Dictionary<string, string>(scene.FailureReasons);
         foreach (var s in scene.Slices)
         {
@@ -583,6 +583,16 @@ public static class Dx11SceneBuilder
             // blend state below is left alone deliberately - the point is to reproduce the client's DEPTH
             // behaviour, not to stop compositing.
             if (EmulateClientDepthRules) depthWrite = true;
+
+            // M788: the pass's own writeMask can independently forbid depth/colour writes - a stencil-only
+            // mask mesh (TFT's TheLastDrop_Stencil01_MAT: depthEnable false, stencilEnable true, writeMask
+            // 32) authors NEITHER, and drew as an opaque box because nothing on this path ever read
+            // writeMask at all. ANDed onto the render-mode heuristic above rather than replacing it - this
+            // can only ever turn an already-writing pass OFF, never on, so writeMask 31/absent (8,488 of
+            // 8,717 StaticMaterialDef bindings censused across every shipped map materials.bin) is
+            // untouched. See MaterialProfile.AuthoredWriteMask for the bit layout and why the CHARACTER
+            // path's own writeMask reading (M777) is deliberately left as it is.
+            if (!s.Profile.AuthoredWriteMaskHasDepthBit) depthWrite = false;
             mat.WritesDepth = depthWrite;
             mat.SortableByPipeline = depthWrite;
             // Keyed off the material's own blend state, not off depthWrite: under EmulateClientDepthRules
@@ -594,6 +604,15 @@ public static class Dx11SceneBuilder
             if (!depthWrite) transparent++;
             mat.SamplerAddress = SamplerAddressFor(s.Profile);
             if (mat.SamplerAddress != PreviewSamplerAddress.Wrap) clamped++;
+
+            // M788: bits 0-3 of the same writeMask - which colour channels the pass writes at all. 15 (the
+            // schema default/absent case) is ColorWriteEnable.All and PreviewMaterial.ColorWriteMask already
+            // defaults to that, so this line changes nothing for the 8,488 default materials; a narrower
+            // mask (0 for the stencil-only case above, 7/8 for a handful of others) reaches the renderer's
+            // masked blend states (ShaderPreviewRenderer.AuthoredBlendState's colorMask overload / its new
+            // BlendStateMasked) instead of the universal one.
+            mat.ColorWriteMask = s.Profile.AuthoredColorWriteMask;
+            if (mat.ColorWriteMask != 0xF) colorMasked++;   // 0xF == D3D11's ColorWriteEnable.All (R|G|B|A)
 
             foreach (var (name, value) in s.Parameters) mat.Params[name] = value;
 
@@ -625,6 +644,10 @@ public static class Dx11SceneBuilder
             sb.AppendLine($"{transparent} transparent slice(s): no depth write, drawn after the solid pass in authored order");
         if (clamped > 0)
             sb.AppendLine($"{clamped} slice(s) use authored per-axis UV clamp addressing");
+        // M788: a pass whose writeMask narrows the colour channels it writes (0 for a stencil-only mask
+        // mesh, up to 15 for the schema default/absent case this never fires for).
+        if (colorMasked > 0)
+            sb.AppendLine($"{colorMasked} slice(s) author a writeMask narrower than RGBA (colour and/or depth write reduced)");
         // M456: which light path each slice landed on. A pin count of 0 on a map that has lights is the
         // whole feature silently not happening, and it looks exactly like the overlay working as before.
         if (scene.DynamicLightingPinned > 0 || scene.DynamicLightingPinFailed > 0)

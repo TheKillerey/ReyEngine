@@ -319,6 +319,16 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// <remarks>M720: false for every particle mode but NONE, which is the one the engine writes depth for.</remarks>
     public bool WritesDepth { get; set; } = true;
 
+    /// <summary>M788: the pass's authored colour channel write mask, in D3D11's own <c>RenderTargetWriteMask</c>
+    /// numbering (R=1, G=2, B=4, A=8 - <see cref="ColorWriteEnable.All"/> is 15, the default here and the
+    /// StaticMaterialPassDef schema default). Set by the map builder off a material's real writeMask
+    /// (MaterialProfile.AuthoredColorWriteMask); everything else (particles, characters, props) leaves this
+    /// at the default and draws exactly as before this existed. A mask narrower than 15 only takes effect
+    /// through <see cref="ShaderPreviewRenderer.AuthoredBlendState"/>'s colour-mask overload or its sibling
+    /// <c>BlendStateMasked</c> - particles carry their own colour-write decision on
+    /// <see cref="ParticleBlend"/> and never read this.</summary>
+    public byte ColorWriteMask { get; set; } = (byte)ColorWriteEnable.All;
+
     /// <summary>
     /// M717: per-slot address mode, by sampler name, in Riot's own enum - 0 Wrap, 1 Clamp, 2 Mirror.
     ///
@@ -935,8 +945,14 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     /// <summary>M720: particle blend states, built once per distinct state and kept for the device's life.</summary>
     private readonly Dictionary<(bool Enabled, ReyEngine.Formats.Vfx.VfxBlendFactor Src, ReyEngine.Formats.Vfx.VfxBlendFactor Dst,
         ReyEngine.Formats.Vfx.VfxBlendOp Op, bool WritesColor), ComPtr<ID3D11BlendState>> _particleBlendStates = new();
-    private readonly Dictionary<(MaterialBlendFactor Src, MaterialBlendFactor Dst), ComPtr<ID3D11BlendState>>
+    private readonly Dictionary<(MaterialBlendFactor Src, MaterialBlendFactor Dst, byte ColorMask), ComPtr<ID3D11BlendState>>
         _authoredBlendStates = new();
+    /// <summary>M788: the plain alpha-blend state (mirrors <c>_blend</c>'s own SrcAlpha/InvSrcAlpha), with a
+    /// narrower colour write mask substituted in. Only reached by a material that authors a writeMask
+    /// narrower than RGBA (<see cref="PreviewMaterial.ColorWriteMask"/>) and is NOT already on the
+    /// authored-blend path below - a stencil-only mask mesh with no blendEnable of its own, such as TFT's
+    /// TheLastDrop_Stencil01_MAT.</summary>
+    private readonly Dictionary<(bool Enable, byte ColorMask), ComPtr<ID3D11BlendState>> _blendMaskedStates = new();
 
     public void ClearMaterials()
     {
@@ -4427,9 +4443,9 @@ float4 psmain(VOut i) : SV_Target
     };
 
     private ComPtr<ID3D11BlendState> AuthoredBlendState(
-        MaterialBlendFactor source, MaterialBlendFactor destination)
+        MaterialBlendFactor source, MaterialBlendFactor destination, byte colorMask = (byte)ColorWriteEnable.All)
     {
-        var key = (source, destination);
+        var key = (source, destination, colorMask);
         if (_authoredBlendStates.TryGetValue(key, out var existing)) return existing;
 
         var desc = new BlendDesc();
@@ -4440,11 +4456,39 @@ float4 psmain(VOut i) : SV_Target
             // StaticMaterialDef only authors the COLOR factors. Keep the established alpha equation;
             // it preserves coverage without inventing a second enum from absent data.
             SrcBlendAlpha = Blend.One, DestBlendAlpha = Blend.InvSrcAlpha, BlendOpAlpha = BlendOp.Add,
-            RenderTargetWriteMask = (byte)ColorWriteEnable.All,
+            // M788: was unconditionally ColorWriteEnable.All; a caller with a narrower authored writeMask
+            // (e.g. Map22's shadow receivers, whose writeMask 7 leaves the alpha channel out) now passes it
+            // in. Every existing call site before M788 passed nothing, i.e. still gets .All - byte-identical.
+            RenderTargetWriteMask = colorMask,
         };
         ComPtr<ID3D11BlendState> state = default;
         if (_device.CreateBlendState(in desc, ref state) < 0) return default;
         _authoredBlendStates[key] = state;
+        return state;
+    }
+
+    /// <summary>M788: the plain alpha-blend state <c>_blend</c> itself uses (SrcAlpha/InvSrcAlpha), with the
+    /// pass's authored colour write mask substituted in - for a material that narrows its writeMask but is
+    /// not on the authored-blend path (<see cref="AuthoredBlendState"/>) because it authors no blendEnable of
+    /// its own, e.g. TFT's TheLastDrop_Stencil01_MAT (writeMask 32: stencil bit only, no blendEnable field at
+    /// all). <paramref name="blendEnable"/> mirrors what <c>_blend</c> would have used
+    /// (<see cref="PreviewSettings.AlphaBlend"/>), so the only change from the unmasked path is the mask.</summary>
+    private ComPtr<ID3D11BlendState> BlendStateMasked(bool blendEnable, byte colorMask)
+    {
+        var key = (blendEnable, colorMask);
+        if (_blendMaskedStates.TryGetValue(key, out var existing)) return existing;
+
+        var desc = new BlendDesc();
+        desc.RenderTarget[0] = new RenderTargetBlendDesc
+        {
+            BlendEnable = blendEnable,
+            SrcBlend = Blend.SrcAlpha, DestBlend = Blend.InvSrcAlpha, BlendOp = BlendOp.Add,
+            SrcBlendAlpha = Blend.One, DestBlendAlpha = Blend.InvSrcAlpha, BlendOpAlpha = BlendOp.Add,
+            RenderTargetWriteMask = colorMask,
+        };
+        ComPtr<ID3D11BlendState> state = default;
+        if (_device.CreateBlendState(in desc, ref state) < 0) return default;
+        _blendMaskedStates[key] = state;
         return state;
     }
 
@@ -5621,15 +5665,26 @@ float4 psmain(VOut i) : SV_Target
             // M720: a particle material carries the engine's own state for its mode; the two older answers
             // below remain for everything that is not a particle.
             var particleState = mat.ParticleBlend is { } particleBlend ? ParticleBlendState(particleBlend) : default;
+            // M788: does this material author a writeMask narrower than RGBA? Checked once and threaded
+            // through whichever branch below would otherwise have fired, rather than replacing any of them -
+            // a masked shadow receiver or water pass (writeMask 7/15) still needs its own authored blend
+            // equation, only with a couple of colour channels dropped from the write. Particles are excluded:
+            // they carry their own colour-write decision on ParticleBlend/WritesColor (M720) and default
+            // ColorWriteMask to "all", so this is never true for one.
+            bool masked = mat.ColorWriteMask != (byte)ColorWriteEnable.All && particleState.Handle is null;
             if (particleState.Handle is not null)
                 _ctx.OMSetBlendState(particleState, factor, 0xFFFFFFFF);
             else if (mat.Additive && _blendAdditive.Handle is not null)
                 _ctx.OMSetBlendState(_blendAdditive, factor, 0xFFFFFFFF);
             else if (s.AlphaBlend && mat.UsesAuthoredColorBlend)
             {
-                var authoredBlend = AuthoredBlendState(mat.SourceColorBlend, mat.DestinationColorBlend);
+                var authoredBlend = masked
+                    ? AuthoredBlendState(mat.SourceColorBlend, mat.DestinationColorBlend, mat.ColorWriteMask)
+                    : AuthoredBlendState(mat.SourceColorBlend, mat.DestinationColorBlend);
                 _ctx.OMSetBlendState(authoredBlend.Handle is not null ? authoredBlend : _blend, factor, 0xFFFFFFFF);
             }
+            else if (masked)
+                _ctx.OMSetBlendState(BlendStateMasked(s.AlphaBlend, mat.ColorWriteMask), factor, 0xFFFFFFFF);
             else
                 _ctx.OMSetBlendState(_blend, factor, 0xFFFFFFFF);
 
@@ -6076,6 +6131,8 @@ float4 psmain(VOut i) : SV_Target
         _authoredBlendStates.Clear();
         foreach (var state in _particleBlendStates.Values) state.Dispose();   // M720
         _particleBlendStates.Clear();
+        foreach (var state in _blendMaskedStates.Values) state.Dispose();   // M788
+        _blendMaskedStates.Clear();
         _raster.Dispose(); _blend.Dispose(); _blendOpaque.Dispose(); _depthState.Dispose();
         _blendAdditive.Dispose(); _depthStateNoWrite.Dispose(); _depthStateNoTest.Dispose();
         for (int b = 0; b < 3; b++)
