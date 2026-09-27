@@ -59,15 +59,48 @@ public static class VfxPlaybackSim
     /// flip lives in the view, so testing a raw camera position culls the wrong half of the map.</para>
     /// </summary>
     public static bool IsActive(VfxPlaybackItem item, Vector3 mirroredCamPos, float maxDistanceSq,
+        in Matrix4x4 viewProj) =>
+        IsActive(item.WorldPos, VfxCullBounds.Radius(item), mirroredCamPos, maxDistanceSq, viewProj);
+
+    /// <summary>M787: the same gate for a SPHERE of <paramref name="radius"/> around the placement origin
+    /// (<see cref="VfxCullBounds"/>), so a large system stays on while any of it can be on screen. Radius 0 is
+    /// exactly the old point test.</summary>
+    public static bool IsActive(Vector3 worldPos, float radius, Vector3 mirroredCamPos, float maxDistanceSq,
         in Matrix4x4 viewProj)
     {
-        if (Vector3.DistanceSquared(mirroredCamPos, item.WorldPos) > maxDistanceSq) return false;
-        var clip = Vector4.Transform(new Vector4(item.WorldPos, 1f), viewProj);
-        if (clip.W <= 0f) return false;
-        float margin = clip.W * 1.25f;
-        if (MathF.Abs(clip.X) > margin || MathF.Abs(clip.Y) > margin || clip.Z < -margin || clip.Z > margin)
-            return false;
-        return true;
+        if (!(radius > 0f))
+        {
+            if (Vector3.DistanceSquared(mirroredCamPos, worldPos) > maxDistanceSq) return false;
+            var clip = Vector4.Transform(new Vector4(worldPos, 1f), viewProj);
+            if (clip.W <= 0f) return false;
+            float margin = clip.W * 1.25f;
+            if (MathF.Abs(clip.X) > margin || MathF.Abs(clip.Y) > margin || clip.Z < -margin || clip.Z > margin)
+                return false;
+            return true;
+        }
+
+        float maxDistance = MathF.Sqrt(maxDistanceSq);
+        if (Vector3.Distance(mirroredCamPos, worldPos) - radius > maxDistance) return false;
+
+        // The point test's six conditions (|x|, |y|, |z| <= 1.25w) and w > 0 as planes of the row-vector
+        // viewProj (clip = (p,1) * M, so each clip component is a COLUMN of M), each normalised so the sphere
+        // is rejected only when it lies wholly outside one of them.
+        const float k = 1.25f;
+        var cx = new Vector4(viewProj.M11, viewProj.M21, viewProj.M31, viewProj.M41);
+        var cy = new Vector4(viewProj.M12, viewProj.M22, viewProj.M32, viewProj.M42);
+        var cz = new Vector4(viewProj.M13, viewProj.M23, viewProj.M33, viewProj.M43);
+        var cw = new Vector4(viewProj.M14, viewProj.M24, viewProj.M34, viewProj.M44);
+        return InsidePlane(k * cw + cx, worldPos, radius) && InsidePlane(k * cw - cx, worldPos, radius)
+            && InsidePlane(k * cw + cy, worldPos, radius) && InsidePlane(k * cw - cy, worldPos, radius)
+            && InsidePlane(k * cw + cz, worldPos, radius) && InsidePlane(k * cw - cz, worldPos, radius)
+            && InsidePlane(cw, worldPos, radius);
+    }
+
+    private static bool InsidePlane(Vector4 plane, Vector3 p, float radius)
+    {
+        float len = new Vector3(plane.X, plane.Y, plane.Z).Length();
+        if (!(len > 1e-12f)) return plane.W >= 0f;
+        return (plane.X * p.X + plane.Y * p.Y + plane.Z * p.Z + plane.W) / len >= -radius;
     }
 
     /// <summary>The pool key the fallback sprite is cached under. Leading space so it can never collide with
