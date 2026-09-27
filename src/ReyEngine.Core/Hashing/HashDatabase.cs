@@ -50,6 +50,16 @@ public sealed class HashDatabase : IHashResolver
     public int BinCount => _bin.Count;
     public int ConflictCount => _wadConflicts.Count + _binConflicts.Count;
 
+    /// <summary>
+    /// M792: nothing to resolve with - no dictionary entry AND no table entry.
+    ///
+    /// <para>WadCount and BinCount count only the dictionaries, and a Mimir install leaves those empty:
+    /// HashSyncService.LoadLocal skips the merged cache once a table is attached, so only a manual .txt fills
+    /// them. The startup warning asked those two counts and told every such install "No hash dictionary yet"
+    /// while 3.3 M names resolved through its tables.</para>
+    /// </summary>
+    public bool IsEmpty => _wad.Count == 0 && _bin.Count == 0 && TableEntryCount == 0;
+
     public bool TryGetPath(ulong hash, out string path)
     {
         if (_wad.TryGetValue(hash, out path!)) return true;

@@ -6614,7 +6614,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var db = _sync.LoadLocal(m => _log.Info("Hashes", m));
         _resolver = new WadPathResolver(db);
-        if (db.WadCount + db.BinCount == 0)
+        if (db.IsEmpty)   // M792: not WadCount + BinCount - a Mimir install's dictionaries are empty
             _log.Warn("Hashes", "No hash dictionary yet. Use Tools ▸ Sync Hashes to download from CommunityDragon.");
 
         Animation.ClipLoader = DecodeAnimation;

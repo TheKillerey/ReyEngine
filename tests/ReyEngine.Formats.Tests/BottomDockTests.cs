@@ -28,20 +28,42 @@ public sealed class BottomDockTests
     private static void Log(MainWindowViewModel vm, LogLevel level) =>
         vm.Console.Append(new LogEntry(DateTime.Now, level, "test", "message"));
 
-    [Fact]
-    public void TheDockStartsOnTheContentBrowserWithNothingUnseen()
+    /// <summary>
+    /// A view model with an empty console and a zero badge, whatever its constructor had to say.
+    ///
+    /// <para>M792: the constructor logs through Write, so its lines land exactly when this thread owns the
+    /// dispatcher - which it does whenever this class runs on its own - and one of them can be a warning: "No
+    /// hash dictionary yet" is true in a worktree with no hash tables. The badge counted it, every count below
+    /// was off by one, and 5 of 7 tests failed alone while passing in a full run, where another class claims
+    /// the dispatcher first. What startup reports is the machine's business; these tests are about the
+    /// bookkeeping from here on.</para>
+    /// </summary>
+    private static MainWindowViewModel NewDock()
     {
         var vm = new MainWindowViewModel();
+        vm.Console.Clear();
+        vm.UnseenConsoleProblems = 0;
+        return vm;
+    }
+
+    [Fact]
+    public void TheDockStartsOnTheContentBrowserWithOnlyStartupProblemsUnseen()
+    {
+        // M792: the one test that looks at what the constructor logged, so it asks what holds on every machine
+        // and on either side of the dispatcher: the badge counts exactly the problems the console is holding,
+        // and none of the chatter around them.
+        var vm = new MainWindowViewModel();
+        int problems = vm.Console.Entries.Count(e => e.Level is LogLevel.Warning or LogLevel.Error);
 
         Assert.Equal(ContentBrowser, vm.BottomDockTab);
-        Assert.Equal(0, vm.UnseenConsoleProblems);
-        Assert.False(vm.HasUnseenConsoleProblems);
+        Assert.Equal(problems, vm.UnseenConsoleProblems);
+        Assert.Equal(problems > 0, vm.HasUnseenConsoleProblems);
     }
 
     [Fact]
     public void ProblemsArrivingBehindTheTabAreCounted()
     {
-        var vm = new MainWindowViewModel();
+        var vm = NewDock();
 
         Log(vm, LogLevel.Warning);
         Log(vm, LogLevel.Error);
@@ -55,7 +77,7 @@ public sealed class BottomDockTests
     {
         // The dock logs constantly — every load, every save, every mount. A badge that lit up for those
         // would be ignored within a minute, and then it would not be there for the one that mattered.
-        var vm = new MainWindowViewModel();
+        var vm = NewDock();
 
         Log(vm, LogLevel.Info);
         Log(vm, LogLevel.Success);
@@ -67,7 +89,7 @@ public sealed class BottomDockTests
     [Fact]
     public void OpeningTheConsoleClearsTheBadgeAndKeepsItClear()
     {
-        var vm = new MainWindowViewModel();
+        var vm = NewDock();
         Log(vm, LogLevel.Error);
         Assert.Equal(1, vm.UnseenConsoleProblems);
 
@@ -89,7 +111,7 @@ public sealed class BottomDockTests
     {
         // The badge's IsVisible binds to HasUnseenConsoleProblems, which is a plain getter — without the
         // hand-written notification it would never appear or disappear.
-        var vm = new MainWindowViewModel();
+        var vm = NewDock();
         var raised = new List<string?>();
         vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
 
@@ -104,7 +126,7 @@ public sealed class BottomDockTests
     [Fact]
     public void ShowConsoleBringsTheTabToTheFront()
     {
-        var vm = new MainWindowViewModel();
+        var vm = NewDock();
         Log(vm, LogLevel.Error);
 
         vm.ShowConsoleCommand.Execute(null);
@@ -120,7 +142,7 @@ public sealed class BottomDockTests
     public void ClearingTheConsoleAlsoClearsTheBadge()
     {
         // Otherwise the badge would still be advertising lines that no longer exist to read.
-        var vm = new MainWindowViewModel();
+        var vm = NewDock();
         Log(vm, LogLevel.Error);
         Assert.Equal(1, vm.UnseenConsoleProblems);
 
