@@ -309,6 +309,8 @@ public sealed class D3D11MapProps
                     if (mats.Count > 0)
                     {
                         foreach (var mat in mats) { _mine.Add(mat); g.Materials.Add(mat); }
+                        // M781: asset-path keys, so the map and the particles may bind the same pooled views -
+                        // RemoveCachedTextures keeps any view another material still binds.
                         foreach (var key in scene.Textures.Keys) _textureKeys.Add(key);
                         RiotShaderMeshes++;
                         return g;

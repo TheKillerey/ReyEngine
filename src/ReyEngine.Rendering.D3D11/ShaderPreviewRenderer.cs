@@ -2233,14 +2233,42 @@ float4 psmain_tex(VTexOut i) : SV_Target
         _retired.Clear();
     }
 
-    /// <summary>Release exact scene-owned pool entries after their materials have been removed.</summary>
+    /// <summary>Release exact scene-owned pool entries after their materials have been removed.
+    ///
+    /// <para>M781: except a view a registered material still binds. The pool is keyed by ASSET PATH and every
+    /// owner - the map scene, the particles, the props - binds through <see cref="TryBindCached"/> first, so a
+    /// key the caller names can be a view another owner holds too. D3D11MapProps passes every texture of its
+    /// character scenes here; on 7yanniversary three of them were the map's <c>black.tex</c> and the particles'
+    /// boat and pengu sprites, and disposing them left 42 map and particle slots on a freed view - the next
+    /// PSSetShaderResources read freed memory, and the editor died inside the NVIDIA driver when props were
+    /// switched off and on or dragged. A view still bound stays pooled (with its alpha note) until the scene
+    /// clears the pool, which is the M226 rule the rest of the pool follows.</para></summary>
     public void RemoveCachedTextures(IEnumerable<string> keys)
     {
+        HashSet<nint>? bound = null;
         foreach (string key in keys.Distinct(StringComparer.Ordinal))
         {
-            if (_texPool.Remove(key, out var texture)) texture.Dispose();
+            if (_texPool.TryGetValue(key, out var texture))
+            {
+                bound ??= BoundTextureViews();
+                if (bound.Contains((nint)texture.Handle)) continue;   // M781: another owner still draws with it
+                _texPool.Remove(key);
+                texture.Dispose();
+            }
             _texAlpha.Remove(key);
         }
+    }
+
+    /// <summary>M781: every view a registered material binds, its debug-view slots included.</summary>
+    private HashSet<nint> BoundTextureViews()
+    {
+        var views = new HashSet<nint>();
+        foreach (var m in _materials)
+        {
+            foreach (var v in m.Textures.Values) views.Add((nint)v.Handle);
+            foreach (var v in m.DebugTextures.Values) views.Add((nint)v.Handle);
+        }
+        return views;
     }
 
     /// <summary>How many distinct assets are resident, for the scene report.</summary>
