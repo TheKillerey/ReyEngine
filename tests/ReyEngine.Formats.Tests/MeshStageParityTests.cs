@@ -111,8 +111,10 @@ public sealed class MeshStageParityTests
         if (d3d is null) return;
         Assert.Contains("erosionParams[0] = inst[o + 18];", d3d);
         // Writing the value is not enough - the constant buffer holding it has to be re-uploaded per
-        // particle, or every particle draws with the first one's drive.
-        Assert.Contains("or \"cAlphaErosionParams\")) continue;", d3d);
+        // particle, or every particle draws with the first one's drive. Pinned by membership, not by being
+        // last: M786 added vParticleUVTransform (the per-particle uv turn/scroll) to the same list.
+        Assert.Matches(@"v\.Name is [^;]*""cAlphaErosionParams""[^;]*\)\) continue;", d3d);
+        Assert.Matches(@"v\.Name is [^;]*""vParticleUVTransform""[^;]*\)\) continue;", d3d);
     }
 
     // ===================================================== 2. palette before multiplier
