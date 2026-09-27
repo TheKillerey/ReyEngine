@@ -321,7 +321,8 @@ public sealed class D3D11MapParticles
     /// <summary>Call after <c>Dx11SceneBuilder.Commit</c>. Its <c>ClearMaterials</c> disposed OUR materials
     /// and emptied the texture pool along with the map's, so the retained playback has to be rebuilt from
     /// scratch. Nothing here touches the dead material objects - the next rebuild only ever asks the renderer
-    /// which of its own materials are ours, and it no longer holds any.</summary>
+    /// which of its own materials are ours, and it no longer holds any. M782: that same answer tells the
+    /// rebuild its mesh geometry ids died with them, so it does not release ids the props may own by then.</summary>
     public void Invalidate() => _dirty = true;
 
     // ---------------------------------------------------------------- build
@@ -332,17 +333,29 @@ public sealed class D3D11MapParticles
 
         // Only ours. ClearMaterials would take the ~1,600-material map scene with it, and rebuilding that
         // costs seconds - a particle selection click must not do that.
-        _renderer.RemoveMaterials(m => _mine.Contains(m));
+        int removed = _renderer.RemoveMaterials(m => _mine.Contains(m));
+        // M782: none of ours left to remove means the renderer was cleared under us - a scene commit's
+        // ClearMaterials, which released every mesh geometry along with the materials and emptied both
+        // stores. The mesh ids below are then dead handles, and on the frame after NotifySceneRebuilt the
+        // props upload BEFORE this rebuild runs, into those emptied stores: "releasing" the old ids freed the
+        // props' new geometry and handed its slots to our meshes (2 of 14 prop meshes drew particle meshes on
+        // 7yanniversary). Asked of the renderer rather than assumed from Invalidate, because
+        // NotifySceneRebuilt also runs when the scene build returned before its commit - ids still live then.
+        bool meshGeometryAlreadyReleased = _mine.Count > 0 && removed == 0;
         _mine.Clear();
         // M710: cleared beside _mine so a rebuild that returns early - no playback, no shader toc - cannot
         // leak its half-built materials into the next one's draw order.
         _pending.Clear();
         _slices.Clear();
-        foreach (int id in _meshSlices.Where(s => s.GeometryId >= 0).Select(s => s.GeometryId).Distinct())
-            _renderer.ReleaseMeshGeometry(id);
-        foreach (int id in _meshSlices.Where(s => s.RiotGeometryId >= 0).Select(s => s.RiotGeometryId).Distinct())
-            _renderer.ReleaseRiotMeshGeometry(id);
+        if (!meshGeometryAlreadyReleased)
+        {
+            foreach (int id in _meshSlices.Where(s => s.GeometryId >= 0).Select(s => s.GeometryId).Distinct())
+                _renderer.ReleaseMeshGeometry(id);
+            foreach (int id in _meshSlices.Where(s => s.RiotGeometryId >= 0).Select(s => s.RiotGeometryId).Distinct())
+                _renderer.ReleaseRiotMeshGeometry(id);
+        }
         _meshSlices.Clear();
+        // M782: ribbons are NOT released by ClearMaterials, so these ids are still ours either way.
         foreach (int id in _ribbonSlices.Select(s => s.RibbonId).Distinct())
             _renderer.ReleaseRibbon(id);
         _ribbonSlices.Clear();
