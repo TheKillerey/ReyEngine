@@ -1625,14 +1625,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return (mask & (1 << bit)) != 0;
     }
 
+    /// <summary>M784: does this placement play when the map loads? A <c>startDisabled</c> placement is switched
+    /// on by a scripted MapBehavior (MapActionToggleMapParticle) on a gameplay event, never at load.
+    /// 7yanniversary's Progression_Setting_Main is the level-7 board transformation - one gold flash over the
+    /// penguin - which Play All looped forever as a strobe. LTK Manager's map backdrop drops these placements
+    /// the same way. Selecting one still previews it on request (the single-placement branch below).</summary>
+    public static bool PlaysAtMapLoad(Formats.MapGeo.MapParticlePlacement placement) => placement.StartDisabled != true;
+
     private void RebuildParticlePlayback()
     {
         if (PlayAllParticles)
         {
             var items = new List<VfxPlaybackItem>();
+            int eventDriven = 0;
             foreach (var v in MapContent.AllParticles)
             {
                 if (!v.IsEditorVisible || v.IsDisabled || v.IsRemoved) continue;
+                if (!PlaysAtMapLoad(v.Placement)) { eventDriven++; continue; }   // M784
                 if (!IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags)) continue;
                 // M403: Transitional placements are one-shot bursts fired BY a state change - the
                 // SRS_*_Transition_DragonPit set and friends. Playing them with everything else would
@@ -1647,7 +1656,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     { EmitterEmissionSurfaces = ResolveSystemEmissionSurfaces(s) });   // M754
             }
             CurrentParticlePlayback = items.Count > 0 ? new VfxPlayback(items, CullByCamera: true) : null;
-            _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.");
+            string offAtLoad = eventDriven > 0
+                ? $" {eventDriven} event-driven placement(s) left off - the game shows them only when a map event turns them on; select one to preview it."
+                : "";
+            _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.{offAtLoad}");
             return;
         }
 
