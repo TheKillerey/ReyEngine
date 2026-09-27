@@ -93,6 +93,47 @@ public static class VfxUvTransform
         return uv;
     }
 
+    /// <summary>
+    /// M786: a MESH emitter's uv transform, as the 2x3 affine Riot's <c>particlesystem/mesh_vs</c> takes per
+    /// draw in <c>vParticleUVTransform</c> - <c>u' = dot((u, v, 1), row0)</c>, <c>v' = dot((u, v, 1), row1)</c>,
+    /// rows padded to float4, third row (0, 0, 1). Twelve floats, in the order the D3D11 host already wrote.
+    ///
+    /// <para>The mesh path only ever applied the tiling (texDiv) and the birth scroll, so an authored uv
+    /// rotation never reached a mesh. TFT_Anniversary_Idle_Ievel1_Candles02's flames are a flat teardrop mesh
+    /// (TFT_Anniversary_Intro_Mesh_vfx_05.scb, 3 x 6.1 units in XZ) textured with a horizontal wavy band
+    /// (TFT_ArenaSkin_Intro_010.tex, alpha only in v 0.34..0.69) that uvRotation 90 stands upright and
+    /// particleUVScrollRate (1.2, 0) runs along the flame. Unturned, the band cut the flame into a wide flat
+    /// strip - the "flat yellow ellipses" of the report.</para>
+    ///
+    /// <para>So this adds exactly those two terms, composed as <see cref="Cell"/> composes them for a quad
+    /// (turn about the centre, then translate): the rotation (uvRotation plus its rates times the particle's
+    /// age) about uvTransformCenter, and particleUVScrollRate times the particle's age. The host's existing
+    /// tiling and birth scroll are kept as they were; with no rotation and no integrated scroll the result is
+    /// the old constant. uvScale, birthUVOffset, the flips, emitterUvScrollRate and the birth ramp's clamp
+    /// stay unread on meshes - still open (M719, M772).</para>
+    /// </summary>
+    /// <param name="texDiv">The host's per-axis tiling factor, applied after the turn as before.</param>
+    /// <param name="birthScroll">The host's birth scroll offset (birthUvScrollRate times emitter age).</param>
+    public static float[] MeshAffine(in VfxUvLayer layer, Vector2 texDiv, Vector2 birthScroll, float particleAge)
+    {
+        float angle = (layer.RotationDegrees + layer.RotateRateDegrees * particleAge) * (MathF.PI / 180f);
+        float cs = MathF.Cos(angle), sn = MathF.Sin(angle);
+        var c = layer.Center;
+        var t = birthScroll + layer.IntegratedScrollRate * particleAge;
+        // p = R (uv - c) + c with R as in Cell; out = texDiv * p + t
+        return new[]
+        {
+            texDiv.X * cs, -texDiv.X * sn, texDiv.X * (c.X - cs * c.X + sn * c.Y) + t.X, 0f,
+            texDiv.Y * sn, texDiv.Y * cs, texDiv.Y * (c.Y - sn * c.X - cs * c.Y) + t.Y, 0f,
+            0f, 0f, 1f, 0f,
+        };
+    }
+
+    /// <summary>M786: whether a mesh emitter authors a term <see cref="MeshAffine"/> adds - the only emitters
+    /// whose mesh uv transform changes, and so the only ones that need it per particle.</summary>
+    public static bool MeshTurnsOrScrolls(in VfxUvLayer layer) =>
+        layer.RotationDegrees != 0f || layer.RotateRateDegrees != 0f || layer.IntegratedScrollRate != Vector2.Zero;
+
     /// <summary>The same formula for the OpenGL quad vertex shader, which concatenates this constant.
     /// ASCII only: a non-ASCII byte compiles in C# and blanks the viewport at the driver.</summary>
     public const string Glsl = @"

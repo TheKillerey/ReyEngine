@@ -433,6 +433,12 @@ public sealed unsafe class PreviewMaterial : IDisposable
     public Vector2 MeshTexDiv { get; set; } = Vector2.One;
     public Vector2 MeshTexDivMult { get; set; } = Vector2.One;
 
+    /// <summary>M786: set only for a Riot mesh emitter that authors a uv rotation or particleUVScrollRate.
+    /// DrawRiotMeshInstances then builds <c>vParticleUVTransform</c> per particle, from that particle's age,
+    /// through <see cref="ReyEngine.Formats.Vfx.VfxUvTransform.MeshAffine"/> (with <see cref="MeshTexDiv"/>
+    /// and <see cref="MeshUvOffset"/> as before). Null leaves the per-material constant untouched.</summary>
+    public ReyEngine.Formats.Vfx.VfxUvLayer? MeshUvLayer { get; set; }
+
     /// <summary>Back-face culling for this emitter, from <c>!disableBackfaceCull</c>. The mesh path is the
     /// only place in the VFX renderer that culls at all.</summary>
     public bool MeshCull { get; set; }
@@ -3789,6 +3795,10 @@ float4 psmain(VOut i) : SV_Target
             if (mat.MeshParticleTransforms is { } transforms && i < transforms.Count) model = transforms[i];
             mat.Params["mWorld"] = Mat(model, s);
             mat.Params["kColorFactor"] = colour;
+            // M786: an authored uv rotation / particleUVScrollRate, per particle from its own age (slot 11).
+            if (mat.MeshUvLayer is { } uvLayer)
+                mat.Params["vParticleUVTransform"] = ReyEngine.Formats.Vfx.VfxUvTransform.MeshAffine(
+                    uvLayer, mat.MeshTexDiv, mat.MeshUvOffset, inst[o + 11]);
             // M641: the erosion drive. Riot's mesh_ps reads it from cAlphaErosionParams.x - the slot the
             // quad path leaves at zero, because THERE the drive arrives per vertex (quad_ps: mov o3.z,
             // v2.w). A mesh draw is already one particle, so the constant is the per-particle channel;
@@ -3800,7 +3810,7 @@ float4 psmain(VOut i) : SV_Target
             foreach (var cb in mat.VsRefl.ConstantBuffers)
             {
                 if (cb.BindPoint < 0) continue;
-                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor" or "cAlphaErosionParams")) continue;
+                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor" or "cAlphaErosionParams" or "vParticleUVTransform")) continue;
                 var buf = ResolveCb(mat, cb, mat.VsCbs, s, world, view, proj, unbound);
                 if (buf.Handle is null) continue;
                 _ctx.VSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
@@ -3808,7 +3818,7 @@ float4 psmain(VOut i) : SV_Target
             foreach (var cb in mat.PsRefl.ConstantBuffers)
             {
                 if (cb.BindPoint < 0) continue;
-                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor" or "cAlphaErosionParams")) continue;
+                if (!cb.Variables.Any(v => v.Name is "mWorld" or "kColorFactor" or "cAlphaErosionParams" or "vParticleUVTransform")) continue;
                 var buf = ResolveCb(mat, cb, mat.PsCbs, s, world, view, proj, unbound);
                 if (buf.Handle is null) continue;
                 _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
