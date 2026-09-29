@@ -159,9 +159,10 @@ public sealed record VfxEmitterExtras
     public Vector3? PostRotateOrientationAxis { get; init; }
     /// <summary>2,318.</summary>
     public Vector3? RotationOverride { get; init; }
-    /// <summary>1,779.</summary>
+    /// <summary>1,779. M795: moves the emitter's space, unscaled - see <see cref="VfxEmitterOverride"/>.</summary>
     public Vector3? TranslationOverride { get; init; }
-    /// <summary>113.</summary>
+    /// <summary>113. M795: scales the emitter's space - positions, motion and size - see
+    /// <see cref="VfxEmitterOverride"/>.</summary>
     public Vector3? ScaleOverride { get; init; }
     /// <summary>11,767, always true.</summary>
     public bool? IsFollowingTerrain { get; init; }
@@ -251,7 +252,8 @@ public static class VfxParkedEmitterFields
         "falloffTexture", "modulationFactor", "censorModulateValue", "sliceTechniqueRange", "isTexturePixelated",
         "isUniformScale", "isLocalOrientation", "particleIsLocalOrientation", "IsEmitterSpace",
         "isRotationEnabled", "hasPostRotateOrientation", "postRotateOrientationAxis", "rotationOverride",
-        "translationOverride", "scaleOverride", "isFollowingTerrain", "useNavmeshMask",
+        // M795: translationOverride and scaleOverride are gone from here - they place and size the emitter.
+        "isFollowingTerrain", "useNavmeshMask",
         "birthRotationalAcceleration",
         "bindWeight", "rateByVelocityFunction", "MaximumRateByVelocity", "ParticlesShareRandomValue",
         "directionVelocityScale", "directionVelocityMinScale",

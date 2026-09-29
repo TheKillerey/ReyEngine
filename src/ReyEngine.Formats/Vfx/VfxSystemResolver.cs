@@ -215,6 +215,10 @@ public static class VfxSystemResolver
     // compiles no erosion and no soft fade - so the field decides a permutation and leaves the parked
     // table, and the preview-coverage reflection has to be able to see its hash.
     private static readonly uint F_uvMode              = HashAlgorithms.Fnv1a("uvMode");
+    // M795: translationOverride and scaleOverride place and size the emitter (VfxEmitterOverride), so they
+    // leave the parked table and are declared here for the preview-coverage reflection.
+    private static readonly uint F_translationOverride = HashAlgorithms.Fnv1a("translationOverride");
+    private static readonly uint F_scaleOverride       = HashAlgorithms.Fnv1a("scaleOverride");
     private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
     // M185 (2.15) the Linger curve set. Class VfxLingerDefinitionData = 0x9b19f2b5.
     private static readonly uint F_linger              = HashAlgorithms.Fnv1a("Linger");
@@ -1087,8 +1091,8 @@ public static class VfxSystemResolver
             HasPostRotateOrientation     = GetBoolOrNull(p, PF("hasPostRotateOrientation")),
             PostRotateOrientationAxis    = GetVec3(p, PF("postRotateOrientationAxis")),
             RotationOverride             = GetVec3(p, PF("rotationOverride")),
-            TranslationOverride          = GetVec3(p, PF("translationOverride")),
-            ScaleOverride                = GetVec3(p, PF("scaleOverride")),
+            TranslationOverride          = GetVec3(p, F_translationOverride),   // M795: VfxEmitterOverride
+            ScaleOverride                = GetVec3(p, F_scaleOverride),
             IsFollowingTerrain           = GetBoolOrNull(p, PF("isFollowingTerrain")),
             UseNavmeshMask               = GetBoolOrNull(p, PF("useNavmeshMask")),
             BirthRotationalAcceleration  = ReadCurve3(p, PF("birthRotationalAcceleration"))?.Constant,

@@ -54,7 +54,10 @@ public static class VfxCullBounds
             if (!(life > 0f) || life > MaxTravelSeconds) life = MaxTravelSeconds;
             float travel = MaxLength(e.BirthVelocity) * life;
 
-            float reach = offset + extent + travel;
+            // M795: the emitter's own frame scales all of that and then moves it (VfxEmitterOverride).
+            var so = VfxEmitterOverride.Scale(e);
+            float reach = (offset + extent + travel) * MaxOf(Scaled(so, 1f, 1f, 1f))
+                          + VfxEmitterOverride.Translation(e).Length();
             if (float.IsFinite(reach)) r = MathF.Max(r, reach);
             else r = MaxRadius;
         }

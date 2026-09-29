@@ -17,6 +17,14 @@ public sealed class VfxParticleSimulator
         public required VfxEmitterDefinition Def { get; init; }
         public Vector3 BasePos;                 // world spawn origin (placement + emitterPosition)
         public Vector3 PlacementRight, PlacementUp, PlacementForward;
+        /// <summary>M795: the emitter's space in the world - its scaleOverride/translationOverride frame
+        /// (<see cref="VfxEmitterOverride.Frame"/>) under the placement. Every emitter-space vector (position,
+        /// offset, velocity, force) goes through this; it IS the placement transform for the emitters that
+        /// author no override. The placement basis above stays the placement's own.</summary>
+        internal Matrix4x4 World = Matrix4x4.Identity, InverseWorld = Matrix4x4.Identity;
+        /// <summary>M795: scaleOverride, multiplied into each particle's own size (the renderers size a
+        /// particle from its instance slots, not from <see cref="World"/>).</summary>
+        internal Vector3 SizeOverride = Vector3.One;
         /// <summary>M183 (2.5): the beam's two world-space endpoints, recomputed whenever the target or
         /// the placement changes. HasBeamEndpoints is false when the beam would be degenerate, which the
         /// renderer treats as "draw nothing" rather than drawing a zero-length ribbon.</summary>
@@ -146,8 +154,6 @@ public sealed class VfxParticleSimulator
     public IReadOnlyList<EmitterState> Emitters => _emitters;
     private readonly List<EmitterState> _emitters = new();
     private readonly Random _rng;
-    private Matrix4x4 _worldTransform = Matrix4x4.Identity;
-    private Matrix4x4 _inverseWorldTransform = Matrix4x4.Identity;
     public int LiveParticleCount { get; private set; }
 
     /// <summary>M203: the placement's <c>colorModulate</c> - a per-PLACEMENT tint the map author set on this
@@ -236,8 +242,8 @@ public sealed class VfxParticleSimulator
         foreach (var s in _emitters)
         {
             if (s.Def.Beam is not { } beam) { s.HasBeamEndpoints = false; continue; }
-            var source = s.BasePos + Vector3.TransformNormal(beam.SourceOffset, _worldTransform);
-            var targetOffset = Vector3.TransformNormal(beam.TargetOffset, _worldTransform);
+            var source = s.BasePos + Vector3.TransformNormal(beam.SourceOffset, s.World);
+            var targetOffset = Vector3.TransformNormal(beam.TargetOffset, s.World);
 
             Vector3 target;
             if (_beamTarget is { } bound) target = bound + targetOffset;
@@ -322,13 +328,11 @@ public sealed class VfxParticleSimulator
     public void SetSystem(VfxSystemDefinition system, Matrix4x4 worldTransform, bool includeNonVisual = false)
     {
         _emitters.Clear();
-        _worldTransform = worldTransform;
-        if (!Matrix4x4.Invert(worldTransform, out _inverseWorldTransform))
-            _inverseWorldTransform = Matrix4x4.Identity;
+        var inverse = InverseOf(worldTransform);
         foreach (var e in system.Emitters)
         {
             if (!includeNonVisual && !e.IsVisual) continue;
-            _emitters.Add(new EmitterState
+            var state = new EmitterState
             {
                 Def = e,
                 // M174 (2.14): jitter the start when HasVariableStartTime is set. Spread over the
@@ -337,11 +341,10 @@ public sealed class VfxParticleSimulator
                 StartOffset = e.HasVariableStartTime
                     ? (float)_rng.NextDouble() * MathF.Max(0.1f, e.Period ?? 1f)
                     : 0f,
-                BasePos = Vector3.Transform(e.EmitterPosition.Constant, worldTransform),
-                PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX),
-                PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY),
-                PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ),
-            });
+                SizeOverride = VfxEmitterOverride.Scale(e),
+            };
+            PlaceEmitter(state, worldTransform, inverse);
+            _emitters.Add(state);
         }
         ResolveBeams();   // M183: endpoints depend on BasePos + the placement basis just computed
         ComputeNaturalDuration();   // M186: the preview's auto-stop cycle length
@@ -351,20 +354,34 @@ public sealed class VfxParticleSimulator
     private static Vector3 SafeNormal(Vector3 value, Vector3 fallback)
         => value.LengthSquared() > 1e-8f ? Vector3.Normalize(value) : fallback;
 
+    private static Matrix4x4 InverseOf(in Matrix4x4 m) => Matrix4x4.Invert(m, out var inverse) ? inverse : Matrix4x4.Identity;
+
+    /// <summary>The emitter's world frame (M795: its override frame under the placement), its spawn origin
+    /// and the placement basis. An emitter with no override takes the placement and its inverse as they are.</summary>
+    private static void PlaceEmitter(EmitterState s, Matrix4x4 worldTransform, Matrix4x4 inverseWorld)
+    {
+        if (VfxEmitterOverride.IsAuthored(s.Def))
+        {
+            s.World = VfxEmitterOverride.Frame(s.Def) * worldTransform;
+            s.InverseWorld = InverseOf(s.World);
+        }
+        else
+        {
+            s.World = worldTransform;
+            s.InverseWorld = inverseWorld;
+        }
+        s.BasePos = Vector3.Transform(s.Def.EmitterPosition.Constant, s.World);
+        s.PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX);
+        s.PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY);
+        s.PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ);
+    }
+
     /// <summary>M86: move the whole system WITHOUT resetting live particles — used to follow an animated
     /// bone per frame (spawn origins and placement axes update; existing particles keep flying).</summary>
     public void SetWorldTransform(Matrix4x4 worldTransform)
     {
-        _worldTransform = worldTransform;
-        if (!Matrix4x4.Invert(worldTransform, out _inverseWorldTransform))
-            _inverseWorldTransform = Matrix4x4.Identity;
-        foreach (var s in _emitters)
-        {
-            s.BasePos = Vector3.Transform(s.Def.EmitterPosition.Constant, worldTransform);
-            s.PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX);
-            s.PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY);
-            s.PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ);
-        }
+        var inverse = InverseOf(worldTransform);
+        foreach (var s in _emitters) PlaceEmitter(s, worldTransform, inverse);
         // M183: the beam endpoints hang off BasePos and the placement basis, both of which just moved -
         // M116 missiles re-anchor through here every frame, so a beam on a travelling system has to
         // follow rather than stay where it was first resolved.
@@ -523,15 +540,15 @@ public sealed class VfxParticleSimulator
             var linger = lingering ? d.Linger : null;
             var worldAccel = linger?.KeyedAcceleration?.Sample(lingerT)
                              ?? d.Acceleration?.Sample(particleT) ?? Vector3.Zero;
-            worldAccel = Vector3.TransformNormal(worldAccel, _worldTransform);
+            worldAccel = Vector3.TransformNormal(worldAccel, s.World);
             p.Vel += (p.BirthAccel + worldAccel) * dt;
             // M174 (1.9): `velocity` is a separate over-life curve from birthVelocity - 23,112 emitters
             // author it and it was being ignored entirely. Added rather than replacing, so an emitter
             // carrying both keeps its launch speed and gains the authored drift.
             if (linger?.KeyedVelocity is { } lingerVel)
-                p.Vel += Vector3.TransformNormal(lingerVel.Sample(lingerT), _worldTransform) * dt;
+                p.Vel += Vector3.TransformNormal(lingerVel.Sample(lingerT), s.World) * dt;
             else if (d.VelocityOverLife is { } velCurve)
-                p.Vel += Vector3.TransformNormal(velCurve.Sample(particleT), _worldTransform) * dt;
+                p.Vel += Vector3.TransformNormal(velCurve.Sample(particleT), s.World) * dt;
             var dragOverLife = linger?.KeyedDrag?.Sample(lingerT)
                                ?? d.DragOverLife?.Sample(particleT) ?? Vector3.Zero;
             var drag = Vector3.Max(Vector3.Zero, p.BirthDrag + dragOverLife);
@@ -543,10 +560,10 @@ public sealed class VfxParticleSimulator
             p.Pos += p.Vel * dt;
             if (p.BirthOrbitalVelocity.LengthSquared() > 1e-8f)
             {
-                var localRelative = Vector3.TransformNormal(p.Pos - s.BasePos, _inverseWorldTransform);
+                var localRelative = Vector3.TransformNormal(p.Pos - s.BasePos, s.InverseWorld);
                 var angularStep = p.BirthOrbitalVelocity * dt;
                 var orbit = Quaternion.CreateFromYawPitchRoll(angularStep.Y, angularStep.X, angularStep.Z);
-                p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), _worldTransform);
+                p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), s.World);
             }
             // M177 (2.5): record where the ribbon has been, at EXACTLY trailStep spacing so that
             // TrailPoints of them span the authored cutoff.
@@ -655,13 +672,13 @@ public sealed class VfxParticleSimulator
         // ---- uniform acceleration: gravity, wind, updraft ----
         // Nothing inferred here beyond world space, and isLocalSpace measured false on all 472 samples.
         foreach (var a in f.Acceleration)
-            p.Vel += Vector3.TransformNormal(a.Acceleration, _worldTransform) * dt;
+            p.Vel += Vector3.TransformNormal(a.Acceleration, s.World) * dt;
 
         // ---- attraction / repulsion ----
         foreach (var at in f.Attraction)
         {
             if (MathF.Abs(at.Acceleration) < 1e-6f) continue;
-            var centre = Vector3.Transform(at.Position, _worldTransform);
+            var centre = Vector3.Transform(at.Position, s.World);
             var toCentre = centre - p.Pos;
             float dist = toCentre.Length();
             if (dist < 1e-4f) continue;
@@ -675,7 +692,7 @@ public sealed class VfxParticleSimulator
         foreach (var dr in f.Drag)
         {
             if (dr.Strength <= 0f) continue;
-            float falloff = Falloff(Vector3.Distance(Vector3.Transform(dr.Position, _worldTransform), p.Pos), dr.Radius);
+            float falloff = Falloff(Vector3.Distance(Vector3.Transform(dr.Position, s.World), p.Pos), dr.Radius);
             if (falloff <= 0f) continue;
             // Same exponential form the birthDrag path above uses, so the two compose rather than fight.
             p.Vel *= MathF.Exp(-dr.Strength * falloff * dt);
@@ -698,17 +715,17 @@ public sealed class VfxParticleSimulator
             var step = o.Direction * dt;
             if (step.LengthSquared() < 1e-12f) continue;
             var orbit = Quaternion.CreateFromYawPitchRoll(step.Y, step.X, step.Z);
-            var localRelative = Vector3.TransformNormal(p.Pos - s.BasePos, _inverseWorldTransform);
-            p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), _worldTransform);
-            var localVel = Vector3.TransformNormal(p.Vel, _inverseWorldTransform);
-            p.Vel = Vector3.TransformNormal(Vector3.Transform(localVel, orbit), _worldTransform);
+            var localRelative = Vector3.TransformNormal(p.Pos - s.BasePos, s.InverseWorld);
+            p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), s.World);
+            var localVel = Vector3.TransformNormal(p.Vel, s.InverseWorld);
+            p.Vel = Vector3.TransformNormal(Vector3.Transform(localVel, orbit), s.World);
         }
 
         // ---- noise / turbulence ----
         foreach (var n in f.Noise)
         {
             if (n.VelocityDelta <= 0f) continue;
-            float falloff = Falloff(Vector3.Distance(Vector3.Transform(n.Position, _worldTransform), p.Pos), n.Radius);
+            float falloff = Falloff(Vector3.Distance(Vector3.Transform(n.Position, s.World), p.Pos), n.Radius);
             if (falloff <= 0f) continue;
             // frequency read as a spatial WAVELENGTH in world units - see VfxNoiseField for why the
             // multiplier reading cannot be right. The time term makes the field evolve instead of being a
@@ -799,9 +816,11 @@ public sealed class VfxParticleSimulator
         // per-particle deviation from it is added.
         var posSample = d.EmitterPosition.SampleBirth(_rng);
         localOffset += posSample - d.EmitterPosition.Constant;
-        var worldOffset = Vector3.TransformNormal(localOffset, _worldTransform);
-        vel = Vector3.TransformNormal(vel, _worldTransform);
-        birthAccel = Vector3.TransformNormal(birthAccel, _worldTransform);
+        var worldOffset = Vector3.TransformNormal(localOffset, s.World);
+        vel = Vector3.TransformNormal(vel, s.World);
+        birthAccel = Vector3.TransformNormal(birthAccel, s.World);
+        // M795: the particle's own size scales with its emitter's space (scaleOverride; 1 when unauthored).
+        birthScale *= s.SizeOverride;
 
         s.Particles.Add(new Particle
         {
