@@ -34,7 +34,7 @@
               <TextBlock Text="Board stage" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
               <ComboBox ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}"
                         FontSize="10" HorizontalAlignment="Stretch"
-                        ToolTip.Tip="Shows this board in a game state exactly as its own MapBehaviors define it: the visibility mask the behaviour leaves the board on (replacing the map's starting mask instead of adding to it), the particle placements it switches on or off, and the lighting volume that mask turns on. Start is the map as it loads. Not emulated: the lighting-volume and fog fades, prop animations, sounds, and the stencil masks of the transition materials." />
+                        ToolTip.Tip="Shows this board in a game state exactly as its own MapBehaviors define it: the visibility mask the behaviour leaves the board on (replacing the map's starting mask instead of adding to it; the placed props follow it too), the particle placements it switches on or off, and the lighting volume that mask turns on. Start is the map as it loads. Not emulated: the lighting-volume and fog fades, the props' stage animations (they keep their idle), sounds, and the stencil masks of the transition materials." />
               <TextBlock Text="{Binding Summary}" IsVisible="{Binding HasSummary}" FontSize="9" TextWrapping="Wrap"
                          Foreground="{DynamicResource ReyTextDimBrush}" />
             </StackPanel>

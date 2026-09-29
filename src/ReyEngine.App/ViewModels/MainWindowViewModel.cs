@@ -1230,7 +1230,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void UpdatePlaceableMarkers()
     {
         PropMarkers = CanPickProps ? MapContent.AllProps
-            .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved).Select(p => p.Position).ToList() : null;
+            .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved && StageShowsProp(p)).Select(p => p.Position).ToList() : null;   // M798
         ProbeMarkers = CanPickProbes ? MapContent.Probes
             .Where(p => p.IsEditorVisible && !p.IsDisabled && !p.IsRemoved).Select(p => p.Position).ToList() : null;
         SoundMarkers = CanPickSounds
@@ -3093,7 +3093,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Publish the added meshes as a preview overlay (combined with the prop overlay).</summary>
     private void PublishAddedMeshPreview()
     {
-        var instances = new List<PropInstanceData>(_propInstances);
+        var instances = StagePropInstances();   // M798: every decoded prop, or only the ones the board stage shows
         foreach (var a in MapContent.AddedMeshes)
         {
             if (!a.IsEditorVisible || a.IsDisabled || a.IsRemoved) continue;
@@ -8364,6 +8364,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         PruneSelectionToVisible(); // hidden (filtered-out) meshes must not stay selected/transformable
         if (PlayAllParticles) RebuildParticlePlayback();
         if (AmbienceEnabled) UpdateAmbience(_lastCamPosForAudio, force: true);
+        RefreshStageProps();   // M798: the placed props follow the board stage too
     }
 
     /// <summary>Visibility diagnostic for the primary-selected mesh under the current map filters.</summary>
@@ -9363,7 +9364,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 foreach (var p in MapContent.AllParticles.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
                     && IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags))) TestPx(p, p.CurrentPosition);
             if (ShowPlaceables && MapContent.HasProps)
-                foreach (var p in MapContent.AllProps.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) TestPx(p, p.Position);
+                foreach (var p in MapContent.AllProps.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved && StageShowsProp(v))) TestPx(p, p.Position);   // M798
             if (ShowPlaceables && MapContent.HasProbes)
                 foreach (var p in MapContent.Probes.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) TestPx(p, p.Position);
             if (ShowPlaceables && MapContent.HasSounds)
@@ -9402,7 +9403,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var p in MapContent.AllParticles.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved
                 && IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags))) Test(p, p.CurrentPosition);
         if (CanPickProps && !additive)
-            foreach (var p in MapContent.AllProps.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) Test(p, p.Position);
+            foreach (var p in MapContent.AllProps.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved && StageShowsProp(v))) Test(p, p.Position);   // M798
         if (CanPickProbes && !additive)
             foreach (var p in MapContent.Probes.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) Test(p, p.Position);
         if (CanPickSounds && !additive)
