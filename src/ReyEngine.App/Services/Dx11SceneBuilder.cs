@@ -585,6 +585,12 @@ public static class Dx11SceneBuilder
             if (!s.Profile.AuthoredWriteMaskHasDepthBit) depthWrite = false;
             mat.WritesDepth = depthWrite;
             mat.SortableByPipeline = depthWrite;
+            // M796: the passes the M279 rule above leaves without depth although the client writes it - their
+            // own writeMask keeps the depth bit and depthEnable is on. The renderer replays exactly these
+            // depth-only before the first particle, so the sky bowl and cloud meshes Map22's
+            // dawnbringernightbringer puts under its blended board stop painting over the ground. Under
+            // EmulateClientDepthRules depthWrite is already true and nothing needs replaying.
+            mat.ClientWritesDepth = !depthWrite && s.Profile.AuthoredWriteMaskHasDepthBit && s.Profile.AuthoredDepthTest;
             // Keyed off the material's own blend state, not off depthWrite: under EmulateClientDepthRules
             // depthWrite is forced true, and reading it here would silently drop the authored blend and
             // hide the very thing the mode exists to show.

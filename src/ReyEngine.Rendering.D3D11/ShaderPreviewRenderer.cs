@@ -319,6 +319,14 @@ public sealed unsafe class PreviewMaterial : IDisposable
     /// <remarks>M720: false for every particle mode but NONE, which is the one the engine writes depth for.</remarks>
     public bool WritesDepth { get; set; } = true;
 
+    /// <summary>M796: a map pass the CLIENT writes depth for although this renderer draws it without - a
+    /// blended (M279 transparent) pass whose own writeMask keeps the depth bit and whose depthEnable is on.
+    /// Set by the map builder only. The frame draws it as before (no depth write, composited in the
+    /// transparent tail) and then, right before the first draw that is not map geometry, replays it DEPTH-ONLY
+    /// (see <c>ReplayClientDepth</c>), so particles behind it are hidden as they are in game rather than painted
+    /// over it. False for everything else, which is unaffected.</summary>
+    public bool ClientWritesDepth { get; set; }
+
     /// <summary>M788: the pass's authored colour channel write mask, in D3D11's own <c>RenderTargetWriteMask</c>
     /// numbering (R=1, G=2, B=4, A=8 - <see cref="ColorWriteEnable.All"/> is 15, the default here and the
     /// StaticMaterialPassDef schema default). Set by the map builder off a material's real writeMask
@@ -5340,6 +5348,74 @@ float4 psmain(VOut i) : SV_Target
     /// of draws. Reported so the difference is visible rather than claimed.</summary>
     public int PipelineSwitches { get; private set; }
 
+    /// <summary>M796: how many <see cref="PreviewMaterial.ClientWritesDepth"/> map passes were replayed
+    /// depth-only last frame (0 when nothing but map geometry drew, or no pass qualified).</summary>
+    public int DepthReplayDraws { get; private set; }
+
+    /// <summary>
+    /// M796: write the depth the client writes for the map's blended passes, without their colour.
+    ///
+    /// <para>Map22 dawnbringernightbringer: every board material is a DefaultEnv_Flat alpha blend (6/7) with
+    /// the default writeMask 31, so this renderer drew the board without depth (M279) and the sky bowl, city
+    /// ring and cloud meshes the level puts BELOW the board - drawn after it - painted over the whole ground.
+    /// The client gives such a pass the depth mask (M557/M558, confirmed in game; Riot turns it off per pass
+    /// with writeMask 15 where it wants none), so there the board rejects them.</para>
+    ///
+    /// <para>Each qualifying, visible, in-frustum pass is drawn again exactly as the loop draws it - its own
+    /// shaders (so an alpha-test discard still cuts the depth), constants, resources and cull state - with no
+    /// colour write and the scene's test-and-write depth state. Its colour and the map's own compositing are
+    /// untouched; only what is depth-tested afterwards sees it.</para>
+    /// </summary>
+    private int ReplayClientDepth(PreviewSettings s, Matrix4x4 world, Matrix4x4 view, Matrix4x4 proj,
+        Vector4[] planes, List<string>? unbound, ref int boundSource)
+    {
+        if (!s.DepthTest) return 0;
+        ComPtr<ID3D11BlendState> noColour = default;
+        var factor = stackalloc float[4] { 0, 0, 0, 0 };
+        int drawn = 0;
+        foreach (var mat in _materials)
+        {
+            if (!mat.ClientWritesDepth || !mat.Visible || mat.UsesDynamicMesh) continue;
+            if (mat.Bounds is { } bb && !FrustumContains(planes, bb.Min, bb.Max)) continue;
+            uint count = mat.IndexCount < 0 ? (uint)_indexCount : (uint)mat.IndexCount;
+            if (count == 0) continue;
+            if (noColour.Handle is null)
+            {
+                noColour = BlendStateMasked(false, 0);
+                if (noColour.Handle is null) return drawn;
+            }
+
+            _ctx.RSSetState(s.CullBackFaces && mat.CullBackFaces ? _rasterCull : _raster);
+            _ctx.OMSetBlendState(noColour, factor, 0xFFFFFFFF);
+            _ctx.OMSetDepthStencilState(_depthState, 0);
+            _ctx.IASetInputLayout(mat.Layout);
+            _ctx.VSSetShader(mat.Vs, null, 0);
+            _ctx.PSSetShader(mat.Ps, null, 0);
+            foreach (var cb in mat.VsRefl.ConstantBuffers)
+            {
+                if (cb.BindPoint < 0) continue;
+                var buf = ResolveCb(mat, cb, mat.VsCbs, s, world, view, proj, unbound);
+                if (buf.Handle is null) continue;
+                _ctx.VSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
+            }
+            foreach (var cb in mat.PsRefl.ConstantBuffers)
+            {
+                if (cb.BindPoint < 0) continue;
+                var buf = ResolveCb(mat, cb, mat.PsCbs, s, world, view, proj, unbound);
+                if (buf.Handle is null) continue;
+                _ctx.PSSetConstantBuffers((uint)cb.BindPoint, 1, ref buf);
+            }
+            BindResources(mat, mat.PsRefl, pixel: true);
+            BindResources(mat, mat.VsRefl, pixel: false);
+            if (!BindMeshSource(false, ref boundSource)) continue;
+            _ctx.DrawIndexed(count, (uint)Math.Max(0, mat.StartIndex), 0);
+            DrawCalls++;
+            drawn++;
+        }
+        DepthReplayDraws = drawn;
+        return drawn;
+    }
+
     private readonly List<int> _drawOrder = new();
 
     /// <summary>Gribb-Hartmann plane extraction from a combined view-projection, in System.Numerics'
@@ -5588,6 +5664,8 @@ float4 psmain(VOut i) : SV_Target
             PipelineSwitches = 0;
             bool sceneCaptured = false;
             bool depthCaptured = false;
+            bool depthReplayed = false;   // M796
+            DepthReplayDraws = 0;
             RibbonDraws = 0;
             DistortionDraws = 0;
             MeshDraws = 0;
@@ -5599,6 +5677,19 @@ float4 psmain(VOut i) : SV_Target
 
             // M245: frustum cull. Slices with no bounds are always drawn.
             if (mat.Bounds is { } bb && !FrustumContains(planes, bb.Min, bb.Max)) { CulledSlices++; continue; }
+
+            // M796: the map's blended passes are drawn above without depth (M279) - but the client writes it
+            // for every one whose writeMask keeps the depth bit, and whatever it draws later is tested
+            // against that. So before the first draw here that is not map geometry (particles; a transparent
+            // prop), the ClientWritesDepth passes are replayed depth-only. Only the depth-tested draws after
+            // this point are affected; the map's own compositing is exactly M279's. Placed ahead of the
+            // soft-particle depth snapshot below so that snapshot holds the same depth the client's would.
+            if (!depthReplayed && mat.MapGroupIndex < 0 && !mat.ClientWritesDepth && !mat.SortableByPipeline)
+            {
+                depthReplayed = true;
+                if (ReplayClientDepth(s, world, view, proj, planes, unboundConstants, ref boundSource) > 0)
+                    lastPipeline = int.MinValue;
+            }
 
             // M354: per-material back-face culling, matching GL's M34 rule. The global toggle still wins:
             // turning CullBackFaces off forces everything two-sided, which is what that toggle is for.
