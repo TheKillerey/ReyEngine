@@ -765,11 +765,11 @@ public sealed class D3D11MapParticles
                     riotMat.RiotMeshGeometryId = riotId;
                     riotMat.UsesDynamicMesh = false;
                     riotMat.Visible = false;
-                    // M786: a uv rotation / particleUVScrollRate reaches the mesh per particle (the renderer
-                    // builds vParticleUVTransform from each particle's age); every other emitter keeps the
-                    // per-material constant TickMeshSlices writes, unchanged.
+                    // M786: a uv rotation / particleUVScrollRate (M794: or a uvScale) reaches the mesh per
+                    // particle (the renderer builds vParticleUVTransform from each particle's age); every other
+                    // emitter keeps the per-material constant TickMeshSlices writes, unchanged.
                     var uvLayer = VfxUvLayer.BaseOf(def);
-                    if (VfxUvTransform.MeshTurnsOrScrolls(uvLayer)) riotMat.MeshUvLayer = uvLayer;
+                    if (VfxUvTransform.MeshTransformsUv(uvLayer)) riotMat.MeshUvLayer = uvLayer;
                     // The authored flag, as GL applies it (absent = cull). Gated on the window's Cull
                     // toggle by the renderer like every other per-material cull.
                     riotMat.CullBackFaces = !def.DisableBackfaceCull;

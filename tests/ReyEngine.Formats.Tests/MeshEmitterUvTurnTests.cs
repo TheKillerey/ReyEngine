@@ -30,14 +30,14 @@ public sealed class MeshEmitterUvTurnTests
     public void WithNoTurnAndNoIntegratedScrollTheOldConstantComesBack()
     {
         var layer = new VfxUvLayer(Vector2.Zero, new Vector2(0.4f, 0f), Vector2.Zero, Vector2.Zero, true,
-            new Vector2(2f, 3f), 0f, 0f, new Vector2(0.5f, 0.5f), true, false);   // scale/flip/clamp: still unread
+            Vector2.One, 0f, 0f, new Vector2(0.5f, 0.5f), true, false);   // flip/clamp: still unread (M794 reads the scale)
 
         var m = VfxUvTransform.MeshAffine(layer, new Vector2(2f, 0.5f), new Vector2(0.3f, -0.2f), particleAge: 1.7f);
 
         // exactly what TickMeshSlices has written since M640: { dv.X, 0, sc.X, 0, 0, dv.Y, sc.Y, 0, 0, 0, 1, 0 }
         var old = new[] { 2f, 0f, 0.3f, 0f, 0f, 0.5f, -0.2f, 0f, 0f, 0f, 1f, 0f };
         for (int i = 0; i < 12; i++) Assert.Equal(old[i], m[i], 6);
-        Assert.False(VfxUvTransform.MeshTurnsOrScrolls(layer));
+        Assert.False(VfxUvTransform.MeshTransformsUv(layer));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public sealed class MeshEmitterUvTurnTests
         // Candles02 'new': uvRotation 90, particleUVScrollRate (1.2, 0), default centre, nothing else.
         var layer = new VfxUvLayer(Vector2.Zero, Vector2.Zero, new Vector2(1.2f, 0f), Vector2.Zero, false,
             Vector2.One, 90f, 0f, new Vector2(0.5f, 0.5f), false, false);
-        Assert.True(VfxUvTransform.MeshTurnsOrScrolls(layer));
+        Assert.True(VfxUvTransform.MeshTransformsUv(layer));
 
         foreach (float age in new[] { 0f, 0.37f, 2.5f })
         {

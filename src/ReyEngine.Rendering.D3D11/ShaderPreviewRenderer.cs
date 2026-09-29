@@ -443,7 +443,8 @@ public sealed unsafe class PreviewMaterial : IDisposable
     public Vector2 MeshTexDiv { get; set; } = Vector2.One;
     public Vector2 MeshTexDivMult { get; set; } = Vector2.One;
 
-    /// <summary>M786: set only for a Riot mesh emitter that authors a uv rotation or particleUVScrollRate.
+    /// <summary>M786: set only for a Riot mesh emitter that authors a uv rotation, particleUVScrollRate or
+    /// (M794) a uvScale.
     /// DrawRiotMeshInstances then builds <c>vParticleUVTransform</c> per particle, from that particle's age,
     /// through <see cref="ReyEngine.Formats.Vfx.VfxUvTransform.MeshAffine"/> (with <see cref="MeshTexDiv"/>
     /// and <see cref="MeshUvOffset"/> as before). Null leaves the per-material constant untouched.</summary>

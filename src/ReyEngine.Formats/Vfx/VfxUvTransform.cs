@@ -109,8 +109,16 @@ public static class VfxUvTransform
     /// (turn about the centre, then translate): the rotation (uvRotation plus its rates times the particle's
     /// age) about uvTransformCenter, and particleUVScrollRate times the particle's age. The host's existing
     /// tiling and birth scroll are kept as they were; with no rotation and no integrated scroll the result is
-    /// the old constant. uvScale, birthUVOffset, the flips, emitterUvScrollRate and the birth ramp's clamp
-    /// stay unread on meshes - still open (M719, M772).</para>
+    /// the old constant.</para>
+    ///
+    /// <para>M794 adds uvScale, about the same centre and before the turn, again as <see cref="Cell"/> does
+    /// (a zero component reads as 1). Map22 aprilfool's ground ring is four quarters of ONE quarter-disc
+    /// texture: Level1_AprilFool_Skybox1's GroundA draws two diagonal quarters, and GroundB's mesh is
+    /// GroundA's mirrored in X with u flipped, which its uvScale (-1, 1) flips back (u' = 1 - u about the
+    /// centre). Unread, GroundB sampled 1 - u where GroundA samples u, and the sky band broke along the
+    /// board's centre line (809 of 809 mirror-twin vertices line up with the scale, 10 without).
+    /// birthUVOffset, the flips, emitterUvScrollRate and the birth ramp's clamp stay unread on meshes -
+    /// still open (M719, M772).</para>
     /// </summary>
     /// <param name="texDiv">The host's per-axis tiling factor, applied after the turn as before.</param>
     /// <param name="birthScroll">The host's birth scroll offset (birthUvScrollRate times emitter age).</param>
@@ -118,21 +126,28 @@ public static class VfxUvTransform
     {
         float angle = (layer.RotationDegrees + layer.RotateRateDegrees * particleAge) * (MathF.PI / 180f);
         float cs = MathF.Cos(angle), sn = MathF.Sin(angle);
+        var s = MeshScale(layer);
         var c = layer.Center;
         var t = birthScroll + layer.IntegratedScrollRate * particleAge;
-        // p = R (uv - c) + c with R as in Cell; out = texDiv * p + t
+        // p = R S (uv - c) + c with R and S as in Cell; out = texDiv * p + t
         return new[]
         {
-            texDiv.X * cs, -texDiv.X * sn, texDiv.X * (c.X - cs * c.X + sn * c.Y) + t.X, 0f,
-            texDiv.Y * sn, texDiv.Y * cs, texDiv.Y * (c.Y - sn * c.X - cs * c.Y) + t.Y, 0f,
+            texDiv.X * cs * s.X, -texDiv.X * sn * s.Y, texDiv.X * (c.X - cs * s.X * c.X + sn * s.Y * c.Y) + t.X, 0f,
+            texDiv.Y * sn * s.X, texDiv.Y * cs * s.Y, texDiv.Y * (c.Y - sn * s.X * c.X - cs * s.Y * c.Y) + t.Y, 0f,
             0f, 0f, 1f, 0f,
         };
     }
 
-    /// <summary>M786: whether a mesh emitter authors a term <see cref="MeshAffine"/> adds - the only emitters
-    /// whose mesh uv transform changes, and so the only ones that need it per particle.</summary>
-    public static bool MeshTurnsOrScrolls(in VfxUvLayer layer) =>
-        layer.RotationDegrees != 0f || layer.RotateRateDegrees != 0f || layer.IntegratedScrollRate != Vector2.Zero;
+    /// <summary>uvScale as <see cref="Cell"/> reads it: a zero component is 1.</summary>
+    private static Vector2 MeshScale(in VfxUvLayer layer) =>
+        new(layer.Scale.X == 0f ? 1f : layer.Scale.X, layer.Scale.Y == 0f ? 1f : layer.Scale.Y);
+
+    /// <summary>M786/M794: whether a mesh emitter authors a term <see cref="MeshAffine"/> adds - a turn, a
+    /// uvScale or a particle-age scroll. These are the only emitters whose mesh uv transform changes, and so
+    /// the only ones that need it per particle.</summary>
+    public static bool MeshTransformsUv(in VfxUvLayer layer) =>
+        layer.RotationDegrees != 0f || layer.RotateRateDegrees != 0f || layer.IntegratedScrollRate != Vector2.Zero
+        || MeshScale(layer) != Vector2.One;
 
     /// <summary>The same formula for the OpenGL quad vertex shader, which concatenates this constant.
     /// ASCII only: a non-ASCII byte compiles in C# and blanks the viewport at the driver.</summary>
