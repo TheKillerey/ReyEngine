@@ -141,8 +141,81 @@ public static class MapLighting
     {
         ArgumentNullException.ThrowIfNull(volumes);
         ArgumentNullException.ThrowIfNull(initialVisibilityMask);
-        if (volumes.Count < 2 || volumes.Any(v => v.Transform != volumes[0].Transform)) return null;
+        if (!CoLocated(volumes)) return null;
         if (initialVisibilityMask() is not { } mask || mask == 0) return null;
+        return OnFor(volumes, mask);
+    }
+
+    /// <summary>
+    /// M797: <see cref="ActiveAtStart"/>'s rule for any visibility mask - the one a TFT board stage sets. On
+    /// anniversary, BoardReady (68) turns on the flag-64 volume and level 7 (8) the flag-8 one; on
+    /// dawnbringernightbringer level 7 (20) turns on the flag-16 volume and board-ready (64) the flag-64 one.
+    /// Null when the volumes are not co-located, the mask is empty, or not exactly one of them is on.
+    /// </summary>
+    public static MapLightingVolume? ActiveForMask(IReadOnlyList<MapLightingVolume> volumes, int mask)
+    {
+        ArgumentNullException.ThrowIfNull(volumes);
+        if (!CoLocated(volumes) || mask == 0) return null;
+        return OnFor(volumes, mask);
+    }
+
+    /// <summary>
+    /// M797: the sun a scene is lit with when the visibility mask is <paramref name="mask"/> - the whole of
+    /// <see cref="EffectiveSun"/>'s rule, from volumes already read: a lone volume lights the scene (M207),
+    /// several co-located ones are told apart by the mask (M785), anything else keeps the global sun.
+    /// </summary>
+    public static MapSunProperties? SunForMask(IReadOnlyList<MapLightingVolume> volumes, MapSunProperties? global, int mask) =>
+        VolumeForMask(volumes, mask)?.Lighting ?? global;
+
+    /// <summary>
+    /// M797: the volume <see cref="SunForMask"/> lights the scene with, or null when the global sun does: a lone
+    /// volume (M207) or the one co-located volume the mask turns on (M785). Named separately so a caller can SAY
+    /// which lit the scene - a board with one volume is lit by that volume, whatever the mask.
+    /// </summary>
+    public static MapLightingVolume? VolumeForMask(IReadOnlyList<MapLightingVolume> volumes, int mask)
+    {
+        ArgumentNullException.ThrowIfNull(volumes);
+        return volumes.Count == 1 ? volumes[0] : ActiveForMask(volumes, mask);
+    }
+
+    /// <summary>
+    /// M797: what a board STAGE changes in the lighting - the nine fields a <see cref="MapLightingVolume"/> authors
+    /// and <c>ReadVolumeLighting</c> models (sun colour and direction, sky colour and scale, lightmap scale, horizon
+    /// and ground colour, fog colour and range) - laid over <paramref name="board"/>, every other field left as
+    /// <paramref name="board"/> has it. <paramref name="lit"/> is a sun as this class reads it (a volume's, or the
+    /// global one).
+    ///
+    /// <para><b>Why the stage does this, and <c>ReadVolumeLighting</c> does not read the volume on top of the global
+    /// sun instead.</b> That reading would make a volume-lit view take the board's own fogEnabled, fog alternate
+    /// colour, emissive remaps and shadow settings - more faithful to the data, but measured: it moves the START
+    /// view too. 22 of the 32 shipped stage boards start lit by a volume, a volume read that way switches the fog
+    /// off on 163 of the 173 volumes (the boards author fogEnabled = false), and the two boards rendered changed
+    /// by 17,117 and 46,353 pixels at Start. "Start" is not this feature's to move. So a stage keeps whatever
+    /// Start has in every field a volume does not model - a stage view never shows a default fog or shadow value
+    /// the Start view does not - and changes only what the volumes change.</para>
+    /// </summary>
+    public static MapSunProperties WithVolumeFields(MapSunProperties? board, MapSunProperties lit)
+    {
+        ArgumentNullException.ThrowIfNull(lit);
+        return board is null ? lit : board with
+        {
+            SunColor = lit.SunColor,
+            SunDirection = lit.SunDirection,
+            SkyLightColor = lit.SkyLightColor,
+            SkyLightScale = lit.SkyLightScale,
+            LightMapColorScale = lit.LightMapColorScale,
+            HorizonColor = lit.HorizonColor,
+            GroundColor = lit.GroundColor,
+            FogColor = lit.FogColor,
+            FogStartAndEnd = lit.FogStartAndEnd,
+        };
+    }
+
+    private static bool CoLocated(IReadOnlyList<MapLightingVolume> volumes) =>
+        volumes.Count >= 2 && volumes.All(v => v.Transform == volumes[0].Transform);
+
+    private static MapLightingVolume? OnFor(IReadOnlyList<MapLightingVolume> volumes, int mask)
+    {
         MapLightingVolume? active = null;
         foreach (var v in volumes)
         {

@@ -24,6 +24,23 @@
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
+
+      <!-- M797: TFT boards only - the list is empty on every map without stage behaviours, and IsVisible keeps
+           that empty control from taking a StackPanel spacing gap there. -->
+      <ItemsControl ItemsSource="{Binding BoardStageSelectors}" IsVisible="{Binding HasBoardStages}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Margin="0,0,0,3">
+              <TextBlock Text="Board stage" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+              <ComboBox ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}"
+                        FontSize="10" HorizontalAlignment="Stretch"
+                        ToolTip.Tip="Shows this board in a game state exactly as its own MapBehaviors define it: the visibility mask the behaviour leaves the board on (replacing the map's starting mask instead of adding to it), the particle placements it switches on or off, and the lighting volume that mask turns on. Start is the map as it loads. Not emulated: the lighting-volume and fog fades, prop animations, sounds, and the stencil masks of the transition materials." />
+              <TextBlock Text="{Binding Summary}" IsVisible="{Binding HasSummary}" FontSize="9" TextWrapping="Wrap"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
     </StackPanel>
 
     <!-- view toggles (what renders in the viewport)

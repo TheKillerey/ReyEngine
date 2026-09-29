@@ -115,6 +115,19 @@ public static class MapVisibility
         return dragons != 0 ? (dragons & selectedBit) != 0 : (flags & initial) != 0;
     }
 
+    /// <summary>
+    /// M797: a TFT board stage's rule. The mask is the game's own visibility mask - the value a board's
+    /// <c>MapActionSetVisibilityFlag</c> writes (BoardReady 68 = base + Stage1, dawnbringernightbringer level 7 =
+    /// 20 = Stage1 + Stage3) - so content is on when its flags SHARE A BIT with it. Nothing is added: the map's
+    /// InitialVisibilityMask (67) is what the board starts on, not a permanent floor, and the additive rule of
+    /// <see cref="VisibleForMask"/> is what drew the level-1 cloud vortex around the level-7 board.
+    ///
+    /// <para>0 and 255 stay "all layers", exactly as in <see cref="VisibleForMask"/> and everywhere else the
+    /// editor reads a mask. A visibility controller still overrides the mask
+    /// (<see cref="MapVisibilityResolver"/>).</para>
+    /// </summary>
+    public static bool VisibleForStage(int flags, int stageMask) => flags is 0 or 255 || (flags & stageMask) != 0;
+
     /// <summary>M771: an axis whose initial mask is exactly ONE of its own states - Summoner's Rift's Base,
     /// Map12's Default - as opposed to a multi-bit staged start like Map22's 67.</summary>
     public static bool IsSingleStateInitial(MapVisibilityAxis? axis)

@@ -307,13 +307,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// they stayed visible while the meshes around them switched. Placements use the same map-defined
     /// axes and controller graph as geometry.</summary>
     private bool IsParticleVisible(MapParticlePlacement particle, int? visibilityOverride = null) =>
-        particle.VisibilityControllerHash == 0
-            ? MapVisibility.VisibleForMask(visibilityOverride ?? particle.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit)
+        // M797: a board stage can switch a placement off BY NAME whatever its mask says (MapActionToggleMapParticle).
+        !StageSwitchesOff(particle.Name)
+        && (particle.VisibilityControllerHash == 0
+            ? MaskVisible(visibilityOverride ?? particle.VisibilityFlags)   // M797: the stage's exact rule while one is on
             : (_visibilityResolver ??= new MapVisibilityResolver(_mapControllers, _mapVisibility))
-                .IsVisible(visibilityOverride ?? particle.VisibilityFlags, particle.VisibilityControllerHash, CurrentVisibilitySelections);
+                .IsVisible(visibilityOverride ?? particle.VisibilityFlags, particle.VisibilityControllerHash, CurrentVisibilitySelections, CurrentStageMask));
 
     private bool IsSoundVisible(MapSoundPlacement sound, int? visibilityOverride = null) =>
-        MapVisibility.VisibleForMask(visibilityOverride ?? sound.VisibilityFlags, _mapVisibility.Primary, CurrentPrimaryVisibilityBit);
+        !(sound.FromParticleSystem && StageSwitchesOff(sound.Name))   // M797: a particle's sound follows the particle
+        && MaskVisible(visibilityOverride ?? sound.VisibilityFlags);
 
     // M383: ONE gate per placeable category, read by BOTH the marker builders (what is DRAWN) and
     // SelectAnyFromViewport (what is PICKABLE). They used to be written out separately and had drifted:
@@ -1655,7 +1658,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var v in MapContent.AllParticles)
             {
                 if (!v.IsEditorVisible || v.IsDisabled || v.IsRemoved) continue;
-                if (!PlaysAtMapLoad(v.Placement)) { eventDriven++; continue; }   // M784
+                // M784; M797: ...unless the board stage on has switched it on (MapActionToggleMapParticle)
+                if (!PlaysAtMapLoad(v.Placement) && !StageSwitchesOn(v.Placement.Name)) { eventDriven++; continue; }
                 if (!IsParticleVisible(v.Placement, v.EffectiveVisibilityFlags)) continue;
                 // M403: Transitional placements are one-shot bursts fired BY a state change - the
                 // SRS_*_Transition_DragonPit set and friends. Playing them with everything else would
@@ -1677,7 +1681,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             string offCamera = cameraAttached > 0
                 ? $" {cameraAttached} camera-attached placement(s) left off - the game draws them on the camera as screen overlays, which the editor does not simulate; select one to preview it at its placement."
                 : "";
-            _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.{offAtLoad}{offCamera}");
+            string onStage = _activeBoardStage is { } boardStage   // M797
+                ? $" Board stage '{boardStage.Label}': mask {boardStage.Mask}, {boardStage.ParticleToggles.Count} scripted particle switch(es) applied."
+                : "";
+            _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.{offAtLoad}{offCamera}{onStage}");
             return;
         }
 
@@ -6840,7 +6847,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<MapCubemapProbe>? Probes, IReadOnlyList<MapAnimatedProp>? Props,
         IReadOnlyList<MapSoundPlacement>? Sounds,
         int[] VisibilityIndices, bool HasMoves, int[] SelectedMeshIndices,
-        List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces);
+        List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces,
+        BoardStageSnapshot? BoardStage = null);   // M797: the board-stage picker, where the tab left it
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
     private void OpenAssetDocument(AssetNodeViewModel? node)
@@ -7058,7 +7066,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             CurrentModelSounds,
             VisibilityAxes.Select(a => a.SelectedIndex).ToArray(), HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
-            MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList());
+            MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList(),
+            SnapshotBoardStage());
     }
 
     private void RestoreMapScene(MapScene s)
@@ -7073,6 +7082,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapControllers = s.Controllers;
         _visibilityResolver = new MapVisibilityResolver(s.Controllers, s.Visibility);
         RebuildVisibilityAxes(s.Visibility, s.VisibilityIndices);
+        RestoreBoardStage(s.BoardStage);   // M797: where the tab left the picker; before ApplyMapVisibility below reads the mask
         CurrentMesh = s.Mesh;
         CurrentModelTextures = s.Textures;
         ClearSecondaryTextures();
@@ -8169,6 +8179,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapControllers = null;
         _visibilityResolver = null;
         RebuildVisibilityAxes(_mapVisibility);
+        SetBoardStages(MapBoardStageSet.Empty);   // M797
         VisibilityLayerBits.Clear();
         PlacementVisibilityLayerBits.Clear();
         HasPlacementLayerSelection = false;
@@ -8262,7 +8273,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         partial void OnSelectedIndexChanged(int value)
         {
-            if (!_owner._visibilityUiLoading) _owner.ApplyMapVisibility();
+            if (_owner._visibilityUiLoading) return;
+            _owner.LeaveBoardStageFor(this);   // M797: a layer picked here takes the mask back from a board stage
+            _owner.ApplyMapVisibility();
         }
     }
 
@@ -8326,7 +8339,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             uint ctrl = g.ControllerHash;
             if (g.MeshIndex >= 0 && meshByIdx.TryGetValue(g.MeshIndex, out var src))
             { flags = src.EffectiveVisibility; ctrl = src.EffectiveController; }
-            vis[i] = resolver.IsVisible(flags, ctrl, selections);
+            vis[i] = resolver.IsVisible(flags, ctrl, selections, CurrentStageMask);   // M797: a board stage's exact mask, or null
             if (hiddenByUser.Contains(g.MeshIndex)) vis[i] = false;
             if (vis[i] && !RenderRegionsEnabled && g.MeshIndex >= 0
                 && regionOf.TryGetValue(g.MeshIndex, out var region) && region != 0)
@@ -8447,7 +8460,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_selection.Primary is not { } m || _visibilityResolver is null)
         { MeshVisibilityReason = ""; MeshDetails.Clear(); return; }
         // M105: diagnose the EFFECTIVE (edited) values so the details row matches what the viewport shows
-        var d = _visibilityResolver.Resolve(m.EffectiveVisibility, m.EffectiveController, CurrentVisibilitySelections);
+        var d = _visibilityResolver.Resolve(m.EffectiveVisibility, m.EffectiveController, CurrentVisibilitySelections, CurrentStageMask);   // M797
         MeshVisibilityReason = d.Reason;
         if (_selection.Count == 1)
         {
@@ -11989,7 +12002,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // using a Mantis material has to be normalized for it or it throws IndexOutOfRange. The
             // authoritative bytes (rawMapBytes) are untouched — this only feeds the viewer.
             var extendedChannels = ExtendedChannelMaterialsFor(entry.Path);
-            var (map, mesh, textures, sunProperties) = await Task.Run(() =>
+            var (map, mesh, textures, sunProperties, boardStages) = await Task.Run(() =>
             {
                 var m = MapGeoDecoder.Decode(rawMapBytes, extendedChannels);
                 var meshAsset = new MeshAsset
@@ -12007,7 +12020,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     BoundsMax = m.BoundsMax,
                 };
                 var loaded = TryLoadMapTextures(entry, m);
-                return (m, meshAsset, loaded.Textures, loaded.SunProperties);
+                return (m, meshAsset, loaded.Textures, loaded.SunProperties, loaded.BoardStages);
             });
 
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -12073,6 +12086,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     .Select((g, i) => new MapPieceViewModel { Name = string.IsNullOrEmpty(g.Material) ? $"Mesh {i}" : g.Material, Info = $"{g.IndexCount / 3:n0} tris" })
                     .ToList());
                 BuildMapVisibility(entry.Path, map);
+                SetBoardStages(boardStages);   // M797: the board's stage picker; "Start" changes nothing
                 BuildMapLayerGroups(map);
                 ApplyMapVisibility();    // ensure reset even if the index was already 0
                 _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
@@ -12090,22 +12104,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Resolve the map's materials .bin → per-group diffuse textures (shared instances for reuse).</summary>
-    private (IReadOnlyList<TextureImage?>? Textures, Formats.MapGeo.MapSunProperties? SunProperties)
+    private (IReadOnlyList<TextureImage?>? Textures, Formats.MapGeo.MapSunProperties? SunProperties, MapBoardStageSet BoardStages)
         TryLoadMapTextures(WadAssetEntry mapEntry, MapGeoAsset map)
     {
-        if (!ContentLoaded || !mapEntry.IsResolved) return (null, null);
+        if (!ContentLoaded || !mapEntry.IsResolved) return (null, null, MapBoardStageSet.Empty);
 
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         {
             _log.Info("MapGeo", $"No materials .bin found for {mapEntry.DisplayName} — rendering flat.");
-            return (null, null);
+            return (null, null, MapBoardStageSet.Empty);
         }
+
+        var boardStages = MapBoardStageSet.Empty;   // M797
 
         // M35: placed particle systems live in the same materials.bin (MapPlaceableContainer.items).
         // M36: the VfxSystemDefinitions they reference live in the same bin too — parse them for playback.
         try
         {
             var binBytes = GetAssetBytes(binEntry);
+            // M797: a TFT board's stage behaviours (level 1, level 7 ...). A bin that cannot carry one - it does not
+            // write both the MapBehavior and the MapActionSetVisibilityFlag class hash - costs a byte scan and no
+            // parse: Summoner's Rift (about 5 ms for all 26 of its bins), Map12's bloom and the Arena maps included.
+            try { boardStages = MapBoardStages.Load(binBytes); }
+            catch (Exception ex) { _log.Warn("MapGeo", $"Board stages could not be read: {ex.Message}"); }
             _vfxSystems = VfxSystemResolver.ExtractAll(binBytes);
             RebuildRelinkChoices();   // M205: the re-link picker's candidate list
             var particles = MapParticleExtractor.Extract(binBytes, hash =>
@@ -12133,10 +12154,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (materialToTexture.Count == 0)
         {
             _log.Info("MapGeo", "Materials .bin didn't resolve any textures — rendering flat.");
-            return (null, sunProperties);
+            return (null, sunProperties, boardStages);
         }
         _currentMaterialToTexture = materialToTexture;   // M172c: the paint session needs per-submesh paths
-        return (BuildMapTextures(map, materialToTexture, profiles, names.Count, mapEntry.Path), sunProperties);
+        return (BuildMapTextures(map, materialToTexture, profiles, names.Count, mapEntry.Path), sunProperties, boardStages);
     }
 
     /// <summary>Resolve map material→texture (+ M32 profiles), falling back to the original game
@@ -12486,6 +12507,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveSunToMap()
     {
+        if (RefuseSunSaveForBoardStage()) return;   // M797: a board stage's volume lighting must not become the board's global sun
         if (_currentMapEntry is not { } entry)
         { _log.Warn("Lighting", "No map is open, so there is nowhere to save the sun."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
