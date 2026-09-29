@@ -36,7 +36,10 @@ public sealed record MapParticlePlacement(
     /// <summary>163, values {1,2,3}. Meaning UNKNOWN - an Order/Chaos reading fits the base-door shields
     /// but is broken by the river-shore placements.</summary>
     uint? VisibilityMode = null,
-    /// <summary>7 placements. What it does to the transform is UNKNOWN.</summary>
+    /// <summary>8 placements, all on Map22 (M793 census), and every one reads as a SCREEN overlay: 16:9-ish
+    /// FloorLight_Add vignettes, a dark camera quad, HUD-element meshes, win-streak sparks. How the game
+    /// positions them relative to the camera is still UNKNOWN, so Play All leaves them off
+    /// (MainWindowViewModel.PlaysInWorldSpace) rather than standing them up in the world.</summary>
     bool? AttachToCamera = null,
     /// <summary>3 placements. Read as a raw integer; a bitmask reading fits 80 of 81 samples, which is not
     /// enough to gate anything on.</summary>

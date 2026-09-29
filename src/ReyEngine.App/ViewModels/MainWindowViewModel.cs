@@ -1632,12 +1632,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// the same way. Selecting one still previews it on request (the single-placement branch below).</summary>
     public static bool PlaysAtMapLoad(Formats.MapGeo.MapParticlePlacement placement) => placement.StartDisabled != true;
 
+    /// <summary>M793: does the game draw this placement where it stands in the map? One carrying
+    /// <c>AttachToCamera</c> rides the CAMERA instead. aprilfool's Level7_AprilFool_Board_Light_VFX_02 is a screen
+    /// vignette: one 1350x750 (about 16:9) arbitrary quad, unrotated, a sky gradient under a mask that is clear
+    /// in the middle and opaque at the rim, depth test off. Play All drew it at its map transform, a dark
+    /// vertical sheet standing in the middle of the board - not where the flag says the game draws it. The 8
+    /// placements in the shipping maps that carry the flag are all on Map22 and all read as screen overlays:
+    /// five are FloorLight_Add quads sized near 16:9, one is a dark camera quad, one HUD-element meshes, one
+    /// win-streak sparks at x = +/-600 (either side of the frame, inferred). How the game positions them
+    /// relative to the camera is not in the data, so the editor does not simulate them.
+    /// <para>DIVERGENCE, stated: the game DOES show these, as camera overlays (aprilfool's on its level-7 layer).
+    /// Play All leaves them off because it cannot place them; selecting one still previews it at its placement,
+    /// as startDisabled placements do.</para></summary>
+    public static bool PlaysInWorldSpace(Formats.MapGeo.MapParticlePlacement placement) => placement.AttachToCamera != true;
+
     private void RebuildParticlePlayback()
     {
         if (PlayAllParticles)
         {
             var items = new List<VfxPlaybackItem>();
-            int eventDriven = 0;
+            int eventDriven = 0, cameraAttached = 0;
             foreach (var v in MapContent.AllParticles)
             {
                 if (!v.IsEditorVisible || v.IsDisabled || v.IsRemoved) continue;
@@ -1649,6 +1663,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // actually-running transition into the state they belong to.
                 if (!IsTransitionalParticleActive(v.Placement, v.EffectiveVisibilityFlags)) continue;
                 if (!_vfxSystems.TryGetValue(v.EffectiveSystemHash, out var s) || !s.Emitters.Any(e => e.IsVisual)) continue;
+                if (!PlaysInWorldSpace(v.Placement)) { cameraAttached++; continue; }   // M793: a camera overlay
                 items.Add(new VfxPlaybackItem(s, v.CurrentTransform, ResolveSystemTextures(s), ResolveSystemMeshes(s),
                     ResolveSystemMultTextures(s), ResolveSystemDistortionTextures(s), ResolveSystemColorTextures(s),
                     ResolveSystemErosionTextures(s), ResolveSystemPaletteTextures(s),
@@ -1659,7 +1674,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             string offAtLoad = eventDriven > 0
                 ? $" {eventDriven} event-driven placement(s) left off - the game shows them only when a map event turns them on; select one to preview it."
                 : "";
-            _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.{offAtLoad}");
+            string offCamera = cameraAttached > 0
+                ? $" {cameraAttached} camera-attached placement(s) left off - the game draws them on the camera as screen overlays, which the editor does not simulate; select one to preview it at its placement."
+                : "";
+            _log.Info("Particles", $"Playing all — {items.Count} layer-visible placement(s); viewport culling keeps only nearby on-screen systems active.{offAtLoad}{offCamera}");
             return;
         }
 
