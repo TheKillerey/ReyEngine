@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using System.Linq;
 using ReyEngine.App.ViewModels;
 
 namespace ReyEngine.Formats.Tests;
@@ -43,5 +46,33 @@ public sealed class ParticleEditorDx11Tests
         vm.UseDx11Preview = true;
 
         Assert.Equal("D3D11 unavailable: unknown", vm.Dx11Status);
+    }
+
+    /// <summary>M799: "the d3d11 3d view in particle editor is not working" - a black view with an empty status.
+    /// MainWindow builds the window with its DataContext BEFORE Show and D3D11 already on, so StartDx11 ran while
+    /// the view was in no window: QueueDx11Frame set its "queued" flag, `?.` then skipped the frame request, and
+    /// the flag stayed set for good. The loop only runs in a live window (the UiProbe "dx11particle" card drives
+    /// the real order and failed before this fix), so this pins the two pieces that keep it from coming back.</summary>
+    [Fact]
+    public void TheFrameLoopStartsEvenWhenTurnedOnBeforeTheWindowShows()
+    {
+        var src = Source("src", "ReyEngine.App", "Views", "ParticleEditorView.Dx11.cs");
+        if (src is null) return;
+        int noWindow = src.IndexOf("if (TopLevel.GetTopLevel(this) is not { } top) return;", StringComparison.Ordinal);
+        int queued = src.IndexOf("_dx11FrameQueued = true;", StringComparison.Ordinal);
+        Assert.True(noWindow >= 0, "QueueDx11Frame must return without a window before it marks a frame queued");
+        Assert.True(queued > noWindow, "the queued flag may only be set once a window (TopLevel) is known");
+        Assert.Contains("AttachedToVisualTree +=", src);
+    }
+
+    private static string? Source(params string[] parts)
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            if (!File.Exists(Path.Combine(dir.FullName, "ReyEngine.slnx"))) continue;
+            string path = Path.Combine(new[] { dir.FullName }.Concat(parts).ToArray());
+            return File.Exists(path) ? File.ReadAllText(path) : null;
+        }
+        return null;
     }
 }

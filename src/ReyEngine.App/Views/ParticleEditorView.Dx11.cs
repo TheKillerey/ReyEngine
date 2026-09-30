@@ -37,6 +37,13 @@ public partial class ParticleEditorView
     private void HookDx11()
     {
         DetachedFromVisualTree += (_, _) => { _dx11Closed = true; _dx11?.Dispose(); _dx11 = null; };
+        // M799: MainWindow builds `new ParticleEditorWindow { DataContext = ... }` BEFORE it shows the window, with
+        // D3D11 already on, so StartDx11 runs while this view is in no window and QueueDx11Frame cannot ask for a
+        // frame yet. The first frame is asked for here, once the view is actually in one.
+        AttachedToVisualTree += (_, _) =>
+        {
+            if (DataContext is ParticleEditorViewModel { UseDx11Preview: true }) QueueDx11Frame();
+        };
         DataContextChanged += (_, _) => WatchDx11Toggle();
         WatchDx11Toggle();
     }
@@ -82,8 +89,12 @@ public partial class ParticleEditorView
     private void QueueDx11Frame()
     {
         if (_dx11Closed || _dx11FrameQueued) return;
+        // M799: no window yet - do NOT mark a frame as queued. The flag used to be set first and the request then
+        // skipped by `?.`, so the flag stayed set and the loop never started (the D3D11 view stayed black with an
+        // empty status). AttachedToVisualTree asks again once the view is in a window.
+        if (TopLevel.GetTopLevel(this) is not { } top) return;
         _dx11FrameQueued = true;
-        TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_ =>
+        top.RequestAnimationFrame(_ =>
         {
             _dx11FrameQueued = false;
             if (_dx11Closed || DataContext is not ParticleEditorViewModel vm || !vm.UseDx11Preview) return;
