@@ -443,7 +443,13 @@ public static class VfxSystemResolver
 
         return new VfxEmitterDefinition(
             Name: GetString(p, F_emitterName) ?? "(emitter)",
-            Rate: ReadCurveF(p, F_rate) ?? VfxCurveF.Const(10f),
+            // M801: absent is the declared default, ValueFloat { constantValue 0 } - every revision of the schema
+            // (meta.db.json, build 5229820 to 16.19), and LTK Manager's reader. Riot's writer omits it: 0 of the
+            // 1,783,300 visual emitters in the installed game write a ValueFloat rate of constant 0, and the 5,154
+            // that write none are the ones authored at 0. It read as 10 particles/s from M36, a value nothing
+            // supports, which streamed 406 continuous emitters that the game spawns once (VfxParticleSimulator's
+            // first emission). The 4,748 single-particle ones never read it.
+            Rate: ReadCurveF(p, F_rate) ?? VfxCurveF.Zero,
             ParticleLifetime: ReadCurveF(p, F_particleLife) ?? VfxCurveF.Const(1f),
             EmitterLifetime: GetOptionalF32(p, F_lifetime),
             ParticleLinger: GetOptionalF32(p, F_particleLinger) ?? 0f,

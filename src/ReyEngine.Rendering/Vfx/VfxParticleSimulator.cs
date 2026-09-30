@@ -56,6 +56,8 @@ public sealed class VfxParticleSimulator
         internal float StartOffset;
         internal float Age;                     // emitter age (seconds)
         internal bool BurstDone;                // for isSingleParticle
+        /// <summary>M801: the continuous emitter has had its first emitting step this run - see UpdateEmitter.</summary>
+        internal bool FirstEmissionDone;
         internal readonly List<Particle> Particles = new();
 
         /// <summary>M185 (2.15): mirrors the simulator's stopped flag so BuildInstances, which is static
@@ -390,7 +392,7 @@ public sealed class VfxParticleSimulator
 
     public void Reset()
     {
-        foreach (var s in _emitters) { s.Particles.Clear(); s.SpawnAccum = 0; s.Age = 0; s.BurstDone = false; s.InstanceCount = 0; s.Stopped = false; }
+        foreach (var s in _emitters) { s.Particles.Clear(); s.SpawnAccum = 0; s.Age = 0; s.BurstDone = false; s.FirstEmissionDone = false; s.InstanceCount = 0; s.Stopped = false; }
         LiveParticleCount = 0;
         _stopped = false;   // M185: replaying a stopped system starts it running again
     }
@@ -498,6 +500,19 @@ public sealed class VfxParticleSimulator
                     ? Math.Clamp((s.Age - d.TimeBeforeFirstEmission) / d.EmitterLifetime.Value, 0f, 1f)
                     : 0f;
                 float rate = MathF.Max(0f, d.Rate.Sample(emitterT));
+                // M801: a continuous emitter at rate 0 still emits ONE particle, at its first emission - which is
+                // what an emitter that authors no `rate` is, the schema default being 0 (VfxSystemResolver). The
+                // 406 such visual emitters in the game are attached meshes, flashes, shockwaves and immortal
+                // particles that read as one particle, not as a stream and not as nothing. The rule is LTK Manager's
+                // engine reading (emit.ts: a first emission never emits zero; its test "emits one particle from an
+                // emitter authored at no rate"), NOT verified in game. Applied at rate 0 only: the same reading also
+                // moves every positive-rate emitter's first particle forward to its first emission, which re-times
+                // every emitter in the corpus and is held for game evidence, like M772's isSingleParticle burst.
+                if (!s.FirstEmissionDone)
+                {
+                    s.FirstEmissionDone = true;
+                    if (rate <= 0f) Spawn(s);
+                }
                 s.SpawnAccum += rate * dt;
                 while (s.SpawnAccum >= 1f && s.Particles.Count < MaxParticlesPerEmitter)
                 {
