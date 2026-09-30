@@ -312,10 +312,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         && (particle.VisibilityControllerHash == 0
             ? MaskVisible(visibilityOverride ?? particle.VisibilityFlags)   // M797: the stage's exact rule while one is on
             : (_visibilityResolver ??= new MapVisibilityResolver(_mapControllers, _mapVisibility))
-                .IsVisible(visibilityOverride ?? particle.VisibilityFlags, particle.VisibilityControllerHash, CurrentVisibilitySelections, CurrentStageMask));
+                .IsVisible(visibilityOverride ?? particle.VisibilityFlags, particle.VisibilityControllerHash, CurrentVisibilitySelections, CurrentStageMask,
+                    CurrentEnabledEvents));   // M802: an event-gated placement shows only while its event is on
 
     private bool IsSoundVisible(MapSoundPlacement sound, int? visibilityOverride = null) =>
         !(sound.FromParticleSystem && StageSwitchesOff(sound.Name))   // M797: a particle's sound follows the particle
+        && EventAllows(sound.VisibilityControllerHash)                // M802: and so does the event that gates it
         && MaskVisible(visibilityOverride ?? sound.VisibilityFlags);
 
     // M383: ONE gate per placeable category, read by BOTH the marker builders (what is DRAWN) and
@@ -6848,7 +6850,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<MapSoundPlacement>? Sounds,
         int[] VisibilityIndices, bool HasMoves, int[] SelectedMeshIndices,
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces,
-        BoardStageSnapshot? BoardStage = null);   // M797: the board-stage picker, where the tab left it
+        BoardStageSnapshot? BoardStage = null,   // M797: the board-stage picker, where the tab left it
+        IReadOnlyList<string>? EnabledEvents = null);   // M802: the events that were ticked (session only)
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
     private void OpenAssetDocument(AssetNodeViewModel? node)
@@ -7067,7 +7070,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             VisibilityAxes.Select(a => a.SelectedIndex).ToArray(), HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList(),
-            SnapshotBoardStage());
+            SnapshotBoardStage(), SnapshotMapEvents());
     }
 
     private void RestoreMapScene(MapScene s)
@@ -7083,6 +7086,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _visibilityResolver = new MapVisibilityResolver(s.Controllers, s.Visibility);
         RebuildVisibilityAxes(s.Visibility, s.VisibilityIndices);
         RestoreBoardStage(s.BoardStage);   // M797: where the tab left the picker; before ApplyMapVisibility below reads the mask
+        RestoreMapEvents(s.EnabledEvents); // M802: and the events it had ticked, read by the same ApplyMapVisibility
         CurrentMesh = s.Mesh;
         CurrentModelTextures = s.Textures;
         ClearSecondaryTextures();
@@ -8180,6 +8184,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _visibilityResolver = null;
         RebuildVisibilityAxes(_mapVisibility);
         SetBoardStages(MapBoardStageSet.Empty);   // M797
+        SetMapEvents(null);                       // M802
         VisibilityLayerBits.Clear();
         PlacementVisibilityLayerBits.Clear();
         HasPlacementLayerSelection = false;
@@ -8280,6 +8285,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     public ObservableCollection<VisibilityAxisViewModel> VisibilityAxes { get; } = new();
+    [NotifyPropertyChangedFor(nameof(ShowVisibilityLayers))]   // M802: the section shows for a layer OR an event
     [ObservableProperty] private bool _hasVisibilityAxes;
     private bool _visibilityUiLoading;
 
@@ -8339,7 +8345,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             uint ctrl = g.ControllerHash;
             if (g.MeshIndex >= 0 && meshByIdx.TryGetValue(g.MeshIndex, out var src))
             { flags = src.EffectiveVisibility; ctrl = src.EffectiveController; }
-            vis[i] = resolver.IsVisible(flags, ctrl, selections, CurrentStageMask);   // M797: a board stage's exact mask, or null
+            vis[i] = resolver.IsVisible(flags, ctrl, selections, CurrentStageMask, CurrentEnabledEvents);   // M797: a board stage's exact mask, or null; M802: the events that are on
             if (hiddenByUser.Contains(g.MeshIndex)) vis[i] = false;
             if (vis[i] && !RenderRegionsEnabled && g.MeshIndex >= 0
                 && regionOf.TryGetValue(g.MeshIndex, out var region) && region != 0)
@@ -8461,7 +8467,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_selection.Primary is not { } m || _visibilityResolver is null)
         { MeshVisibilityReason = ""; MeshDetails.Clear(); return; }
         // M105: diagnose the EFFECTIVE (edited) values so the details row matches what the viewport shows
-        var d = _visibilityResolver.Resolve(m.EffectiveVisibility, m.EffectiveController, CurrentVisibilitySelections, CurrentStageMask);   // M797
+        var d = _visibilityResolver.Resolve(m.EffectiveVisibility, m.EffectiveController, CurrentVisibilitySelections, CurrentStageMask, CurrentEnabledEvents);   // M797, M802
         MeshVisibilityReason = d.Reason;
         if (_selection.Count == 1)
         {
@@ -8794,6 +8800,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapControllers = MapVisibilityControllers.Build(bins, _mapVisibility);
         _visibilityResolver = new MapVisibilityResolver(_mapControllers, _mapVisibility);
         RebuildVisibilityAxes(_mapVisibility);
+        SetMapEvents(_mapControllers, announce: true);   // M802: every event OFF, as in a normal game
         LayerControllerChoices.Clear();
         _layerControllerHashes.Clear();
         VisibilityLayerBits.Clear();

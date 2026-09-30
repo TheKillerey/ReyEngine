@@ -10,9 +10,10 @@
                FontSize="11" FontWeight="SemiBold" Margin="8,4,8,2" />
 
     <!-- scene-level visibility layers -->
-    <StackPanel DockPanel.Dock="Top" Margin="8,2,8,4" Spacing="3" IsVisible="{Binding HasVisibilityAxes}">
+    <!-- M802: the section shows for a layer OR an event; a map can have either without the other. -->
+    <StackPanel DockPanel.Dock="Top" Margin="8,2,8,4" Spacing="3" IsVisible="{Binding ShowVisibilityLayers}">
       <TextBlock Classes="cardTitle" Text="VISIBILITY LAYERS" />
-      <ItemsControl ItemsSource="{Binding VisibilityAxes}">
+      <ItemsControl ItemsSource="{Binding VisibilityAxes}" IsVisible="{Binding HasVisibilityAxes}">
         <ItemsControl.ItemTemplate>
           <DataTemplate>
             <StackPanel Margin="0,0,0,3">
@@ -41,6 +42,22 @@
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
+
+      <!-- M802: only a map whose bins hold a MutatorMapVisibilityController (Summoner's Rift). Every event starts OFF, as in
+           a normal game, and ticking one shows the content it gates. Session only. IsVisible keeps the block out of the
+           layout on every other map. -->
+      <StackPanel Spacing="1" IsVisible="{Binding HasMapEvents}">
+        <TextBlock Text="Events" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}"
+                   ToolTip.Tip="Content this map ships for one game event only (Hall of Legends, MSI trophies, esports banners). A normal game has no event on, so it is hidden here too until you tick the event. Hover an event for what it gates. Session only - never saved." />
+        <ItemsControl ItemsSource="{Binding MapEvents}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <CheckBox Content="{Binding Label}" IsChecked="{Binding IsOn}" FontSize="10" MinHeight="20" Padding="4,0,0,0"
+                        ToolTip.Tip="{Binding Tooltip}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
     </StackPanel>
 
     <!-- view toggles (what renders in the viewport)

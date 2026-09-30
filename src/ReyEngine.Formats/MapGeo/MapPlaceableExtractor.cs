@@ -30,7 +30,11 @@ public sealed record MapSoundPlacement(
     /// transform bytes. Default (invalid) for sounds DERIVED from a particle system - those are a view of
     /// the particle and have no MapAudio entry of their own, so the particle is what gets saved.</summary>
     MapPlacementId Id = default,
-    bool HasVisibilityFlags = false);
+    bool HasVisibilityFlags = false,
+    /// <summary>M802: the visibility controller of the particle this sound is DERIVED from (0 = none, and always 0
+    /// for a direct MapAudio - none of Riot's carry one). A particle's sound follows its particle, so an event that
+    /// gates the particle gates its ambience too.</summary>
+    uint VisibilityControllerHash = 0);
 
 /// <param name="IdleAnimation">M723: the clip the placement's <c>CharacterMesh</c> names, "" when it names
 /// none. This - not a guess from the skin's graph - is what the game asks the animation graph for.</param>
@@ -223,7 +227,8 @@ public static class MapParticleAudioExtractor
                 sounds.Add(new MapSoundPlacement(
                     particle.Name, sound.Name, particle.Position, particle.Transform,
                     system.VisibilityRadius > 0f ? system.VisibilityRadius : 4000f,
-                    particle.VisibilityFlags, true, sound.Loop));
+                    particle.VisibilityFlags, true, sound.Loop,
+                    VisibilityControllerHash: particle.VisibilityControllerHash));   // M802
             }
         }
         return sounds;

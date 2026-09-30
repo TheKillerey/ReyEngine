@@ -26,13 +26,47 @@ public sealed class MapVisibilityResolver
         _definition = definition ?? MapVisibilityDefinition.Empty;
     }
 
-    public bool IsVisible(int flags, uint controllerHash, IReadOnlyDictionary<uint, int>? selections, int? stageMask = null)
-        => Resolve(flags, controllerHash, selections, stageMask).Visible;
+    public bool IsVisible(int flags, uint controllerHash, IReadOnlyDictionary<uint, int>? selections, int? stageMask = null,
+        IReadOnlySet<string>? enabledEvents = null)
+        => Resolve(flags, controllerHash, selections, stageMask, enabledEvents).Visible;
+
+    /// <summary>
+    /// M802: does the EVENT part of a controller let its content show? True for everything no event gates (no
+    /// controller, a layer controller, <paramref name="enabledEvents"/> null). For content the editor has no other
+    /// visibility rule for - a particle's sound follows its particle - where the whole of <see cref="Resolve"/> would
+    /// also start applying the dragon and baron layers to it.
+    /// </summary>
+    public bool EventsAllow(uint controllerHash, IReadOnlySet<string>? enabledEvents)
+    {
+        if (controllerHash == 0 || _controllers is null) return true;
+        return EventGate(_controllers.Resolve(controllerHash), enabledEvents) is not { Blocks: true };
+    }
+
+    /// <summary>What the events in a controller graph say about it, or null when it reaches none (or events are not
+    /// being evaluated). A mutator is ON when its name is in the set. The graph's leaves join as a union, so ANY event
+    /// on satisfies it, and ParentMode 3 - the existing "none of the parents" inversion - flips it.
+    /// <para><b>Blocks</b>: the event alone hides the content. <b>Satisfies</b>: the graph also reaches layer bits, and
+    /// the event being on is enough for the union, so the layer rules are not consulted. With the event off a mixed
+    /// graph is left to its layer rules. No shipped graph is mixed - every mutator is a direct controller, and no Child
+    /// in Map11's 26 bins has one among its parents (M802 census) - so this is the existing union rule carried over, not
+    /// a measured one.</para></summary>
+    private static (bool Blocks, bool Satisfies, bool On)? EventGate(VisibilityControllerResolution controller, IReadOnlySet<string>? enabledEvents)
+    {
+        if (enabledEvents is null || controller.Mutators.Count == 0) return null;
+        bool on = controller.Mutators.Any(enabledEvents.Contains);
+        bool mixed = controller.HasAxisBits;
+        bool blocks = on ? controller.NotVisible : !mixed && !controller.NotVisible;
+        return (blocks, on && !controller.NotVisible && mixed, on);
+    }
 
     /// <param name="stageMask">M797: a TFT board stage's exact visibility mask. When set it IS the primary axis's
     /// state - <see cref="MapVisibility.VisibleForStage"/> for content, the mask itself (no initial mask added)
     /// for a controller - and the primary axis's own selection is not consulted. Null leaves every rule as it was.</param>
-    public VisibilityDiagnostic Resolve(int flags, uint controllerHash, IReadOnlyDictionary<uint, int>? selections, int? stageMask = null)
+    /// <param name="enabledEvents">M802: the events switched on (a normal game has none). Content whose controller is an
+    /// event shows only while its event is in the set. Null means events are not evaluated and event content shows -
+    /// the behaviour before M802, for a caller that has no event state.</param>
+    public VisibilityDiagnostic Resolve(int flags, uint controllerHash, IReadOnlyDictionary<uint, int>? selections, int? stageMask = null,
+        IReadOnlySet<string>? enabledEvents = null)
     {
         var primary = _definition.Primary;
         var result = new VisibilityDiagnostic
@@ -51,6 +85,24 @@ public sealed class MapVisibilityResolver
         var controllerParts = new List<string>();
         var reasons = new List<string>();
         bool visible = true;
+
+        // M802: event-only content (a MutatorMapVisibilityController) is decided by which events are on, not by a layer.
+        // It is checked before the layer axes so it also works on a map that declares none.
+        var gate = EventGate(controller, enabledEvents);
+        string eventNames = gate is null ? "" : string.Join(", ", controller.Mutators);
+        if (gate is { } eventGate)
+        {
+            controllerParts.Add($"Event: {eventNames} ({(eventGate.On ? "on" : "off")})");
+            if (eventGate.Blocks)
+            {
+                visible = false;
+                reasons.Add(eventGate.On
+                    ? $"event '{eventNames}' is on, and this content shows only while it is off"
+                    : $"event '{eventNames}' is off (tick it under Visibility Layers > Events)");
+            }
+        }
+        bool eventSatisfies = gate is { Satisfies: true };
+
         foreach (var axis in _definition.Axes)
         {
             // M797: a board stage stands in for the primary axis's selection (see the parameter's remark).
@@ -67,6 +119,7 @@ public sealed class MapVisibilityResolver
                 controllerParts.Add($"{axis.Name}: {(names.Count > 0 ? string.Join(", ", names) : controllerBits.ToString())}");
             }
             if (selected == 0 && !staged) continue;
+            if (eventSatisfies) continue;   // M802: a union the event being on already satisfies (see EventGate)
 
             bool axisVisible;
             if (controllerBits != 0)
@@ -97,6 +150,7 @@ public sealed class MapVisibilityResolver
             + (controller.NotVisible ? " / inverted (ParentMode 3)" : "");
         result.Reason = visible
             ? $"visible: {(filterParts.Count == 0 ? "map declares no visibility filter" : string.Join("; ", filterParts))}"
+              + (gate is { On: true } ? $"; event '{eventNames}' is on" : "")
             : "hidden: " + string.Join("; ", reasons);
         return result;
     }
