@@ -5514,6 +5514,26 @@ float4 psmain(VOut i) : SV_Target
     public const string NoShaderLoaded = "no shader loaded";
 
     /// <summary>
+    /// M804: true when a registered material draws PARTICLE geometry - quads out of the shared dynamic buffer, a
+    /// mesh emitter's own geometry, or a beam / trail ribbon - whether or not a particle is alive this frame.
+    ///
+    /// <para>Geometry belongs to a frame and a material does not: a particle material is registered when its
+    /// pipeline resolves, before its first quad exists, and stays registered (invisible, a zero-length range)
+    /// while the system has nothing alive - between auto-stop cycles, or before a delayed emitter's first spawn.
+    /// That frame is still a frame. Only asked when the renderer has no static mesh, no dynamic quads, no mesh
+    /// geometry and no backdrop, so a map or a character - which always has a static mesh - never pays for
+    /// the scan.</para>
+    /// </summary>
+    private bool HasParticleMaterial()
+    {
+        foreach (var m in _materials)
+            if (m.UsesDynamicMesh || m.MeshGeometryId is not null || m.RiotMeshGeometryId is not null
+                || m.RibbonId is not null)
+                return true;
+        return false;
+    }
+
+    /// <summary>
     /// <para>Draw one frame and return it as BGRA8 bytes, row-packed at <paramref name="width"/>*4.
     /// Returns null when there is nothing to draw; <paramref name="error"/> then says why.</para>
     ///
@@ -5539,8 +5559,14 @@ float4 psmain(VOut i) : SV_Target
         // M264: either source is enough. A particle-only frame has no static mesh, and a map frame has
         // no dynamic one until something uploads quads. M640: mesh-particle geometry counts too - a
         // system whose quads have all died while a mesh emitter still lives was refused as "no mesh set".
+        // M804: and so does a registered PARTICLE MATERIAL - what is left when every quad has died, or a
+        // delayed emitter has not spawned yet (see HasParticleMaterial). Such a host has a valid frame with
+        // no geometry THIS instant, and its editor furniture (floor grid, force shapes, Move handle) still
+        // has to draw; refusing it blanked the picture and read as a fault. The Particle Editor's own surface
+        // never hit this (Dx11ViewportSurface.Initialize installs a fallback sphere), a bare renderer did.
         if ((_vb.Handle is null || _indexCount == 0) && (_dynVb.Handle is null || _dynIndexCount == 0)
-            && _meshGeoms.All(g => g is null) && _riotMeshGeoms.All(g => g is null) && !HasBackdrop)
+            && _meshGeoms.All(g => g is null) && _riotMeshGeoms.All(g => g is null) && !HasBackdrop
+            && !HasParticleMaterial())
         { error = "no mesh set"; return null; }
         if (width <= 0 || height <= 0) { error = "zero-sized target"; return null; }
 
