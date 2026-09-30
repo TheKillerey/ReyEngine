@@ -69,7 +69,11 @@ public static class VfxPreviewCoverage
     /// <summary>Fields the resolver DOES read but that never reach anything the particle preview draws.
     /// Hand-maintained: proving "parsed but unrendered" mechanically needs real dataflow analysis, and an
     /// attempt at it produced obvious false positives, so this list is limited to cases traced by hand from
-    /// the parse site to every consumer in <c>src/</c>, and under-claims rather than guesses.</summary>
+    /// the parse site to every consumer in <c>src/</c>, and under-claims rather than guesses.
+    ///
+    /// <para>M800 adds the one exception: two fields the resolver does NOT read (it only counts them, through
+    /// <see cref="VfxComponentFormat"/>) but whose text the generic "the game will use it" sentence at the
+    /// foot of <see cref="IgnoredNote"/> would get wrong.</para></summary>
     private static readonly Dictionary<uint, string> NotRendered = new()
     {
         [HashAlgorithms.Fnv1a("particleLingerType")] =
@@ -94,6 +98,21 @@ public static class VfxPreviewCoverage
             + "VfxSystemResolver to VfxSystemDefinition and found no consumer anywhere in the codebase. "
             + "The per-particle linger window is what drives the shutdown curves; this emitter-level value "
             + "is not wired up.",
+
+        // M800: Riot's component-based ("Shimmer") VFX format. Neither hash is a resolver constant (see
+        // VfxComponentFormat), so without these entries the generic "the game will use it" sentence below
+        // answered for both - and that sentence is wrong for VfxComponents on a classic emitter, which the
+        // client does not declare and so never reads. The text is conditional on where it stands because this
+        // lookup knows only the hash: inside a Shimmer emitter the parent's note is inherited first anyway.
+        [VfxComponentFormat.ComponentsField] =
+            "Riot's component (Shimmer) VFX block, added in 16.16. On a classic emitter the client does not "
+            + "declare this field and ignores it, and ReyEngine does not simulate the format either - so "
+            + "editing it changes nothing in the game or in the viewport. The edit is still saved to the .bin.",
+        [VfxComponentFormat.ShimmerListField] =
+            "Riot's component (Shimmer) emitter list, added in 16.16. ReyEngine does not simulate it, so "
+            + "nothing in it shows in the viewport. Every Shimmer emitter Riot ships is disabled, so the game "
+            + "draws nothing from this list today either; an emitter you enable is one the game may draw. "
+            + "The edit is saved to the .bin.",
     };
 
     /// <summary>A note for the editor when this field will not affect the preview, or null when it will.

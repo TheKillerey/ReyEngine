@@ -121,6 +121,18 @@
                                      VerticalAlignment="Center" />
                         </DockPanel>
                       </Border>
+                      <!-- M800: the SYSTEM card says why a system authored in Riot's component (Shimmer) VFX
+                           format draws nothing, instead of leaving an empty viewport to read as a load failure.
+                           Theme brushes only, the same pair the NOT SHOWN IN THE PREVIEW banner uses. -->
+                      <Border DockPanel.Dock="Top" Padding="8,5" IsVisible="{Binding HasComponentNote}"
+                              Background="{DynamicResource ReyWarningSoftBrush}"
+                              BorderBrush="{DynamicResource ReyWarningBrush}" BorderThickness="0,0,0,1">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="COMPONENT (SHIMMER) VFX" FontSize="9" FontWeight="Bold"
+                                     Foreground="{DynamicResource ReyWarningBrush}" />
+                          <TextBlock Text="{Binding ComponentNote}" FontSize="9" Opacity="0.85" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </Border>
                       <!-- M754: what the particles are born on, when the emitter names a surface -->
                       <Border DockPanel.Dock="Top" Padding="8,3" IsVisible="{Binding HasEmissionNote}"
                               Background="{DynamicResource ReyPanelAltBrush}">
@@ -498,8 +510,10 @@
               <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="0,0,10,0">
                 <CheckBox Content="D3D11" IsChecked="{Binding UseDx11Preview}" FontSize="10"
                           ToolTip.Tip="Render this preview through the same Direct3D 11 particle path as the main viewport, instead of the OpenGL approximation." />
+                <!-- M800: "Nothing to draw - ..." carries a reason and would be cut at 260px, so the line has more
+                     room (the 3D VIEW column is 620px wide) and the whole sentence is one hover away -->
                 <TextBlock Text="{Binding Dx11Status}" FontSize="9" Opacity="0.6" TextTrimming="CharacterEllipsis"
-                           MaxWidth="260" VerticalAlignment="Center" />
+                           MaxWidth="360" VerticalAlignment="Center" ToolTip.Tip="{Binding Dx11Status}" />
               </StackPanel>
               <TextBlock Classes="panelHeader" DockPanel.Dock="Top" Text="3D VIEW" />
             </DockPanel>

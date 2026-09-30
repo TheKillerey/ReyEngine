@@ -18,7 +18,11 @@ public sealed record VfxSystemDefinition(
     /// <summary>M194 (tier 4.3): system fields the resolver now parses but the renderer does not consume.
     /// Null when the system authored none of them. See <see cref="VfxSystemExtras"/> - in particular for
     /// why <c>transform</c> is parsed and deliberately NOT applied to the preview.</summary>
-    VfxSystemExtras? Extras = null);
+    VfxSystemExtras? Extras = null,
+    /// <summary>M800: how much of the system is authored in Riot's component-based ("Shimmer") VFX format,
+    /// which ReyEngine does not simulate. Null when it uses none. Counts only - see
+    /// <see cref="VfxComponentEmitters"/> for what they mean and why the editor reports them.</summary>
+    VfxComponentEmitters? ComponentEmitters = null);
 
 /// <summary>One emitter inside a system. Curves are absolute-valued (sampled over normalised particle age 0..1).</summary>
 public sealed record VfxEmitterDefinition(

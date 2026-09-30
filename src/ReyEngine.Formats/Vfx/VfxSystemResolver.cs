@@ -330,21 +330,50 @@ public static class VfxSystemResolver
         string path = GetString(o.Properties, F_particlePath) ?? "";
 
         var emitters = new List<VfxEmitterDefinition>();
+        // M800: Riot's component-based ("Shimmer") entries are COUNTED, never parsed - see VfxComponentEmitters.
+        int shimmer = 0, shimmerDisabled = 0, classicComponentOnly = 0;
         // Any container property whose elements are VfxEmitterDefinitionData structs holds emitters
         // (complexEmitterDefinitionData and friends) — read them all, order-preserving.
-        foreach (var (_, prop) in o.Properties)
+        foreach (var (fieldHash, prop) in o.Properties)
         {
             if (prop is not BinTreeContainer c) continue;
             foreach (var el in c.Elements)
-                if (el is BinTreeStruct s && s.ClassHash == EmitterClass)
+            {
+                if (el is not BinTreeStruct s) continue;
+                if (s.ClassHash == EmitterClass)
+                {
                     emitters.Add(ParseEmitter(s));
+                    if (IsComponentOnlyClassic(s)) classicComponentOnly++;
+                }
+                else if (s.ClassHash == VfxComponentFormat.ShimmerEmitterClass
+                         || (fieldHash == VfxComponentFormat.ShimmerListField && s.ClassHash != 0))
+                {
+                    shimmer++;
+                    if (GetBool(s.Properties, F_disabled)) shimmerDisabled++;
+                }
+            }
         }
         var sysExtras = ReadSystemExtras(o.Properties);
         string? persistentSound = GetString(o.Properties, F_soundPersistent);
         string? onCreateSound = GetString(o.Properties, F_soundOnCreate);
         float radius = GetF32(o.Properties, F_visibilityRadius) ?? 0f;
-        return new VfxSystemDefinition(o.PathHash, name, path, emitters, persistentSound, onCreateSound, radius, sysExtras);
+        var components = shimmer + classicComponentOnly > 0
+            ? new VfxComponentEmitters(shimmer, shimmerDisabled, classicComponentOnly)
+            : null;
+        return new VfxSystemDefinition(o.PathHash, name, path, emitters, persistentSound, onCreateSound, radius, sysExtras,
+            components);
     }
+
+    /// <summary>M800: a classic <c>VfxEmitterDefinitionData</c> that carries a <c>VfxComponents</c> block and
+    /// none of the classic payload - no texture, no primitive, no rate. That is the census's "not hybrid": 80
+    /// such entries in the installed game and none that also authors a classic payload. A method and not a
+    /// constant for the block's hash, so <see cref="VfxPreviewCoverage"/>'s reflection over this class's
+    /// fields cannot mistake the block for something the preview reads.</summary>
+    private static bool IsComponentOnlyClassic(BinTreeStruct classic) =>
+        classic.Properties.ContainsKey(VfxComponentFormat.ComponentsField)
+        && !classic.Properties.ContainsKey(F_texture)
+        && !classic.Properties.ContainsKey(F_primitive)
+        && !classic.Properties.ContainsKey(F_rate);
 
     private static VfxEmitterDefinition ParseEmitter(BinTreeStruct s)
     {

@@ -51,4 +51,25 @@ public sealed partial class ParticleEditorViewModel
     {
         if (!value) Dx11Status = "";
     }
+
+    /// <summary>
+    /// M800: the status line for a frame the D3D11 surface could not render, <paramref name="why"/> being its
+    /// <c>LastError</c>.
+    ///
+    /// <para>"no shader loaded" is the renderer's name for "no emitter produced a material". For a system with
+    /// no VISUAL emitter - a stub, a fully disabled one, or one authored in Riot's component (Shimmer) format,
+    /// which ReyEngine does not simulate - that is the correct outcome and not a fault, and the line used to
+    /// read <c>render failed: no shader loaded</c> for it, as if the device had broken. So exactly that pair
+    /// - the renderer's "nothing built" error AND a playback that has no visual emitter - becomes "Nothing to
+    /// draw" plus the reason. Every other failure keeps its message, including "no shader loaded" for a
+    /// system that DOES have a visual emitter (its pipelines failed to build, which is worth a red flag).</para>
+    /// </summary>
+    public string Dx11RenderFailedStatus(string why)
+    {
+        if (why == ReyEngine.Rendering.D3D11.ShaderPreviewRenderer.NoShaderLoaded
+            && Playback is { Items.Count: > 0 } playback
+            && playback.Items.All(static i => ReyEngine.Formats.Vfx.VfxNothingToDraw.Applies(i.System)))
+            return ReyEngine.Formats.Vfx.VfxNothingToDraw.Status(playback.Items[0].System)!;
+        return "render failed: " + why;
+    }
 }

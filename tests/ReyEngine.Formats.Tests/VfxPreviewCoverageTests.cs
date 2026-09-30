@@ -136,6 +136,33 @@ public class VfxPreviewCoverageTests
         Assert.True(VfxPreviewCoverage.IgnoredNote(H(field)) is not null,
             $"nested field '{field}' is not read by the resolver and must be badged on its own hash");
 
+    /// <summary>M800: the generic note for a field the resolver never reads ends "the game will use it". For the
+    /// component (Shimmer) VFX block on a classic emitter that is false - the client does not declare the field, so
+    /// it ignores it - and for the Shimmer list it is at best empty, since every emitter Riot ships in it is
+    /// disabled. Neither may fall through to that sentence.</summary>
+    [Theory]
+    [InlineData("VfxComponents", "ignores")]
+    [InlineData("ShimmerEmitterDefinitionData", "disabled")]
+    public void TheComponentFormatIsNeverPromisedToTheGame(string field, string mustSay)
+    {
+        string? note = VfxPreviewCoverage.IgnoredNote(H(field));
+        Assert.NotNull(note);
+        Assert.DoesNotContain("the game will use it", note);
+        Assert.Contains(mustSay, note);
+        Assert.Contains("component (Shimmer)", note);
+        // and they are NOT resolver constants: the coverage reflection would count one as "the preview reads it"
+        Assert.False(VfxPreviewCoverage.IsParsed(H(field)), $"'{field}' must stay out of VfxSystemResolver's constants");
+    }
+
+    [Fact]
+    public void AnOrdinaryUnreadFieldStillGetsTheGenericNote()
+    {
+        // M800 touched two entries, not the rule: a field nobody has explained keeps the fail-closed sentence
+        string? note = VfxPreviewCoverage.IgnoredNote(H("Filtering"));
+        Assert.NotNull(note);
+        Assert.Contains("the game will use it", note);
+    }
+
     [Fact]
     public void AnUnknownHashIsBadged()
     {

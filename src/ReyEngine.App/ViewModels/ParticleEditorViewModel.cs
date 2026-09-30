@@ -154,7 +154,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(GizmoTarget));
         Cards.Clear();
         SelectedProperty = null;
-        if (value is null) { Playback = null; RefreshGizmo(); return; }
+        if (value is null) { Playback = null; RefreshGizmo(); NotifyComponentNote(); return; }   // M800
         Cards.Add(new ParticleEmitterCardViewModel(value.Entry, this));   // M188 (3.5): the system's own fields
         for (int i = 0; i < value.Entry.Emitters.Count; i++)
             Cards.Add(new ParticleEmitterCardViewModel(value.Entry.Emitters[i], this, i));
@@ -356,6 +356,7 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         RebuildPlaybackCore();
         RefreshGizmo();
         NotifyHostCounts();   // M755
+        NotifyComponentNote();   // M800
     }
 
     /// <summary>M754: what an emitter's particles are born on, in words, or null when it names no surface.
@@ -614,6 +615,13 @@ public sealed partial class ParticleEmitterCardViewModel : ObservableObject
     public string? EmissionNote => Entry is null ? null : _owner.EmissionNote(EmitterIndex);
     public bool HasEmissionNote => EmissionNote is not null;
     internal void NotifyEmissionNote() { OnPropertyChanged(nameof(EmissionNote)); OnPropertyChanged(nameof(HasEmissionNote)); }
+
+    /// <summary>M800: on the SYSTEM card only - the system is authored in Riot's component (Shimmer) VFX format,
+    /// which ReyEngine does not simulate, so it draws nothing here. Null on emitter cards and on systems that
+    /// use only the classic format.</summary>
+    public string? ComponentNote => Entry is null ? _owner.ComponentNote : null;
+    public bool HasComponentNote => ComponentNote is not null;
+    internal void NotifyComponentNote() { OnPropertyChanged(nameof(ComponentNote)); OnPropertyChanged(nameof(HasComponentNote)); }
 
     /// <summary>M753: the Move handle is on this emitter's own position.</summary>
     public bool IsGizmoTarget => Entry is not null && _owner.IsGizmoTarget(ParticleEditorViewModel.EmitterKey(EmitterIndex));

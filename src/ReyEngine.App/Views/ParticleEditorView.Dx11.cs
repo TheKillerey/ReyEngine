@@ -64,6 +64,9 @@ public partial class ParticleEditorView
     private void StartDx11(ParticleEditorViewModel vm)
     {
         if (_dx11Closed) return;
+        // M800: turning the toggle off cleared the status, so whatever the last failure line was has to be said
+        // again when it comes back on - the loop only writes a failure it has not already written.
+        _dx11LastErrorShown = null;
         _dx11 ??= new Dx11ViewportSurface();
         if (!_dx11.IsReady && !_dx11.Initialize())
         {
@@ -178,6 +181,7 @@ public partial class ParticleEditorView
         {
             Dx11Preview.Source = null;
             vm.Dx11Status = "Nothing selected.";
+            _dx11LastErrorShown = null;   // M800: the next failure line is news again, not a repeat to swallow
             return;
         }
 
@@ -212,11 +216,19 @@ public partial class ParticleEditorView
 
         if (!_dx11.Render(PreviewViewport.Camera, w, h))
         {
-            if (_dx11.LastError is { Length: > 0 } why && why != _dx11LastErrorShown)
+            if (_dx11.LastError is { Length: > 0 } why)
             {
-                _dx11LastErrorShown = why;
-                vm.Dx11Status = "render failed: " + why;
-                vm.LogDx11?.Invoke("D3D11", "render failed: " + why);
+                // M800: a system with no visual emitter ("no shader loaded" from the renderer) says "Nothing to
+                // draw" and why; every other failure keeps its "render failed: ..." text. The dedupe key is the
+                // finished line, not the raw error - moving from one empty system to another produces the same
+                // renderer error and a different reason, and the new reason has to reach the status.
+                string status = vm.Dx11RenderFailedStatus(why);
+                if (status != _dx11LastErrorShown)
+                {
+                    _dx11LastErrorShown = status;
+                    vm.Dx11Status = status;
+                    vm.LogDx11?.Invoke("D3D11", status);
+                }
             }
             Dx11Preview.Source = null;   // no stale frame while nothing renders
             return;

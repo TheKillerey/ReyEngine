@@ -5506,6 +5506,13 @@ float4 psmain(VOut i) : SV_Target
 
     // ---------------------------------------------------------------- render
 
+    /// <summary>M800: the <c>error</c> <see cref="RenderFrame"/> returns when no material was registered and
+    /// there is no backdrop to draw. It is the renderer's name for "nothing was built", not a fault: a host
+    /// that knows its playback has no visual emitter (the Particle Editor, with a stub system or a component /
+    /// Shimmer one) says "Nothing to draw" instead. A constant so that host compares against the symbol and
+    /// cannot drift from the text.</summary>
+    public const string NoShaderLoaded = "no shader loaded";
+
     /// <summary>
     /// <para>Draw one frame and return it as BGRA8 bytes, row-packed at <paramref name="width"/>*4.
     /// Returns null when there is nothing to draw; <paramref name="error"/> then says why.</para>
@@ -5528,7 +5535,7 @@ float4 psmain(VOut i) : SV_Target
         // map vanished with it, where the GL viewport still draws it. The M725 diffuse-only prop never hit this
         // only because it registered materials. IsReady itself is left alone: the map window gates vertex and
         // material rebuilds on it, and those must not run against an empty scene.
-        if (_device.Handle is null || (_materials.Count == 0 && !HasBackdrop)) { error = "no shader loaded"; return null; }
+        if (_device.Handle is null || (_materials.Count == 0 && !HasBackdrop)) { error = NoShaderLoaded; return null; }
         // M264: either source is enough. A particle-only frame has no static mesh, and a map frame has
         // no dynamic one until something uploads quads. M640: mesh-particle geometry counts too - a
         // system whose quads have all died while a mesh emitter still lives was refused as "no mesh set".
