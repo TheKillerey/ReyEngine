@@ -390,9 +390,16 @@ These are pure renderer gaps — no amount of better bin reading fixes them.
 ### Hardcoded constants standing in for data
 
 `VfxParticleSimulator.cs`: `MaxParticlesPerEmitter = 4000` (silent truncation, `:68`); `dt` clamped to 0.1 s (`:140`); particle life floor 0.05 s (`:218`); `birthScale0.Y == 0 → X` (`:243`, hits 49,869 emitters); colour-gradient U axis for `colorLookUpType 1` uses an invented 400 units/s normalisation and types 2/3 are both treated as per-particle random (`:305-314`, with the code's own comment admitting it); V axis defaults to 0.5.
-`VfxSystemResolver.cs`: `rate = 10/s` when absent (6,499 emitters), `particleLifetime = 1 s` (38,239), `blendMode = 1` (110,540), `numFrames = 1` (30,115 with a multi-cell `texDiv`).
+`VfxSystemResolver.cs`: `blendMode = 1` (110,540), `numFrames = 1` (30,115 with a multi-cell `texDiv`).
 
-The rate/lifetime defaults were checked specifically and are **not** a significant error source — `rate` is genuinely absent on 0.31% of emitters and `particleLifetime` on 3.05%, and Riot authors those exact values explicitly often enough that they look like the real defaults.
+**Corrected (M801, M803):** the absent `rate` and `particleLifetime` defaults above were INVENTED, and this report
+once called them harmless because "Riot authors those exact values explicitly often enough that they look like the
+real defaults" - which has it backwards. Riot's writer OMITS a field at its schema default, so a value that is
+written often cannot be the default. The client schema (`data/meta/meta.db.json`) declares `rate` =
+ValueFloat{constantValue 0} and `particleLifetime` = ValueFloat{constantValue 3}. Of 1,255,667 constant
+particleLifetimes written, 0 are exactly 3.0; of 1,783,300 visual emitters, 0 write a rate of 0. LTK Manager's engine
+agrees. An absent rate now reads 0, and a continuous rate-0 emitter emits one particle at its first emission
+(LTK's reading). An absent particleLifetime reads 3 s.
 
 ---
 

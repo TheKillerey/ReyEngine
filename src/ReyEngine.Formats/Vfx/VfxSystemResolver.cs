@@ -450,7 +450,13 @@ public static class VfxSystemResolver
             // supports, which streamed 406 continuous emitters that the game spawns once (VfxParticleSimulator's
             // first emission). The 4,748 single-particle ones never read it.
             Rate: ReadCurveF(p, F_rate) ?? VfxCurveF.Zero,
-            ParticleLifetime: ReadCurveF(p, F_particleLife) ?? VfxCurveF.Const(1f),
+            // M803: absent is the declared default, ValueFloat { constantValue 3 } - the one revision of the schema
+            // (meta.db.json, build 5229820 to 16.19), and LTK Manager's reader. Riot's writer omits exactly that value: of
+            // the 1,255,667 emitters in the installed game that write particleLifetime as a bare constant, 0 write 3, while
+            // 1 is the commonest value (129,311). So the 43,384 visual emitters that write none are the ones authored at
+            // 3 s. It read as 1 s from M36, a value nothing supports: Janna's Q tornado meshes (single particles on a 6 s
+            // emitter) vanished one second into the flight, and slow emitters like the Baron pit runes blinked.
+            ParticleLifetime: ReadCurveF(p, F_particleLife) ?? VfxCurveF.Const(3f),
             EmitterLifetime: GetOptionalF32(p, F_lifetime),
             ParticleLinger: GetOptionalF32(p, F_particleLinger) ?? 0f,
             TimeBeforeFirstEmission: GetF32(p, F_timeBefore) ?? 0f,
