@@ -236,6 +236,8 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 resolveBinName: ResolveBinName,
                 resolveWadPath: ResolveWadPath,
                 fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader,
+                // M805: an esports banner's materials live in the map's shipping bin, parsed once when the banners were built
+                hostBin: mesh.HostBin,
                 // M732: this mesh was already decoded on the thread pool when the prop set was built.
                 decodedMesh: mesh.SknMesh);
         }

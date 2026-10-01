@@ -36,6 +36,10 @@ public sealed record PropMesh(
     /// does. Null for an added mesh, or a prop whose bin was not found; those keep the diffuse-only draw.</summary>
     public byte[]? SknBytes { get; init; }
     public byte[]? SkinBinBytes { get; init; }
+    /// <summary>M805: the bin the game has loaded beside this skin that its materials live in - the map's shipping bin
+    /// for an esports banner. Handed to the D3D11 scene preparation with <see cref="SkinBinBytes"/>; null for every
+    /// other prop, which resolves its materials exactly as before.</summary>
+    public ReyEngine.Formats.Materials.LoadedBin? HostBin { get; init; }
     /// <summary>M676: the skin's own <c>skinScale</c> (SkinMeshDataProperties), 1 when unauthored. The game
     /// scales the whole model by it; every placement is composed with it in
     /// <see cref="PropInstanceData.Place"/>.</summary>

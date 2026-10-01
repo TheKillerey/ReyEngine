@@ -152,7 +152,11 @@ public static class Dx11CharacterScene
         // thread while the prop set is built (BuildPropRenderSet), and this then decoded the SAME bytes a
         // second time - on the UI thread, inside the render frame, once per distinct prop mesh, every time
         // props are switched on or the scene is rebuilt. Null keeps the old behaviour.
-        MeshAsset? decodedMesh = null)
+        MeshAsset? decodedMesh = null,
+        // M805: a bin the game has loaded beside this skin - the map's shipping bin for a banner placed on the map,
+        // whose materials live there and nowhere the skin bin links. Already parsed by the caller, so a prop driver
+        // that prepares the mesh again on every republish does not parse it again. Null changes nothing.
+        LoadedBin? hostBin = null)
     {
         var state = driverState ?? MaterialDriverState.Rest;
         MeshAsset mesh;
@@ -198,7 +202,7 @@ public static class Dx11CharacterScene
 
         MaterialDocument? document = null;
         if (skinBinBytes is { Length: > 0 })
-            try { document = MaterialDocument.Parse(skinBinBytes, resolveBinName, resolveWadPath, ReadBin); }
+            try { document = MaterialDocument.Parse(skinBinBytes, resolveBinName, resolveWadPath, ReadBin, hostBin); }   // M805: hostBin
             catch (Exception ex) { sb.AppendLine($"skin bin: {ex.Message}"); }
 
         var bindings = document?.Materials ?? (IReadOnlyList<MaterialBinding>)Array.Empty<MaterialBinding>();

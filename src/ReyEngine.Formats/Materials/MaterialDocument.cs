@@ -20,6 +20,7 @@ public enum MaterialSourceKind { ChampionSkin, MapMaterials }
 public sealed class MaterialDocument
 {
     private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+    private static readonly uint StaticMaterialDefClass = HashAlgorithms.Fnv1a("StaticMaterialDef");   // M805
     private readonly BinTree _tree;
 
     public MaterialSourceKind Kind { get; }
@@ -198,8 +199,11 @@ public sealed class MaterialDocument
     /// <c>skinMeshProperties.material</c>/<c>materialOverride[].material</c> link points at a
     /// StaticMaterialDef this bin does not itself define. Null skips linked-bin resolution entirely
     /// (every existing caller that doesn't pass one behaves exactly as before).</param>
+    /// <param name="hostBin">M805: a bin the game has loaded beside this skin (see <see cref="LoadedBin"/>) - consulted
+    /// AFTER <c>tree.Dependencies</c>, only for a material link both leave unresolved. Null (every caller before M805)
+    /// changes nothing.</param>
     public static MaterialDocument Parse(byte[] data, Func<uint, string?> resolve,
-        Func<ulong, string?>? resolveWadPath = null, Func<string, byte[]?>? readBin = null)
+        Func<ulong, string?>? resolveWadPath = null, Func<string, byte[]?>? readBin = null, LoadedBin? hostBin = null)
     {
         var tree = SafeBinTree.Parse(data, out var issues);
         bool champion = tree.Objects.Values.Any(o => Field(o.Properties, "skinMeshProperties") is not null);
@@ -281,14 +285,14 @@ public sealed class MaterialDocument
         // path/name, and only for links this bin leaves unresolved - an object present locally always
         // wins even if a same-named one exists in a dependency.
         var linkedMaterials = new Dictionary<uint, (BinTreeObject Obj, string From)>();
-        if (champion && readBin is not null)
+        if (champion && (readBin is not null || hostBin is not null))   // M805: or a host bin alone
         {
             var missing = new HashSet<uint>();
             if (defaultMaterialHash is { } dmh && dmh != 0 && !tree.Objects.ContainsKey(dmh)) missing.Add(dmh);
             foreach (var link in assignment.Keys)
                 if (link != 0 && !tree.Objects.ContainsKey(link)) missing.Add(link);
 
-            if (missing.Count > 0)
+            if (missing.Count > 0 && readBin is not null)
             {
                 // Dependency paths are case-insensitive (WAD lookups hash the lowercased path); dedupe on
                 // that basis so a bin listing the same dependency twice with different casing is read once.
@@ -316,6 +320,20 @@ public sealed class MaterialDocument
                     }
                 }
             }
+
+            // M805: what the dependencies left unresolved, from a bin the game has loaded beside the skin (a map's own
+            // shipping bin for a character placed on that map). Same rule as a dependency: by hash, StaticMaterialDefs
+            // only, linked and therefore read-only; never consulted for an object the skin bin or a dependency defines.
+            if (hostBin is not null)
+                foreach (var hash in missing.ToList())
+                {
+                    if (!hostBin.Tree.Objects.TryGetValue(hash, out var obj)) continue;
+                    if (obj.ClassHash != StaticMaterialDefClass
+                        && !string.Equals(resolve(obj.ClassHash), "StaticMaterialDef", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    linkedMaterials[hash] = (obj, hostBin.Path);
+                    missing.Remove(hash);
+                }
         }
 
         // Every StaticMaterialDef (shared by champions and maps), plus any resolved from a linked bin above.

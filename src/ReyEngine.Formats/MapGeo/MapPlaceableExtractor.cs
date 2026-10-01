@@ -69,6 +69,42 @@ public sealed record MapAnimatedProp(string Name, Vector3 Position, Matrix4x4 Tr
 }
 
 /// <summary>
+/// M805: an esports sponsor banner - a <c>GdsMapObject</c> whose <c>extraInfo</c> holds a <c>GDSMapObjectBannerInfo</c>.
+/// Summoner's Rift places 117 (chunk Maps/MapGeometry/SR/Chunks/Esports_Banners in base_srx; 117 in every Map11 skin that
+/// has them), every one gated by the MapObjectESportSponsorBanners event (MutatorMapVisibilityController 0x11a9b55d).
+///
+/// <para><b>What stands there.</b> The object names no mesh. It is a LevelProp, named "LevelProp_" + a character + a
+/// number ("LevelProp_Srx_Banner_Vertical1"), and that character's Skin0 - Srx_Banner_Hero, _Horizontal, _Vertical or
+/// _VerticalThin, all four in Map11.wad - is drawn at <see cref="Transform"/>, the way a placed prop's skin is. Read from
+/// the data rather than the client: every banner name resolves to a character the map WAD ships, and that character's
+/// mesh under the transform lands on the object's authored boxMin/boxMax.</para>
+///
+/// <para><b>Sponsor art.</b> <see cref="BannerName"/> ("ORDER_MIDLANE_VERT_BANNER_1", from the linked EsportsBannerData)
+/// is a slot: map11.bin's EsportsRotatingBannerConfiguration fills it at runtime, per league, with a texture under
+/// assets/esports/sponsoredbanners/secret/ - all encrypted (M353). The banner skins' own flag material names
+/// srx_banner_flags.tex, which is what the editor shows.</para>
+/// </summary>
+/// <param name="CharacterName">"Srx_Banner_Vertical" for "LevelProp_Srx_Banner_Vertical1" - see <see cref="CharacterOf"/>;
+/// "" when the name implies none.</param>
+/// <param name="Id">The container and item key the object lives under (read-only: nothing writes banners).</param>
+public sealed record MapBannerProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterName,
+    string BannerName, uint VisibilityControllerHash, MapPlacementId Id = default)
+{
+    /// <summary>The skin drawn: Characters/&lt;CharacterName&gt;/Skins/Skin0, the one skin (beside Root) each banner
+    /// character ships. "" when <see cref="CharacterName"/> is.</summary>
+    public string Skin => CharacterName.Length == 0 ? "" : $"Characters/{CharacterName}/Skins/Skin0";
+
+    /// <summary>The character a LevelProp names: the "LevelProp_" prefix and the trailing number dropped. "" for a name
+    /// without the prefix, or with nothing left after it.</summary>
+    public static string CharacterOf(string name)
+    {
+        const string prefix = "LevelProp_";
+        if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return "";
+        return name[prefix.Length..].TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
+    }
+}
+
+/// <summary>
 /// Reads the remaining <c>MapPlaceableContainer.items</c> types beyond particles (M38): cubemap reflection
 /// probes (<c>MapCubemapProbe</c>) and placed characters / animated props (identified structurally by a
 /// <c>characterRecord</c> field). Never throws.
@@ -164,6 +200,77 @@ public static class MapPlaceableExtractor
             }
         }
         return (probes, props, sounds);
+    }
+
+    // M805: the esports banners (see MapBannerProp)
+    private static readonly uint GdsMapObjectClass = HashAlgorithms.Fnv1a("GdsMapObject");             // 0xda9e5c0c
+    private static readonly uint BannerInfoClass = HashAlgorithms.Fnv1a("GDSMapObjectBannerInfo");      // 0x69f67d4a
+    private static readonly uint F_extraInfo = HashAlgorithms.Fnv1a("extraInfo");
+    private static readonly uint F_bannerData = HashAlgorithms.Fnv1a("BannerData");
+    private static readonly uint F_bannerName = HashAlgorithms.Fnv1a("bannerName");
+    private static readonly uint F_visibilityController = HashAlgorithms.Fnv1a("VisibilityController");
+
+    /// <summary>
+    /// M805: the esports sponsor banners of a map's materials bin - every <c>GdsMapObject</c> whose <c>extraInfo</c>
+    /// carries a <c>GDSMapObjectBannerInfo</c>. No other GdsMapObject is read: the spawn nodes (type 9) and the other
+    /// LevelProps (the snails, gromp props, lizards ... of type 10) are left as they were. Never throws.
+    /// <para><b>One banner per item key.</b> Bloom and the boba skins carry their 117 banners twice: in the chunk their
+    /// MapContainer's <c>chunks</c> lists (a copy of their own, with two or three banners moved for that skin's terrain)
+    /// and in the base chunk, which they do not list. Drawn twice, the moved ones would stand beside themselves and the
+    /// rest z-fight. A key found in several containers is read from the one <c>chunks</c> lists, otherwise from the first.
+    /// A container nothing lists is still read - every other placeable is read that way (ruby_sr ships its banners in one).</para>
+    /// </summary>
+    public static IReadOnlyList<MapBannerProp> ExtractBanners(byte[] materialsBin)
+    {
+        var banners = new List<MapBannerProp>();
+        BinTree bin;
+        try { bin = SafeBinTree.Parse(materialsBin); }
+        catch { return banners; }
+
+        // the containers a MapContainer builds the map from (chunks: map[hash,link])
+        var listed = new HashSet<uint>();
+        foreach (var o in bin.Objects.Values)
+            if (Field(o.Properties, "chunks") is BinTreeMap chunks)
+                foreach (var chunk in chunks)
+                    if (chunk.Value is BinTreeObjectLink link) listed.Add(link.Value);
+
+        var byKey = new Dictionary<uint, (int At, bool Listed)>();
+        foreach (var o in bin.Objects.Values)
+        {
+            if (o.ClassHash != ContainerClass || Field(o.Properties, "items") is not BinTreeMap items) continue;
+            bool containerListed = listed.Contains(o.PathHash);
+            foreach (var kv in items)
+            {
+                if (kv.Value is not BinTreeStruct s || s.ClassHash != GdsMapObjectClass) continue;
+                if (Get(s, F_extraInfo) is not BinTreeContainer extra
+                    || extra.Elements.OfType<BinTreeStruct>().FirstOrDefault(e => e.ClassHash == BannerInfoClass) is not { } info)
+                    continue;
+                uint key = kv.Key is BinTreeHash kh ? kh.Value : 0u;
+                if (byKey.TryGetValue(key, out var seen))
+                {
+                    if (seen.Listed || !containerListed) continue;            // keep the first copy, or the listed one
+                    banners[seen.At] = ReadBanner(bin, o.PathHash, key, s, info); // the listed chunk's copy replaces an unlisted one
+                    byKey[key] = (seen.At, true);
+                    continue;
+                }
+                byKey[key] = (banners.Count, containerListed);
+                banners.Add(ReadBanner(bin, o.PathHash, key, s, info));
+            }
+        }
+        return banners;
+    }
+
+    private static MapBannerProp ReadBanner(BinTree bin, uint container, uint key, BinTreeStruct s, BinTreeStruct info)
+    {
+        var transform = Get(s, F_transform) is BinTreeMatrix44 m ? m.Value : Matrix4x4.Identity;
+        string name = NameOf(s);
+        // the slot name lives on the EsportsBannerData the info links, in the same bin
+        string slot = Get(info, F_bannerData) is BinTreeObjectLink data && data.Value != 0
+            && bin.Objects.TryGetValue(data.Value, out var dataObj)
+            && dataObj.Properties.TryGetValue(F_bannerName, out var bn) && bn is BinTreeString bs ? bs.Value : "";
+        return new MapBannerProp(name, transform.Translation, transform, MapBannerProp.CharacterOf(name), slot,
+            Get(s, F_visibilityController) is BinTreeObjectLink vc ? vc.Value : 0u,
+            new MapPlacementId(container, key));
     }
 
     /// <summary>Placed characters wrap their character record + skin in an embedded "character data" struct.

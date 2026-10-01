@@ -1086,7 +1086,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return (instances.Count > 0 ? new PropRenderSet(instances) : null, owners, instances.Count, failed);
     }
 
-    private PropMesh? TryBuildPropMesh(string skin, Dictionary<string, TextureImage?> texCache, string? clip = null)
+    /// <param name="hostBin">M805: the bin the game has loaded beside this skin, for materials no dependency of the skin
+    /// bin holds (an esports banner's live in the map's shipping bin). Null for every other prop: unchanged.</param>
+    private PropMesh? TryBuildPropMesh(string skin, Dictionary<string, TextureImage?> texCache, string? clip = null,
+        Formats.Materials.LoadedBin? hostBin = null)
     {
         try
         {
@@ -1098,7 +1101,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (sknBytes is null) return null;
 
             var mesh = SkinnedMeshDecoder.Decode(sknBytes);
-            var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName, ResolveWadPath, ReadAssetByPath);   // M777
+            var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName, ResolveWadPath, ReadAssetByPath, hostBin);   // M777, M805
 
             // M676: the skin's own scale, which the game applies to the whole model and this preview never
             // did - Baron and the camps drew at the mesh's authored size whatever the bin said.
@@ -1149,6 +1152,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 SknMesh = mesh, Skeleton = skeleton, IdleClip = idle,
                 SknBytes = sknBytes, SkinBinBytes = binBytes, SkinScale = skinScale,   // M676
+                HostBin = hostBin,   // M805: the D3D11 scene resolves the same materials
             };
         }
         catch { return null; }
@@ -3096,6 +3100,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void PublishAddedMeshPreview()
     {
         var instances = StagePropInstances();   // M798: every decoded prop, or only the ones the board stage shows
+        var banners = ShownBannerInstances();   // M805: the esports banners whose event is on (whatever the Props toggle says)
+        instances.AddRange(banners);
+        _publishedBanners = banners;
         foreach (var a in MapContent.AddedMeshes)
         {
             if (!a.IsEditorVisible || a.IsDisabled || a.IsRemoved) continue;
@@ -6851,7 +6858,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         int[] VisibilityIndices, bool HasMoves, int[] SelectedMeshIndices,
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces,
         BoardStageSnapshot? BoardStage = null,   // M797: the board-stage picker, where the tab left it
-        IReadOnlyList<string>? EnabledEvents = null);   // M802: the events that were ticked (session only)
+        IReadOnlyList<string>? EnabledEvents = null,   // M802: the events that were ticked (session only)
+        IReadOnlyList<MapBannerProp>? Banners = null);   // M805: the esports banners (decoded again when shown)
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
     private void OpenAssetDocument(AssetNodeViewModel? node)
@@ -7070,7 +7078,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             VisibilityAxes.Select(a => a.SelectedIndex).ToArray(), HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList(),
-            SnapshotBoardStage(), SnapshotMapEvents());
+            SnapshotBoardStage(), SnapshotMapEvents(), _mapBanners);
     }
 
     private void RestoreMapScene(MapScene s)
@@ -7084,6 +7092,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapVisibility = s.Visibility;
         _mapControllers = s.Controllers;
         _visibilityResolver = new MapVisibilityResolver(s.Controllers, s.Visibility);
+        SetMapBanners(s.Banners);          // M805: its banners, before anything below applies visibility - decoded again once an event shows them
         RebuildVisibilityAxes(s.Visibility, s.VisibilityIndices);
         RestoreBoardStage(s.BoardStage);   // M797: where the tab left the picker; before ApplyMapVisibility below reads the mask
         RestoreMapEvents(s.EnabledEvents); // M802: and the events it had ticked, read by the same ApplyMapVisibility
@@ -8185,6 +8194,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         RebuildVisibilityAxes(_mapVisibility);
         SetBoardStages(MapBoardStageSet.Empty);   // M797
         SetMapEvents(null);                       // M802
+        SetMapBanners(null);                      // M805: before the prop set is cleared below, so nothing republishes them
         VisibilityLayerBits.Clear();
         PlacementVisibilityLayerBits.Clear();
         HasPlacementLayerSelection = false;
@@ -8371,6 +8381,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (PlayAllParticles) RebuildParticlePlayback();
         if (AmbienceEnabled) UpdateAmbience(_lastCamPosForAudio, force: true);
         RefreshStageProps();   // M798: the placed props follow the board stage too
+        RefreshMapBanners();   // M805: and the esports banners follow their event
     }
 
     /// <summary>Visibility diagnostic for the primary-selected mesh under the current map filters.</summary>
@@ -12115,6 +12126,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private (IReadOnlyList<TextureImage?>? Textures, Formats.MapGeo.MapSunProperties? SunProperties, MapBoardStageSet BoardStages)
         TryLoadMapTextures(WadAssetEntry mapEntry, MapGeoAsset map)
     {
+        SetMapBanners(null);   // M805: nothing from the previous map, whatever happens below
         if (!ContentLoaded || !mapEntry.IsResolved) return (null, null, MapBoardStageSet.Empty);
 
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
@@ -12152,9 +12164,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             CurrentModelSounds = sounds.Count > 0 ? sounds : null;
             if (probes.Count > 0 || props.Count > 0 || sounds.Count > 0)
                 _log.Info("MapGeo", $"{probes.Count} cubemap probe(s), {props.Count} animated prop(s) ({props.Select(p => p.CharacterName).Distinct().Count()} characters), {sounds.Count} sound placement(s).");
+            // M805: the esports banners (GdsMapObject + GDSMapObjectBannerInfo) - listed only; decoded when an event shows one
+            var banners = MapPlaceableExtractor.ExtractBanners(binBytes);
+            SetMapBanners(banners);
+            if (banners.Count > 0)
+                _log.Info("MapGeo", $"{banners.Count} esports banner prop(s) ({string.Join(", ", banners.Select(b => b.CharacterName).Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))}), "
+                    + "drawn while the event that gates them is on.");
             LoadMapAudioBanks(binEntry.Path, sounds);   // M56/M60: direct MapAudio + VFX-carried map ambience
         }
-        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; }
+        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; SetMapBanners(null); }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
         var (materialToTexture, profiles, sunProperties) = ResolveMapMaterials(binEntry, names,

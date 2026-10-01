@@ -58,12 +58,14 @@ public static class ChampionMaterialResolver
     /// through to <see cref="MaterialDocument.Parse"/> so a materialOverride pointing into a LINKED bin
     /// (Nexus skin31's Glass_inst) resolves here too, not just on the D3D11 path. Null keeps the old,
     /// skin-bin-only behaviour.</param>
+    /// <param name="hostBin">M805: passed straight through to <see cref="MaterialDocument.Parse"/> - a bin the game has
+    /// loaded beside the skin (a map's shipping bin, for a character placed on that map). Null changes nothing.</param>
     public static Result Resolve(byte[] skinBin, Func<uint, string?> resolve,
-        Func<ulong, string?>? resolveWadPath = null, Func<string, byte[]?>? readBin = null)
+        Func<ulong, string?>? resolveWadPath = null, Func<string, byte[]?>? readBin = null, LoadedBin? hostBin = null)
     {
         try
         {
-            var doc = MaterialDocument.Parse(skinBin, resolve, resolveWadPath, readBin);
+            var doc = MaterialDocument.Parse(skinBin, resolve, resolveWadPath, readBin, hostBin);
             return new Result(
                 doc.SubmeshDiffuse(), doc.DefaultDiffusePath,
                 doc.SubmeshSampler(b => b.Mask), doc.DefaultMaskPath,

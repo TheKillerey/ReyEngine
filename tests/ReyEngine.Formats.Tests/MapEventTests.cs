@@ -894,7 +894,7 @@ public sealed class MapEventRealDataTests(ITestOutputHelper output)
         Assert.Equal(banners.Count, banners.Count(hash => !resolver.IsVisible(255, hash, none, null, new HashSet<string>())));
         Assert.Equal(0, banners.Count(hash => !resolver.IsVisible(255, hash, none, null, new HashSet<string> { "MapObjectESportSponsorBanners" })));
         output.WriteLine($"ran: {banners.Count} GdsMapObject banner prop(s) in base_srx: all hidden by default, all shown with MapObjectESportSponsorBanners on "
-            + "(the editor does not draw a GdsMapObject, so this changes no pixel)");
+            + "(M805: drawn as their characters while it is on - see MapBannerRealDataTests)");
     }
 
     [Fact]
