@@ -58,7 +58,9 @@ public sealed class ClientDepthRulesTests
         if (file is null) return;
         string source = File.ReadAllText(file);
 
-        int applied = source.IndexOf("if (EmulateClientDepthRules) depthWrite = true;", StringComparison.Ordinal);
+        // M807: Commit states the mode as a parameter (a thumbnail passes the value it was keyed with, and
+        // the three-argument Commit passes EmulateClientDepthRules), so the override reads that parameter.
+        int applied = source.IndexOf("if (emulateClientDepthRules) depthWrite = true;", StringComparison.Ordinal);
         int used = source.IndexOf("mat.WritesDepth = depthWrite;", StringComparison.Ordinal);
         Assert.True(applied > 0 && used > applied,
             "the override has to run before WritesDepth is read, or it does nothing");

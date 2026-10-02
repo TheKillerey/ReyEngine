@@ -51,7 +51,9 @@ public sealed class CinematicClockTests
         Assert.Contains("private float _captureLastTime = -1f;", surface);
         Assert.Contains("float delta = _captureLastTime < 0f ? 0f : MathF.Max(0f, timeSeconds - _captureLastTime);", surface);
         // a captured frame steps by that delta; a live frame drawn during a capture steps by nothing
-        Assert.Contains("float particleDt = _capture is { } cap ? cap.Delta : (liveFrameDuringCapture ? 0f : ParticleDelta(t));", surface);
+        // (M783 scales only the LIVE step by the Particle Editor's speed, and the statement now spans two lines)
+        string flat = System.Text.RegularExpressions.Regex.Replace(surface, @"\s+", " ");
+        Assert.Contains("float particleDt = _capture is { } cap ? cap.Delta : (liveFrameDuringCapture ? 0f : ParticleDelta(t) * (float)ParticleTimeScale);", flat);
         Assert.Contains("bool liveFrameDuringCapture = _capturing && _capture is null;", surface);
         // and only the captured frames move the props, every one of them
         Assert.Contains("PlayPropAnimations && !liveFrameDuringCapture", surface);
