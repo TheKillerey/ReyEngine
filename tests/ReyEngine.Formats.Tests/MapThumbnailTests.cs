@@ -617,17 +617,16 @@ public sealed partial class MapThumbnailTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void The_d3d11_library_is_pinned_so_releasing_the_last_device_cannot_unload_it()
+    public void The_d3d11_library_is_pinned_by_the_shared_renderer_so_releasing_the_last_device_cannot_unload_it()
     {
         // M807: ShaderPreviewRenderer.Dispose ends by freeing the Silk library handle. With the thumbnail device the last one in
         // the process, a thread whose entry point is inside d3d11.dll had not started yet and then started in the unloaded
         // image - a native access violation no catch sees (every Map12 batch, and two of two under cdb with the debug heap off).
-        // One extra load of the library, never freed, makes that unload a no-op.
+        // M809: the pin M807 kept here, for this worker alone, now lives in ShaderPreviewRenderer.Initialize and covers every host
+        // (D3D11LibraryPinTests pins it). The worker creates its device through Initialize and carries no pin of its own.
         if (!OperatingSystem.IsWindows()) { output.WriteLine("SKIPPED: d3d11.dll is Windows-only"); return; }
-        var pin = typeof(MapThumbnailRenderer).GetMethod("PinD3D11Library", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(pin);
-        pin!.Invoke(null, null);
-        pin.Invoke(null, null);   // the second call loads nothing more and throws nothing
+        ReyEngine.Rendering.D3D11.ShaderPreviewRenderer.PinD3D11Library();
+        ReyEngine.Rendering.D3D11.ShaderPreviewRenderer.PinD3D11Library();   // the second call loads nothing more and throws nothing
 
         using var self = System.Diagnostics.Process.GetCurrentProcess();
         Assert.Contains(self.Modules.Cast<System.Diagnostics.ProcessModule>(),
@@ -635,9 +634,9 @@ public sealed partial class MapThumbnailTests(ITestOutputHelper output)
 
         string? src = Source("src", "ReyEngine.App", "Services", "MapThumbnailRenderer.cs");
         if (src is null) { output.WriteLine("SKIPPED (source half): MapThumbnailRenderer.cs not found"); return; }
-        int pinned = src.IndexOf("PinD3D11Library();", StringComparison.Ordinal);
-        int created = src.IndexOf("new ShaderPreviewRenderer()", StringComparison.Ordinal);
-        Assert.True(pinned > 0 && created > pinned, "d3d11.dll must be pinned before the first device is created");
+        Assert.DoesNotContain("NativeLibrary", src);                       // no second copy of the pin
+        Assert.DoesNotContain("PinD3D11Library", src);
+        Assert.Contains("created.Initialize(out string? initError)", src);   // and its device comes from the call that pins
     }
 
     [Fact]

@@ -777,6 +777,7 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         error = null;
         try
         {
+            PinD3D11Library();   // M809: before the first Silk load - Dispose below can then never take the image's last reference
             _d3d = SilkD3D11.GetApi(null);
             var levels = stackalloc D3DFeatureLevel[2] { D3DFeatureLevel.Level111, D3DFeatureLevel.Level110 };
             D3DFeatureLevel got = default;
@@ -6265,6 +6266,7 @@ float4 psmain(VOut i) : SV_Target
             _stencilDepthStates[b, mode].Dispose();
         _linearMirror.Dispose();
         _ctx.Dispose(); _device.Dispose();
+        // M809: this frees Silk's handle on d3d11.dll, which is no longer the image's last reference - see PinD3D11Library
         _d3d?.Dispose();
     }
 }

@@ -403,7 +403,8 @@ public sealed class MapThumbnailRenderer : IMapThumbnailRenderer
 
         if (_renderer is null)
         {
-            PinD3D11Library();
+            // M809: d3d11.dll is pinned by ShaderPreviewRenderer.Initialize, for every host alike - this worker's ReleaseDevice is
+            // the release that used to crash when it was the process's last device (M807 pinned the library here, for this worker only)
             var created = new ShaderPreviewRenderer();
             if (!created.Initialize(out string? initError))
             {
@@ -445,21 +446,6 @@ public sealed class MapThumbnailRenderer : IMapThumbnailRenderer
         // gigabyte higher after an idle release than with a compacting one, measured), which it trims on its own schedule.
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: false);
     }
-
-    /// <summary>M807: <c>ShaderPreviewRenderer.Dispose</c> ends by freeing the Silk library handle, which unloads d3d11.dll when
-    /// nothing else in the process holds it. When the released device was the process's last one, a thread whose entry point is
-    /// inside d3d11.dll has not started running yet and starts in code that has just been unloaded: "Attempt to execute
-    /// non-executable address" in &lt;Unloaded_d3d11.dll&gt;, a native crash no catch sees (it hit Map12 runs outside a debugger
-    /// and two of two under cdb with the debug heap off; it never showed while another device was alive). One extra load of the
-    /// library, never freed, makes that unload a no-op. The device and everything on the GPU are still released; only the
-    /// library image stays mapped, and it is the one the viewport maps anyway.</summary>
-    private static void PinD3D11Library()
-    {
-        if (Interlocked.Exchange(ref _d3d11Pinned, 1) != 0) return;
-        try { System.Runtime.InteropServices.NativeLibrary.TryLoad("d3d11.dll", out _); }
-        catch { /* not Windows, or no such library: there is no device to release either */ }
-    }
-    private static int _d3d11Pinned;
 
     public void Dispose() => ReleaseDevice();
 
