@@ -35,7 +35,12 @@ public sealed class NewFeatureLookup : INotifyPropertyChanged
         {
             if (string.Equals(_lastSeenVersion, value, StringComparison.Ordinal)) return;
             _lastSeenVersion = value ?? "";
-            // Item[] is how Avalonia is told an indexer changed; every Classes.newFeature binding re-reads.
+            // M811: how a binding learns the indexer changed. Avalonia 12 re-reads a reflection indexer binding
+            // only for the indexer's own name, "Item". "Item[]" - Avalonia 11's and WPF's name, the only one
+            // raised until M811 - and an empty or null name leave every glow as it was (measured on the real
+            // MainWindow, UiProbe glowlive), so Got it put no glow out until the editor restarted. Both names
+            // are raised, so a binding that follows either rule re-reads.
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs("Item"));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs("Item[]"));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AnyUnseen)));
         }

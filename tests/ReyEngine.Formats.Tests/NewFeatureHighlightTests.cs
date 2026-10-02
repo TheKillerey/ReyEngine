@@ -52,6 +52,31 @@ public sealed class NewFeatureHighlightTests : IDisposable
         Assert.False(NewFeatures.IsNew("older-thing", "0.4.0"));
     }
 
+    /// <summary>M811: Got it put no glow out until the editor restarted. Avalonia 12 re-reads a reflection indexer
+    /// binding - <c>Classes.newFeature="{Binding NewFeature[id]}"</c> - only when the change is raised under the
+    /// indexer's own name, "Item". The lookup raised "Item[]" alone (Avalonia 11's and WPF's name), which Avalonia
+    /// 12 ignores, as it does an empty or a null name: measured on the real MainWindow headless (UiProbe
+    /// glowlive), where only "Item" changed a glow. A window check needs the headless platform this project does
+    /// not reference, so this pins the notification the binding needs and the value its re-read then gets.</summary>
+    [Fact]
+    public void AcknowledgingLiveTellsTheGlowBindingsUnderTheNameAvalonia12Reads()
+    {
+        var lookup = new ReyEngine.App.ViewModels.NewFeatureLookup { LastSeenVersion = "0.4.0" };
+        Assert.True(lookup["future-thing"]);
+        var raised = new List<string?>();
+        lookup.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        lookup.LastSeenVersion = "0.5.0";   // what DismissNewFeatures does when Got it is pressed
+        Assert.Contains("Item", raised);
+        Assert.Contains(nameof(lookup.AnyUnseen), raised);
+        Assert.False(lookup["future-thing"]);
+        Assert.False(lookup.AnyUnseen);
+
+        raised.Clear();
+        lookup.LastSeenVersion = "0.5.0";   // nothing changed, nothing to re-read
+        Assert.Empty(raised);
+    }
+
     [Fact]
     public void ALaterReleasesFeaturesStillGlowAfterAcknowledgingThisOne()
     {
