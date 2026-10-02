@@ -105,6 +105,29 @@ public sealed record MapBannerProp(string Name, Vector3 Position, Matrix4x4 Tran
 }
 
 /// <summary>
+/// M806: a level prop - a <c>GdsMapObject</c> of type 10 named "LevelProp_" + a character + a number, that is not an esports
+/// banner (<see cref="MapBannerProp"/>). The map's ambient creatures and set dressing: base_srx places 72 of 12 characters
+/// (SRU_AntlerMouse, SRU_Duck, SRU_stag, sru_bird, sru_dragon_prop, sru_gromp_prop, sru_lizard, sru_snail and the four
+/// Sru_Es_Bannerplatform / Sru_Es_Bannerwall characters), Bilgewater 80, the Howling Abyss 32. Like a banner it names no mesh:
+/// the character's Skin0 is drawn at <see cref="Transform"/>, with the skin's own scale under it, as a placed prop is.
+/// </summary>
+/// <param name="VisibilityFlags">The object's <c>mVisibilityFlags</c>, 255 when it authors none (23 shipped objects author
+/// 128, every one an sru_gromp_prop - two on base_srx).</param>
+/// <param name="VisibilityControllerHash">The object's own <c>VisibilityController</c>, or else the controller a
+/// <c>MapChunkVisibility</c> entry gives the chunk (container) it lives in; 0 when neither does - which is every shipped
+/// level prop.</param>
+/// <param name="IdleAnimation">The clip a <c>GDSMapObjectAnimationInfo</c> names (<c>defaultAnimation</c>, "idle1" on the
+/// three TFT_BoardPoro), "" when the object names none.</param>
+/// <param name="Id">The container and item key the object lives under (read-only: nothing writes level props).</param>
+public sealed record MapLevelProp(string Name, Vector3 Position, Matrix4x4 Transform, string CharacterName,
+    int VisibilityFlags = 255, bool HasVisibilityFlags = false, uint VisibilityControllerHash = 0, string IdleAnimation = "",
+    MapPlacementId Id = default)
+{
+    /// <summary>The skin drawn: Characters/&lt;CharacterName&gt;/Skins/Skin0. "" when <see cref="CharacterName"/> is.</summary>
+    public string Skin => CharacterName.Length == 0 ? "" : $"Characters/{CharacterName}/Skins/Skin0";
+}
+
+/// <summary>
 /// Reads the remaining <c>MapPlaceableContainer.items</c> types beyond particles (M38): cubemap reflection
 /// probes (<c>MapCubemapProbe</c>) and placed characters / animated props (identified structurally by a
 /// <c>characterRecord</c> field). Never throws.
@@ -212,8 +235,8 @@ public static class MapPlaceableExtractor
 
     /// <summary>
     /// M805: the esports sponsor banners of a map's materials bin - every <c>GdsMapObject</c> whose <c>extraInfo</c>
-    /// carries a <c>GDSMapObjectBannerInfo</c>. No other GdsMapObject is read: the spawn nodes (type 9) and the other
-    /// LevelProps (the snails, gromp props, lizards ... of type 10) are left as they were. Never throws.
+    /// carries a <c>GDSMapObjectBannerInfo</c>. No other GdsMapObject is read here: the other LevelProps (the snails, gromp
+    /// props, lizards ... of type 10) are <see cref="ExtractLevelProps"/>' (M806), the spawn and info nodes nobody's. Never throws.
     /// <para><b>One banner per item key.</b> Bloom and the boba skins carry their 117 banners twice: in the chunk their
     /// MapContainer's <c>chunks</c> lists (a copy of their own, with two or three banners moved for that skin's terrain)
     /// and in the base chunk, which they do not list. Drawn twice, the moved ones would stand beside themselves and the
@@ -222,11 +245,106 @@ public static class MapPlaceableExtractor
     /// </summary>
     public static IReadOnlyList<MapBannerProp> ExtractBanners(byte[] materialsBin)
     {
-        var banners = new List<MapBannerProp>();
         BinTree bin;
         try { bin = SafeBinTree.Parse(materialsBin); }
-        catch { return banners; }
+        catch { return Array.Empty<MapBannerProp>(); }
+        return GdsObjects(bin, s => BannerInfoOf(s) is not null)
+            .Select(g => ReadBanner(bin, g.Container, g.Key, g.Item, BannerInfoOf(g.Item)!))
+            .ToList();
+    }
 
+    // M806: the other level props (see MapLevelProp)
+    private static readonly uint AnimationInfoClass = HashAlgorithms.Fnv1a("GDSMapObjectAnimationInfo");   // 0x892e1ff2
+    private static readonly uint ChunkVisibilityClass = HashAlgorithms.Fnv1a("MapChunkVisibility");        // 0xcdb1c8f6
+    private static readonly uint F_type = HashAlgorithms.Fnv1a("type");
+    private static readonly uint F_defaultAnimation = HashAlgorithms.Fnv1a("defaultAnimation");
+    private static readonly uint F_chunk = HashAlgorithms.Fnv1a("chunk");
+    private const byte LevelPropType = 10;   // GdsMapObject.type of every shipped "LevelProp_" object (M806 census)
+
+    /// <summary>
+    /// M806: the level props of a map's materials bin - every <c>GdsMapObject</c> of type 10 named "LevelProp_" + a character,
+    /// except the esports banners (<see cref="ExtractBanners"/> reads those). One per item key, as the banners. Never throws.
+    /// <para><b>Gating.</b> Each keeps its own <c>VisibilityController</c>; with none, it takes the controller a
+    /// <c>MapChunkVisibility</c> component gives its chunk - the map hides a whole chunk that way (Summoner's Rift gates two:
+    /// Esports_Banners by its sponsor-banner event and the Hall of Legends chunk by its event). Measured over every shipping
+    /// map: no level prop carries either - all of them live in listed, ungated chunks - so every one resolves to 0.</para>
+    /// </summary>
+    public static IReadOnlyList<MapLevelProp> ExtractLevelProps(byte[] materialsBin)
+    {
+        BinTree bin;
+        try { bin = SafeBinTree.Parse(materialsBin); }
+        catch { return Array.Empty<MapLevelProp>(); }
+        var chunkGates = ChunkVisibilityControllers(bin);
+        return GdsObjects(bin, s => Get(s, F_type) is BinTreeU8 { Value: LevelPropType }
+                                    && MapBannerProp.CharacterOf(NameOf(s)).Length > 0 && BannerInfoOf(s) is null)
+            .Select(g => ReadLevelProp(g.Container, g.Key, g.Item, chunkGates.GetValueOrDefault(g.Container)))
+            .ToList();
+    }
+
+    /// <summary>M806: what a <c>MapChunkVisibility</c> component (on the MapContainer) gates: chunk (container) path hash to the
+    /// visibility controller its entry names. Found by field (<c>chunk</c> + <c>VisibilityController</c>) inside the component,
+    /// since neither the entry's class nor its list field has a known name.</summary>
+    private static Dictionary<uint, uint> ChunkVisibilityControllers(BinTree bin)
+    {
+        var gates = new Dictionary<uint, uint>();
+        void Walk(BinTreeProperty p, bool inside)
+        {
+            switch (p)
+            {
+                case BinTreeStruct s:
+                    bool here = inside || s.ClassHash == ChunkVisibilityClass;
+                    if (here && Get(s, F_chunk) is BinTreeObjectLink chunk && Get(s, F_visibilityController) is BinTreeObjectLink controller)
+                        gates[chunk.Value] = controller.Value;
+                    foreach (var v in s.Properties.Values) Walk(v, here);
+                    break;
+                case BinTreeContainer c:
+                    foreach (var e in c.Elements) Walk(e, inside);
+                    break;
+                case BinTreeOptional o when o.Value is not null:
+                    Walk(o.Value, inside);
+                    break;
+            }
+        }
+        foreach (var o in bin.Objects.Values)
+            foreach (var v in o.Properties.Values) Walk(v, false);
+        return gates;
+    }
+
+    private static MapLevelProp ReadLevelProp(uint container, uint key, BinTreeStruct s, uint chunkController)
+    {
+        var transform = Get(s, F_transform) is BinTreeMatrix44 m ? m.Value : Matrix4x4.Identity;
+        string name = NameOf(s);
+        var flags = Get(s, F_visibilityFlags);
+        string idle = Get(s, F_extraInfo) is BinTreeContainer extra
+                      && extra.Elements.OfType<BinTreeStruct>().FirstOrDefault(e => e.ClassHash == AnimationInfoClass) is { } animation
+                      && Get(animation, F_defaultAnimation) is BinTreeString clip ? clip.Value : "";
+        return new MapLevelProp(name, transform.Translation, transform, MapBannerProp.CharacterOf(name),
+            flags switch
+            {
+                BinTreeU8 u8 => u8.Value,
+                BinTreeU16 u16 => u16.Value,
+                BinTreeU32 u32 => unchecked((int)u32.Value),
+                BinTreeI32 i32 => i32.Value,
+                _ => 255,
+            },
+            flags is not null,
+            Get(s, F_visibilityController) is BinTreeObjectLink own && own.Value != 0 ? own.Value : chunkController,
+            idle,
+            new MapPlacementId(container, key));
+    }
+
+    private static BinTreeStruct? BannerInfoOf(BinTreeStruct s) =>
+        Get(s, F_extraInfo) is BinTreeContainer extra ? extra.Elements.OfType<BinTreeStruct>().FirstOrDefault(e => e.ClassHash == BannerInfoClass) : null;
+
+    /// <summary>
+    /// M805/M806: the <c>GdsMapObject</c> items of the bin's <c>MapPlaceableContainer</c>s that <paramref name="take"/> accepts,
+    /// one per item key. Bloom and the boba skins carry their banners twice - in the chunk their MapContainer's <c>chunks</c>
+    /// lists (a copy of their own, with two or three banners moved for that skin's terrain) and in the base chunk, which they do
+    /// not list - so a key found in several containers is read from the one <c>chunks</c> lists, otherwise from the first. A
+    /// container nothing lists is still read - every other placeable is read that way.
+    /// </summary>
+    private static List<(uint Container, uint Key, BinTreeStruct Item)> GdsObjects(BinTree bin, Func<BinTreeStruct, bool> take)
+    {
         // the containers a MapContainer builds the map from (chunks: map[hash,link])
         var listed = new HashSet<uint>();
         foreach (var o in bin.Objects.Values)
@@ -234,6 +352,7 @@ public static class MapPlaceableExtractor
                 foreach (var chunk in chunks)
                     if (chunk.Value is BinTreeObjectLink link) listed.Add(link.Value);
 
+        var found = new List<(uint Container, uint Key, BinTreeStruct Item)>();
         var byKey = new Dictionary<uint, (int At, bool Listed)>();
         foreach (var o in bin.Objects.Values)
         {
@@ -241,23 +360,20 @@ public static class MapPlaceableExtractor
             bool containerListed = listed.Contains(o.PathHash);
             foreach (var kv in items)
             {
-                if (kv.Value is not BinTreeStruct s || s.ClassHash != GdsMapObjectClass) continue;
-                if (Get(s, F_extraInfo) is not BinTreeContainer extra
-                    || extra.Elements.OfType<BinTreeStruct>().FirstOrDefault(e => e.ClassHash == BannerInfoClass) is not { } info)
-                    continue;
+                if (kv.Value is not BinTreeStruct s || s.ClassHash != GdsMapObjectClass || !take(s)) continue;
                 uint key = kv.Key is BinTreeHash kh ? kh.Value : 0u;
                 if (byKey.TryGetValue(key, out var seen))
                 {
-                    if (seen.Listed || !containerListed) continue;            // keep the first copy, or the listed one
-                    banners[seen.At] = ReadBanner(bin, o.PathHash, key, s, info); // the listed chunk's copy replaces an unlisted one
+                    if (seen.Listed || !containerListed) continue;      // keep the first copy, or the listed one
+                    found[seen.At] = (o.PathHash, key, s);             // the listed chunk's copy replaces an unlisted one
                     byKey[key] = (seen.At, true);
                     continue;
                 }
-                byKey[key] = (banners.Count, containerListed);
-                banners.Add(ReadBanner(bin, o.PathHash, key, s, info));
+                byKey[key] = (found.Count, containerListed);
+                found.Add((o.PathHash, key, s));
             }
         }
-        return banners;
+        return found;
     }
 
     private static MapBannerProp ReadBanner(BinTree bin, uint container, uint key, BinTreeStruct s, BinTreeStruct info)

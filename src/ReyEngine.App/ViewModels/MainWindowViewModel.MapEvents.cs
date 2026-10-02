@@ -22,7 +22,8 @@ namespace ReyEngine.App.ViewModels;
 /// <para><b>Not gated, by the data:</b> none of Riot's <c>MapAudio</c> sounds, <c>MapAnimatedProp</c> props or cubemap
 /// probes names a visibility controller (0 of them across Map11, Map12, Map22, Map30 and Map453), so they have nothing for
 /// an event to gate. M805: the banner props (<c>GdsMapObject</c>s with banner info) are drawn as their characters while their
-/// event is on (MainWindowViewModel.MapBanners.cs); no other GdsMapObject is.</para>
+/// event is on (MainWindowViewModel.MapBanners.cs). M806: the other level props are drawn with Props on, and an event gates one
+/// only through its own or its chunk's controller - none shipped has either (MainWindowViewModel.LevelProps.cs).</para>
 /// </summary>
 public sealed partial class MainWindowViewModel
 {
@@ -94,6 +95,7 @@ public sealed partial class MainWindowViewModel
         _log.Info("Events", $"{names.Count} event(s) gate content in this map: {string.Join(", ", names)}. All are OFF, as in a normal game, so "
             + $"{hidden.Meshes} mesh(es) ({hidden.Groups} draw group(s)), {hidden.Particles} particle placement(s) and {hidden.Sounds} sound(s) "
             + "start hidden." + (hidden.Banners > 0 ? $" So do {hidden.Banners} esports banner prop(s)." : "")   // M805
+            + (hidden.LevelProps > 0 ? $" So do {hidden.LevelProps} level prop(s)." : "")                         // M806
             + " Tick an event under Visibility Layers > Events to show what it gates (session only).");
     }
 
@@ -116,10 +118,12 @@ public sealed partial class MainWindowViewModel
         var hidden = CountHiddenByEvents();
         _log.Info("Events", $"Event '{ev.Name}' {(ev.IsOn ? "ON" : "off")}: it gates {gated.Meshes} mesh(es) ({gated.Groups} draw group(s)), "
             + $"{gated.Particles} particle placement(s) and {gated.Sounds} sound(s)"
+            + (gated.LevelProps > 0 ? $", {gated.LevelProps} level prop(s)" : "")                  // M806
             + (gated.Banners > 0 ? $", and {gated.Banners} esports banner prop(s)" : "") + ". "   // M805
             + $"Events on: {(_enabledEvents.Count == 0 ? "none" : string.Join(", ", _enabledEvents.Order(StringComparer.OrdinalIgnoreCase)))}; "
             + $"still hidden by events: {hidden.Meshes} mesh(es) ({hidden.Groups} draw group(s)), {hidden.Particles} particle placement(s), {hidden.Sounds} sound(s)"
-            + (hidden.Banners > 0 ? $", {hidden.Banners} banner prop(s)" : "") + ".");
+            + (hidden.Banners > 0 ? $", {hidden.Banners} banner prop(s)" : "")
+            + (hidden.LevelProps > 0 ? $", {hidden.LevelProps} level prop(s)" : "") + ".");   // M806
     }
 
     /// <summary>Does the event part of this controller let a particle's sound play? True with no event on the controller.
@@ -133,16 +137,17 @@ public sealed partial class MainWindowViewModel
     {
         var gated = CountGatedBy(name);
         // M805: the banner props are drawn now, so they count - and the old "objects the editor does not show" aside went
-        string gates = gated.Meshes + gated.Particles + gated.Sounds + gated.Banners == 0
+        string gates = gated.Meshes + gated.Particles + gated.Sounds + gated.Banners + gated.LevelProps == 0
             ? "Nothing this editor draws is gated by it, so ticking it changes nothing on screen."
             : $"In this map it gates {gated.Meshes} mesh(es), {gated.Particles} particle placement(s) and {gated.Sounds} sound(s)"
+              + (gated.LevelProps > 0 ? $", {gated.LevelProps} level prop(s) (drawn with Props on)" : "")   // M806
               + (gated.Banners > 0 ? $", and {gated.Banners} esports banner prop(s)." + DescribeMapBanners(gated.Banners) : ".");
         return $"Event \"{name}\" (MutatorMapVisibilityController). In a normal game no event is on, so the content it gates is hidden; "
             + $"tick it to show that content. {gates} Session only - never saved.";
     }
 
     /// <summary>How much of the open map the controllers that reach event <paramref name="name"/> gate.</summary>
-    private (int Meshes, int Groups, int Particles, int Sounds, int Banners) CountGatedBy(string name)
+    private (int Meshes, int Groups, int Particles, int Sounds, int Banners, int LevelProps) CountGatedBy(string name)
     {
         if (_mapControllers is not { } controllers) return default;
         bool Gated(uint hash) => hash != 0 && controllers.Resolve(hash).Mutators.Contains(name);
@@ -150,14 +155,14 @@ public sealed partial class MainWindowViewModel
     }
 
     /// <summary>How much of the open map is hidden by events right now (with the events that are on).</summary>
-    private (int Meshes, int Groups, int Particles, int Sounds, int Banners) CountHiddenByEvents()
+    private (int Meshes, int Groups, int Particles, int Sounds, int Banners, int LevelProps) CountHiddenByEvents()
     {
         if (_mapControllers is null) return default;
         var resolver = _visibilityResolver ??= new MapVisibilityResolver(_mapControllers, _mapVisibility);
         return CountContent(hash => hash != 0 && !resolver.EventsAllow(hash, _enabledEvents));
     }
 
-    private (int Meshes, int Groups, int Particles, int Sounds, int Banners) CountContent(Func<uint, bool> controllerCounts)
+    private (int Meshes, int Groups, int Particles, int Sounds, int Banners, int LevelProps) CountContent(Func<uint, bool> controllerCounts)
     {
         int meshes = 0, groups = 0;
         if (_currentMap is { } map)
@@ -169,6 +174,7 @@ public sealed partial class MainWindowViewModel
         int particles = CurrentModelParticles?.Count(p => controllerCounts(p.VisibilityControllerHash)) ?? 0;
         int sounds = CurrentModelSounds?.Count(s => controllerCounts(s.VisibilityControllerHash)) ?? 0;
         int banners = _mapBanners.Count(b => controllerCounts(b.VisibilityControllerHash));   // M805
-        return (meshes, groups, particles, sounds, banners);
+        int levelProps = _mapLevelProps.Count(p => controllerCounts(p.VisibilityControllerHash));   // M806: none shipped is gated
+        return (meshes, groups, particles, sounds, banners, levelProps);
     }
 }

@@ -28,8 +28,8 @@ namespace ReyEngine.App.ViewModels;
 ///
 /// <para><b>Cost.</b> Nothing is decoded on map open: the four skins are decoded once per map, off the UI thread, the
 /// first time an event shows a banner. Ticking and unticking afterwards only republishes the prop set. Read-only: the
-/// banners are not listed for editing, carry no gizmo and are never written. Not drawn: the other LevelProp
-/// GdsMapObjects (snails, gromp props, lizards ...), which no event gates and which the editor still does not show.</para>
+/// banners are not listed for editing, carry no gizmo and are never written. The other LevelProp GdsMapObjects (snails,
+/// gromp props, lizards ...) are drawn with Props on since M806 (MainWindowViewModel.LevelProps.cs).</para>
 /// </summary>
 public sealed partial class MainWindowViewModel
 {
@@ -111,7 +111,7 @@ public sealed partial class MainWindowViewModel
     /// the UI thread.</summary>
     private BannerBuild BuildBannerInstances(IReadOnlyList<MapBannerProp> banners, string? mapPath)
     {
-        var host = LoadBannerMaterials(banners, mapPath, out string hostNote);
+        var host = LoadHostMaterials(banners.Select(b => b.Skin), mapPath, out string hostNote);
         var meshBySkin = new Dictionary<string, PropMesh?>(StringComparer.OrdinalIgnoreCase);
         var texCache = new Dictionary<string, TextureImage?>(StringComparer.OrdinalIgnoreCase);
         var instances = new List<PropInstanceData>();
@@ -147,16 +147,17 @@ public sealed partial class MainWindowViewModel
         return new BannerBuild(instances, owners, summary);
     }
 
-    /// <summary>The StaticMaterialDefs the banner skins link from the map's shipping bin (map11.bin), as a small
+    /// <summary>The StaticMaterialDefs <paramref name="skins"/> link from the map's shipping bin (map11.bin), as a small
     /// <see cref="LoadedBin"/> holding only those - the whole bin is about 4.6 MB and is parsed once, here, and dropped.
-    /// Null when the map names no shipping bin or the skins link nothing in it; <paramref name="note"/> then says so.</summary>
-    private LoadedBin? LoadBannerMaterials(IReadOnlyList<MapBannerProp> banners, string? mapPath, out string note)
+    /// Null when the map names no shipping bin or the skins link nothing in it; <paramref name="note"/> then says so.
+    /// M806: shared with the level props (MainWindowViewModel.LevelProps.cs), whose shipped skins link nothing there.</summary>
+    private LoadedBin? LoadHostMaterials(IEnumerable<string> skins, string? mapPath, out string note)
     {
         note = "";
         string? binPath = mapPath is null ? null : MapBinPathFor(mapPath);
         if (binPath is null || ReadAssetByPath(binPath) is not { } bytes)
         {
-            note = $" (the map's shipping bin {binPath ?? "(none for this map path)"} was not found, so the banner materials could not be resolved)";
+            note = $" (the map's shipping bin {binPath ?? "(none for this map path)"} was not found, so materials only it holds could not be resolved)";
             return null;
         }
         LoadedBin whole;
@@ -165,7 +166,7 @@ public sealed partial class MainWindowViewModel
 
         // exactly the materials the skins resolve to there - found by the same rule the resolvers use
         var keep = new Dictionary<uint, BinTreeObject>();
-        foreach (string skin in banners.Select(b => b.Skin).Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (string skin in skins.Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin") is not { } skinBin) continue;
             try
@@ -174,9 +175,9 @@ public sealed partial class MainWindowViewModel
                     if (m.LinkedFromBin == binPath && whole.Tree.Objects.TryGetValue(m.ObjectPathHash, out var obj))
                         keep[m.ObjectPathHash] = obj;
             }
-            catch { /* a skin that will not parse resolves nothing; its banners are counted as unresolved */ }
+            catch { /* a skin that will not parse resolves nothing; its placements are counted as unresolved */ }
         }
-        if (keep.Count == 0) { note = $" (the banner skins link no material in {binPath})"; return null; }
+        if (keep.Count == 0) { note = $" (no material from {binPath} needed)"; return null; }
         note = $" ({keep.Count} material(s) from {binPath})";
         return new LoadedBin(binPath, new BinTree(keep.Values.ToList(), Array.Empty<string>()));
     }

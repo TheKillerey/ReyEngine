@@ -1029,7 +1029,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showPropMeshes;
     [ObservableProperty] private PropRenderSet? _currentPropMeshes;
 
-    partial void OnShowPropMeshesChanged(bool value) => _ = RefreshPropMeshesAsync();
+    partial void OnShowPropMeshesChanged(bool value)
+    {
+        _ = RefreshPropMeshesAsync();
+        RefreshLevelProps();   // M806: the level props show with Props, like the placed props
+    }
 
     private async System.Threading.Tasks.Task RefreshPropMeshesAsync()
     {
@@ -3103,6 +3107,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var banners = ShownBannerInstances();   // M805: the esports banners whose event is on (whatever the Props toggle says)
         instances.AddRange(banners);
         _publishedBanners = banners;
+        var levelProps = ShownLevelPropInstances();   // M806: the level props, by the placed props' rules
+        instances.AddRange(levelProps);
+        _publishedLevelProps = levelProps;
         foreach (var a in MapContent.AddedMeshes)
         {
             if (!a.IsEditorVisible || a.IsDisabled || a.IsRemoved) continue;
@@ -6859,7 +6866,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         List<MapLayerGroupViewModel> LayerGroups, string MapName, List<MapPieceViewModel> Pieces,
         BoardStageSnapshot? BoardStage = null,   // M797: the board-stage picker, where the tab left it
         IReadOnlyList<string>? EnabledEvents = null,   // M802: the events that were ticked (session only)
-        IReadOnlyList<MapBannerProp>? Banners = null);   // M805: the esports banners (decoded again when shown)
+        IReadOnlyList<MapBannerProp>? Banners = null,   // M805: the esports banners (decoded again when shown)
+        IReadOnlyList<MapLevelProp>? LevelProps = null);   // M806: the level props (decoded again when shown)
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
     private void OpenAssetDocument(AssetNodeViewModel? node)
@@ -7078,7 +7086,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             VisibilityAxes.Select(a => a.SelectedIndex).ToArray(), HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList(),
-            SnapshotBoardStage(), SnapshotMapEvents(), _mapBanners);
+            SnapshotBoardStage(), SnapshotMapEvents(), _mapBanners, _mapLevelProps);
     }
 
     private void RestoreMapScene(MapScene s)
@@ -7093,6 +7101,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _mapControllers = s.Controllers;
         _visibilityResolver = new MapVisibilityResolver(s.Controllers, s.Visibility);
         SetMapBanners(s.Banners);          // M805: its banners, before anything below applies visibility - decoded again once an event shows them
+        SetMapLevelProps(s.LevelProps);    // M806: and its level props, decoded again once Props shows them
         RebuildVisibilityAxes(s.Visibility, s.VisibilityIndices);
         RestoreBoardStage(s.BoardStage);   // M797: where the tab left the picker; before ApplyMapVisibility below reads the mask
         RestoreMapEvents(s.EnabledEvents); // M802: and the events it had ticked, read by the same ApplyMapVisibility
@@ -8195,6 +8204,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SetBoardStages(MapBoardStageSet.Empty);   // M797
         SetMapEvents(null);                       // M802
         SetMapBanners(null);                      // M805: before the prop set is cleared below, so nothing republishes them
+        SetMapLevelProps(null);                   // M806: likewise
         VisibilityLayerBits.Clear();
         PlacementVisibilityLayerBits.Clear();
         HasPlacementLayerSelection = false;
@@ -8382,6 +8392,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (AmbienceEnabled) UpdateAmbience(_lastCamPosForAudio, force: true);
         RefreshStageProps();   // M798: the placed props follow the board stage too
         RefreshMapBanners();   // M805: and the esports banners follow their event
+        RefreshLevelProps();   // M806: and the level props the board stage and their event, as the placed props do
     }
 
     /// <summary>Visibility diagnostic for the primary-selected mesh under the current map filters.</summary>
@@ -12127,6 +12138,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         TryLoadMapTextures(WadAssetEntry mapEntry, MapGeoAsset map)
     {
         SetMapBanners(null);   // M805: nothing from the previous map, whatever happens below
+        SetMapLevelProps(null);   // M806: likewise
         if (!ContentLoaded || !mapEntry.IsResolved) return (null, null, MapBoardStageSet.Empty);
 
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
@@ -12170,9 +12182,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (banners.Count > 0)
                 _log.Info("MapGeo", $"{banners.Count} esports banner prop(s) ({string.Join(", ", banners.Select(b => b.CharacterName).Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))}), "
                     + "drawn while the event that gates them is on.");
+            // M806: the other level props (snails, birds, banner platforms ...) - listed only; decoded when Props shows one
+            var levelProps = MapPlaceableExtractor.ExtractLevelProps(binBytes);
+            SetMapLevelProps(levelProps);
+            if (levelProps.Count > 0)
+                _log.Info("MapGeo", $"{levelProps.Count} level prop(s) of {levelProps.Select(p => p.CharacterName).Distinct(StringComparer.OrdinalIgnoreCase).Count()} character(s), "
+                    + "drawn with Props on (read-only).");
             LoadMapAudioBanks(binEntry.Path, sounds);   // M56/M60: direct MapAudio + VFX-carried map ambience
         }
-        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; SetMapBanners(null); }
+        catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; SetMapBanners(null); SetMapLevelProps(null); }
 
         var names = map.Groups.Select(g => g.Material).Where(m => m.Length > 0).Distinct().ToList();
         var (materialToTexture, profiles, sunProperties) = ResolveMapMaterials(binEntry, names,
