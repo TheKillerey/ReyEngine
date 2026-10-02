@@ -2324,8 +2324,12 @@ public sealed class ViewportControl : OpenGlControlBase
         return true;
     }
 
-    /// <summary>Recentre the camera on a world point (M35 particle focus), keeping a close-in distance.</summary>
-    private void FocusOnPoint(Vector3 p)
+    /// <summary>Recentre the camera on a world point (M35 particle focus), keeping a close-in distance.
+    /// M810: public, and the one implementation of "focus" for every host. It used to be reached only from the GL render
+    /// (<see cref="FocusPoint"/> sets <c>_pendingFocus</c>, which <c>OnOpenGlRender</c> consumes), and this control is hidden - and
+    /// never renders - under Direct3D 11, the default: the Focus buttons did nothing there. The main window now asks for the
+    /// focus itself, for either renderer; the camera it moves is the one both of them draw with.</summary>
+    public void FocusOnPoint(Vector3 p)
     {
         // The viewport pre-mirrors Riot world X before applying the camera view. Camera state lives
         // in that mirrored space too (CameraMoved converts it back), so mirror an external focus point.

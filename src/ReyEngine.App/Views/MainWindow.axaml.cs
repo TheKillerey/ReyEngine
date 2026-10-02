@@ -162,6 +162,8 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                              && vm.UseDx11Viewport && _dx11?.IsReady == true) OnDx11Toggled(vm);
                     // M808: a map was OPENED - the camera goes where its Content Browser picture looks from
                     else if (e.PropertyName == nameof(MainWindowViewModel.MapFrameRequest)) FrameViewportForOpenedMap(vm);
+                    // M810: a Focus button (or F) asked for the selection - the camera goes there, whichever renderer draws
+                    else if (e.PropertyName == nameof(MainWindowViewModel.FocusRequest)) FocusViewportOnRequest(vm);
                 };
             // M808: the camera lives in this window. A map tab takes its camera with it when another tab takes the viewport,
             // and gets it back when it returns.
@@ -219,6 +221,26 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     {
         if (vm.UseDx11Viewport) QueueDx11Frame();
         else Viewport.RequestRedraw();
+    }
+
+    /// <summary>
+    /// M810: the Focus buttons of the Object inspector and the F key. The camera goes to the point the view model worked out from
+    /// what is selected. This used to be a property the GL control applied on its next render; under Direct3D 11 - the default - that
+    /// control is hidden and never renders, so nothing moved. <see cref="ViewportControl.FocusOnPoint"/> is the one implementation
+    /// (it mirrors the point into the camera's display space); the camera it moves is the one both renderers draw with.
+    /// </summary>
+    private void FocusViewportOnRequest(MainWindowViewModel vm)
+    {
+        Viewport.FocusOnPoint(vm.FocusRequestPoint);
+        RedrawViewport(vm);
+    }
+
+    /// <summary>M810: F, "Focus Selected": the selection when there is one, as the Focus buttons do; the whole map, as Frame does
+    /// (M808), when there is none.</summary>
+    private void FocusSelectionOrFrame()
+    {
+        if (DataContext is MainWindowViewModel vm && vm.RequestFocusOnSelection()) return;
+        FrameViewport();
     }
 
     // ---- M248: the D3D11 side-by-side surface ----
@@ -1530,7 +1552,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
 
     private void OnViewportKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == _kFocus) { FrameViewport(); return; }   // M808
+        if (e.Key == _kFocus) { FocusSelectionOrFrame(); return; }   // M808: Frame; M810: the selection first
         _heldKeys.Add(e.Key);
     }
 

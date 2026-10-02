@@ -388,7 +388,8 @@ public sealed partial class MapThumbnailTests
         Assert.Contains("var size = ViewportInput.Bounds;", window);
         Assert.Contains("Viewport.FrameCamera(size.Width, size.Height);", window);
         Assert.Contains("ViewportInput.SizeChanged +=", window);              // a map opened before the first layout is framed when there is one
-        Assert.Contains("if (e.Key == _kFocus) { FrameViewport(); return; }", window);
+        Assert.Contains("if (e.Key == _kFocus) { FocusSelectionOrFrame(); return; }", window);   // M810: the selection first, this when there is none
+        Assert.Contains("if (DataContext is MainWindowViewModel vm && vm.RequestFocusOnSelection()) return;\n        FrameViewport();", window.Replace("\r\n", "\n"));
         Assert.DoesNotContain("Viewport.FocusSelected()", window);
         Assert.Contains("FrameViewport();   // M808", window);                // the Frame button, which under Direct3D 11 asked a hidden control
 

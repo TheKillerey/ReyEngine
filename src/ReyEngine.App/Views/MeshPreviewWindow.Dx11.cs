@@ -47,6 +47,12 @@ public partial class MeshPreviewWindow
         {
             if (e.PropertyName is nameof(MeshPreviewViewModel.UseDx11Preview) && vm.UseDx11Preview)
                 StartDx11(vm);
+            // M810: the camera follows FocusPoint - the arena puts it on the champion at the spawn and keeps it there while he
+            // walks. The GL control applies that on its next render (the binding in the XAML); hidden under Direct3D 11 it never
+            // renders, and the camera stayed where it was. FocusOnPoint is the one implementation, and the camera is the one both
+            // renderers draw with; the D3D11 loop is continuous, so the next frame shows it.
+            else if (e.PropertyName is nameof(MeshPreviewViewModel.FocusPoint) && vm.UseDx11Preview && vm.FocusPoint is { } focus)
+                PreviewViewport.FocusOnPoint(focus);
         };
         if (vm.UseDx11Preview) StartDx11(vm);
     }

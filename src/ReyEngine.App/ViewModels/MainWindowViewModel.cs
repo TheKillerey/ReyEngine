@@ -199,7 +199,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private ParticlePlacementViewModel? _selectedParticleNode;               // the selected placement (leaf)
     [ObservableProperty] private IReadOnlyList<System.Numerics.Vector3>? _particleMarkers;         // positions shown in the viewport
     [ObservableProperty] private System.Numerics.Vector3? _selectedParticleMarker;
-    [ObservableProperty] private System.Numerics.Vector3? _particleFocusPoint;                     // set to recentre the camera
+    // M810: the focus point is no longer a property the GL control watches - see MainWindowViewModel.Focus.cs (FocusRequest)
 
     public bool HasParticles => MapContent.HasParticles;
 
@@ -967,12 +967,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>M55b: explicitly frame the camera on the selected placeable (selection itself no longer
-    /// moves the camera — Unity-style: select is passive, Focus is an action).</summary>
+    /// moves the camera — Unity-style: select is passive, Focus is an action).
+    /// M810: the point comes from what is selected and the window moves the shared camera, for either renderer -
+    /// see <see cref="RequestFocusOnSelection"/>.</summary>
     [RelayCommand]
-    private void FocusSelectedPlaceable()
-    {
-        if (SelectedParticleMarker is { } pos) ParticleFocusPoint = pos;
-    }
+    private void FocusSelectedPlaceable() => RequestFocusOnSelection();
 
     /// <summary>M55/M77b: bucket-grid overlay — the grid's COMPLETE baked scene mesh as 3D wireframe
     /// (every unique triangle edge; a bucket grid is a simplified bake of the map). No flat cell lines,

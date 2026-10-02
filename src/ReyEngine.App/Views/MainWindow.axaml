@@ -476,7 +476,6 @@
                 SunProperties="{Binding CurrentSunProperties}"
                 ScreenFog="{Binding CurrentPostFog}"
                 FogEnabled="{Binding ShowFog}"
-                FocusPoint="{Binding ParticleFocusPoint}"
                 PreviewMode="{Binding PreviewMode}" />
 
             <!-- transparent surface that forwards pointer input to the viewport camera -->
