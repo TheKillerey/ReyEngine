@@ -39,7 +39,7 @@ public static class NewFeatures
     /// <summary>The release whose highlights are currently on offer. Bumped when a release ADDS entries -
     /// a fix-only release (0.4.6) leaves it, so the What's New list keeps its newest header and nothing
     /// glows for a release that changed no entry point.</summary>
-    public const string CurrentVersion = "0.4.10";
+    public const string CurrentVersion = "0.5.0";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -119,6 +119,21 @@ public static class NewFeatures
         NewFeature.Note("0.4.10", "A placed prop can wait for the game clock — Appear after N seconds, set when placing or later in the prop inspector"),
         NewFeature.Note("0.4.10", "Old character placements convert to client-side props in one click, from the prop inspector"),
         NewFeature.Note("0.4.10", "Jade maps: one click switches off the old jade champion ground projections, shipped as a layer you can turn off"),
+        // 0.5.0. Three entry points in this window whose capability changed: the Content Browser tab (map
+        // previews), Lighting… (both fogs are edited there) and Open in Particle Editor. The board stage
+        // picker and the Events block live in the outliner's item templates, with no control here to glow
+        // on, so they are notes - as are the renderer default, the level props, the gizmo, Focus and the
+        // LTK Manager declarations, which live inside other windows or arrive by themselves.
+        new("map-previews",     "0.5.0", "Content Browser — every map shows a rendered preview, and opens framed the way its preview shows it"),
+        new("fog",              "0.5.0", "Lighting — edit a map's height fog and screen fog, drawn the way the game draws them"),
+        new("particle-editor",  "0.5.0", "Particle Editor — forces with Mute and Solo, a Move handle for emitters and force centres, particles born on meshes and on a character"),
+        NewFeature.Note("0.5.0", "Direct3D 11 is the default renderer, and the viewport toolbar is two short strips: what the mouse does, and how the view looks"),
+        NewFeature.Note("0.5.0", "TFT boards: a Board stage picker shows a board the way its own stages set it up, placed props included"),
+        NewFeature.Note("0.5.0", "Event content (Hall of Legends, MSI trophies, esports banners) starts hidden as in a normal game; tick it under Events to show it"),
+        NewFeature.Note("0.5.0", "Maps show their critters and decorations: snails, birds, poros, boats and the esports banners, drawn with the placed props"),
+        NewFeature.Note("0.5.0", "The gizmo keeps its size from every camera, rotate follows the mouse round the ring, and Focus and F go to whatever is selected"),
+        NewFeature.Note("0.5.0", "Project Settings can send game bin edits to LTK Manager 1.20+ as declarations, so a mod keeps Riot's later changes to those bins"),
+        NewFeature.Note("0.5.0", "Bake tangents into a skin's .skn for normal-mapped skins, byte for byte what LTK Manager writes"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever

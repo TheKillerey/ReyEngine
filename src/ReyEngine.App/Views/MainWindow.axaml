@@ -128,6 +128,7 @@
                   ToolTip.Tip="Fly a camera through the map on keyframes and export the move as a numbered PNG sequence. Every frame is rendered at a fixed time step, so the result is smooth whatever the viewport is running at, and identical on every run. Renders through the Direct3D 11 viewport." />
         <Separator />
         <MenuItem Header="Open in Particle Editor" Command="{Binding OpenActiveInParticleEditorCommand}"
+                  Classes.newFeature="{Binding NewFeature[particle-editor]}"
                   ToolTip.Tip="Open the active document's .bin in the Particle Editor (works for skin bins and map materials.bin that contain VFX systems)" />
         <MenuItem Header="Open in HUD Editor" Command="{Binding OpenInHudEditorCommand}"
                   ToolTip.Tip="Open a HUD layout bin (ClientStates/…/UIBase) in the visual HUD editor — see every element rendered at its position with its texture" />
@@ -147,7 +148,8 @@
           </MenuItem>
           <Separator />
           <MenuItem Header="Lighting…" Command="{Binding OpenLightingCommand}"
-                    ToolTip.Tip="Sun, sky, lightmap brightness, point-light placement and the light table — everything that drives how the map is lit in the viewport, and what a bake reproduces" />
+                    Classes.newFeature="{Binding NewFeature[fog]}"
+                    ToolTip.Tip="Sun, sky, fog, lightmap brightness, point-light placement and the light table — everything that drives how the map is lit in the viewport, and what a bake reproduces" />
           <MenuItem Header="Bake Lighting…" Command="{Binding OpenLightBakeCommand}"
                     ToolTip.Tip="Bake the current lighting into the map's lightmap atlases; offers to generate a lightmap layout first for maps that have none" />
           <Separator />
@@ -949,7 +951,7 @@
           <TabControl SelectedIndex="{Binding BottomDockTab}" Padding="0" Margin="0">
 
             <!-- CONTENT BROWSER (Unreal/Windows-style: folder tree + tiles) -->
-            <TabItem FontSize="12">
+            <TabItem FontSize="12" Classes.newFeature="{Binding NewFeature[map-previews]}">
               <TabItem.Header><TextBlock Text="Content Browser" FontSize="11" /></TabItem.Header>
           <DockPanel>
             <!-- Column 0 held the "CONTENT BROWSER" header; the tab header names the pane now. -->
