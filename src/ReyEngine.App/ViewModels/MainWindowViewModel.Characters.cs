@@ -229,19 +229,11 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     {
         if (mesh.SknBytes is null) return null;
         if (OpenDx11ShaderCache(out _) is not { } cache) return null;
-        try
-        {
-            return Services.Dx11CharacterScene.Prepare(mesh.SknBytes, mesh.SkinBinBytes, cache, ShaderPerms(),
-                readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
-                resolveBinName: ResolveBinName,
-                resolveWadPath: ResolveWadPath,
-                fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader,
-                // M805: an esports banner's materials live in the map's shipping bin, parsed once when the banners were built
-                hostBin: mesh.HostBin,
-                // M732: this mesh was already decoded on the thread pool when the prop set was built.
-                decodedMesh: mesh.SknMesh);
-        }
-        catch { return null; }
+        // M807: the preparation itself is PropMeshBuilder's, which the Content Browser's map thumbnails call as well.
+        return Services.PropMeshBuilder.PrepareDx11Scene(mesh, cache, ShaderPerms(),
+            readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
+            resolveBinName: ResolveBinName,
+            resolveWadPath: ResolveWadPath);
     }
 
     /// <summary>M680: the map's lightgrid, read once per map on first ask. The bin names it
@@ -303,8 +295,12 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
 
         try
         {
-            _mounts.AddFallback(new WadMount(WadArchive.Open(wadPath, _resolver),
-                AssetSourceKind.RiotReference, editable: false, name: Path.GetFileName(wadPath)));
+            var champion = new WadMount(WadArchive.Open(wadPath, _resolver),
+                AssetSourceKind.RiotReference, editable: false, name: Path.GetFileName(wadPath));
+            // M807: the fallback list is enumerated by a thumbnail draw on its own thread; a draw that overlaps this add is not kept
+            NoteMapThumbnailInputsChanged();
+            _mounts.AddFallback(champion);
+            NoteMapThumbnailInputsChanged();
             _log.Info("Character", $"Mounted {Path.GetFileName(wadPath)} as a read-only reference.");
             return true;
         }

@@ -119,6 +119,23 @@ public static class Dx11SceneBuilder
 
     // ---------------------------------------------------------------- CPU half
 
+    /// <summary>
+    /// <para>M807: how much <c>Prepare</c> may spend decoding textures. The viewport takes <see cref="None"/> - every texture at full size on every core. The
+    /// Content Browser's map thumbnails take <see cref="Thumbnail"/>: nothing past 256 on a side (the largest stored mip that
+    /// fits is decoded on its own, so the full-size copy never exists) and two decoders at a time, at below-normal priority,
+    /// so a background thumbnail cannot take every core from the editor it runs beside.</para>
+    ///
+    /// <para><paramref name="Checkpoint"/> is asked before each texture of the capped path: it waits while the editor is busy
+    /// with something a background job must not compete with, and answers false once the job is cancelled, which ends the loop.
+    /// Null asks nothing. (The viewport's uncapped path never asks.)</para>
+    /// </summary>
+    public readonly record struct PrepareLimits(int MaxTextureSize, int MaxDecodeParallelism, Func<bool>? Checkpoint)
+    {
+        /// <summary>No cap on size or parallelism: what <c>Prepare</c> did before M807.</summary>
+        public static PrepareLimits None => new(0, 0, null);
+        public static PrepareLimits Thumbnail => new(256, 2, null);
+    }
+
     public static PreparedScene Prepare(
         ShaderCacheReader cache,
         ShaderPermutationIndex? perms,
@@ -134,7 +151,22 @@ public static class Dx11SceneBuilder
         // M456: does this map have dynamic point lights to draw? Required rather than optional, for the
         // exact reason grassTintPath became required in M365d - an omitted argument silently disables a
         // whole feature while every count in the log still looks healthy.
-        bool pinDynamicLighting)
+        bool pinDynamicLighting) =>
+        Prepare(cache, perms, map, materials, readAsset, mapGeoPath, grassTintPath, pinDynamicLighting, PrepareLimits.None);
+
+    /// <summary>M807: <c>Prepare</c> with the texture budget stated. The one implementation: the 8-argument form above is this with
+    /// <see cref="PrepareLimits.None"/>, so the viewport and the thumbnails cannot resolve a material two ways. As there,
+    /// every parameter is required - <paramref name="limits"/> included.</summary>
+    public static PreparedScene Prepare(
+        ShaderCacheReader cache,
+        ShaderPermutationIndex? perms,
+        MapGeoAsset map,
+        IReadOnlyList<MaterialBinding> materials,
+        Func<ulong, byte[]?> readAsset,
+        string? mapGeoPath,
+        string? grassTintPath,
+        bool pinDynamicLighting,
+        PrepareLimits limits)
     {
         var t0 = DateTime.UtcNow;
         int pinnedDynamic = 0, pinFailed = 0;
@@ -397,7 +429,7 @@ public static class Dx11SceneBuilder
         scene.ShadowShaders = LoadShadowShaders(cache);
         scene.PostFogShaders = LoadPostFogShaders(cache);
 
-        DecodeTextures(distinct, readAsset, scene);
+        DecodeTextures(distinct, readAsset, scene, limits);
         scene.PrepareMs = (DateTime.UtcNow - t0).TotalMilliseconds;
         return scene;
     }
@@ -413,9 +445,47 @@ public static class Dx11SceneBuilder
     /// fewer files, and decoding per binding would make this slower than the version it replaced.</para>
     /// </summary>
     private static void DecodeTextures(
-        HashSet<string> distinct, Func<ulong, byte[]?> readAsset, PreparedScene scene)
+        HashSet<string> distinct, Func<ulong, byte[]?> readAsset, PreparedScene scene, PrepareLimits limits)
     {
         var keys = distinct.ToArray();
+        var decoded = new System.Collections.Concurrent.ConcurrentDictionary<string, TextureImage>(
+            StringComparer.Ordinal);
+
+        // M807: a thumbnail reads each texture inside its own decode and drops the compressed copy at once. The viewport's
+        // path below reads every texture first, which holds the whole compressed set (hundreds of megabytes on Summoner's
+        // Rift) while the decoders run - affordable for a foreground load, not for a background picture. The WAD read is
+        // locked, so two decoders still read one at a time; it is the decode that was ever worth overlapping.
+        if (limits.MaxTextureSize > 0 || limits.MaxDecodeParallelism > 0)
+        {
+            var streaming = new System.Threading.Tasks.ParallelOptions
+                { MaxDegreeOfParallelism = limits.MaxDecodeParallelism > 0 ? limits.MaxDecodeParallelism : -1 };
+            var checkpoint = limits.Checkpoint;
+            System.Threading.Tasks.Parallel.For(0, keys.Length, streaming,
+                // a pool thread decodes at below-normal priority for as long as it works for this loop, then gets its own back
+                () =>
+                {
+                    var self = System.Threading.Thread.CurrentThread;
+                    var before = self.Priority;
+                    if (before > System.Threading.ThreadPriority.BelowNormal) self.Priority = System.Threading.ThreadPriority.BelowNormal;
+                    return before;
+                },
+                (i, loop, before) =>
+                {
+                    // the editor began a map load while this loop ran, or the job was cancelled: wait, or stop
+                    if (checkpoint is not null && !checkpoint()) { loop.Stop(); return before; }
+                    byte[] bytes;
+                    try { bytes = readAsset(HashAlgorithms.WadPath(keys[i])) ?? Array.Empty<byte>(); }
+                    catch { return before; }
+                    if (bytes.Length == 0) return before;
+                    try { decoded[keys[i]] = TextureDecoder.DecodeToMaxSize(bytes, limits.MaxTextureSize); }
+                    catch { }   // as below: a texture that will not decode is left out, never a failed scene
+                    return before;
+                },
+                before => System.Threading.Thread.CurrentThread.Priority = before);
+            foreach (var kv in decoded) scene.Textures[kv.Key] = kv.Value;
+            return;
+        }
+
         var raw = new byte[keys.Length][];
 
         for (int i = 0; i < keys.Length; i++)
@@ -423,9 +493,6 @@ public static class Dx11SceneBuilder
             try { raw[i] = readAsset(HashAlgorithms.WadPath(keys[i])) ?? Array.Empty<byte>(); }
             catch { raw[i] = Array.Empty<byte>(); }
         }
-
-        var decoded = new System.Collections.Concurrent.ConcurrentDictionary<string, TextureImage>(
-            StringComparer.Ordinal);
 
         System.Threading.Tasks.Parallel.For(0, keys.Length, i =>
         {
@@ -472,7 +539,13 @@ public static class Dx11SceneBuilder
     /// </summary>
     public static bool EmulateClientDepthRules { get; set; }
 
-    public static Result Commit(ShaderPreviewRenderer renderer, PreparedScene scene, string gameVersion)
+    public static Result Commit(ShaderPreviewRenderer renderer, PreparedScene scene, string gameVersion) =>
+        Commit(renderer, scene, gameVersion, EmulateClientDepthRules);
+
+    /// <summary>M807: <c>Commit</c> with the Game Depth flag stated. The one implementation: the three-argument form is this with
+    /// <see cref="EmulateClientDepthRules"/>, read at that moment. A thumbnail passes the value it was KEYED with, so a toggle
+    /// between the tile being described and the map being drawn cannot file a picture under the wrong key.</summary>
+    public static Result Commit(ShaderPreviewRenderer renderer, PreparedScene scene, string gameVersion, bool emulateClientDepthRules)
     {
         var sb = new StringBuilder();
         var t0 = DateTime.UtcNow;
@@ -572,7 +645,7 @@ public static class Dx11SceneBuilder
             // M557: the client keeps the depth mask on transparents; see EmulateClientDepthRules. The
             // blend state below is left alone deliberately - the point is to reproduce the client's DEPTH
             // behaviour, not to stop compositing.
-            if (EmulateClientDepthRules) depthWrite = true;
+            if (emulateClientDepthRules) depthWrite = true;
 
             // M788: the pass's own writeMask can independently forbid depth/colour writes - a stencil-only
             // mask mesh (TFT's TheLastDrop_Stencil01_MAT: depthEnable false, stencilEnable true, writeMask

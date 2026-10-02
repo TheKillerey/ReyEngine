@@ -46,11 +46,15 @@ public sealed class PropGlMaterialTests
     public void TheControlUploadsEveryLayerAndTheViewModelResolvesThem()
     {
         var control = Source("src", "ReyEngine.App", "Views", "ViewportControl.cs");
+        // M807: the prop decode moved from the view model into PropMeshBuilder (the map thumbnails build their props with it
+        // too); the view model's TryBuildPropMesh calls it with the full detail the viewport has always had
+        var builder = Source("src", "ReyEngine.App", "Services", "PropMeshBuilder.cs");
         var vm = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs");
-        if (control is null || vm is null) return;
+        if (control is null || builder is null || vm is null) return;
         Assert.Contains("Upload(s.MatCap), Upload(s.MatCapMask), s.Material)", control);
-        Assert.Contains("Material = mat.HasAny ? ToSubmeshMaterial(mat.Profile(s.Material)) with { BlendWritesDepth = true } : null,", vm);
-        Assert.Contains("Emissive = Tex(mat.ForEmissive(s.Material)),", vm);
+        Assert.Contains("Material = mat.HasAny ? MapSubmeshResources.ToSubmeshMaterial(mat.Profile(s.Material)) with { BlendWritesDepth = true } : null,", builder);
+        Assert.Contains("Emissive = Tex(mat.ForEmissive(s.Material)),", builder);
+        Assert.Contains("PropBuilder.TryBuild(skin, texCache, clip, hostBin, Services.PropMeshDetail.Full)", vm);
     }
 
     [Fact]

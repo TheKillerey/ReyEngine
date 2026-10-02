@@ -49,13 +49,15 @@ public sealed class PropAnimationChoiceTests
     {
         var card = Source("src", "ReyEngine.App", "Views", "SceneObjectInspectorView.axaml");
         var main = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs");
-        if (card is null || main is null) return;
+        // M807: the prop decode moved out of the view model into the builder the map thumbnails share
+        var builder = Source("src", "ReyEngine.App", "Services", "PropMeshBuilder.cs");
+        if (card is null || main is null || builder is null) return;
         Assert.Contains("SelectedItem=\"{Binding SelectedPropNode.EditedAnimation}\"", card);
         Assert.Contains("Command=\"{Binding OpenPropInCharacterEditorCommand}\"", card);
         // the render set is keyed by skin AND clip, so two placements with different clips get two poses
         Assert.Contains("string key = clip is null ? p.Skin : p.Skin + \"|\" + clip;", main);
         // the idle stays the fallback when the chosen name resolves to nothing
-        Assert.Contains("(clip is not null ? TryFindClip(skin, clip) : null) ?? TryFindIdleClip(skin)", main);
+        Assert.Contains("(clip is not null ? TryFindClip(skin, clip) : null) ?? TryFindIdleClip(skin)", builder);
         // the idle entry is offered first
         Assert.Contains("PropAnimationChoices.Add(AnimatedPropViewModel.IdleChoice);", main);
     }

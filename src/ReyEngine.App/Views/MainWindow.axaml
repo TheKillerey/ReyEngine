@@ -1037,7 +1037,8 @@
                 <!-- M50: the materials quick-list was removed from the Content Browser — selecting a
                      .materials.bin/skin .bin now opens the INSPECTOR's Materials tab (right panel). -->
                 <Grid x:Name="BrowserItemsPanel" DragDrop.AllowDrop="True" Background="Transparent">
-                <ScrollViewer Padding="6,4" IsVisible="{Binding !ContentBrowser.ListView}">
+                <!-- M807: named so the code-behind can tell the view model which tiles are in view (map tiles draw the map for those only) -->
+                <ScrollViewer x:Name="BrowserGridScroll" Padding="6,4" IsVisible="{Binding !ContentBrowser.ListView}">
                 <ItemsControl x:Name="BrowserGrid" ItemsSource="{Binding ContentBrowser.Items}">
                   <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
@@ -1076,6 +1077,9 @@
                             <MenuItem Header="Export…" Command="{Binding $parent[Window].DataContext.ExportSelectedCommand}" />
                             <MenuItem Header="Copy Resolved Path" Command="{Binding $parent[Window].DataContext.CopyResolvedPathCommand}" />
                             <MenuItem Header="Copy Hash" Command="{Binding $parent[Window].DataContext.CopyHashCommand}" />
+                            <!-- M807: a map tile shows a rendered picture of the map; this draws it again (a texture edited under the map is not seen by its cache key) -->
+                            <MenuItem Header="Refresh Thumbnail" IsVisible="{Binding WantsMapThumbnail}"
+                                      Command="{Binding $parent[Window].DataContext.RefreshMapThumbnailCommand}" CommandParameter="{Binding}" />
                             <MenuItem Header="Refresh" Command="{Binding $parent[Window].DataContext.RefreshBrowserCommand}" />
                           </ContextMenu>
                         </Button.ContextMenu>

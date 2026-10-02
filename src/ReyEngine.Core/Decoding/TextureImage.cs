@@ -82,6 +82,94 @@ public static class TextureDecoder
         return new TextureImage(w, h, rgba);
     }
 
+    /// <summary>
+    /// <para>M807: <see cref="Decode"/> for a caller that will never use more than <paramref name="maxSize"/> texels on a side -
+    /// the Content Browser's map thumbnails, which draw a whole map into 384 pixels. A .tex that carries its mip chain
+    /// (BC1, BC3 or BGRA8 - all but a handful of the game's textures) is not decoded at full size and shrunk: the largest
+    /// stored mip that fits is decoded on its own, which for a 4096 square atlas is a sixty-fourth of the work and of the
+    /// memory. Anything else - no chain, another format, a texture already small enough, DDS, TGA - takes
+    /// <see cref="Decode"/> and <see cref="TextureReduce"/>, so the result is always at most <paramref name="maxSize"/> on a side
+    /// and never an exception <see cref="Decode"/> would not throw.</para>
+    ///
+    /// <para>The mip is the game's own, built by its tools, not a box filter of the top level; the two differ by a few levels
+    /// per texel. A <paramref name="maxSize"/> that is not positive is <see cref="Decode"/> unchanged.</para>
+    /// </summary>
+    public static TextureImage DecodeToMaxSize(byte[] data, int maxSize)
+    {
+        if (maxSize <= 0) return Decode(data);
+        if (!IsEncryptedAsset(data) && TryDecodeTexMip(data, maxSize) is { } mip) return mip;
+        return TextureReduce.ToMaxSize(Decode(data), maxSize);
+    }
+
+    /// <summary>The largest stored mip of a mipped 2D .tex whose longer side is at most <paramref name="maxSize"/>, or null
+    /// when this cannot say (see <see cref="DecodeToMaxSize"/>). The layout is the one <see cref="TryDecodeExtendedTex"/> and
+    /// the reference reader read: a 12-byte header (magic, width, height, depth, format, resource type, flags), then the
+    /// mips SMALLEST FIRST, each a whole number of blocks.</summary>
+    private static TextureImage? TryDecodeTexMip(byte[] data, int maxSize)
+    {
+        const int HeaderSize = 12;
+        if (data.Length < HeaderSize || data[0] != 'T' || data[1] != 'E' || data[2] != 'X' || data[3] != 0) return null;
+
+        int width = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(4, 2));
+        int height = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(6, 2));
+        int depth = data[8];
+        byte format = data[9], resource = data[10], flags = data[11];
+        if (resource != 0 || depth > 1 || (flags & 1) == 0) return null;   // a plain 2D texture with a mip chain
+        if (width <= 0 || height <= 0 || Math.Max(width, height) <= maxSize) return null;
+
+        // format: 10/11 BC1 (8 bytes a 4x4 block), 12 BC3 (16 bytes), 20 uncompressed BGRA8
+        int block, bytesPerBlock;
+        CompressionFormat? bc;
+        switch (format)
+        {
+            case 10: case 11: block = 4; bytesPerBlock = 8; bc = CompressionFormat.Bc1WithAlpha; break;   // the "1bitalpha" cutouts are BC1 with a transparent texel
+            case 12: block = 4; bytesPerBlock = 16; bc = CompressionFormat.Bc3; break;
+            case 20: block = 1; bytesPerBlock = 4; bc = null; break;
+            default: return null;
+        }
+
+        int mipCount = (int)Math.Floor(Math.Log2(Math.Max(width, height))) + 1;
+        long MipBytes(int level)
+        {
+            int w = Math.Max(1, width >> level), h = Math.Max(1, height >> level);
+            return (long)((w + block - 1) / block) * ((h + block - 1) / block) * bytesPerBlock;
+        }
+
+        int pick = 0;
+        while (pick < mipCount - 1 && Math.Max(Math.Max(1, width >> pick), Math.Max(1, height >> pick)) > maxSize) pick++;
+
+        long total = 0, before = 0;
+        for (int level = 0; level < mipCount; level++)
+        {
+            long bytes = MipBytes(level);
+            total += bytes;
+            if (level > pick) before += bytes;   // smaller mips are stored first
+        }
+        if (data.Length - HeaderSize < total) return null;   // a truncated chain: let the full decoder say what it is
+
+        int mw = Math.Max(1, width >> pick), mh = Math.Max(1, height >> pick);
+        int offset = checked(HeaderSize + (int)before);
+        int length = checked((int)MipBytes(pick));
+        var rgba = new byte[checked(mw * mh * 4)];
+
+        if (bc is null)
+        {
+            for (int i = 0; i < mw * mh; i++)
+            {
+                int s = offset + i * 4, d = i * 4;
+                rgba[d] = data[s + 2]; rgba[d + 1] = data[s + 1]; rgba[d + 2] = data[s]; rgba[d + 3] = data[s + 3];
+            }
+            return new TextureImage(mw, mh, rgba);
+        }
+
+        var pixels = new BcDecoder().DecodeRaw(data.AsSpan(offset, length).ToArray(), mw, mh, bc.Value);
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            rgba[i * 4] = pixels[i].r; rgba[i * 4 + 1] = pixels[i].g; rgba[i * 4 + 2] = pixels[i].b; rgba[i * 4 + 3] = pixels[i].a;
+        }
+        return new TextureImage(mw, mh, rgba);
+    }
+
     private static TextureImage? TryDecodeExtendedTex(byte[] data)
     {
         const int HeaderSize = 12;

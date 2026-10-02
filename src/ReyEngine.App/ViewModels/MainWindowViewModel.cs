@@ -58,12 +58,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool ContentLoaded => _archive is not null || _mounts is not null;
 
     /// <summary>Read an asset's bytes, mount-aware (project mode) or override-aware (single WAD).</summary>
-    private byte[] ReadAsset(ulong hash)
+    private byte[] ReadAsset(ulong hash) => ReadAssetFrom(_mounts, _archive, hash);
+
+    /// <summary>M807: <see cref="ReadAsset"/> through the readers it is GIVEN - the mounts and archive a map thumbnail's job was
+    /// described against, which a rebuild may have replaced since. There is one implementation: the thumbnails read the way the
+    /// editor does.</summary>
+    private byte[] ReadAssetFrom(AssetMountService? mounts, WadArchive? archive, ulong hash)
     {
-        if (_mounts is not null)
-            return _mounts.Read(hash) ?? throw new FileNotFoundException($"0x{hash:x16} not in any mount.");
+        if (mounts is not null)
+            return mounts.Read(hash) ?? throw new FileNotFoundException($"0x{hash:x16} not in any mount.");
         if (_overrides.TryGet(hash, out var ov) && File.Exists(ov.OverrideFile)) return File.ReadAllBytes(ov.OverrideFile);
-        return _archive!.Extract(hash);
+        return archive!.Extract(hash);
     }
 
     private bool TryResolveEntry(ulong hash, out WadAssetEntry entry)
@@ -1093,74 +1098,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <param name="hostBin">M805: the bin the game has loaded beside this skin, for materials no dependency of the skin
     /// bin holds (an esports banner's live in the map's shipping bin). Null for every other prop: unchanged.</param>
     private PropMesh? TryBuildPropMesh(string skin, Dictionary<string, TextureImage?> texCache, string? clip = null,
-        Formats.Materials.LoadedBin? hostBin = null)
-    {
-        try
-        {
-            var binBytes = ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin");
-            if (binBytes is null) return null;
-            var meshRef = SkinMeshExtractor.Extract(binBytes, ResolveWadPath);
-            if (meshRef?.SimpleSkin is not { } sknPath) return null;
-            var sknBytes = ReadAssetByPath(sknPath);
-            if (sknBytes is null) return null;
+        Formats.Materials.LoadedBin? hostBin = null) =>
+        PropBuilder.TryBuild(skin, texCache, clip, hostBin, Services.PropMeshDetail.Full);
 
-            var mesh = SkinnedMeshDecoder.Decode(sknBytes);
-            var mat = ChampionMaterialResolver.Resolve(binBytes, ResolveBinName, ResolveWadPath, ReadAssetByPath, hostBin);   // M777, M805
-
-            // M676: the skin's own scale, which the game applies to the whole model and this preview never
-            // did - Baron and the camps drew at the mesh's authored size whatever the bin said.
-            float skinScale = 1f;
-            try
-            {
-                var doc = Formats.Materials.MaterialDocument.Parse(binBytes, ResolveBinName, ResolveWadPath, ReadAssetByPath);
-                if (doc.SkinMesh?.SkinScale is { } authored && authored > 0f) skinScale = authored;
-            }
-            catch { /* an unparseable skin keeps scale 1 rather than losing the prop */ }
-            TextureImage? Tex(string? path)
-            {
-                if (string.IsNullOrEmpty(path)) return null;
-                if (texCache.TryGetValue(path, out var img)) return img;
-                return texCache[path] = LoadTextureByPath(path);
-            }
-            // M678: the same layers and render state the character window resolves for this skin (M664),
-            // so a prop in the GL viewport blends, cuts out, tints and glows as the window shows it.
-            var subs = mesh.SubMeshes
-                .Select(s => new PropSubmesh(s.StartIndex, s.IndexCount, Tex(mat.For(s.Material) ?? meshRef.DefaultTexture))
-                {
-                    Mask = Tex(mat.ForMask(s.Material)),
-                    Gradient = Tex(mat.ForGradient(s.Material)),
-                    Emissive = Tex(mat.ForEmissive(s.Material)),
-                    MatCap = Tex(mat.ForMatCap(s.Material)),
-                    MatCapMask = Tex(mat.ForMatCapMask(s.Material)),
-                    Material = mat.HasAny ? ToSubmeshMaterial(mat.Profile(s.Material)) with { BlendWritesDepth = true } : null,
-                })
-                .ToList();
-
-            // M54: idle-animation payload — the character's skeleton + a best-match idle .anm, so the
-            // viewport can play the ambient idles (Baron breathing, camps shuffling...).
-            SkeletonAsset? skeleton = null;
-            AnimationClip? idle = null;
-            if (mesh.CanSkin && meshRef.Skeleton is { } sklPath)
-            {
-                try
-                {
-                    var sklBytes = ReadAssetByPath(sklPath);
-                    if (sklBytes is not null) skeleton = SkeletonDecoder.Decode(sklBytes);
-                    // M677: the chosen clip when there is one, the idle otherwise - and the idle when the
-                    // chosen name resolves to nothing, rather than a prop frozen in bind pose.
-                    if (skeleton is not null) idle = (clip is not null ? TryFindClip(skin, clip) : null) ?? TryFindIdleClip(skin);
-                }
-                catch { skeleton = null; idle = null; }
-            }
-            return new PropMesh(skin, mesh.Positions, mesh.Normals, mesh.Uvs, mesh.Indices, subs)
-            {
-                SknMesh = mesh, Skeleton = skeleton, IdleClip = idle,
-                SknBytes = sknBytes, SkinBinBytes = binBytes, SkinScale = skinScale,   // M676
-                HostBin = hostBin,   // M805: the D3D11 scene resolves the same materials
-            };
-        }
-        catch { return null; }
-    }
+    /// <summary>M807: the prop decode lives in <see cref="Services.PropMeshBuilder"/> now, so the Content Browser's map
+    /// thumbnails build their props with the very same code. This view model supplies the readers it always used.</summary>
+    private Services.PropMeshBuilder? _propBuilder;
+    private Services.PropMeshBuilder PropBuilder => _propBuilder ??= new Services.PropMeshBuilder(new Services.PropMeshSources(
+        ReadAssetByPath, ResolveBinName, ResolveWadPath, LoadTextureByPath, TryFindClip, TryFindIdleClip));
 
     /// <summary>M679: the clips a placed skin plays, from its OWN animation graph (see
     /// <see cref="Formats.Characters.PropAnimations"/>), cached per skin for the life of the loaded map.
@@ -3172,7 +3117,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// D3D11-unavailable fallback (OnDx11Toggled) writes UseDx11Viewport directly and skips
     /// <see cref="UseOpenGlViewport"/>'s setter, so this is the one place that reacts to that fallback
     /// rather than the one that decides it - which is also why the fallback never touches settings.json.</summary>
-    partial void OnUseDx11ViewportChanged(bool value) => OnPropertyChanged(nameof(UseOpenGlViewport));
+    partial void OnUseDx11ViewportChanged(bool value)
+    {
+        OnPropertyChanged(nameof(UseOpenGlViewport));
+        NotifyMapThumbnailAvailability();   // M807
+    }
 
     /// <summary>M762: "Use OpenGL renderer" in View ▾. Binding a checkbox straight to <c>!UseDx11Viewport</c>
     /// reads as a double negative, and naming the OFF state gives this a second job: it is the ONE place a
@@ -3315,6 +3264,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnClientDepthRulesChanged(bool value)
     {
         Services.Dx11SceneBuilder.EmulateClientDepthRules = value;
+        ReevaluateMapThumbnails();   // M807: Game Depth is part of a thumbnail's key
         _log.Info("Viewport", value
             ? "Client depth rules ON - transparents keep the depth mask and sort with solid geometry, as the "
               + "game does. A decal that goes black in game should go black here too."
@@ -4719,6 +4669,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// in here synchronously, almost all of it decoding 2,860 texture bindings.</summary>
     public async Task<string> BuildDx11SceneAsync(ReyEngine.Rendering.D3D11.ShaderPreviewRenderer renderer)
     {
+        Interlocked.Increment(ref _mapThumbnailBusy);   // M807: a background map thumbnail waits while the viewport builds its scene
+        try { return await BuildDx11SceneCoreAsync(renderer); }
+        finally { Interlocked.Decrement(ref _mapThumbnailBusy); }
+    }
+
+    private async Task<string> BuildDx11SceneCoreAsync(ReyEngine.Rendering.D3D11.ShaderPreviewRenderer renderer)
+    {
         if (_currentMap is not { } map) return "No map open - the D3D11 surface has no scene to draw yet.";
         if (_currentMapEntry is not { } mapEntry) return "The open map has no WAD entry.";
 
@@ -4915,7 +4872,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // author a bare 0x… with an unresolved warning, for a file the project itself just created.
         // Registering here rather than at project open also covers assets made DURING a session, which
         // is exactly when a port runs.
+        NoteMapThumbnailInputsChanged();   // M807: a thumbnail draw reads the dictionary this changes
         _resolver.Database.AddWad(hash, assetPath);
+        NoteMapThumbnailInputsChanged();
         if (Project.IsFolderProject && Project.RootPath is { } root && _currentMapEntry is { } mapEntry)
         {
             // Stage under the SAME WAD folder the map itself lives in (Map12.wad.client → "Map12"): the
@@ -6792,6 +6751,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             foreach (var n in nodes) _thumbnails.Request(n.ThumbnailPath, bmp => n.Thumbnail = bmp);
         };
+        ContentBrowser.VisibleItemsChanged = OnBrowserVisibleItems;   // M807: map tiles draw the map, for what is on screen only
         MapContent.OpenMap = OpenAssetDocument;
         MapContent.ItemStateChanged = OnMapContentItemStateChanged;
         LoadRecentProjects(RecentProjects.Load());
@@ -7523,7 +7483,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             _log.Info("WAD", $"Opening {Path.GetFileName(path)} …");
-            _archive?.Dispose();
+            AbandonMapThumbnails();   // M807: another WAD: the tile in hand is stopped; the archive it reads through is disposed once it has
+            RetireMapThumbnailReader(_archive);
             _archive = WadArchive.Open(path, _resolver);
             Documents.Clear(); ActiveDocument = null;  // fresh source — old tabs are stale
             RebuildTree();
@@ -7531,7 +7492,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Inspector.Clear();
             UndoService.Clear(); // new inspection context = fresh history
 
-            _mounts?.Dispose(); _mounts = null;
+            RetireMapThumbnailReader(_mounts); _mounts = null;   // M807
             ProjectMode = false; InspectionMode = true;
             _log.Success("WAD", $"Loaded {_archive.Entries.Count:n0} chunks; resolved {_archive.ResolvedCount:n0} paths.");
             _log.Info("WAD", "Single-WAD inspection mode — open a project folder (File ▸ Open Project Folder) to edit and build mods.");
@@ -7550,6 +7511,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var root = AssetTree.Build(_archive.Entries, _archive.Name);
         RootNodes.Clear();
         _nodesByHash.Clear();
+        InvalidateMapThumbnails();   // M807
         var rootVm = new AssetNodeViewModel(root);
         IndexNodes(rootVm);
         RootNodes.Add(rootVm);
@@ -7993,23 +7955,28 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (Project.RootPath is null) return 0;
         int added = 0;
-        foreach (string folder in Project.ProjectFolders)
+        NoteMapThumbnailInputsChanged();   // M807: a thumbnail draw reads the dictionary this changes
+        try
         {
-            string root = Path.Combine(Project.RootPath, folder);
-            if (!Directory.Exists(root)) continue;
-            try
+            foreach (string folder in Project.ProjectFolders)
             {
-                foreach (var (hash, path) in ReyEngine.Core.Build.WadPackService.EnumerateChunkFiles(root))
+                string root = Path.Combine(Project.RootPath, folder);
+                if (!Directory.Exists(root)) continue;
+                try
                 {
-                    string rel = Path.GetRelativePath(root, path).Replace('\\', '/');
-                    // A hash-named loose chunk has no path to teach - its name IS the hash.
-                    if (!rel.Contains('/') && Path.GetFileNameWithoutExtension(rel).Length == 16) continue;
-                    _resolver.Database.AddWad(hash, rel);
-                    added++;
+                    foreach (var (hash, path) in ReyEngine.Core.Build.WadPackService.EnumerateChunkFiles(root))
+                    {
+                        string rel = Path.GetRelativePath(root, path).Replace('\\', '/');
+                        // A hash-named loose chunk has no path to teach - its name IS the hash.
+                        if (!rel.Contains('/') && Path.GetFileNameWithoutExtension(rel).Length == 16) continue;
+                        _resolver.Database.AddWad(hash, rel);
+                        added++;
+                    }
                 }
+                catch (Exception ex) { _log.Info("Project", $"Could not index {folder} for path names: {ex.Message}"); }
             }
-            catch (Exception ex) { _log.Info("Project", $"Could not index {folder} for path names: {ex.Message}"); }
         }
+        finally { NoteMapThumbnailInputsChanged(); }
         return added;
     }
 
@@ -12024,6 +11991,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // "Reset to map" (which reads _baseSunAuthored) put it back.
         bool wasApplyingLighting = _applyingLighting;
         _applyingLighting = true;
+        Interlocked.Increment(ref _mapThumbnailBusy);   // M807: a background map thumbnail waits while a map loads
         try
         {
             _log.Info("MapGeo", $"Decoding {entry.DisplayName} …");
@@ -12130,7 +12098,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         // M515: a load that threw before the restore must not leave capture suppressed for the session -
         // every later slider move would then be silently dropped.
-        finally { _applyingLighting = wasApplyingLighting; }
+        finally { _applyingLighting = wasApplyingLighting; Interlocked.Decrement(ref _mapThumbnailBusy); }
     }
 
     /// <summary>Resolve the map's materials .bin → per-group diffuse textures (shared instances for reuse).</summary>
@@ -12329,15 +12297,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// defaults, so a sun-less map - or Reset lighting on one - drew a fog the map never had, and its
     /// captured record stopped matching the 0..0 signature <see cref="MapLightingArtefact"/> heals by.
     /// Found in review (M761).</para></summary>
-    private static MapSunProperties NoMapSun() => new()
-    {
-        SunDirection = new System.Numerics.Vector3(0.4f, 0.85f, 0.45f),
-        SunColor = new System.Numerics.Vector4(0.75f, 0.75f, 0.75f, 1f),
-        SkyLightColor = new System.Numerics.Vector4(0.35f, 0.35f, 0.35f, 1f),
-        SkyLightScale = 1f,
-        FogEnabled = false,
-        FogStartAndEnd = System.Numerics.Vector2.Zero,
-    };
+    private static MapSunProperties NoMapSun() => Services.MapSunRender.NoMapSun();   // M807: one definition, shared with the map thumbnails
     private bool _suppressSunRebuild;
     private static double Clamp01(double v) => System.Math.Clamp(v, 0.0, 1.0);
 
@@ -15199,7 +15159,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var project = ReyProjectService.OpenFolder(folder);
             Project = project;
             _overrides.LoadFrom(project);
-            _archive?.Dispose(); _archive = null;
+            AbandonMapThumbnails();   // M807: another project: the tile in hand is stopped; the archive it reads through is disposed once it has
+            RetireMapThumbnailReader(_archive); _archive = null;
             Documents.Clear(); ActiveDocument = null; // same path hash in another project is different content
             BuildMounts();
             BuildProjectTree();
@@ -15259,7 +15220,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void BuildMounts()
     {
-        _mounts?.Dispose();
+        InvalidateMapThumbnails();   // M807: what is queued was described against the old mounts; the tile in hand finishes on them
+        RetireMapThumbnailReader(_mounts);   // M807: and they are disposed the moment it has
         _mounts = new AssetMountService();
         if (Project.OverridesDirectory is { } ov) _mounts.Add(new OverrideMount(ov, _resolver));
         foreach (var f in Project.ProjectFolders)
@@ -15403,6 +15365,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         RootNodes.Clear();
         _nodesByHash.Clear();
         _thumbnails.Clear();
+        InvalidateMapThumbnails();   // M807: the tiles are new objects; what was queued for the old ones is stale
 
         var projectGroup = new AssetTreeNode { Name = "Project", IsFolder = true };
         foreach (var mount in _mounts.Mounts.Where(m => m.Kind != AssetSourceKind.RiotReference))

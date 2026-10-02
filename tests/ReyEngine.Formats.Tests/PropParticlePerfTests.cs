@@ -185,7 +185,9 @@ public sealed class PropParticlePerfTests
         var props = Source("src", "ReyEngine.App", "Services", "D3D11MapProps.cs");
         var renderer = Source("src", "ReyEngine.Rendering.D3D11", "ShaderPreviewRenderer.cs");
         var characters = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.Characters.cs");
-        if (particles is null || props is null || renderer is null || characters is null) return;
+        // M807: the preparation of a placed prop's D3D11 scene is PropMeshBuilder's now, shared with the map thumbnails
+        var builder = Source("src", "ReyEngine.App", "Services", "PropMeshBuilder.cs");
+        if (particles is null || props is null || renderer is null || characters is null || builder is null) return;
 
         // a mesh emitter re-skins into buffers it keeps, positions only - no PoseBuffer, arrays, bone
         // segments and joint-name dictionary per emitter per frame
@@ -196,7 +198,8 @@ public sealed class PropParticlePerfTests
         // the light rings are uploaded when they change, like the icons beside them
         Assert.Contains("if (ReferenceEquals(_lightRangeSource, verts)) return;", renderer);
         // and a placed prop's mesh is decoded once, off the UI thread, not again inside the frame
-        Assert.Contains("decodedMesh: mesh.SknMesh);", characters);
+        Assert.Contains("decodedMesh: mesh.SknMesh);", builder);
+        Assert.Contains("Services.PropMeshBuilder.PrepareDx11Scene(mesh, cache, ShaderPerms(),", characters);
     }
 
     /// <summary>M733: switching props on used to upload every distinct mesh - the scene prepare, the

@@ -78,6 +78,10 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
         : Entry?.Type is AssetType.Texture or AssetType.Dds ? Entry.Path : null;
     public bool WantsThumbnail => !IsFolder && !string.IsNullOrEmpty(ThumbnailPath);
 
+    /// <summary>M807: a resolved <c>.mapgeo</c> tile gets a rendered picture of the map (MapThumbnailService), not a decoded
+    /// texture - so it is NOT <see cref="WantsThumbnail"/>, which the texture loader acts on for every listed item.</summary>
+    public bool WantsMapThumbnail => !IsFolder && Entry is { Type: AssetType.MapGeometry, IsResolved: true };
+
     public bool IsReadOnly => IsMaterial ? MaterialAsset!.ReadOnly : Entry is { ReadOnly: true };
     public bool HasConflict => Entry is { HasConflict: true };
     public string SourceTag => IsFolder ? "" : IsMaterial

@@ -64,6 +64,27 @@ public sealed partial class ContentBrowserViewModel : ViewModelBase
     /// <summary>Host hook: lazily load thumbnails for the items now shown (textures + material diffuse).</summary>
     public Action<IReadOnlyList<AssetNodeViewModel>>? RequestThumbnails { get; set; }
 
+    /// <summary>M807: host hook - the tiles in view changed (an empty list for the list view). Unlike
+    /// <see cref="RequestThumbnails"/>, which is handed every listed item, this is only what is on screen: a map thumbnail is
+    /// a render, and a folder of fifty maps must not queue fifty of them.</summary>
+    public Action<IReadOnlyList<AssetNodeViewModel>>? VisibleItemsChanged { get; set; }
+
+    /// <summary>M807: the grid scrolled, resized or changed what it lists. Names the tiles in view from the scroll window
+    /// (<see cref="ContentGridViewport"/>) and hands them to <see cref="VisibleItemsChanged"/>. The view debounces this.</summary>
+    public void ReportGridViewport(double offsetY, double contentWidth, double viewportHeight)
+    {
+        if (ListView)
+        {
+            VisibleItemsChanged?.Invoke(Array.Empty<AssetNodeViewModel>());
+            return;
+        }
+        var (first, last) = ContentGridViewport.VisibleRange(Items.Count, offsetY, contentWidth, viewportHeight);
+        var visible = first > last
+            ? (IReadOnlyList<AssetNodeViewModel>)Array.Empty<AssetNodeViewModel>()
+            : Items.Skip(first).Take(last - first + 1).ToList();
+        VisibleItemsChanged?.Invoke(visible);
+    }
+
     /// <summary>Host hook: does this folder map to a writable directory on disk? (M107)</summary>
     public Func<AssetNodeViewModel?, bool>? CanImportInto { get; set; }
 

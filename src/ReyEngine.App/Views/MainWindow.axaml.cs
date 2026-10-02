@@ -162,7 +162,11 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             // already happened. OnDx11Toggled no-ops harmlessly if a caller ever flips this false first.
             if (DataContext is MainWindowViewModel started && started.UseDx11Viewport) OnDx11Toggled(started);
         };
-        Closed += (_, _) => { _closed = true; _dx11?.Dispose(); _dx11 = null; };
+        Closed += (_, _) =>
+        {
+            _closed = true; _dx11?.Dispose(); _dx11 = null;
+            (DataContext as MainWindowViewModel)?.ShutDownMapThumbnails();   // M807: stop the thumbnail thread, give back its device
+        };
     }
 
     // ---- M248: the D3D11 side-by-side surface ----
@@ -732,6 +736,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
             _ = vm.AutoUpdateHashesAsync();      // M731: newer hash tables / meta classes, when Settings leaves it on
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
+            WireBrowserThumbnails(vm);   // M807: the tiles in view are the only map tiles drawn
 
             // M83: breadcrumb behaves like Explorer's path bar — on navigation, scroll to the END so the
             // current folder is visible (the bar is hidden; it used to overlay and cover the whole path).
@@ -764,6 +769,55 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         await win.ShowDialog(this);
         // closing the window any way counts as done — the wizard must not nag on every launch
         if (!vm.Settings.FirstRunCompleted) { vm.Settings.FirstRunCompleted = true; vm.Settings.Save(); }
+    }
+
+    // ---- M807: Content Browser map thumbnails --------------------------------
+
+    /// <summary>
+    /// A map tile shows a rendered picture of its map, and rendering is the one thing the grid does that is not cheap - so the
+    /// view model is told which tiles are in view, and only those are drawn. The grid is a plain WrapPanel of fixed cells, so
+    /// the scroll window names them (<see cref="ContentGridViewport"/>). Debounced: a fling through a folder of maps changes the
+    /// window fifty times a second, and only the place it stops is worth a render.
+    /// </summary>
+    private void WireBrowserThumbnails(MainWindowViewModel vm)
+    {
+        if (this.FindControl<ScrollViewer>("BrowserGridScroll") is not { } scroll
+            || this.FindControl<ItemsControl>("BrowserGrid") is not { } grid) return;
+
+        var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        // The grid sits in the bottom dock's TabControl: with the Console tab selected (or the grid detached, hidden, or the window
+        // gone) no tile is in view, whatever window the scroll viewer still remembers - and nothing is drawn for a tile nobody sees.
+        bool Shown() => vm.IsContentBrowserTabSelected && TopLevel.GetTopLevel(scroll) is not null && scroll.IsEffectivelyVisible;
+        void Report() =>
+            vm.ContentBrowser.ReportGridViewport(scroll.Offset.Y, grid.Bounds.Width, Shown() ? scroll.Viewport.Height : 0);
+        // a tick that threw would take the dispatcher with it: the cost of a mistake here is a tile without a picture
+        settle.Tick += (_, _) =>
+        {
+            settle.Stop();
+            try { Report(); }
+            catch (Exception ex) { vm.LogMapThumbnailProblem("the tiles in view could not be reported: " + ex.Message); }
+        };
+        void Settle() { settle.Stop(); settle.Start(); }
+
+        scroll.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == ScrollViewer.OffsetProperty || e.Property == ScrollViewer.ViewportProperty
+                || e.Property == ScrollViewer.ExtentProperty || e.Property == IsVisibleProperty)
+                Settle();
+        };
+        scroll.AttachedToVisualTree += (_, _) => Settle();
+        scroll.DetachedFromVisualTree += (_, _) => Settle();
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MainWindowViewModel.BottomDockTab)) Settle();
+        };
+        grid.PropertyChanged += (_, e) => { if (e.Property == BoundsProperty) Settle(); };
+        vm.ContentBrowser.Items.CollectionChanged += (_, _) => Settle();
+        vm.ContentBrowser.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ContentBrowserViewModel.ListView)) Settle();
+        };
+        Settle();
     }
 
     // ---- M74: Content Browser drag & drop --------------------------------
