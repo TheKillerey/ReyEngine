@@ -2,6 +2,11 @@ using System.Numerics;
 
 namespace ReyEngine.Rendering;
 
+/// <summary>M808: where an orbit camera is - target, distance, angles and the clip planes that go with them - and nothing of what
+/// belongs to the viewport rather than to a place (the field of view, the fly speed). What a map tab remembers when another
+/// tab takes the viewport.</summary>
+public readonly record struct OrbitCameraPose(Vector3 Target, float Distance, float Yaw, float Pitch, float Near, float Far);
+
 /// <summary>
 /// Viewport camera with an Unreal-style control set. Internally it keeps an orbit model
 /// (Target + Distance + Yaw/Pitch) so framing stays simple, but exposes free-fly + look-in-place
@@ -39,6 +44,21 @@ public sealed class OrbitCamera
 
     /// <summary>World units per second of WASD fly (user-adjustable via RMB+wheel).</summary>
     public float FlySpeed = 600f;
+
+    /// <summary>M808: the camera's place, to be put back with <see cref="Restore"/>.</summary>
+    public OrbitCameraPose Pose => new(Target, Distance, Yaw, Pitch, Near, Far);
+
+    /// <summary>M808: put the camera back where <paramref name="pose"/> was taken. The field of view and the fly speed are the
+    /// viewport's own and stay as they are.</summary>
+    public void Restore(in OrbitCameraPose pose)
+    {
+        Target = pose.Target;
+        Distance = pose.Distance;
+        Yaw = pose.Yaw;
+        Pitch = pose.Pitch;
+        Near = pose.Near;
+        Far = pose.Far;
+    }
 
     // Unit vector from Target to the eye for the current yaw/pitch.
     private Vector3 Dir

@@ -71,7 +71,17 @@ public sealed class MapStartState
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(definition);
-        var controllers = MapVisibilityControllers.Build(controllerBins, definition);
+        return ResolveWith(map, definition, MapVisibilityControllers.Build(controllerBins, definition), boardStage);
+    }
+
+    /// <summary>M808: <see cref="Resolve(MapGeoAsset, MapVisibilityDefinition, IEnumerable{byte[]}, MapBoardStage?)"/> over controllers
+    /// that are already built. The editor reads a map's controllers once, when it opens the map, and the camera it opens the
+    /// map with is placed from the same start state the Content Browser's picture of the map is drawn from.</summary>
+    public static MapStartState ResolveWith(MapGeoAsset map, MapVisibilityDefinition definition,
+        MapVisibilityControllers? controllers, MapBoardStage? boardStage)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(definition);
         var resolver = new MapVisibilityResolver(controllers, definition);
 
         var selections = new Dictionary<uint, int>();

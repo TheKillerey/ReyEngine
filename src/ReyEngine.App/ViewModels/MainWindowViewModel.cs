@@ -6827,7 +6827,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         BoardStageSnapshot? BoardStage = null,   // M797: the board-stage picker, where the tab left it
         IReadOnlyList<string>? EnabledEvents = null,   // M802: the events that were ticked (session only)
         IReadOnlyList<MapBannerProp>? Banners = null,   // M805: the esports banners (decoded again when shown)
-        IReadOnlyList<MapLevelProp>? LevelProps = null);   // M806: the level props (decoded again when shown)
+        IReadOnlyList<MapLevelProp>? LevelProps = null,   // M806: the level props (decoded again when shown)
+        MapOpenFrame? Frame = null,   // M808: the area Frame frames
+        ReyEngine.Rendering.OrbitCameraPose? Camera = null);   // M808: where the camera was when the tab was left
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
     private void OpenAssetDocument(AssetNodeViewModel? node)
@@ -7046,7 +7048,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             VisibilityAxes.Select(a => a.SelectedIndex).ToArray(), HasMapMoves,
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList(),
-            SnapshotBoardStage(), SnapshotMapEvents(), _mapBanners, _mapLevelProps);
+            SnapshotBoardStage(), SnapshotMapEvents(), _mapBanners, _mapLevelProps,
+            CurrentMapFrame, CaptureCameraPose?.Invoke());
     }
 
     private void RestoreMapScene(MapScene s)
@@ -7062,6 +7065,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _visibilityResolver = new MapVisibilityResolver(s.Controllers, s.Visibility);
         SetMapBanners(s.Banners);          // M805: its banners, before anything below applies visibility - decoded again once an event shows them
         SetMapLevelProps(s.LevelProps);    // M806: and its level props, decoded again once Props shows them
+        CurrentMapFrame = s.Frame;         // M808: what Frame frames for this map - the viewport does not re-frame a tab coming back
         RebuildVisibilityAxes(s.Visibility, s.VisibilityIndices);
         RestoreBoardStage(s.BoardStage);   // M797: where the tab left the picker; before ApplyMapVisibility below reads the mask
         RestoreMapEvents(s.EnabledEvents); // M802: and the events it had ticked, read by the same ApplyMapVisibility
@@ -7099,6 +7103,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _selection.SetMany(meshes);
         ApplyMapVisibility();   // recompute the visibility array from the restored filters
         MeshVerticesRevision++; // re-upload possibly-edited vertices
+        if (s.Camera is { } camera) RestoreCameraPose?.Invoke(camera);   // M808: the camera is where the tab left it, not framed again
         _log.Info("MapGeo", $"Restored map tab '{s.MapName}' ({s.Map.MeshCount:n0} meshes).");
     }
 
@@ -8159,6 +8164,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void ClearViewport()
     {
         CurrentMesh = null;
+        CurrentMapFrame = null;   // M808
         CurrentSkeleton = null;
         if (_currentMap is { } clearedMap) UndoService.PurgeContext(clearedMap);
         _currentMap = null;
@@ -8783,10 +8789,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var match = System.Text.RegularExpressions.Regex.Match(mapgeoPath, @"/mapgeometry/map(?<id>\d+)/", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (match.Success)
             shippingBin = ReadAssetByPath($"data/maps/shipping/map{match.Groups["id"].Value}/map{match.Groups["id"].Value}.bin");
-        _mapVisibility = MapVisibility.Parse(shippingBin, ResolveBinName);
+        var parsedVisibility = MapVisibility.Parse(shippingBin, ResolveBinName);
+        _mapVisibility = parsedVisibility;
         if (!_mapVisibility.HasAxes) _mapVisibility = MapVisibility.Infer(map.Meshes.Select(m => m.VisibilityFlags));
 
         _mapControllers = MapVisibilityControllers.Build(bins, _mapVisibility);
+        // M808: the camera a map opens with is placed from the start state the Content Browser's picture is drawn from, which
+        // never infers an axis (it would invent an initial mask): the definition as the shipping bin gives it, and controllers
+        // built on that. They are the ones above unless an axis was inferred, which only a map without a shipping bin has.
+        _mapStartDefinition = parsedVisibility;
+        _mapStartControllers = ReferenceEquals(_mapVisibility, parsedVisibility)
+            ? _mapControllers
+            : MapVisibilityControllers.Build(bins, parsedVisibility);
         _visibilityResolver = new MapVisibilityResolver(_mapControllers, _mapVisibility);
         RebuildVisibilityAxes(_mapVisibility);
         SetMapEvents(_mapControllers, announce: true);   // M802: every event OFF, as in a normal game
@@ -12023,6 +12037,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                var previousEntry = _currentMapEntry;   // M808: a different map from this one is an OPEN; the same map again is a reload
                 CurrentSkeleton = null;
                 ShowBones = false;
                 CurrentMesh = mesh;
@@ -12087,6 +12102,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 SetBoardStages(boardStages);   // M797: the board's stage picker; "Start" changes nothing
                 BuildMapLayerGroups(map);
                 ApplyMapVisibility();    // ensure reset even if the index was already 0
+                // M808: where the camera goes on this map - the area its Content Browser picture shows. Only a map that is OPENED
+                // (a different one from the viewport's) is framed; the same map reloaded after an edit keeps the user's camera.
+                var openFrame = ComputeMapOpenFrame(map, boardStages);
+                CurrentMapFrame = openFrame;
+                if (openFrame is not null && (previousEntry is null || previousEntry.PathHash != entry.PathHash)) MapFrameRequest++;
                 _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
                                        (map.Warnings.Count > 0 ? $", {map.Warnings.Count} warnings" : ""));
             });

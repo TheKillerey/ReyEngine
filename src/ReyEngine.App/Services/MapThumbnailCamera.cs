@@ -30,6 +30,13 @@ public static class MapThumbnailCamera
     /// <summary>The offset from the target to the eye, before it is scaled by the distance.</summary>
     public static readonly Vector3 Direction = Vector3.Normalize(new Vector3(0f, 1.5f, -1f));
     public const float FovDegrees = 40f;
+
+    /// <summary>M808: <see cref="Direction"/> as the orbit camera's angles (<c>OrbitCamera.Position = Target + (cos p sin y, sin p,
+    /// cos p cos y) * Distance</c>): from above and behind, a 56 degree pitch. A map OPENED in the viewport is looked at from
+    /// the same side the Content Browser's picture of it is.</summary>
+    public static float OrbitYaw => MathF.Atan2(Direction.X, Direction.Z);
+    /// <summary>M808: the pitch half of <see cref="OrbitYaw"/>.</summary>
+    public static float OrbitPitch => MathF.Asin(Direction.Y);
     /// <summary>How much of the frame (NDC, centre to edge) the framed box fills.</summary>
     public const float Fill = 0.92f;
     /// <summary>The share of the longer side the box is tall.</summary>
@@ -108,11 +115,26 @@ public static class MapThumbnailCamera
     }
 
     /// <summary>Frame <paramref name="points"/> (triangle centroids, world space) for a frame of <paramref name="aspect"/>
-    /// (width over height).</summary>
-    public static bool TryFrame(IReadOnlyList<Vector3> points, float aspect, out MapThumbnailFrame frame)
+    /// (width over height), at the thumbnail's field of view.</summary>
+    public static bool TryFrame(IReadOnlyList<Vector3> points, float aspect, out MapThumbnailFrame frame) =>
+        TryFrame(points, aspect, FovDegrees * MathF.PI / 180f, out frame);
+
+    /// <summary>M808: <see cref="TryFrame(IReadOnlyList{Vector3}, float, out MapThumbnailFrame)"/> for a frame with a field of
+    /// view of its own (radians, vertical). The thumbnail's rule and the editor viewport's are this one rule: only the field of
+    /// view and the aspect of the frame they fit differ.</summary>
+    public static bool TryFrame(IReadOnlyList<Vector3> points, float aspect, float fovRadians, out MapThumbnailFrame frame)
     {
         frame = null!;
         if (!(aspect > 0f) || !TryBox(points, out var min, out var max)) return false;
+        return TryFrameBox(min, max, aspect, fovRadians, out frame);
+    }
+
+    /// <summary>M808: the fit, for a box <see cref="TryBox"/> already found (a viewport that is resized, or asked to Frame again,
+    /// keeps the box and fits it to the new frame without sorting the map's centroids once more).</summary>
+    public static bool TryFrameBox(Vector3 min, Vector3 max, float aspect, float fovRadians, out MapThumbnailFrame frame)
+    {
+        frame = null!;
+        if (!(aspect > 0f) || !(fovRadians > 0f && fovRadians < MathF.PI)) return false;
 
         // world -> display: X is mirrored, so the box's X range is negated and swapped
         var lo = new Vector3(-max.X, min.Y, min.Z);
@@ -124,7 +146,7 @@ public static class MapThumbnailCamera
         var target = (lo + hi) * 0.5f;
         float side = MathF.Max(hi.X - lo.X, hi.Z - lo.Z);
         float distance = MathF.Max(side * 1.3f, 1f);
-        float fov = FovDegrees * MathF.PI / 180f;
+        float fov = fovRadians;
         float halfTan = MathF.Tan(fov * 0.5f);
 
         for (int pass = 0; pass < 8; pass++)

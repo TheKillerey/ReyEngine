@@ -130,6 +130,11 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     public MainWindow()
     {
         InitializeComponent();
+        // M808: a map opened before the viewport has a size is framed the moment it gets one
+        ViewportInput.SizeChanged += (_, _) =>
+        {
+            if (_mapFramePending && DataContext is MainWindowViewModel opened) FrameViewportForOpenedMap(opened);
+        };
         LoadBranding();
         TitleVersionText.Text = AppInfo.DisplayVersion;   // M81
         _ = AutoCheckUpdatesAsync();                      // M81: silent startup check
@@ -155,7 +160,20 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                     // permutation, which changes the input layout, so nothing shallower is safe yet.
                     else if (e.PropertyName == nameof(MainWindowViewModel.MaterialsRevision)
                              && vm.UseDx11Viewport && _dx11?.IsReady == true) OnDx11Toggled(vm);
+                    // M808: a map was OPENED - the camera goes where its Content Browser picture looks from
+                    else if (e.PropertyName == nameof(MainWindowViewModel.MapFrameRequest)) FrameViewportForOpenedMap(vm);
                 };
+            // M808: the camera lives in this window. A map tab takes its camera with it when another tab takes the viewport,
+            // and gets it back when it returns.
+            if (DataContext is MainWindowViewModel cameraHost)
+            {
+                cameraHost.CaptureCameraPose = () => Viewport.Camera.Pose;
+                cameraHost.RestoreCameraPose = pose =>
+                {
+                    Viewport.Camera.Restore(pose);
+                    RedrawViewport(cameraHost);
+                };
+            }
             // M762: Direct3D 11 is now the VM's own starting value (set in its constructor, before this
             // handler exists to hear the PropertyChanged that a later toggle relies on) - so a fresh window
             // has to kick the D3D11 surface awake itself rather than wait for a change notification that
@@ -167,6 +185,40 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             _closed = true; _dx11?.Dispose(); _dx11 = null;
             (DataContext as MainWindowViewModel)?.ShutDownMapThumbnails();   // M807: stop the thumbnail thread, give back its device
         };
+    }
+
+    // ---- M808: the camera a map opens with ----
+
+    private bool _mapFramePending;
+
+    /// <summary>
+    /// A map was opened: put the camera where its Content Browser picture looks from, fitted to this viewport's field of view and
+    /// size. The size is <c>ViewportInput</c>'s - the one area both renderers draw into and the only one that keeps its bounds when
+    /// the GL control is hidden (see RenderDx11Frame). Before the viewport has a size it waits for one.
+    /// </summary>
+    private void FrameViewportForOpenedMap(MainWindowViewModel vm)
+    {
+        var size = ViewportInput.Bounds;
+        if (!(size.Width > 0 && size.Height > 0)) { _mapFramePending = true; return; }
+        _mapFramePending = false;
+        Viewport.FrameCamera(size.Width, size.Height);
+        RedrawViewport(vm);
+    }
+
+    /// <summary>The Frame button and F: the same framing, on demand. Under Direct3D 11 it used to do nothing at all - it asked a
+    /// GL control that is hidden, and never renders, to frame itself.</summary>
+    private void FrameViewport()
+    {
+        if (DataContext is not MainWindowViewModel vm) return;
+        var size = ViewportInput.Bounds;
+        if (size.Width > 0 && size.Height > 0 && Viewport.FrameCamera(size.Width, size.Height)) RedrawViewport(vm);
+        else Viewport.RequestFrame();
+    }
+
+    private void RedrawViewport(MainWindowViewModel vm)
+    {
+        if (vm.UseDx11Viewport) QueueDx11Frame();
+        else Viewport.RequestRedraw();
     }
 
     // ---- M248: the D3D11 side-by-side surface ----
@@ -1478,7 +1530,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
 
     private void OnViewportKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == _kFocus) { Viewport.FocusSelected(); return; }
+        if (e.Key == _kFocus) { FrameViewport(); return; }   // M808
         _heldKeys.Add(e.Key);
     }
 
@@ -1515,7 +1567,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
 
     private void OnFrameClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        Viewport.RequestFrame();
+        FrameViewport();   // M808
     }
 
     /// <summary>Global editor shortcuts. TextBoxes keep their own local undo and clipboard: when one has

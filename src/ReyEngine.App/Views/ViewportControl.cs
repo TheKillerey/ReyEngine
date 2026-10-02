@@ -27,6 +27,10 @@ public sealed class ViewportControl : OpenGlControlBase
 {
     public static readonly StyledProperty<MeshAsset?> MeshProperty =
         AvaloniaProperty.Register<ViewportControl, MeshAsset?>(nameof(Mesh));
+    /// <summary>M808: the area of the open MAP the camera frames - the box its Content Browser picture is drawn from. Null for
+    /// everything else (a character, a prop, a map with nothing to frame), which is framed on the whole mesh as ever.</summary>
+    public static readonly StyledProperty<Services.MapOpenFrame?> MapFrameProperty =
+        AvaloniaProperty.Register<ViewportControl, Services.MapOpenFrame?>(nameof(MapFrame));
     public static readonly StyledProperty<SkeletonAsset?> SkeletonProperty =
         AvaloniaProperty.Register<ViewportControl, SkeletonAsset?>(nameof(Skeleton));
     public static readonly StyledProperty<bool> WireframeProperty =
@@ -340,6 +344,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public Action<string, string>? Log { get; set; }
     public int MeshVerticesRevision { get => GetValue(MeshVerticesRevisionProperty); set => SetValue(MeshVerticesRevisionProperty, value); }
     public MeshAsset? Mesh { get => GetValue(MeshProperty); set => SetValue(MeshProperty, value); }
+    public Services.MapOpenFrame? MapFrame { get => GetValue(MapFrameProperty); set => SetValue(MapFrameProperty, value); }
     public SkeletonAsset? Skeleton { get => GetValue(SkeletonProperty); set => SetValue(SkeletonProperty, value); }
     public bool Wireframe { get => GetValue(WireframeProperty); set => SetValue(WireframeProperty, value); }
     public bool CullBackfaces { get => GetValue(CullBackfacesProperty); set => SetValue(CullBackfacesProperty, value); }
@@ -928,7 +933,9 @@ public sealed class ViewportControl : OpenGlControlBase
                 _meshRenderer.SetMesh(m.Positions, m.Normals, m.Uvs, m.Indices, m.VertexCount, m.BoundsMin, m.BoundsMax,
                     subs, m.Colors, m.LightmapUvs, m.BakedPaintUvs);
                 _markerSize = Math.Clamp(m.Radius * 0.004f, 4f, 90f); // fixed from the mesh so toggling Show doesn't resize markers
-                _needFrame = true;
+                // M808: a map the window frames itself (once, when it is OPENED) is not re-framed by every upload of its mesh -
+                // a reload after an edit, or a tab coming back, keeps the camera where the user left it
+                _needFrame = MapFrame is null;
                 _texturesDirty = true;
                 _skinDirty = true;
                 _visibilityDirty = true;
@@ -2286,17 +2293,35 @@ public sealed class ViewportControl : OpenGlControlBase
         return (modelM.IsIdentity ? bm : bm * modelM).Translation;
     }
 
-    private void FrameCamera()
+    private void FrameCamera() => FrameCamera(Bounds.Width, Bounds.Height);
+
+    /// <summary>
+    /// <para>M808: frame the camera on what is loaded, for a viewport of <paramref name="width"/> by <paramref name="height"/>.
+    /// Public, and independent of a GL frame, because under Direct3D 11 - the default - this control is hidden and never renders:
+    /// nothing framed the camera there at all, so a map opened with the camera wherever it had last been (at first, 600 units
+    /// from the world origin). The window calls this with the size of the area both renderers share.</para>
+    ///
+    /// <para>An open map (<see cref="MapFrame"/> set) is framed exactly as its Content Browser picture is - the same box, view
+    /// direction and fit (<see cref="Services.MapViewCamera"/>), solved for this camera's field of view and this size. Anything
+    /// else is framed on the whole mesh's bounding sphere as before. The clip planes follow the whole mesh either way: the sky
+    /// bowl and everything else the map is made of must stay inside them when the camera backs away.</para>
+    /// </summary>
+    public bool FrameCamera(double width, double height)
     {
-        if (Mesh is not { } m) return;
+        if (Mesh is not { } m) return false;
         float radius = MathF.Max(m.Radius, 1f);
         float dist = radius / MathF.Sin(_camera.FieldOfView * 0.5f) * 1.25f; // fit sphere + margin
-        _camera.Target = m.Center;
-        _camera.Distance = Math.Clamp(dist, 5f, 100000f);
+        if (MapFrame is not { } frame || !(width > 0 && height > 0)
+            || !Services.MapViewCamera.TryApply(_camera, frame, (float)(width / height)))
+        {
+            _camera.Target = m.Center;
+            _camera.Distance = Math.Clamp(dist, 5f, 100000f);
+        }
         // A CEILING only. EffectiveNear tightens this as Distance drops; latching the framing distance
         // here is what stopped the camera approaching anything inside a large map.
         _camera.Near = MathF.Max(dist * 0.01f, 0.05f);
         _camera.Far = dist * 40f + radius * 20f;
+        return true;
     }
 
     /// <summary>Recentre the camera on a world point (M35 particle focus), keeping a close-in distance.</summary>

@@ -415,6 +415,7 @@
                 IsVisible="{Binding !UseDx11Viewport}"
                 Skybox="{Binding CurrentSkybox}"
                 Mesh="{Binding CurrentMesh}"
+                MapFrame="{Binding CurrentMapFrame}"
                 ModelTextures="{Binding CurrentModelTextures}"
                 ModelMaskTextures="{Binding CurrentModelMaskTextures}"
                 ModelGradientTextures="{Binding CurrentModelGradientTextures}"
