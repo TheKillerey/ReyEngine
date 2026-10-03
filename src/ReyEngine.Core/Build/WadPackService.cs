@@ -20,6 +20,9 @@ public sealed class WadPackReport
     public List<string> Warnings { get; } = new();
     /// <summary>M132: files excluded by the known-game-types filter (relative paths).</summary>
     public List<string> CleanedUnknown { get; } = new();
+    /// <summary>M814: the folder-relative path (forward slashes) of every file that went into the WAD. A WAD
+    /// stores hashes only; these are the names a .fantome's harvested hashtable keeps for them.</summary>
+    public List<string> PackedPaths { get; } = new();
     public bool Success => Reopened;
 }
 
@@ -79,6 +82,7 @@ public static class WadPackService
             try { raw = File.ReadAllBytes(path); }
             catch (Exception ex) { report.Warnings.Add($"skip {Path.GetFileName(path)}: {ex.Message}"); report.Skipped++; continue; }
             report.InputBytes += raw.Length;
+            report.PackedPaths.Add(Path.GetRelativePath(folder, path).Replace('\\', '/'));
 
             byte[] data; byte comp;
             if (raw.Length == 0) { data = raw; comp = 0; }

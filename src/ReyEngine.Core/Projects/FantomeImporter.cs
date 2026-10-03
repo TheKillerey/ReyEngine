@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
 using ReyEngine.Core.Hashing;
@@ -6,7 +7,65 @@ using ReyEngine.Core.Assets;
 
 namespace ReyEngine.Core.Projects;
 
-public sealed record FantomeImportResult(string RootPath, string ProjectName, int Wads, int ExtractedFiles, int RawFiles, int FailedChunks);
+/// <summary>
+/// M814: one layer of an LTK-layered .fantome whose content this import did NOT bring into the project.
+/// </summary>
+/// <param name="Name">The layer, spelled as the archive spells it (the <c>Layers</c> key when it has one, else the
+/// <c>WAD_&lt;layer&gt;</c> directory).</param>
+/// <param name="Wads">WADs stored in its <c>WAD_&lt;layer&gt;/</c> directory: one per packed file or raw folder.</param>
+/// <param name="GameDataModules">Modules of its <c>Layers.&lt;name&gt;.GameData</c> declaration document: one per
+/// declared game bin.</param>
+public sealed record FantomeSkippedLayer(string Name, int Wads, int GameDataModules);
+
+public sealed record FantomeImportResult(string RootPath, string ProjectName, int Wads, int ExtractedFiles, int RawFiles, int FailedChunks)
+{
+    /// <summary>
+    /// M814: what the package held in LTK's layered layout that was not imported - empty for a package of the base
+    /// layer's <c>WAD/</c> and <c>RAW/</c> alone, which is everything this import reads.
+    ///
+    /// <para>Export .fantome writes the layered layout (<c>WAD_&lt;layer&gt;/</c> for a layer other than base,
+    /// <c>GameData</c> in <c>META/info.json</c> for game bins shipped as declarations), and LTK Manager reads it. The
+    /// import is older: it reads <c>WAD/</c>, <c>RAW/</c> and the thumbnail only. Counting what it leaves is the
+    /// difference between a layered mod importing as a smaller one without a word and importing with the omission
+    /// said. Reading it is not done yet; nothing here converts it.</para>
+    /// </summary>
+    public IReadOnlyList<FantomeSkippedLayer> SkippedLayers { get; init; } = Array.Empty<FantomeSkippedLayer>();
+
+    /// <summary>WADs found in <c>WAD_&lt;layer&gt;/</c> directories and not imported.</summary>
+    public int LayerWads => SkippedLayers.Sum(l => l.Wads);
+
+    /// <summary>Declared game bins found in <c>Layers.*.GameData</c> and not imported.</summary>
+    public int GameDataModules => SkippedLayers.Sum(l => l.GameDataModules);
+
+    /// <summary>The line to show the user, or null when nothing was left behind: which content was NOT imported,
+    /// layer by layer, and that the project built from this import would ship without it.</summary>
+    public string? NotImportedWarning
+    {
+        get
+        {
+            var left = SkippedLayers.Where(l => l.Wads > 0 || l.GameDataModules > 0).ToList();
+            if (left.Count == 0) return null;
+
+            static string N(int n) => n.ToString(CultureInfo.InvariantCulture);
+            var what = new List<string>();
+            if (LayerWads > 0) what.Add($"{N(LayerWads)} WAD(s) stored in WAD_<layer>/ directories");
+            if (GameDataModules > 0) what.Add($"{N(GameDataModules)} declared game bin(s) (Layers.*.GameData)");
+
+            var perLayer = left.Select(l =>
+            {
+                var parts = new List<string>();
+                if (l.Wads > 0) parts.Add($"{N(l.Wads)} WAD(s)");
+                if (l.GameDataModules > 0) parts.Add($"{N(l.GameDataModules)} declared bin(s)");
+                return $"{l.Name}: {string.Join(", ", parts)}";
+            });
+
+            return $"This .fantome uses LTK's layered layout, and the import reads only the base layer's WAD/ folders and RAW/. "
+                 + $"NOT imported: {string.Join(" and ", what)} - {string.Join("; ", perLayer)}. "
+                 + "ReyEngine does not read them yet - a later version will - so a mod built from this project would ship without them. "
+                 + "The .fantome itself is untouched.";
+        }
+    }
+}
 
 /// <summary>
 /// M94: converts a .fantome mod package into an editable ReyEngine folder project. A fantome zip holds
@@ -16,6 +75,12 @@ public sealed record FantomeImportResult(string RootPath, string ProjectName, in
 /// cslol "unpacked" layout common to HUD/UI mods, M139). Both become the same per-WAD project folder;
 /// RAW/ files are copied as-is, and same-named Riot WADs from the game install become read-only
 /// references so everything else still resolves. Never touches the source .fantome.
+///
+/// <para><b>M814: LTK's layered layout is not imported.</b> Export .fantome writes layers other than base to
+/// <c>WAD_&lt;layer&gt;/</c> and game bins shipped as declarations to <c>Layers.&lt;name&gt;.GameData</c> in
+/// <c>META/info.json</c>. This import reads <c>WAD/</c>, <c>RAW/</c> and the thumbnail, as it always did, so it
+/// leaves both behind - and now counts them (<see cref="FantomeImportResult.SkippedLayers"/>) so the caller can say
+/// so instead of presenting a smaller mod as the whole one.</para>
 /// </summary>
 public static class FantomeImporter
 {
@@ -261,8 +326,85 @@ public static class FantomeImporter
         if (RiotPatchVersionDetector.Detect(gameDirectory) is { } installed)
             project.RiotPatchVersion = RiotPatchVersionDetector.InferProjectBaseline(project.ModVersion, installed.Patch);
         ReyProjectService.Save(project, Path.Combine(root, ReyProjectService.FolderMetaDir, ReyProjectService.FolderMetaFile));
-        return new FantomeImportResult(root, name, wads, extracted, raw, failed);
+
+        // M814: LTK's layered layout is read by LTK Manager and not by this import - say what was left behind
+        var layered = FindLayeredContent(zip);
+        var result = new FantomeImportResult(root, name, wads, extracted, raw, failed) { SkippedLayers = layered };
+        if (result.NotImportedWarning is not null)
+            progress?.Report($"Not imported: {result.LayerWads} WAD(s) in WAD_<layer>/ and {result.GameDataModules} GameData bin(s)");
+        return result;
     }
+
+    /// <summary>
+    /// M814: the layered content of a .fantome that <see cref="Import"/> does not read: the WADs of
+    /// <c>WAD_&lt;layer&gt;/</c> directories and the modules of each <c>Layers.&lt;name&gt;.GameData</c> document
+    /// (<c>ltk_fantome</c> 0.15.1, <c>ltk_game_data</c> 0.8: a document is <c>{version, modules:[...]}</c>, a module one
+    /// declared bin). A layer is listed when it holds either; the base layer shows up only for its GameData,
+    /// because its <c>WAD/</c> is what the import reads.
+    ///
+    /// <para>Tolerant by design: it runs after the import has written the project, so a package whose
+    /// <c>info.json</c> is malformed, or whose <c>Layers</c> is not a table, simply reports what it can read.
+    /// A directory entry is not a WAD; two entries of one WAD are one.</para>
+    /// </summary>
+    private static IReadOnlyList<FantomeSkippedLayer> FindLayeredContent(ZipArchive zip)
+    {
+        // layer (case-insensitive, as the format compares them) -> the spelling to show, distinct WADs, GameData modules
+        var spelled = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var wads = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var modules = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in zip.Entries)
+        {
+            string full = entry.FullName.Replace('\\', '/');
+            if (!full.StartsWith("WAD_", StringComparison.OrdinalIgnoreCase) || full.EndsWith('/')) continue;
+            int slash = full.IndexOf('/');
+            if (slash < 0) continue;                              // "WAD_x" with no directory is not a layer's folder
+            string layer = full["WAD_".Length..slash];
+            string rest = full[(slash + 1)..];
+            if (layer.Length == 0 || rest.Length == 0) continue;
+            int next = rest.IndexOf('/');
+            string wad = next < 0 ? rest : rest[..next];          // a packed file or the raw folder named like one
+            spelled.TryAdd(layer, layer);
+            if (!wads.TryGetValue(layer, out var set)) wads[layer] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            set.Add(wad);
+        }
+
+        if (FindEntry(zip, "META/info.json") is { } info)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(ReadAll(info));
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty("Layers", out var table) && table.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var layer in table.EnumerateObject())
+                    {
+                        if (layer.Value.ValueKind != JsonValueKind.Object
+                            || !layer.Value.TryGetProperty("GameData", out var gameData) || gameData.ValueKind != JsonValueKind.Object
+                            || !gameData.TryGetProperty("modules", out var list) || list.ValueKind != JsonValueKind.Array)
+                            continue;
+                        int count = list.GetArrayLength();
+                        if (count == 0) continue;
+                        spelled[layer.Name] = layer.Name;         // the table's spelling wins over a directory's
+                        modules[layer.Name] = count;
+                    }
+                }
+            }
+            catch { /* a malformed info.json was already tolerated above; report what the directories show */ }
+        }
+
+        return spelled.Keys
+            .OrderBy(k => FantomeLayerOrder(k), StringComparer.Ordinal)
+            .Select(k => new FantomeSkippedLayer(
+                spelled[k],
+                wads.TryGetValue(k, out var w) ? w.Count : 0,
+                modules.TryGetValue(k, out var m) ? m : 0))
+            .ToList();
+    }
+
+    /// <summary>The base layer first, then the others in plain order - a stable order for a message and a test.</summary>
+    private static string FantomeLayerOrder(string layer) =>
+        string.Equals(layer, "base", StringComparison.OrdinalIgnoreCase) ? "\0" : layer.ToUpperInvariant();
 
     private static ZipArchiveEntry? FindEntry(ZipArchive zip, string path) =>
         zip.Entries.FirstOrDefault(e => string.Equals(

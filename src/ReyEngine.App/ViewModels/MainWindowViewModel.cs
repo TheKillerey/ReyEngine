@@ -13684,9 +13684,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex) { _log.Error("MapBin", $"{entry.DisplayName}: {ex.Message}"); }
     }
 
+    /// <summary>M814 test seam: how a reference WAD is opened. Null is the real thing
+    /// (<see cref="ReferenceWadSet.OpenFile"/>); a test swaps in a counting one.</summary>
+    private Func<string, IReferenceWad?>? _referenceWadOpener = null;   // set only by tests (reflection): an explicit null keeps CS0649 quiet
+
+    /// <summary>M814: the project's reference WADs as one lookup run uses them - each opened at most once, then released.</summary>
+    private ReferenceWadSet OpenReferenceWads() => new(Project.ReferenceWads, _referenceWadOpener);
+
     /// <summary>M98: the UNTOUCHED Riot bytes for an entry — read from the project's reference WADs
-    /// directly (never through the mounts, which would return the project's own override).</summary>
-    private byte[]? ReadRiotOriginalBytes(WadAssetEntry entry)
+    /// directly (never through the mounts, which would return the project's own override).
+    ///
+    /// <para>M814: the references are opened for this one lookup and released, which is what this always did. A run
+    /// of lookups (the declaration plan asks for every bin of a project) passes the set it shares to the overload
+    /// below instead.</para></summary>
+    private byte[]? ReadRiotOriginalBytes(WadAssetEntry entry) => ReadRiotOriginalBytes(entry, null);
+
+    /// <summary>M814: as above, with <paramref name="references"/> as the set a whole run of lookups shares: each
+    /// reference WAD is opened the first time a lookup reaches it and kept until the run ends, instead of being
+    /// reopened for every bin the mounts could not answer. A separate overload and not an optional parameter, so
+    /// <c>MapBinEditor.ReadRiotOriginal = ReadRiotOriginalBytes</c> still binds to the one-argument form. The answer
+    /// is the same either way.</summary>
+    private byte[]? ReadRiotOriginalBytes(WadAssetEntry entry, ReferenceWadSet? references)
     {
         // Prefer already-open reference/fallback mounts. The old wizard reopened a multi-hundred-MB WAD
         // for every bin, turning an update into repeated archive parsing when the exact source was mounted.
@@ -13698,15 +13716,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         try { return source.Read(entry.PathHash); } catch { }
             try { if (_mounts.ReadFallback(entry.PathHash) is { } fallback) return fallback; } catch { }
         }
-        foreach (var wadPath in Project.ReferenceWads)
+        if (references is not null)
         {
-            try
-            {
-                if (!File.Exists(wadPath)) continue;
-                using var w = ReyEngine.Core.Wad.WadArchive.Open(wadPath, _resolver.Database);
-                if (w.TryGetEntry(entry.PathHash, out var e)) return w.Extract(e);
-            }
-            catch { /* try the next reference */ }
+            if (references.Read(entry.PathHash) is { } shared) return shared;
+        }
+        else
+        {
+            using var once = OpenReferenceWads();
+            if (once.Read(entry.PathHash) is { } single) return single;
         }
         // single-WAD mode: the open archive IS the Riot file
         try { if (_archive is not null && _archive.TryGetEntry(entry.PathHash, out var ae)) return _archive.Extract(ae); }
@@ -14931,13 +14948,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             Directory.CreateDirectory(buildRoot);
-            await Task.Run(() =>
+            var outcome = await Task.Run(() =>
+                ExportFantomeCore(fantomePath, meta, thumbnail, buildRoot, progress, "PatchUpdate",
+                    "No WAD was produced from the updated project.", $"Packaging {Path.GetFileName(fantomePath)}..."));
+            if (outcome == FantomeExportOutcome.NothingToShip)
             {
-                var wads = BuildProjectCore(buildRoot, progress);
-                if (wads.Count == 0) throw new InvalidOperationException("No WAD was produced from the updated project.");
-                progress.Report((0.98, $"Packaging {Path.GetFileName(fantomePath)}..."));
-                FantomeExporter.Export(meta, wads, thumbnail, fantomePath);
-            });
+                // M814: the updated project matches the game bin for bin, so there is no package to build. That is the
+                // outcome of the update, recorded as such - not a failed build, and nothing for the user to review.
+                bool earlier = File.Exists(fantomePath);
+                patchProject.LastPatchUpdateSummary += " Nothing to ship: every bin in the project is identical to the game's, so no package was built."
+                    + (earlier ? $" The earlier package {Path.GetFileName(fantomePath)} was left as it was and no longer matches the project." : "");
+                if (patchProject.ProjectFilePath is { } summaryPath) ReyProjectService.Save(patchProject, summaryPath);
+                Status = "Updated project matches the game - no package to build";
+                _log.Info("PatchUpdate", "Nothing to ship after the update: the project matches the game bin for bin, so no package was built."
+                    + (earlier ? $" The earlier package {fantomePath} was left as it was and no longer matches the project." : ""));
+                return true;
+            }
             Status = $"Updated package ready: {Path.GetFileName(fantomePath)}";
             _log.Success("PatchUpdate", $"Automatically rebuilt WAD output and {fantomePath} ({new FileInfo(fantomePath).Length / 1048576.0:0.0} MB).");
             return true;
@@ -15166,13 +15192,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var progress = new Progress<string>(m => Status = m);
             var result = await Task.Run(() => ReyEngine.Core.Projects.FantomeImporter.Import(
                 file, ProjectsFolder, gameDir, _resolver, progress));
-            _log.Success("Import", $"{result.ProjectName}: {result.Wads} WAD(s), {result.ExtractedFiles:n0} file(s) unpacked" +
-                (result.RawFiles > 0 ? $" + {result.RawFiles} RAW file(s)" : "") +
-                (result.FailedChunks > 0 ? $" ({result.FailedChunks} chunk(s) failed — usually subchunked textures)" : "") +
-                $" → {result.RootPath}");
+            LogFantomeImport(result);
             OpenProjectAt(result.RootPath);   // also records it in Open Recent
         }
         catch (Exception ex) { _log.Error("Import", $"Fantome import failed: {ex.Message}"); }
+    }
+
+    /// <summary>M94: what an import unpacked. M814: and, when the package used LTK's layered layout, a warning naming
+    /// what it did not bring in - the <c>WAD_&lt;layer&gt;/</c> WADs and the <c>GameData</c> declarations that
+    /// Export .fantome writes - because a smaller mod presented as the whole one is how edits get lost.</summary>
+    private void LogFantomeImport(ReyEngine.Core.Projects.FantomeImportResult result)
+    {
+        _log.Success("Import", $"{result.ProjectName}: {result.Wads} WAD(s), {result.ExtractedFiles:n0} file(s) unpacked" +
+            (result.RawFiles > 0 ? $" + {result.RawFiles} RAW file(s)" : "") +
+            (result.FailedChunks > 0 ? $" ({result.FailedChunks} chunk(s) failed — usually subchunked textures)" : "") +
+            $" → {result.RootPath}");
+        if (result.NotImportedWarning is { } notImported) _log.Warn("Import", notImported);
     }
 
     [RelayCommand]
@@ -15761,7 +15796,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var progress = BuildProgressSink();
         try
         {
-            await Task.Run(() =>
+            var outcome = await Task.Run(() =>
             {
                 var buildRoot = Project.OutputDirectory ?? Path.Combine(Project.RootPath, "Build");
                 if (BuildSafety.IsInsideGameInstall(buildRoot))
@@ -15769,16 +15804,136 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 Directory.CreateDirectory(buildRoot);
                 // M131: fresh build + bundle EXACTLY what it produced — stale wads lying in the
                 // build folder from earlier project layouts used to sneak into the package.
-                var wads = BuildProjectCore(buildRoot, progress);
-                if (wads.Count == 0) throw new InvalidOperationException("No WAD was produced — the project has no packable content.");
-                progress.Report((0.98, $"Zipping {Path.GetFileName(outPath)}…"));
-                FantomeExporter.Export(meta, wads, thumb, outPath);
+                return ExportFantomeCore(outPath, meta, thumb, buildRoot, progress, "Export",
+                    "No WAD was produced — the project has no packable content.", $"Zipping {Path.GetFileName(outPath)}…");
             });
+            if (outcome == FantomeExportOutcome.NothingToShip)
+            {
+                // the log already says why (ExportFantomeCore): this is an answer, not an error, and nothing was written
+                Status = "Nothing to export — every bin matches the game";
+                return;
+            }
             _log.Success("Export", $"Wrote {outPath} ({new FileInfo(outPath).Length / 1048576.0:0.0} MB) — {meta.Name} v{meta.Version} by {meta.Author}.");
             Status = $"Exported {Path.GetFileName(outPath)}";
         }
         catch (Exception ex) { _log.Error("Export", ex.Message); }
         finally { IsBuilding = false; }
+    }
+
+    /// <summary>M814: how an export that did not fail ended.</summary>
+    private enum FantomeExportOutcome
+    {
+        /// <summary>The .fantome was written.</summary>
+        Written,
+
+        /// <summary>Every game bin the project holds is identical to the game's copy and the project holds nothing else
+        /// to package, so there is nothing for a mod to ship and no .fantome was written. The right answer for a
+        /// project that has caught up with the game, not an error.</summary>
+        NothingToShip,
+    }
+
+    /// <summary>
+    /// M814: build the project and write it as a .fantome in LTK's layered layout. Project > Export .fantome and
+    /// the automatic rebuild after a Riot patch both end here, so they cannot disagree about layers, declarations
+    /// or the log.
+    ///
+    /// <para><b>Layers</b> are the ones Send to LTK Manager declares (<see cref="Core.Build.LtkProjectLayers"/>), each
+    /// folder in the layer <see cref="ReyProject.LayerOf"/> names: base in <c>WAD/</c>, any other in
+    /// <c>WAD_&lt;layer&gt;/</c>. A layer name the format cannot carry stops the export before anything is built.</para>
+    ///
+    /// <para><b>Declarations</b> follow <see cref="ReyProject.ShipBinEditsAsDeclarations"/>: on, every game bin the
+    /// project changed that can be declared is a module of its layer's <c>GameData</c> in <c>META/info.json</c> and
+    /// is not packed; a bin that cannot be declared ships whole and the log says why. Off, bins ship whole.</para>
+    ///
+    /// <para><b>Nothing to ship.</b> With declarations on, a project whose every bin equals the game's copy has no
+    /// WAD content and no declaration. That is not a failure: the project has caught up with the game, and an empty
+    /// mod would only look like a broken export. It returns <see cref="FantomeExportOutcome.NothingToShip"/>, says why
+    /// in the log, and writes nothing. A project with no packable content at all is still the error
+    /// <paramref name="emptyMessage"/>.</para>
+    ///
+    /// <para>The .fantome is written whole or not at all (<see cref="FantomeExporter.Export"/>): a failure leaves an
+    /// existing package as it was.</para>
+    /// </summary>
+    private FantomeExportOutcome ExportFantomeCore(string outPath, FantomeMeta meta, byte[]? thumbnail, string buildRoot,
+        IProgress<(double Frac, string Stage)> progress, string logCategory, string emptyMessage, string packagingStage)
+    {
+        Core.Build.LtkProjectLayers.ForFantome(Project);   // refuse a bad layer name before the long part
+
+        var build = BuildProjectCore(buildRoot, progress, declareBins: Project.ShipBinEditsAsDeclarations);
+
+        var gameData = new Dictionary<string, System.Text.Json.Nodes.JsonNode>(StringComparer.OrdinalIgnoreCase);
+        if (build.Declarations is { } plan)
+            foreach (var (layer, chunks) in plan.Modules)
+                gameData[layer] = Formats.Meta.BinDeclarations.GameDataDocument(chunks, FantomeLayers.ModuleNames);
+        if (build.Wads.Count == 0 && gameData.Count == 0)
+        {
+            // every file the plan looked at matched the game and none is left to pack (a file that WAS left and failed to
+            // pack is a failure, not a match, and stays the error below)
+            if (build.Declarations is { Unchanged: > 0, Kept.Count: 0 } matched)
+            {
+                LogNothingToShip(logCategory, matched);
+                return FantomeExportOutcome.NothingToShip;
+            }
+            throw new InvalidOperationException(emptyMessage);
+        }
+
+        meta.Generator = $"ReyEngine {AppInfo.Version}";
+        meta.Layers = Core.Build.LtkProjectLayers.ForFantome(Project, gameData);
+
+        progress.Report((0.98, packagingStage));
+        FantomeExporter.Export(meta, build.Wads, thumbnail, outPath);
+        LogFantomeLayout(logCategory, meta.Layers, build);
+        return FantomeExportOutcome.Written;
+    }
+
+    /// <summary>M814: the log for a project that matches the game bin for bin - the comparison's numbers, and the
+    /// plain statement that nothing was written and why. Info, not an error.</summary>
+    private void LogNothingToShip(string category, Formats.Meta.DeclarationPlan plan)
+    {
+        foreach (var (level, line) in plan.Report("shipped"))
+            if (level == 0) _log.Success(category, line); else _log.Info(category, line);
+        _log.Info(category, $"Nothing to ship: all {plan.Unchanged} game bin(s) in the project are identical to the game's own copy and the "
+            + "project holds nothing else to package, so a mod would change nothing. No .fantome was written. Edit a bin first, or turn off "
+            + "Project Settings > Send game bin edits as declarations to ship the bins whole anyway.");
+    }
+
+    /// <summary>M814: what went into a .fantome - its layers, the declared bins, the bins that ship whole and
+    /// why - and what GameData needs from the player's mod manager.</summary>
+    private void LogFantomeLayout(string category, IReadOnlyList<FantomeLayer> layers, ProjectBuild build)
+    {
+        var plan = build.Declarations;
+        var parts = new List<string>();
+        foreach (var layer in layers)
+        {
+            int wads = build.Wads.Count(w => w.Layer.Equals(layer.Name, StringComparison.OrdinalIgnoreCase));
+            int declared = plan is not null && plan.Modules.TryGetValue(layer.Name, out var modules) ? modules.Count : 0;
+            parts.Add($"{layer.Name} (priority {layer.Priority}): {wads} WAD(s), {declared} declared bin(s)");
+        }
+        _log.Info(category, "Layers - " + string.Join("; ", parts) + ".");
+
+        // a layer's WADs are entries of WAD_<layer>/, which LTK Manager reads and a loader that predates layers skips
+        var inOwnDirectory = layers.Where(l => !FantomeLayers.IsBase(l.Name)
+            && build.Wads.Any(w => w.Layer.Equals(l.Name, StringComparison.OrdinalIgnoreCase))).Select(l => l.Name).ToList();
+        if (inOwnDirectory.Count > 0)
+            _log.Warn(category, $"Layer(s) {string.Join(", ", inOwnDirectory)} are stored in WAD_<layer>/ directories. LTK Manager reads "
+                + "them; cslol-manager and other loaders that predate layers skip them, so on those the mod would lack that content.");
+        if (plan is null) return;
+
+        foreach (var (level, line) in plan.Report("shipped"))
+            if (level == 0) _log.Success(category, line); else _log.Info(category, line);
+        foreach (var bin in plan.DeclaredBins.Take(20))
+            _log.Info(category, $"  declared [{bin.Layer}] {bin.RelPath}: {bin.Chunk.Properties} propert(ies), "
+                + $"{bin.Chunk.ObjectsAdded} object(s) added, {bin.Chunk.ObjectsRemoved} removed");
+        if (plan.DeclaredBins.Count > 20) _log.Info(category, $"  ... and {plan.DeclaredBins.Count - 20} more declared.");
+
+        if (plan.Declared > 0)
+            _log.Warn(category, "GameData in this .fantome is applied by LTK Manager when the mod is installed. cslol-manager and "
+                + "other loaders ignore it, so on those the mod would be incomplete: the bins above are not in its WADs."
+                // names are off (FantomeLayers.ModuleNames): a manager on ltk_game_data 0.6 would refuse the layer for one
+                + (FantomeLayers.ModuleNames
+                    ? " The modules carry names, which need an LTK Manager built on league-mod's ltk_game_data 0.7 or newer; an "
+                      + "older manager refuses the whole layer's declarations."
+                    : ""));
     }
 
     /// <summary>
@@ -15929,59 +16084,41 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// M757: turn every project bin that overrides a GAME bin into declarations against the game's copy.
     /// A declared or unchanged bin leaves the file list; one that cannot be declared stays in it and the
     /// report says why. A bin with no game copy is new content and is sent as it always was.
+    ///
+    /// <para>M814: the selection is <see cref="Formats.Meta.BinDeclarationPlanner"/>, the same code Export
+    /// .fantome runs (<see cref="PlanDeclarations"/>), so a project is given the same declarations by both. This
+    /// only renders them as the YAML manifest Send to LTK Manager writes.</para>
     /// </summary>
     private (List<(string Layer, string WadFolder, string RelPath, string AbsPath)> Files,
              Dictionary<string, string> GameData, List<(int Level, string Line)> Report)
         DeclareGameBins(List<(string Layer, string WadFolder, string RelPath, string AbsPath)> files)
     {
-        var names = new DeclarationNames(_resolver.Database);
-        var kept = new List<(string, string, string, string)>();
-        var modules = new Dictionary<string, List<Formats.Meta.DeclaredChunk>>(StringComparer.OrdinalIgnoreCase);
-        var seen = new Dictionary<(string Layer, string Target), byte[]>();
-        var whole = new List<string>();
-        int declared = 0, unchanged = 0, props = 0, added = 0, removed = 0;
-        foreach (var f in files)
-        {
-            if (!f.RelPath.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) { kept.Add(f); continue; }
-            string stem = Path.GetFileNameWithoutExtension(f.RelPath);
-            ulong hash = !f.RelPath.Contains('/') && stem.Length == 16
-                         && ulong.TryParse(stem, System.Globalization.NumberStyles.HexNumber, null, out var hex)
-                ? hex : Core.Hashing.HashAlgorithms.WadPath(f.RelPath);
-            byte[]? riot = null;
-            try { riot = ReadRiotOriginalBytes(new WadAssetEntry { PathHash = hash, Path = f.RelPath }); } catch { }
-            if (riot is null) { kept.Add(f); continue; }   // not a game bin: new content ships as a file
-
-            byte[] mod = File.ReadAllBytes(f.AbsPath);
-            string target = Formats.Meta.BinDeclarations.TargetOf(f.RelPath, hash);
-            // the same bin in two WAD folders of one layer declares once; two different copies cannot
-            if (seen.TryGetValue((f.Layer, target), out var first))
-            {
-                if (first.AsSpan().SequenceEqual(mod)) continue;
-                whole.Add($"{f.WadFolder}/{f.RelPath}: two different copies in one layer");
-                kept.Add(f);
-                continue;
-            }
-            seen[(f.Layer, target)] = mod;
-
-            var chunk = Formats.Meta.BinDeclarations.Convert(target, riot, mod, names);
-            if (chunk.Unchanged) { unchanged++; continue; }
-            if (!chunk.Declared) { whole.Add($"{f.WadFolder}/{f.RelPath}: {chunk.WhyNot}"); kept.Add(f); continue; }
-            if (!modules.TryGetValue(f.Layer, out var list)) modules[f.Layer] = list = new();
-            list.Add(chunk);
-            declared++; props += chunk.Properties; added += chunk.ObjectsAdded; removed += chunk.ObjectsRemoved;
-        }
-
-        var report = new List<(int, string)>
-        {
-            (0, $"Declarations: {declared} game bin(s) sent as changes ({props} propert(ies), {added} object(s) added, "
-                + $"{removed} removed), {unchanged} unchanged bin(s) not sent, {whole.Count} sent whole."),
-        };
-        foreach (var w in whole.Take(20)) report.Add((1, "  sent whole - " + w));
-        if (whole.Count > 20) report.Add((1, $"  ... and {whole.Count - 20} more sent whole."));
-        var gameData = modules.ToDictionary(kv => kv.Key, kv => Formats.Meta.BinDeclarations.Manifest(kv.Value),
+        var plan = PlanDeclarations(files.Select(f => new Formats.Meta.DeclarationFile(f.Layer, f.WadFolder, f.RelPath, f.AbsPath)));
+        var gameData = plan.Modules.ToDictionary(kv => kv.Key, kv => Formats.Meta.BinDeclarations.Manifest(kv.Value),
             StringComparer.OrdinalIgnoreCase);
-        return (kept.Select(k => (k.Item1, k.Item2, k.Item3, k.Item4)).ToList(), gameData, report);
+        return (plan.Kept.Select(k => (k.Layer, k.WadFolder, k.RelPath, k.AbsPath)).ToList(), gameData, plan.Report().ToList());
     }
+
+    /// <summary>M814: the declaration selection both Send to LTK Manager and Export .fantome run. The game's
+    /// copy of a bin is <see cref="ReadRiotOriginalBytes(WadAssetEntry, ReferenceWadSet?)"/> - the untouched Riot
+    /// bytes of the project's reference WADs, never the project's own override.
+    ///
+    /// <para>The plan asks for every bin of the project, and a bin the mounts do not answer (new content, or a
+    /// reference that is not mounted) falls through to the reference WADs. One <see cref="ReferenceWadSet"/> serves
+    /// the whole run, so each reference is opened at most once however many bins ask, and released when the plan is
+    /// done. The declarations are the ones the per-bin reopening gave.</para></summary>
+    private Formats.Meta.DeclarationPlan PlanDeclarations(IEnumerable<Formats.Meta.DeclarationFile> files)
+    {
+        using var references = OpenReferenceWads();
+        return Formats.Meta.BinDeclarationPlanner.Plan(files,
+            (hash, rel) => ReadRiotOriginalBytes(new WadAssetEntry { PathHash = hash, Path = rel }, references),
+            _declarationNames ?? new DeclarationNames(_resolver.Database));
+    }
+
+    /// <summary>M814 test seam: the plaintext a declaration spells hashes with. Null is the loaded hash tables
+    /// (<see cref="DeclarationNames"/>), which is what a user's export uses; the golden-fixture test and the harness that
+    /// verifies the fixture with league-mod's crates supply a fixed table, so the document is the same on every machine.</summary>
+    private Formats.Meta.IDeclarationNames? _declarationNames = null;   // set only by tests and the harness (reflection)
 
     private byte[]? LoadThumbnailPng(string? path)
     {
@@ -16909,13 +17046,30 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         finally { IsBuilding = false; }
     }
 
+    /// <summary>M814: what a project build produced - the wads, each with the layer it ships in and the paths
+    /// packed into it, and the declaration plan when the build was asked to declare game bins.</summary>
+    private sealed record ProjectBuild(List<FantomeWad> Wads, Formats.Meta.DeclarationPlan? Declarations);
+
+    /// <summary>A layer a folder resolves to, or base when the layer has no usable name - the fallback Send to
+    /// LTK Manager applies to the same value.</summary>
+    private static string BaseIfBlank(string layer) =>
+        string.IsNullOrWhiteSpace(layer) ? ReyEngine.Core.Projects.ProjectLayer.BaseLayer : layer;
+
     /// <summary>M131: build the project into <paramref name="buildRoot"/>. Returns the wads this
-    /// build produced — callers must bundle exactly these, never "whatever sits in the folder".</summary>
-    private List<string> BuildProjectCore(string buildRoot, IProgress<(double Frac, string Stage)>? progress = null)
+    /// build produced — callers must bundle exactly these, never "whatever sits in the folder".
+    ///
+    /// <para>M814: each wad carries the layer its folder ships in (<see cref="ReyProject.LayerOf"/> on the
+    /// leaf of the folder's resolved path - the rule Send to LTK Manager uses) and the paths packed into it. With
+    /// <paramref name="declareBins"/> the project's changed game bins are compared with the game's copy and the
+    /// ones that can be declared are taken out of the STAGED folders before they are packed; the plan comes back
+    /// for the .fantome's GameData. Build Package passes false and builds whole bins as it always did.</para></summary>
+    private ProjectBuild BuildProjectCore(string buildRoot, IProgress<(double Frac, string Stage)>? progress = null,
+        bool declareBins = false)
     {
         var overridesByHash = _overrides.All.ToDictionary(o => o.PathHash, o => o.OverrideFile);
         int wads = 0, staged = 0, files = 0, skipped = 0;
         var produced = new List<string>();
+        var built = new List<FantomeWad>();
 
         // M131: a fresh build starts from a CLEAN slate — leftover staging from earlier builds kept
         // files the project has since deleted or renamed, and they leaked into every later package.
@@ -16943,11 +17097,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             foreach (var i in report.Issues) _log.Warn("Build", i.Message);
             _log.Info("Build", $"WAD {Path.GetFileName(w)}: {apply.Count} replaced → {Path.GetFileName(outWad)}");
             produced.Add(outWad);
+            built.Add(new FantomeWad(outWad, BaseIfBlank(Project.LayerOf(Path.GetFileName(w)))));
             wads++;
         }
 
         // Project folders: stage (copy tree + apply overrides as files — new files are safe in folder format).
-        var stagedFolders = new List<(string name, string dir)>();
+        var stagedFolders = new List<(string name, string dir, string layer, string leaf)>();
         int folderIdx = 0;
         foreach (var f in Project.ProjectFolders)
         {
@@ -16959,7 +17114,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             files += CopyTree(srcFolder, outFolder, buildRoot,
                 n => progress?.Report((0.05 + 0.25 * (idx - 1 + Math.Min(1.0, n / 15000.0)) / Project.ProjectFolders.Count,
                     $"Staging {name}… ({n:n0} files)")));
-            stagedFolders.Add((name, outFolder));
+            // M814: CopyTree creates nothing for an EMPTY project folder, and the M768 mapgeo pass below then enumerated a
+            // directory that did not exist (DirectoryNotFoundException out of Build Package and Export). Staging it always makes
+            // an empty folder the same case as one whose bins were all declared: it packs no WAD.
+            Directory.CreateDirectory(outFolder);
+            // M814: the layer and WAD-folder name Send to LTK Manager uses for this folder - the leaf of its resolved path
+            string leaf = Path.GetFileName(srcFolder.TrimEnd('/', '\\'));
+            stagedFolders.Add((name, outFolder, BaseIfBlank(Project.LayerOf(leaf)), leaf));
             staged++;
         }
 
@@ -16989,7 +17150,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M768: no built map may carry vertex buffers no mesh uses - LTK Manager's loader refuses the whole
         // mapgeo. The STAGED copy is compacted, so a project file saved before M768 still builds clean.
-        foreach (var (_, dir) in stagedFolders)
+        foreach (var (_, dir, _, _) in stagedFolders)
             foreach (var geoPath in Directory.EnumerateFiles(dir, "*.mapgeo", SearchOption.AllDirectories))
             {
                 try
@@ -17006,14 +17167,40 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 catch (Exception ex) { _log.Warn("Build", $"Could not check {Path.GetFileName(geoPath)} for unused buffers: {ex.Message}"); }
             }
 
+        // M814: game bins as declarations. The plan reads the STAGED files (project files with the overrides
+        // applied - exactly what would be packed) and removes the declared and unchanged ones from the staged
+        // copies only; the project's own files are never touched.
+        Formats.Meta.DeclarationPlan? plan = null;
+        if (declareBins)
+        {
+            progress?.Report((0.29, "Comparing game bins with the game's copy…"));
+            var candidates = new List<Formats.Meta.DeclarationFile>();
+            foreach (var (_, dir, layer, leaf) in stagedFolders)
+                foreach (var (_, path) in WadPackService.EnumerateChunkFiles(dir))
+                    candidates.Add(new Formats.Meta.DeclarationFile(layer, leaf,
+                        Path.GetRelativePath(dir, path).Replace('\\', '/'), path));
+            plan = PlanDeclarations(candidates);
+            foreach (var gone in plan.Dropped)
+                if (IsSameOrChild(gone.AbsPath, stagingRoot)) File.Delete(gone.AbsPath);
+        }
+
         // Pack each staged folder into a distributable .wad.client.
         int packed = 0;
         int packIdx = 0;
-        foreach (var (name, dir) in stagedFolders)
+        foreach (var (name, dir, layer, _) in stagedFolders)
         {
             var outWad = Path.Combine(buildRoot, name + ".wad.client");
             packIdx++;
             int idx = packIdx;
+            if (!WadPackService.EnumerateChunkFiles(dir).Any())
+            {
+                // every file of this folder is a declaration, or the project folder is empty (M814): a WAD of no chunks
+                // would only be noise
+                _log.Info("Build", plan is not null
+                    ? $"{name}: every file is a declaration or matches the game, so no WAD is packed."
+                    : $"{name}: the folder is empty, so no WAD is packed.");
+                continue;
+            }
             var packProgress = new Progress<float>(fr => progress?.Report(
                 (0.30 + 0.65 * (idx - 1 + fr) / stagedFolders.Count, $"Packing {name}.wad.client… {fr:P0}")));
             WadPackReport pr;
@@ -17030,6 +17217,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 packed++;
                 produced.Add(outWad);
+                built.Add(new FantomeWad(outWad, layer, pr.PackedPaths));
                 _log.Success("Build", $"Packed {name}.wad.client — {pr.Chunks:n0} chunks, {pr.InputBytes / 1048576.0:0.0}→{pr.OutputBytes / 1048576.0:0.0} MB. {pr.Validation}");
             }
             else _log.Error("Build", $"Pack didn't validate for {name} — the staged folder is at {dir}.");
@@ -17046,7 +17234,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         progress?.Report((1.0, "Build finished."));
         _log.Info("Build", $"project WADs: {wads} · folders packed: {packed}/{staged} · files: {files:n0} · skipped: {skipped}");
-        return produced;
+        return new ProjectBuild(built, plan);
     }
 
     private static int CopyTree(string src, string dst, string excludedRoot, Action<int>? onProgress = null)

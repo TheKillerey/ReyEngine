@@ -125,6 +125,10 @@ public sealed class ReyProject
     /// changes to every key the mod does not touch survive a patch. Needs LTK Manager 1.20 or newer; off by
     /// default because an older manager, or any other loader, would ignore the edits entirely. A bin whose
     /// changes cannot be declared (a removed property, a changed class) still ships whole.
+    ///
+    /// <para>M814: Export .fantome, and the rebuild after a Riot patch, follow the same setting: the declarations
+    /// are the layer's <c>GameData</c> in <c>META/info.json</c> and the declared bins are not packed. cslol-manager
+    /// ignores GameData, so a .fantome exported with this on is incomplete there.</para>
     /// </summary>
     public bool ShipBinEditsAsDeclarations { get; set; }
 

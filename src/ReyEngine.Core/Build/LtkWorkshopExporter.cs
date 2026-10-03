@@ -103,6 +103,51 @@ public static class LtkProjectLayers
         }
         return layers.OrderBy(l => l.Priority).ToList();
     }
+
+    /// <summary>
+    /// M814: the layer table Export .fantome writes - the SAME layers and priorities as <see cref="Of"/>
+    /// (which Send to LTK Manager declares), with the base layer first and the others by priority and name,
+    /// each carrying its declarations in <paramref name="gameData"/> when it has any.
+    ///
+    /// <para>A .fantome layer is a directory name (<c>WAD_&lt;layer&gt;/</c>), so its name has to be one the
+    /// format reads back; <see cref="FantomeLayers.NameProblem"/> says which are not, and one that is not stops
+    /// the export before anything is built. It is checked on the project's own layers, because <see cref="Of"/>
+    /// would fold a layer called "BASE" into the base layer without a word.</para>
+    ///
+    /// <para>One layer name passes unchecked: exactly <see cref="Projects.ProjectLayer.BaseLayer"/>, compared
+    /// ordinally. <see cref="Of"/> lets a project re-declare its own base layer (to give it a priority or a
+    /// description; <c>LtkWorkshopExporterTests.Redeclaring_base_replaces_it_rather_than_duplicating_it</c> pins
+    /// it) and a send accepts that, so the export does too - base is the layer every mod has, and it is written
+    /// under the name the format knows it by. Only another casing of it ("BASE", "Base") is refused, because
+    /// that is not a spelling the project's folder routing (<see cref="Projects.ReyProject.LayerOf"/>) or the
+    /// editor's base row ever produces.</para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">A layer name the format cannot carry, or declarations for a
+    /// layer the project does not have.</exception>
+    public static IReadOnlyList<FantomeLayer> ForFantome(
+        Projects.ReyProject project, IReadOnlyDictionary<string, JsonNode>? gameData = null)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        foreach (var l in project.Layers)
+        {
+            if (string.IsNullOrWhiteSpace(l.Name)) continue;   // Of leaves an unnamed layer out
+            if (string.Equals(l.Name, Projects.ProjectLayer.BaseLayer, StringComparison.Ordinal)) continue;   // base re-declared: see above
+            if (FantomeLayers.NameProblem(l.Name) is { } problem)
+                throw new InvalidOperationException(problem + " Rename the layer in Project > Project Settings.");
+        }
+
+        var table = FantomeExporter.OrderLayers(Of(project).Select(l => new FantomeLayer(l.Name, l.Priority)));
+        if (gameData is null || gameData.Count == 0) return table;
+
+        foreach (string key in gameData.Keys)
+            if (!table.Any(t => t.Name.Equals(key, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"Declarations were made for layer '{key}', which the project does not have.");
+        return table
+            .Select(l => gameData.FirstOrDefault(kv => kv.Key.Equals(l.Name, StringComparison.OrdinalIgnoreCase)) is { Value: { } doc }
+                ? l with { GameData = doc }
+                : l)
+            .ToList();
+    }
 }
 
 /// <param name="Name">Layer name, matching the content folder under <c>content/</c>.</param>

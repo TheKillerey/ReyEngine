@@ -19,6 +19,11 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- M814: GameData documents league-mod's crates were checked against (see GameDataGoldenTests) -->
+  <ItemGroup>
+    <None Include="Fixtures\**\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\ReyEngine.Formats\ReyEngine.Formats.csproj" />
     <ProjectReference Include="..\..\src\ReyEngine.Core\ReyEngine.Core.csproj" />

@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.IO;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
+using ReyEngine.Core.Build;
 using ReyEngine.Core.Projects;
 
 namespace ReyEngine.App.ViewModels;
@@ -34,17 +34,18 @@ public sealed partial class ProjectLayerRow : ObservableObject
 
     public override string ToString() => Label;
 
-    /// <summary>Why this layer cannot ship, or null. The name becomes a folder under <c>content/</c>, so
-    /// it has to be usable as one.</summary>
+    /// <summary>Why this layer cannot ship, or null.
+    ///
+    /// <para>A layer ships as <c>content/&lt;name&gt;/</c> in a mod sent to LTK Manager and, since M814, as
+    /// <c>WAD_&lt;name&gt;/</c> in an exported .fantome. The name has to be one both can carry, and the .fantome's
+    /// rule is the stricter - ASCII letters, digits, '-' and '_' (<see cref="FantomeLayers.NameProblem"/>) - so
+    /// that is the rule here: the editor refuses at Save what Export .fantome would refuse later, with the same
+    /// words, and the user is never handed a layer called "Particle Fix" that only fails at export time.</para></summary>
     public string? Problem(IEnumerable<ProjectLayerRow> siblings)
     {
         if (IsBase) return null;
         string name = Name.Trim();
-        if (name.Length == 0) return "A layer needs a name.";
-        if (string.Equals(name, ProjectLayer.BaseLayer, StringComparison.OrdinalIgnoreCase))
-            return $"'{ProjectLayer.BaseLayer}' is the layer everything unclaimed already ships in.";
-        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-            return $"'{name}' cannot be a folder name, and a layer ships as content/{name}/.";
+        if (FantomeLayers.NameProblem(name) is { } problem) return problem;
         if (siblings.Any(o => !ReferenceEquals(o, this) && !o.IsBase
                 && string.Equals(o.Name.Trim(), name, StringComparison.OrdinalIgnoreCase)))
             return $"Two layers are called '{name}'.";

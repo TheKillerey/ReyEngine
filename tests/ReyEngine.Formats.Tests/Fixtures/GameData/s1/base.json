@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "target": "data/maps/a.bin",
+      "edits": [
+        {
+          "Maps/Test/Thing": {
+            "speed": 2
+          }
+        }
+      ],
+      "origin": {
+        "manifest": "game_data.yaml",
+        "source": null,
+        "module": 0
+      }
+    },
+    {
+      "target": "data/maps/sink.bin",
+      "edits": [
+        {
+          "links": [
+            "DATA/B.bin"
+          ],
+          "-links": [
+            "DATA/A.bin"
+          ],
+          "Maps/Test/Thing": {
+            "u8": 200,
+            "i8": -100,
+            "u16": 65000,
+            "i16": -30000,
+            "u32": 4294967295,
+            "i32": -2147483648,
+            "u64": 18446744073709551615,
+            "i64": -9223372036854775808,
+            "b": true,
+            "flag": true,
+            "f_neg0": -0.0,
+            "f_exp": 1E-30,
+            "f_big": 123456790.0,
+            "f_max": 3.4028235E+38,
+            "v2": [
+              1.5,
+              -2.25
+            ],
+            "v3": [
+              1,
+              2,
+              3
+            ],
+            "v4": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "m44": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16
+            ],
+            "rgba": [
+              255,
+              128,
+              0,
+              64
+            ],
+            "str": "say \"hi\" \\ back\ttab",
+            "hash": "speed",
+            "link": "Maps/Test/Thing",
+            "file": "assets/a.tex",
+            "list": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "list2": [
+              "speed"
+            ],
+            "vecs": [
+              [
+                1,
+                2
+              ]
+            ],
+            "opt_filled": 7,
+            "opt_emptied": null,
+            "opt_list": [
+              [
+                1,
+                2
+              ]
+            ],
+            "map": {
+              "a": 2,
+              "b": 3
+            },
+            "hmap": {
+              "0x0badf00d": 2.5
+            },
+            "embed.speed": 9.5,
+            "ptr_swap": {
+              "pointer": {
+                "class": "OtherData",
+                "set": {
+                  "count": 1
+                }
+              }
+            },
+            "ptr_set": {
+              "pointer": {
+                "class": "InnerData",
+                "set": {
+                  "count": 3
+                }
+              }
+            },
+            "ptr_clear": null,
+            "embeds": [
+              {
+                "embed": {
+                  "class": "InnerData",
+                  "set": {
+                    "speed": 9.5,
+                    "count": 2
+                  }
+                }
+              },
+              {
+                "embed": {
+                  "class": "InnerData",
+                  "set": {
+                    "speed": 9.5,
+                    "count": 2
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "origin": {
+        "manifest": "game_data.yaml",
+        "source": null,
+        "module": 1
+      }
+    }
+  ]
+}

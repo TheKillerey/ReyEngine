@@ -10,7 +10,9 @@ namespace ReyEngine.Formats.Tests;
 /// <para>Layers were reachable only by hand-editing project.json, which is how the first send went out
 /// with none at all. These pin the rules the dialog enforces: a folder rides exactly one layer, a deleted
 /// layer hands its folders back to base rather than taking them with it, and a name that cannot be a
-/// folder is refused before it becomes <c>content/&lt;name&gt;/</c> in the sent mod.</para>
+/// folder is refused before it becomes <c>content/&lt;name&gt;/</c> in the sent mod. Since M814 a name the
+/// .fantome layout cannot carry (<c>WAD_&lt;name&gt;/</c>: ASCII letters, digits, '-' and '_') is refused
+/// here too, by the export's own rule.</para>
 ///
 /// <para>The markup itself is checked by the headless UiProbe card, which opens the real window - an
 /// Avalonia binding is resolved at runtime, so nothing here would notice a wrong one.</para>
@@ -140,6 +142,12 @@ public sealed class ProjectLayerEditorTests
     [InlineData("BASE")]
     [InlineData("map/extras")]
     [InlineData("map:extras")]
+    // M814: a layer is also WAD_<name>/ in an exported .fantome, whose reader knows ASCII letters, digits, - and _ only
+    [InlineData("Particle Fix")]
+    [InlineData("caf\u00e9")]
+    [InlineData("map.extras")]
+    [InlineData("fix!")]
+    [InlineData("\u00fcber")]
     public void ANameThatCannotBeAContentFolderIsRefused(string name)
     {
         var vm = Open(Project("Map453"));
@@ -150,6 +158,71 @@ public sealed class ProjectLayerEditorTests
 
         Assert.False(vm.Saved);
         Assert.True(vm.HasLayerError);
+    }
+
+    /// <summary>M814 review: the editor applies the .fantome export's own rule, in the export's own words, so a layer
+    /// the editor accepts never fails Export later and the user is told what to change at the moment they can.</summary>
+    [Theory]
+    [InlineData("Particle Fix")]
+    [InlineData("caf\u00e9")]
+    [InlineData("map.extras")]
+    [InlineData("BASE")]
+    [InlineData("   ")]
+    public void TheEditorRefusesALayerNameWithTheExportsOwnReason(string name)
+    {
+        var vm = Open(Project("Map453"));
+        vm.AddLayerCommand.Execute(null);
+        vm.Layers[1].Name = name;
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.Equal(ReyEngine.Core.Build.FantomeLayers.NameProblem(name.Trim()), vm.LayerError);
+        Assert.Equal(vm.LayerError, vm.Layers[1].Problem(vm.Layers));
+    }
+
+    [Theory]
+    [InlineData("particle-fix")]
+    [InlineData("Fix_2")]
+    [InlineData("9")]
+    [InlineData("a-b_c")]
+    public void ANameBothThePackageAndTheFantomeCanCarrySaves(string name)
+    {
+        var vm = Open(Project("Map453"));
+        vm.AddLayerCommand.Execute(null);
+        vm.Layers[1].Name = name;
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.True(vm.Saved, vm.LayerError);
+        Assert.Null(vm.Layers[1].Problem(vm.Layers));
+    }
+
+    /// <summary>M814 review: the editor and Export .fantome cannot disagree about a name. Whatever the editor saves,
+    /// the export's layer table accepts; whatever the editor refuses for a reason of spelling, the export refuses too.
+    /// The one deliberate difference is the base layer, which the editor holds as a fixed row of its own (so a second
+    /// layer cannot be called "base") and the export accepts when a project file declares it.</summary>
+    [Theory]
+    [InlineData("particle-fix")]
+    [InlineData("Fix_2")]
+    [InlineData("Particle Fix")]
+    [InlineData("caf\u00e9")]
+    [InlineData("map.extras")]
+    [InlineData("map/extras")]
+    [InlineData("\u00fcber")]
+    [InlineData("x")]
+    public void TheEditorAndTheFantomeExportAgreeAboutALayerName(string name)
+    {
+        var vm = Open(Project("Map453"));
+        vm.AddLayerCommand.Execute(null);
+        vm.Layers[1].Name = name;
+        vm.SaveCommand.Execute(null);
+
+        // the layer as ApplyTo would store it (trimmed), had the dialog let it through
+        var project = new ReyProject { Name = "P", RootPath = @"C:\P" };
+        project.Layers.Add(new ProjectLayer { Name = name.Trim(), Priority = 10 });
+
+        if (vm.Saved) Assert.NotEmpty(ReyEngine.Core.Build.LtkProjectLayers.ForFantome(project));
+        else Assert.Throws<InvalidOperationException>(() => ReyEngine.Core.Build.LtkProjectLayers.ForFantome(project));
     }
 
     [Fact]
