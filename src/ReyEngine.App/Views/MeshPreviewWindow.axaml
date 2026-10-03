@@ -744,6 +744,87 @@
               </StackPanel>
             </ScrollViewer>
           </TabItem>
+          <!-- M812: the Chroma Studio starts here, read-only. Everything colour-bearing the open skin or chroma
+               draws, Body and Effects, each item marked shared or unshared with the champion's other skins. The scan
+               runs when the button is pressed - opening a skin reads none of this. The two lists virtualise: an
+               inventory runs to thousands of rows, so they are not inside a ScrollViewer. -->
+          <TabItem FontSize="12" IsVisible="{Binding HasChromaCard}">
+            <TabItem.Header><TextBlock Text="Chroma" FontSize="12" /></TabItem.Header>
+            <Border Classes="card" Margin="10">
+              <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,2*" RowSpacing="5">
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Grid.Column="0" Text="CHROMA" VerticalAlignment="Center"
+                             ToolTip.Tip="Everything colour-bearing this skin draws: the body's colour textures and colour parameters, and the colours and colour textures of the effects it uses. Read-only - nothing is written." />
+                  <Button Grid.Column="1" Classes="tool" Content="Scan colours" FontSize="11" Padding="8,2"
+                          Command="{Binding ScanColoursCommand}"
+                          ToolTip.Tip="Read this skin's files and list its colours. Runs in the background; opening a skin does not do it." />
+                </Grid>
+                <TextBlock Grid.Row="1" Text="{Binding ChromaSkinLabel}" FontSize="11"
+                           Foreground="{DynamicResource ReyAccentBrush}" TextWrapping="Wrap" />
+                <TextBlock Grid.Row="2" Text="{Binding ChromaSummary}" FontSize="10"
+                           Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                <!-- what could not be read, so the lists may be incomplete: in the warning colour, and capped like the notes -->
+                <ScrollViewer Grid.Row="3" MaxHeight="84" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasChromaWarnings}">
+                  <TextBlock Text="{Binding ChromaWarnings}" FontSize="10"
+                             Foreground="{DynamicResource ReyWarningBrush}" TextWrapping="Wrap" />
+                </ScrollViewer>
+                <!-- how far the comparison reached and what was left out: capped, so a long list scrolls instead of
+                     squeezing the two lists below it away -->
+                <ScrollViewer Grid.Row="4" MaxHeight="96" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasChromaNotes}">
+                  <TextBlock Text="{Binding ChromaNotes}" FontSize="9"
+                             Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                </ScrollViewer>
+                <TextBlock Grid.Row="5" Classes="cardTitle" Text="BODY" Margin="0,4,0,0" IsVisible="{Binding HasChromaResult}" />
+                <ListBox Grid.Row="6" ItemsSource="{Binding ChromaBodyRows}" Background="Transparent" BorderThickness="0"
+                         IsVisible="{Binding HasChromaResult}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ChromaRowViewModel">
+                      <Grid ColumnDefinitions="*,Auto" Margin="{Binding Indent}" ToolTip.Tip="{Binding Tip}">
+                        <StackPanel Grid.Column="0">
+                          <TextBlock Classes.chromaHeader="{Binding IsHeader}" Text="{Binding Title}" FontSize="11"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Detail}" FontSize="9" IsVisible="{Binding HasDetail}"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="6,0,0,0" VerticalAlignment="Center">
+                          <Border Classes="badge outline" IsVisible="{Binding IsOutside}" ToolTip.Tip="{Binding OutsideTip}">
+                            <TextBlock Text="{Binding OutsideBadge}" />
+                          </Border>
+                          <Border Classes="badge warn" IsVisible="{Binding IsShared}" ToolTip.Tip="{Binding SharedTip}">
+                            <TextBlock Text="{Binding SharedBadge}" />
+                          </Border>
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock Grid.Row="7" Classes="cardTitle" Text="EFFECTS" Margin="0,4,0,0" IsVisible="{Binding HasChromaResult}" />
+                <ListBox Grid.Row="8" ItemsSource="{Binding ChromaEffectRows}" Background="Transparent" BorderThickness="0"
+                         IsVisible="{Binding HasChromaResult}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ChromaRowViewModel">
+                      <Grid ColumnDefinitions="*,Auto" Margin="{Binding Indent}" ToolTip.Tip="{Binding Tip}">
+                        <StackPanel Grid.Column="0">
+                          <TextBlock Classes.chromaHeader="{Binding IsHeader}" Text="{Binding Title}" FontSize="11"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Detail}" FontSize="9" IsVisible="{Binding HasDetail}"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="6,0,0,0" VerticalAlignment="Center">
+                          <Border Classes="badge outline" IsVisible="{Binding IsOutside}" ToolTip.Tip="{Binding OutsideTip}">
+                            <TextBlock Text="{Binding OutsideBadge}" />
+                          </Border>
+                          <Border Classes="badge warn" IsVisible="{Binding IsShared}" ToolTip.Tip="{Binding SharedTip}">
+                            <TextBlock Text="{Binding SharedBadge}" />
+                          </Border>
+                        </StackPanel>
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </Grid>
+            </Border>
+          </TabItem>
         </TabControl>
       </Border>
     </Grid>

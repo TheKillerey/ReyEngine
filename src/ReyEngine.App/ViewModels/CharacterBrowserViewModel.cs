@@ -106,6 +106,10 @@ public sealed partial class CharacterBrowserViewModel : ObservableObject, IDispo
     [ObservableProperty] private string _hiddenSubmeshes = "";
     private CharacterSkinInfo? _skinInfo;
 
+    /// <summary>M812: the client's name for one skin of a character - "Petals of Spring Lillia (Rose Quartz)" - or null
+    /// when the client data does not have it (a Game-only install, a companion, a mode-only skin).</summary>
+    public string? SkinDisplayName(string character, int number) => _names.Skin(character, number)?.DisplayName;
+
     public bool HasSkinDetails => _skinInfo is not null;
     public bool CanOpen => _skinInfo is { IsLoadable: true };
 

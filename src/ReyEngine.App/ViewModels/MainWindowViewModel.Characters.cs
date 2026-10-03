@@ -24,9 +24,28 @@ namespace ReyEngine.App.ViewModels;
 /// </summary>
 public sealed partial class MainWindowViewModel : ICharacterBrowserHost
 {
-    /// <summary>Champion WADs already mounted as fallbacks this session, so browsing back and forth does
-    /// not mount the same archive again and again.</summary>
-    private readonly HashSet<string> _characterWads = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// M812: the ONE champion WAD the Character window has open - the one its next read needs - and the DATA/FINAL folder it
+    /// came from. "Is it mounted?" is asked of the mounts (<see cref="IsMountedAsFallback"/>), not of this; this is what
+    /// <see cref="BuildMounts"/> puts back. BuildMounts replaces the whole mount service and the champion WAD goes with the old
+    /// one; this used to be a set that went on saying "mounted", so after ANY project change the next skin of that champion found
+    /// nothing to read - not its textures, not its sibling skins, not a colour scan.
+    ///
+    /// <para>Only this one, and only while the window has it open: a rebuild runs ~600 ms after ANY change under the project
+    /// root, on the UI thread, and every WAD it opens is a resolver pass over thousands of chunks. Every other champion mounts
+    /// again, lazily, on its next <c>OpenSkin</c>. And only from the folder it came from: a champion WAD of another install
+    /// would be served AHEAD of the new install's own copy (the first fallback that holds a hash answers), silently putting an
+    /// old patch's files in the window.</para>
+    /// </summary>
+    private (string Wad, string Final, long OpenedAt)? _openChampionWad;
+
+    /// <summary>How long after <c>OpenSkin</c> the skin counts as open even though its load has not reached the window yet (the
+    /// window's card is set at the END of the load, a second or two on).</summary>
+    private const long ChampionLoadGraceMilliseconds = 30_000;
+
+    /// <summary>M812: the skins the champion WAD lists for the character that was opened last (<see cref="CharacterEntry.Skins"/>,
+    /// a path scan - no bin parsed), so a colour scan can tell a sibling skin it could not read from one the character never had.</summary>
+    private (string Folder, IReadOnlyList<int> Numbers)? _openedCharacterSkins;
 
     string? ICharacterBrowserHost.GameDirectory => Project.GameDirectory;
     IHashResolver? ICharacterBrowserHost.Resolver => _resolver;
@@ -60,6 +79,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
 
         try
         {
+            _openedCharacterSkins = (character.Name, character.Skins.Where(s => !s.IsRoot).Select(s => s.Number).ToArray());
             if (!MakeCharacterWadReadable(champion.WadPath)) return;
 
             // The mesh is addressed the same way every other asset is: by hash, resolved or hex (M592).
@@ -291,7 +311,8 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
             return _archive is not null;
         }
 
-        if (!_characterWads.Add(wadPath)) return true;      // already mounted this session
+        // M812: ask the mounts, not a note that remembers having asked (see _openChampionWad)
+        if (IsMountedAsFallback(_mounts, wadPath)) { NoteCharacterWadOpened(wadPath); return true; }
 
         try
         {
@@ -301,14 +322,86 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
             NoteMapThumbnailInputsChanged();
             _mounts.AddFallback(champion);
             NoteMapThumbnailInputsChanged();
+            NoteCharacterWadOpened(wadPath);
             _log.Info("Character", $"Mounted {Path.GetFileName(wadPath)} as a read-only reference.");
             return true;
         }
         catch (Exception ex)
         {
-            _characterWads.Remove(wadPath);
             _log.Error("Character", $"{Path.GetFileName(wadPath)}: {ex.Message}");
             return false;
         }
     }
+
+    /// <summary>M812: is this WAD already one of the live service's mounts - a project's explicit reference, or a fallback?</summary>
+    private static bool IsMountedAsFallback(AssetMountService mounts, string wadPath)
+    {
+        string wanted = Path.GetFullPath(wadPath);
+        return mounts.Fallback.Concat(mounts.Mounts).OfType<WadMount>()
+            .Any(m => string.Equals(Path.GetFullPath(m.Location), wanted, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>M812: this champion WAD is the one the Character window has open now, and this is the install it came from.</summary>
+    private void NoteCharacterWadOpened(string wadPath)
+    {
+        string? final = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        _openChampionWad = final is not null && IsUnder(wadPath, final) ? (wadPath, final, Environment.TickCount64) : null;
+    }
+
+    /// <summary>Is a champion skin on screen in the Character window - or one being loaded into it?</summary>
+    private bool CharacterWindowHasChampionOpen(long openedAt) =>
+        MeshPreview.HasChromaCard || Environment.TickCount64 - openedAt < ChampionLoadGraceMilliseconds;
+
+    private static bool IsUnder(string path, string folder)
+    {
+        string root = Path.GetFullPath(folder).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// M812: <see cref="BuildMounts"/> has just made a new mount service, and the champion WAD the Character window has open was
+    /// mounted on the old one. Put it back, so a window that is open keeps reading its champion - its textures, its animations,
+    /// its other skins - through a rebuild instead of going quietly empty.
+    ///
+    /// <para><b>One WAD, from the current install.</b> Forgotten instead - and mounted again by the next <c>OpenSkin</c> - when the
+    /// window has moved on to something that is not a champion, or the project's game folder is no longer the install the WAD came
+    /// from (<c>OpenProjectAt</c>, <c>SetGameFolder</c> and <c>ApplyProjectSettings</c> all rebuild; a project on the same install
+    /// keeps its champion, one on another install does not get the old install's file ahead of its own).</para>
+    ///
+    /// <para><b>Opened with the resolver</b>, as <see cref="MakeCharacterWadReadable"/> opens it, and not like a game fallback
+    /// (which has none). Reads by hash alone would not need it - but the next <c>OpenSkin</c> of this champion finds the mount
+    /// already there and takes the mesh's ENTRY from it, and with an unresolved entry <c>TryPairSkeleton</c> finds no skeleton,
+    /// <c>FindAnimations</c> no animations and <c>BuildCharacterActions</c> no abilities (each returns nothing when
+    /// <c>!entry.IsResolved</c>): the skin would open bare. Measured on the real host, one champion WAD opens in about 3 ms with the
+    /// resolver and 1 ms without, so the resolver costs a rebuild about 2 ms.</para>
+    /// </summary>
+    private void RemountCharacterWads()
+    {
+        if (_mounts is null || _openChampionWad is not { } open) return;
+        if (!CharacterWindowHasChampionOpen(open.OpenedAt)) { _openChampionWad = null; return; }
+
+        string? final = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        if (final is null || !SamePath(final, open.Final) || !IsUnder(open.Wad, final))
+        {
+            _openChampionWad = null;
+            _log.Info("Character", $"{Path.GetFileName(open.Wad)} came from another game install than this project's; it mounts again if its skin is opened here.");
+            return;
+        }
+
+        try
+        {
+            if (!IsMountedAsFallback(_mounts, open.Wad))
+                _mounts.AddFallback(new WadMount(WadArchive.Open(open.Wad, _resolver),
+                    AssetSourceKind.RiotReference, editable: false, name: Path.GetFileName(open.Wad)));
+        }
+        catch (Exception ex)
+        {
+            // gone: dropped, and mounted again if its skin is opened
+            _openChampionWad = null;
+            _log.Warn("Character", $"{Path.GetFileName(open.Wad)} could not be mounted again after the project changed: {ex.Message}");
+        }
+    }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 }

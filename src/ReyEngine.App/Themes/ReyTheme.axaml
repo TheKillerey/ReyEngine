@@ -26,6 +26,12 @@
     <Setter Property="LetterSpacing" Value="1.1" />
   </Style>
 
+  <!-- M812: a system's own row in the Character window's CHROMA card, above its emitters -->
+  <Style Selector="TextBlock.chromaHeader">
+    <Setter Property="Foreground" Value="{DynamicResource ReyAccentBrush}" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
   <!-- monospace data readouts -->
   <Style Selector="TextBlock.mono">
     <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, monospace" />

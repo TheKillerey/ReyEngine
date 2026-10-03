@@ -257,6 +257,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Playback = null;
         SelectedVfx = null;
         ImagePreview = null;    // M120: a model preview replaces a texture preview
+        SetChromaSkin(null);    // M812: the CHROMA card belongs to a champion skin; the host turns it back on for one
         StopSounds?.Invoke();   // M90: previous champion's SFX must not bleed into the new preview
         // M142.1: a legacy map (no backdrop) sets its Light.dat lights directly — drop them when the next
         // preview isn't backdrop-lit, or the previous map's 95 torches keep lighting the new champion.

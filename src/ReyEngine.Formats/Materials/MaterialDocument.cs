@@ -1670,6 +1670,25 @@ public sealed class MaterialParameter
         }
     }
 
+    /// <summary>M812: the parameter as a colour - a Vector4, a Color, or a Vector3 (alpha 1). False for anything else, a
+    /// scalar and a Vector2 included: <see cref="TryGetVector4"/> zero-extends those, which is right for a UV read and
+    /// wrong for "is this a colour". A parameter whose entry wrote no value reads as the authored zero (M673).</summary>
+    public bool TryGetColor(out System.Numerics.Vector4 v)
+    {
+        switch (_prop)
+        {
+            case BinTreeVector4 p: v = p.Value; return true;
+            case BinTreeColor p: v = new System.Numerics.Vector4(p.Value.R, p.Value.G, p.Value.B, p.Value.A); return true;
+            case BinTreeVector3 p: v = new System.Numerics.Vector4(p.Value, 1f); return true;
+            default: v = default; return false;
+        }
+    }
+
+    /// <summary>M812: the material names this parameter and writes no value for it - an authored zero (M673), which is
+    /// not the same as a parameter the material does not name. Meaningful on a freshly parsed document; once the value
+    /// has been edited the entry carries one.</summary>
+    public bool IsValueOmitted => _omittedValue;
+
     /// <summary>Apply text (throws on invalid input — caller keeps the old value).</summary>
     public void Apply(string text)
     {

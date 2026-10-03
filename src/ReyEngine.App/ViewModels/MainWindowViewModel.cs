@@ -6689,6 +6689,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.ResolveMeshes = ResolveSystemMeshes;
         MeshPreview.ResolveEmissionSurfaces = ResolveSystemEmissionSurfaces;   // M754
         MeshPreview.BakeTangents = BakePreviewSkinTangentsAsync;               // M758
+        MeshPreview.ScanSkinColours = ScanSkinColours;                         // M812: the CHROMA card's read-only inventory
         MeshPreview.PlaySoundEvent = PlayPreviewSoundEvent;              // M90: clip SFX
         MeshPreview.StopSounds = () => Sound.StopTag("previewsfx");
 
@@ -7498,6 +7499,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
             RetireMapThumbnailReader(_mounts); _mounts = null;   // M807
             ProjectMode = false; InspectionMode = true;
+            _openChampionWad = null;   // M812: it was mounted on the service just retired; a project opened later must not bring it back
             _log.Success("WAD", $"Loaded {_archive.Entries.Count:n0} chunks; resolved {_archive.ResolvedCount:n0} paths.");
             _log.Info("WAD", "Single-WAD inspection mode — open a project folder (File ▸ Open Project Folder) to edit and build mods.");
             Status = $"{_archive.Name} — {_archive.Entries.Count:n0} entries · {_archive.ResolvedCount:n0} resolved";
@@ -7737,16 +7739,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // and the tree is what applies the new names to them.
         if (_mounts is { } mounts)
         {
-            int resolved = 0, total = 0;
-            foreach (var wad in mounts.Mounts.OfType<WadMount>().Concat(mounts.Fallback.OfType<WadMount>()))
+            // M812: the LIVE service is re-resolved and rebuilt in place, and a colour scan or a map thumbnail may be reading through
+            // it on a worker. The index is swapped whole (AssetMountService.Rebuild), so no read is torn - but a read that straddles
+            // the change sees two states of the project's names, and a scan that did is run again rather than trusted.
+            NoteMapThumbnailInputsChanged();
+            try
             {
-                resolved += _resolver.RefreshArchive(wad.Archive);
-                total += wad.Archive.Entries.Count;
+                int resolved = 0, total = 0;
+                foreach (var wad in mounts.Mounts.OfType<WadMount>().Concat(mounts.Fallback.OfType<WadMount>()))
+                {
+                    resolved += _resolver.RefreshArchive(wad.Archive);
+                    total += wad.Archive.Entries.Count;
+                }
+                mounts.Rebuild();
+                BuildProjectTree();
+                _log.Success("Hashes", $"Resolved {resolved:n0} / {total:n0} WAD paths across the project's mounts.");
+                Status = $"{Project.Name} — {mounts.Count:n0} assets · {resolved:n0} WAD paths resolved";
             }
-            mounts.Rebuild();
-            BuildProjectTree();
-            _log.Success("Hashes", $"Resolved {resolved:n0} / {total:n0} WAD paths across the project's mounts.");
-            Status = $"{Project.Name} — {mounts.Count:n0} assets · {resolved:n0} WAD paths resolved";
+            finally { NoteMapThumbnailInputsChanged(); }
             return;
         }
 
@@ -11799,6 +11809,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // M664: AFTER Show, which clears Materials. Without this a champion drew every submesh
                 // opaque, and a blend-mode-only transparency like Aatrox's wings came out solid black.
                 MeshPreview.Materials = textures.Materials;
+                // M812: the CHROMA card scans THIS skin's bin, on demand. Nothing is read here - opening a skin gets no slower.
+                MeshPreview.SetChromaSkin(binPath);
                 MeshPreview.SetSubmeshRules(initialHide, clipsByAnm, allClips);
                 MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
                     ? FindAnimations(entry, ownAnms)
@@ -15252,6 +15264,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var r in Project.ReferenceWads) MountReference(r);
 
         AddGameFallback();
+        RemountCharacterWads();   // M812: the champion WADs the Character window opened were mounted on the service this replaced
         _mounts.Rebuild();
     }
 

@@ -82,9 +82,82 @@ public sealed partial class MainWindowViewModel
     private void RetireMapThumbnailReader(IDisposable? reader)
     {
         if (reader is null) return;
+        // M812: a colour scan that took THIS reader on the UI thread is still reading through it on a worker; it waits for the scan
+        // exactly as it waits for the tile in hand, and is handed to the thumbnail service (which waits for the tile) once the
+        // last scan holding it lets go. Any other reader - the service a later rebuild replaces, say - is not the scan's business
+        // and goes at once.
+        lock (_readerLeaseGate)
+        {
+            if (_readerHolds.TryGetValue(reader, out var hold)) { hold.Retired = true; return; }
+        }
         if (_mapThumbnails is { } service) service.Retire(reader);
         else reader.Dispose();
     }
+
+    /// <summary>
+    /// M812: the readers colour scans hold, and which of them the editor has since replaced. A scan takes a lease on the exact
+    /// readers it will read through (the mount service and the archive as they were) on the UI thread, before its worker starts,
+    /// and gives it back when the worker is done. A rebuild that retires one of THOSE parks it here instead of disposing it under
+    /// the scan; two rebuilds during one long scan park the one reader the scan took, not the one in between.
+    /// </summary>
+    private readonly object _readerLeaseGate = new();
+    private readonly Dictionary<IDisposable, ReaderHold> _readerHolds = new(ReferenceEqualityComparer.Instance);
+    private int _activeReaderLeases;
+
+    private sealed class ReaderHold
+    {
+        public int Leases;
+        public bool Retired;
+    }
+
+    private IDisposable AcquireReaderLease(params IDisposable?[] readers)
+    {
+        var held = new List<IDisposable>();
+        Interlocked.Increment(ref _activeReaderLeases);
+        lock (_readerLeaseGate)
+            foreach (var reader in readers)
+            {
+                if (reader is null || held.Any(h => ReferenceEquals(h, reader))) continue;
+                if (!_readerHolds.TryGetValue(reader, out var hold)) _readerHolds[reader] = hold = new ReaderHold();
+                hold.Leases++;
+                held.Add(reader);
+            }
+        return new ReaderLease(this, held);
+    }
+
+    private void ReleaseReaderLease(IReadOnlyList<IDisposable> readers)
+    {
+        Interlocked.Decrement(ref _activeReaderLeases);
+        List<IDisposable>? ready = null;
+        lock (_readerLeaseGate)
+            foreach (var reader in readers)
+            {
+                if (!_readerHolds.TryGetValue(reader, out var hold) || --hold.Leases > 0) continue;
+                _readerHolds.Remove(reader);
+                if (hold.Retired) (ready ??= new List<IDisposable>()).Add(reader);
+            }
+        if (ready is null) return;
+        // Whatever the editor replaced while the scan read goes now - and goes quietly, each on its own: a reader that will not
+        // close must neither fail a scan that has finished nor keep the readers after it open (MapThumbnailService does the same).
+        foreach (var reader in ready)
+            try { RetireMapThumbnailReader(reader); }
+            catch { /* released with the process */ }
+    }
+
+    private sealed class ReaderLease(MainWindowViewModel owner, IReadOnlyList<IDisposable> readers) : IDisposable
+    {
+        private int _released;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0) owner.ReleaseReaderLease(readers);
+        }
+    }
+
+    /// <summary>For the tests: readers the editor has replaced that a scan is still reading through.</summary>
+    internal int ReadersHeldForScans { get { lock (_readerLeaseGate) return _readerHolds.Values.Count(h => h.Retired); } }
+
+    /// <summary>For the tests: scans (leases) in flight.</summary>
+    internal int ReaderLeasesHeld => Volatile.Read(ref _activeReaderLeases);
 
     /// <summary>Something thumbnails read through is about to change, or has just changed, in place: a draw that overlaps the
     /// change read a half-changed state and is not kept. Call before AND after the change.</summary>
