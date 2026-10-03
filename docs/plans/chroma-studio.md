@@ -1,8 +1,8 @@
-# Chroma Studio plan (M812, M813, M816-M820)
+# Chroma Studio plan (M812, M813, then C3-C7)
 
 Recolour one champion skin or chroma, its body and its effects, in one place, and ship it as an ordinary
-project mod. Agreed 2026-10-02. (M814 and M815 went to the LTK game-data work, docs/plans/ltk-game-data-mods.md,
-so the studio's later milestones are numbered M816-M820.)
+project mod. Agreed 2026-10-02. M812 and M813 are done. The later steps are named C3-C7 and get their milestone
+number when they start (the LTK game-data work, docs/plans/ltk-game-data-mods.md, takes M814-M819 first).
 
 **Ground rule.** A mod cannot add a new chroma to the client's skin list (the list is the client's), so the
 studio repaints an EXISTING skin or chroma; the user picks which one the mod replaces. Riot's files stay
@@ -18,11 +18,11 @@ shaders and plays its effects). The studio grows there as a card, starting with 
 |---|---|---|
 | M812 | **Inventory (read-only).** Everything colour-bearing a skin or chroma draws: Body (material samplers, the skin's default texture fields, materialOverride textures, colour parameters) and Effects (the systems the skin uses, with colour fields and colour textures; masks excluded). Each item marked shared/unshared, naming the other skins and chromas of the champion that use it. Texture-format census. | Real-data tests on a base skin, a paid skin and a chroma (Lillia 49 over 46): structural assertions and known items, masks never listed, a known shared item detected. UiProbe card binds. |
 | M813 | **One colour transform.** Hue rotate, saturation, brightness, colourise, a hue-range selection and grey protection, in one tested function for 8-bit texels and float colours. Colours above 1.0 keep their intensity; alpha is never touched; white stays white. | Unit tests, and Recolor Textures' existing output byte-identical. |
-| M816 | **Body recolour, live.** Sliders recolour the body textures and colour parameters on the character while dragging (wire the existing pixel-swap hooks). Save re-derives from originals into the project; the Character window gets the Copy To Project route it lacks. In place, with "this also changes ..." warnings on shared textures. | Device A/B render, round trip into the project, Build Package ships it. |
-| M817 | **Effects recolour.** birthColor, colour over life, linger and fresnel colours (constants, keys) and the colour / multiplier / gradient / palette textures of the skin's systems, through the Particle Editor's own edit path. | A real champion's systems round-trip with every colour key transformed exactly, masks byte-identical, device render. |
-| M818 | **"This skin only".** Shared textures copied to skin-specific paths and this skin's references repointed; shared effects cloned into the skin's own bin and its ResourceResolver repointed. Research first: does every effect use (clips, spells, idle) go through the skin's resolver? | Every other skin byte-identical in a built package; user's in-game check. |
-| M819 | **Studio UX and recipes.** Skin picker with chromas grouped under their skin, Body / Effects groups with per-material and per-system switches, hue-range eyedropper on the preview, before/after, a shipped chroma as reference. The recipe is saved in the project and re-applied from Riot's new files after a patch. What's New entry, wiki tutorial. | UiProbe, recipe re-application test. |
-| M820 | **Ship.** Three skins end to end through Send to LTK Manager, in-game check, full suite, release. | |
+| C3 | **Body recolour, live.** Sliders recolour the body textures and colour parameters on the character while dragging (wire the existing pixel-swap hooks). Save re-derives from originals into the project; the Character window gets the Copy To Project route it lacks. In place, with "this also changes ..." warnings on shared textures. | Device A/B render, round trip into the project, Build Package ships it. |
+| C4 | **Effects recolour.** birthColor, colour over life, linger and fresnel colours (constants, keys) and the colour / multiplier / gradient / palette textures of the skin's systems, through the Particle Editor's own edit path. | A real champion's systems round-trip with every colour key transformed exactly, masks byte-identical, device render. |
+| C5 | **"This skin only".** Shared textures copied to skin-specific paths and this skin's references repointed; shared effects cloned into the skin's own bin and its ResourceResolver repointed. Research first: does every effect use (clips, spells, idle) go through the skin's resolver? | Every other skin byte-identical in a built package; user's in-game check. |
+| C6 | **Studio UX and recipes.** Skin picker with chromas grouped under their skin, Body / Effects groups with per-material and per-system switches, hue-range eyedropper on the preview, before/after, a shipped chroma as reference. The recipe is saved in the project and re-applied from Riot's new files after a patch. What's New entry, wiki tutorial. | UiProbe, recipe re-application test. |
+| C7 | **Ship.** Three skins end to end through Send to LTK Manager, in-game check, full suite, release. | |
 
 Out of scope: new selectable chromas, colours inside .scb/.sco meshes, normal and mask maps, Riot's
 component (Shimmer) effects.
@@ -30,7 +30,7 @@ component (Shimmer) effects.
 ## Measured by M812 (2026-10-03, every shipped skin bin unless stated)
 
 **Sharing is normal, not an edge case.** 85-90% of a skin's colour items are used by another skin of the
-same character (Aatrox over 41 skins: 8,065 of 9,383). M818 is what lets a chroma be recoloured on its own.
+same character (Aatrox over 41 skins: 8,065 of 9,383). C5 ("this skin only") is what lets a chroma be recoloured on its own.
 
 **How a skin reaches its effects.** It reaches them through:
 - its own ResourceResolver's targets;
@@ -63,7 +63,7 @@ every 2D colour texture; only cubemaps need more.
 **Body classification by sampler name** covers 68% of sampler entries (203 names).
 - The rest (iridescent, scroll overlays, RMA) are listed as excluded, with the reason.
 - Channel-packed data maps (`EmissionR_DistortionG_Texture`) are excluded.
-- M816 may let the user opt an excluded sampler in.
+- C3 may let the user opt an excluded sampler in.
 
 **Mount fix (whole Character window).**
 - BuildMounts used to drop the champion WADs, so a champion's files went unreadable after any project
@@ -98,7 +98,7 @@ every 2D colour texture; only cubemaps need more.
   - vfx-support-report.md counts 808 components above 1.0.
   - M813's read-only scan of every champion WAD found 26 DISTINCT vectors above 1.0, over the five fields'
     constants and first/last keys. Kalista's (255,255,255,255) is the largest.
-  - M817 should count over every key.
+  - C4 should count over every key.
 - Negative colours ship too: five distinct vectors.
   - Four are fresnel colours: Singed, Vel'Koz, Jarvan IV and Jayce (-1,-1,-1).
   - One is a plain colour: Miss Fortune `SmokeTrail_AB6`.
@@ -110,7 +110,7 @@ every 2D colour texture; only cubemaps need more.
   `erosionMapName`, distortion `normalMapTexture`, `falloffTexture`, `glossTexture`, `transitionTexture`.
 - An absent field is the schema default: never write a `constantValue` that is not there.
 
-**From the M813 review, to settle in M816/M817.**
+**From the M813 review, to settle in C3/C4.**
 - **A particle's colour is a product.** It is birthColor x colour-over-life (or the linger colour) x the
   colour texture, with keys lerped per component and a per-channel probability table on each key
   (`VfxParticleSimulator` ~914).
@@ -118,12 +118,12 @@ every 2D colour texture; only cubemaps need more.
     result is B squared. Apply them to one factor only.
   - Hue-shifting each key on its own changes the colours between keys: red to green passes through yellow,
     but after +180 cyan to magenta passes through grey.
-  - Census the colours that carry probability tables or coloured multipliers before M817 writes anything.
+  - Census the colours that carry probability tables or coloured multipliers before C4 writes anything.
   - An absent field must be skipped by structure, not because the transform happens to be a no-op on white
     (brightness is not).
 - **BC1/BC3 decode greys off-grey.** RGB565 endpoints decode a neutral texel to something like
   (132,130,132), about 1.5% saturation, or about 20% near black. Exact-grey protection therefore rarely
-  fires on real textures. M816's default grey threshold should be about 0.05-0.1 with a feather, and
+  fires on real textures. C3's default grey threshold should be about 0.05-0.1 with a feather, and
   possibly value-aware.
 
 **Recolour pipeline (M171/M311).** `TextureRecolor.Apply` is a pure bytes -> bytes function over
