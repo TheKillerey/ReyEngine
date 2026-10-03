@@ -284,6 +284,10 @@ public sealed class ChromaHostTests : IDisposable
 
     // ===================================================================== a scan reads what it was started with
 
+    // The scan's worker is a thread-pool task (ScanSkinColours: Task.Run), and a full suite on a busy machine starved the pool past 10 s
+    // once ("the worker never started reading", the M815 full run) while the class alone passes; a pass returns as soon as it starts.
+    private static readonly TimeSpan WorkerStart = TimeSpan.FromSeconds(30);
+
     [Fact]
     public async Task AScanReadsThroughTheMountsItWasStartedWith_AndARebuildWaitsForItBeforeDisposingThem()
     {
@@ -299,7 +303,7 @@ public sealed class ChromaHostTests : IDisposable
 
         // the hook is called on this thread, as the card calls it on the UI thread: the readers are taken before it returns
         var scan = (Task<SkinColorInventory>)Call(vm, "ScanSkinColours", BinPath("zzchamp"), CancellationToken.None)!;
-        Assert.True(gated.Entered.Wait(TimeSpan.FromSeconds(10)), "the worker never started reading");
+        Assert.True(gated.Entered.Wait(WorkerStart), "the worker never started reading");
         Assert.Equal(1, LeasesHeld(vm));
 
         // the editor rebuilds its mounts while the scan is in the middle of its first read
@@ -332,7 +336,7 @@ public sealed class ChromaHostTests : IDisposable
         SetField(vm, "_mounts", original);
 
         var scan = (Task<SkinColorInventory>)Call(vm, "ScanSkinColours", BinPath("zzchamp"), CancellationToken.None)!;
-        Assert.True(gated.Entered.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(gated.Entered.Wait(WorkerStart));
 
         Call(vm, "BuildMounts");                                       // first rebuild: the service the scan took is replaced
         var between = new FlagMount();
@@ -414,7 +418,7 @@ public sealed class ChromaHostTests : IDisposable
         SetField(vm, "_mounts", original);
 
         var scan = (Task<SkinColorInventory>)Call(vm, "ScanSkinColours", BinPath("zzchamp"), CancellationToken.None)!;
-        Assert.True(gated.Entered.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(gated.Entered.Wait(WorkerStart));
         Call(vm, "BuildMounts");
         gated.Gate.Set();
 
@@ -460,7 +464,7 @@ public sealed class ChromaHostTests : IDisposable
         SetField(vm, "_mounts", original);
 
         var scan = (Task<SkinColorInventory>)Call(vm, "ScanSkinColours", BinPath("zzchamp"), CancellationToken.None)!;
-        Assert.True(gated.Entered.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(gated.Entered.Wait(WorkerStart));
 
         long before = Field<long>(vm, "_mapThumbnailInputs");
         Call(vm, "ApplyHashesToOpenWad");                              // Sync Hashes re-resolves and rebuilds the LIVE mounts, mid-scan
