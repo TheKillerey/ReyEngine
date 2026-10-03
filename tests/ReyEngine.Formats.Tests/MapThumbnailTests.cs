@@ -800,7 +800,10 @@ public sealed partial class MapThumbnailTests(ITestOutputHelper output)
 
         public void Pump() { while (Ui.TryDequeue(out var a)) a(); }
 
-        public bool WaitFor(Func<bool> condition, int ms = 10_000)
+        // 30 s, not 10: the worker runs at BelowNormal (MapThumbnailService), and a full suite on a busy machine starved it past
+        // 10 s once ("the draw is in the worker's hands", 2026-10-03) while the class alone passes in 9 s. A pass returns as soon
+        // as the condition holds; only a real failure waits the whole time.
+        public bool WaitFor(Func<bool> condition, int ms = 30_000)
         {
             var until = DateTime.UtcNow.AddMilliseconds(ms);
             while (DateTime.UtcNow < until)
