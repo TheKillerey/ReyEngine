@@ -16,6 +16,53 @@ modules in `META/info.json`, across the layers `base`, `snowdown-baron` and `sno
 | 3 | **Import the layered format.** Layers, `WAD_<layer>/` folders and `META/hashes/*.txt` come in; GameData is kept verbatim (refs and clones intact) and re-exported unchanged. | Crauzer's file imports with 3 layers and named chunks; re-export is byte-equal in GameData. |
 | 4 | **Apply engine (C#).** `ltk_game_data` apply in C# so the editor previews a declaration-only mod. | Byte-equal to the Rust engine on the sample and on generated documents. |
 
+## Done
+
+**Milestone 1 = M814 (b91ab81).** The layered export, GameData, harvested hashtable and atomic write.
+- Module names are OFF, because LTK Manager 1.21 pairs ltk_fantome 0.14.2 with ltk_game_data 0.6.0, which
+  refuses them.
+
+**Milestone 2 = M815.** A forced map skin ships by reference (`MapSkinDeclarations`).
+- **What becomes references:** every MapSkin object except the source gets, as a ref to the source slot:
+  - each route field that both it and the source carry;
+  - the opted-in character-skin fields;
+  - the routed FeatureAudio properties.
+- **The container's shop key moves** are `-items`/`+items` with refs. A ref is kept only where the project
+  already holds the value it produces.
+- **Hand edits** follow in a literal module, diffed against the game with those refs applied.
+- **Results:**
+  - 5 real switches (Map11 Milkshake/Sodapop, Map12 Trueshot/Odyssey) apply equal to the switcher's output
+    over the installed game.
+  - After a simulated source-slot patch the refs give the patched result byte for byte, while literals stay
+    stale.
+  - The Winter Rift 2025 copy ships no map11.bin and no container bin.
+- **Where ReyEngine differs from the sample** (it follows its own switcher):
+  - It routes every slot and alias, not only Default.
+  - It does not route `mResourceResolvers`.
+  - It refs every route field both carry, including ones equal today.
+  - It routes audio unless the recipe skips it.
+  - It does not set the shop `name`s (BuildCompatibleContainer moves keys only).
+  - It writes `{class, set}` where the sample used `clone`.
+- **A patch that removes or retypes a referenced field** makes LTK skip those edits, as a warning in LTK
+  Manager's log only. ReyEngine re-reads the installed game on every export, and falls back to values (with
+  a note) when the source is gone.
+- **References are decided per group.** The groups are a slot's route fields, a slot's character-skin
+  fields, the audio profile, and one container's key moves. A group stays by reference only if every field
+  in it is held; otherwise the whole group ships as values. A slot is never left half-switched.
+- **Adds need the class schema.** Fields added to slots that lack them (35 of 36 Map11 slots with the
+  character-skin carry) are typed from LTK Manager's class schema. The databases bundled with 1.20 and 1.21
+  type them; a game build newer than the database leaves them `Untypable` until the manager refreshes it.
+  The export note says so.
+- **Container re-keying.** If a Riot patch re-keys the source container's shop placeables, `-items` fails
+  (RemovalUnmatched), LTK skips the whole move, and the server's shop keys may be missing (a StartSpawn
+  crash). Export again after a patch.
+- **The floor is LTK Manager 1.21.** Measured against the crates each manager pins:
+  - 1.20.0 pins ltk_game_data 0.4.0, ltk_overlay 0.12.0 and ltk_fantome 0.14.0. It reads refs and
+    `-items`/`+items`, but refuses the `objects` binding outright (the whole layer is dropped) and resolves
+    a hash-form field name (`0x2d3285eb`) as text (`Untypable`).
+  - 1.21.0 (ltk_game_data 0.6.0) and 0.8.0 pass on all five switches and on the Winter Rift copy.
+  - The setting's label says 1.21+.
+
 ## The format (league-mod @219d84a: ltk_mod_project 0.16.2, ltk_game_data 0.8.0, ltk_fantome 0.15.1)
 
 Clone: `.codex_tmp/league-mod` (`git pull` before re-verifying). Abbreviations: `gd/` = crates/ltk_game_data/src,
@@ -111,7 +158,11 @@ Clone: `.codex_tmp/league-mod` (`git pull` before re-verifying). Abbreviations: 
 **Compatibility of M757's YAML.** 0.6 to 0.8 only added things (module `name`, schema fallback, empty
 `entries`, PTCH targets), so M757's output stays valid. Emitting `name` breaks consumers still on 0.6.
 
-## ReyEngine today (mapped 2026-10-03)
+## ReyEngine before M814 (mapped 2026-10-03)
+
+This is the starting point the milestones were planned from. The export, the declaration model and the Map
+Skin Switcher have since changed (see **Done** above). The import is still as described here, except that
+it now warns about the layered content it skips.
 
 **Import** (`FantomeImporter.Import`).
 - Reads Name/Author/Version/Description/Heart/Home only.

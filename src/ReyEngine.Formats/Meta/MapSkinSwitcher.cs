@@ -63,12 +63,23 @@ public sealed record MapSkinSwapResult(
     public IReadOnlyList<MapSkinCharacterOverride> CarriedCharacterSkins { get; init; } = Array.Empty<MapSkinCharacterOverride>();
 }
 
+/// <summary>M815: one server-addressed placeable that <see cref="MapSkinSwitcher.BuildCompatibleContainer"/> moved to the key the
+/// base container gives its twin: in the MapPlaceableContainer <see cref="ContainerHash"/>, the entry under
+/// <see cref="OldKey"/> now sits under <see cref="NewKey"/> with its value unchanged.</summary>
+public sealed record MapSkinKeyRemap(uint ContainerHash, uint OldKey, uint NewKey);
+
 /// <summary>A source map-container rewritten to retain the server-addressed gameplay identities
 /// from the current/base container while keeping the source skin's authored values and visuals.</summary>
 public sealed record MapSkinContainerCompatibilityResult(
     byte[] Bytes,
     int MatchedServerPlaceables,
-    int RemappedServerPlaceableKeys);
+    int RemappedServerPlaceableKeys)
+{
+    /// <summary>M815: the moves behind <see cref="RemappedServerPlaceableKeys"/>, in the order the rewrite found them - what a
+    /// declaration by reference needs (<see cref="MapSkinDeclarations"/>): each is a removal of the old key and an addition of
+    /// the new one carrying the old key's value, which is all this rewrite does to the container.</summary>
+    public IReadOnlyList<MapSkinKeyRemap> Remaps { get; init; } = Array.Empty<MapSkinKeyRemap>();
+}
 
 /// <summary>
 /// M730: a source environment given by VALUE rather than by slot - the recorded copy of a MapSkin object (and
@@ -497,7 +508,10 @@ public static class MapSkinSwitcher
             if (verifiedItems.Any(item => item.ItemKey == oldKey))
                 throw new InvalidDataException($"Old source placeable key 0x{oldKey:x8} remained after compatibility rewrite.");
 
-        return new MapSkinContainerCompatibilityResult(bytes, matched, replacements.Count);
+        return new MapSkinContainerCompatibilityResult(bytes, matched, replacements.Count)
+        {
+            Remaps = replacements.Select(pair => new MapSkinKeyRemap(pair.Key.ContainerHash, pair.Key.ItemKey, pair.Value)).ToList(),
+        };
     }
 
     /// <param name="sourceAudioOverride">M730: the recorded source audio profile, when the switch runs from a

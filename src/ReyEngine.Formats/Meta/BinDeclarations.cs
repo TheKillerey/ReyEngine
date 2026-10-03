@@ -39,8 +39,115 @@ public sealed record DeclMap(IReadOnlyList<DeclEntry> Entries) : DeclValue;
 /// <summary>A <c>pointer</c> or <c>embed</c> pin: the class and the fields it sets.</summary>
 public sealed record DeclStruct(string Pin, string Class, IReadOnlyList<DeclEntry> Fields) : DeclValue;
 
+/// <summary>
+/// M815: the value another entry of the INSTALLED game holds, named instead of copied - <c>{"ref": "&lt;entry&gt;:&lt;path&gt;"}</c>
+/// in <c>ltk_game_data</c> (<c>value.rs</c> <c>reference()</c>, <c>reference.rs</c>). LTK reads it from the game's own
+/// copy of the entry every time it applies a layer, so a Riot patch that changes the value changes what the mod
+/// applies: that is the whole point, and the reason a map skin switch is declared this way.
+///
+/// <para><b>What a reference can and cannot be.</b> Anywhere a value is: a property edit's value, a list element,
+/// a map VALUE, a struct field. Never a map KEY (keys are text, <see cref="DeclMap"/> holds strings) and never an
+/// operand of a <c>-</c> edit (<c>coerce.rs</c> reads the operands of a map removal as key text, so a reference there is a
+/// <c>KindMismatch</c>): the renderers refuse that with <see cref="BinDeclarations.Refused"/>. It resolves against the
+/// UNMODIFIED game - the first game chunk that declares <see cref="Entry"/> (<c>game_data.rs</c> <c>read_referenced_entry</c>) -
+/// never against the module's own earlier edits, whatever the module order.</para>
+///
+/// <para><b>Spelling.</b> <see cref="Entry"/> is a bin object path or <c>0x</c> and eight hex digits; LTK splits the text at the FIRST
+/// <c>:</c>, so the entry holds none and the path may. The pair is checked here the way <c>Reference::parse</c> checks it.</para>
+/// </summary>
+public sealed record DeclRef : DeclValue
+{
+    public string Entry { get; }
+    public DeclPath Path { get; }
+
+    public DeclRef(string entry, DeclPath path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (string.IsNullOrEmpty(entry) || entry.Contains(':') || entry.Any(char.IsControl))
+            throw new ArgumentException($"A reference's entry is a non-empty object path or hash form without ':' (got '{entry}').", nameof(entry));
+        if (!entry.Contains('/') && !BinDeclarations.IsHashForm(entry))
+            throw new ArgumentException($"A reference's entry '{entry}' carries no '/' and is not 0x and eight hex digits; spell it as its hash.", nameof(entry));
+        Entry = entry;
+        Path = path;
+    }
+
+    /// <summary>The text of the <c>ref</c> value: <c>entry:path</c>.</summary>
+    public string Text => Entry + ":" + Path.Text;
+}
+
+/// <summary>
+/// M815: a property path as <c>ltk_meta</c> parses it (<c>path/parse.rs</c>): segments joined by <c>.</c>, each a <c>name</c>, a
+/// <c>name[index]</c> or a <c>name{key}</c>. A name is anything but <c>.[]{}()</c> and controls; <c>0x</c> and eight hex digits
+/// is the field hash itself (<c>address.rs</c>). An index is decimal with no leading zero (a leading zero reads as octal there).
+/// A <c>{key}</c> is the decimal value of a hash, integer or file-hash key and never <c>{0x...}</c> (<c>path/resolve.rs</c>
+/// <c>key_as</c>). That is a different rule from the keys of a map VALUE or of a <c>-</c> list, which are <c>"0x%08x"</c>
+/// or a name and for which a decimal string is a name to hash (<c>coerce.rs</c> <c>key</c>) - the two spellings of one
+/// key in a single module are therefore different strings, as in <c>"-items": ["0x4241132a"]</c> next to
+/// <c>items{1111561002}</c>.
+///
+/// <para>Only the shapes a declaration this tool writes needs are built: no text keys. A path with two subscripts on one
+/// segment is refused, as the parser refuses it.</para>
+/// </summary>
+public sealed record DeclPath
+{
+    public string Text { get; }
+    private readonly bool _subscripted;
+
+    private DeclPath(string text, bool subscripted) { Text = text; _subscripted = subscripted; }
+
+    /// <summary>A one-segment path.</summary>
+    public static DeclPath Field(string name) => new(CheckName(name), false);
+
+    /// <summary>The path with one more segment under it.</summary>
+    public DeclPath Then(string name) => new(Text + "." + CheckName(name), false);
+
+    /// <summary>The last segment subscripted <c>[index]</c>.</summary>
+    public DeclPath At(int index)
+    {
+        if (_subscripted) throw new InvalidOperationException($"'{Text}' already carries a subscript on its last segment.");
+        if (index < 0) throw new ArgumentOutOfRangeException(nameof(index), "A list index is not negative.");
+        return new(Text + "[" + index.ToString(CultureInfo.InvariantCulture) + "]", true);
+    }
+
+    /// <summary>The last segment subscripted <c>{key}</c> with the key's decimal value (a hash, a file hash or an integer).</summary>
+    public DeclPath Keyed(uint key) => Keyed((ulong)key);
+
+    /// <inheritdoc cref="Keyed(uint)"/>
+    public DeclPath Keyed(ulong key)
+    {
+        if (_subscripted) throw new InvalidOperationException($"'{Text}' already carries a subscript on its last segment.");
+        return new(Text + "{" + key.ToString(CultureInfo.InvariantCulture) + "}", true);
+    }
+
+    /// <inheritdoc cref="Keyed(uint)"/>
+    public DeclPath Keyed(long key)
+    {
+        if (_subscripted) throw new InvalidOperationException($"'{Text}' already carries a subscript on its last segment.");
+        return new(Text + "{" + key.ToString(CultureInfo.InvariantCulture) + "}", true);
+    }
+
+    public override string ToString() => Text;
+
+    private static string CheckName(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name.Any(c => c is '.' or '[' or ']' or '{' or '}' or '(' or ')' || char.IsControl(c)))
+            throw new ArgumentException($"'{name}' is not a path segment name (non-empty, none of . [ ] {{ }} ( ) and no controls).", nameof(name));
+        if (name[0] is '+' or '-')
+            throw new ArgumentException($"'{name}' starts with a sign, which a property key reads as add or remove.", nameof(name));
+        return name;
+    }
+}
+
 /// <summary>One key with its value: a struct field, a map entry or a property edit.</summary>
-public sealed record DeclEntry(string Key, DeclValue Value);
+public sealed record DeclEntry(string Key, DeclValue Value)
+{
+    /// <summary>M815: <c>+path</c>, which appends the elements of a list or adds (or replaces) the entries of a map.</summary>
+    public static DeclEntry Add(string path, DeclValue value) => new("+" + path, value);
+
+    /// <summary>M815: <c>-path</c>, which removes the listed elements of a list or the listed keys of a map. Its operand is a
+    /// list of literals: a <see cref="DeclRef"/> in it is refused when the module is rendered.</summary>
+    public static DeclEntry Remove(string path, DeclValue value) => new("-" + path, value);
+}
 
 /// <summary>The edits of one existing object: its entry name and its dotted property keys.</summary>
 public sealed record DeclaredBody(string Entry, IReadOnlyList<DeclEntry> Edits);
@@ -86,12 +193,16 @@ public sealed record DeclaredChunk(
     /// <summary>M814: what the module is called in a JSON document - the project path of the bin. Null
     /// falls back to <see cref="Target"/>.</summary>
     public string? Label { get; init; }
+
+    /// <summary>M815: how many values of this module are references to the installed game (<see cref="DeclRef"/>)
+    /// instead of values. Zero for a module the diff built.</summary>
+    public int References => Edit is { } edit ? BinDeclarations.CountReferences(edit) : 0;
 }
 
 /// <summary>
 /// M757: a project's copy of a game bin, written as LTK Manager game-data declarations against the game's
 /// copy - league-mod's <c>game_data.yaml</c> (declarations version 1, <c>ltk_game_data</c> 0.6), which
-/// LTK Manager 1.20+ applies over the INSTALLED patch's bin at every overlay build. A mod that declares its
+/// LTK Manager 1.21+ applies over the INSTALLED patch's bin at every overlay build. A mod that declares its
 /// edits ships no copy of the bin, so Riot's later changes to every key it does not name survive.
 ///
 /// <para><b>One <c>target</c> module per bin</b>, not <c>entries</c>: an entries module edits an object in
@@ -134,6 +245,16 @@ public sealed record DeclaredChunk(
 /// whose modules carry one (see <see cref="GameDataDocument"/>). Checked outside the suite the strong way: league-mod's own
 /// <c>ltk_fantome</c> reads the export and <c>ltk_game_data</c> 0.8 applies each layer over the untouched
 /// bin - see the M814 commit for the corpus and counts.</para>
+///
+/// <para><b>M815: references.</b> A value may be <see cref="DeclRef"/> - <c>{"ref": "&lt;entry&gt;:&lt;path&gt;"}</c> in both
+/// renderers - and a property key may carry the <c>+</c> / <c>-</c> sign of an add or a removal. The diff never writes
+/// either; <see cref="MapSkinDeclarations"/> does, to declare a forced map skin as "this slot loads that slot's value" and
+/// not as the value of the day. Both spellings are the ones <c>ltk_game_data</c> reads from 0.4.0, the crate of LTK Manager v1.20.0.
+/// Measured with the 0.4.0 crate (M815): it parses and applies a switch's documents - target modules, references as values and as map
+/// values, <c>-items</c> / <c>+items</c>, <c>origin</c> - and the result equals the project's bins on Map11 and Map12. What 0.4.0 refuses
+/// is M814's <c>objects</c> binding, which creates or removes an object (<c>unsupported binding `objects`</c>, from 0.6.0 = LTK Manager
+/// v1.21.0), and a refused binding refuses the whole layer. So the declarations as a whole need LTK Manager 1.21; the references
+/// alone would not.</para>
 /// </summary>
 public static class BinDeclarations
 {
@@ -162,6 +283,46 @@ public static class BinDeclarations
     /// <summary>Why a bin cannot be declared; caught by <see cref="Convert"/>, which ships the bin whole.</summary>
     public sealed class Refused(string why) : Exception(why);
 
+    /// <summary>M815: a lowercase <c>0x</c> and exactly eight hex digits - the one spelling <c>ltk_game_data</c> reads as a hash
+    /// and not as a name (<c>coerce.rs</c> <c>hex32</c> strips <c>0x</c> only; <c>0X</c> would be hashed as text).</summary>
+    internal static bool IsHashForm(string text) =>
+        text.Length == 10 && text.StartsWith("0x", StringComparison.Ordinal) && text.Skip(2).All(Uri.IsHexDigit);
+
+    /// <summary>M815: the references a declared edit holds, counted in every value it carries.</summary>
+    internal static int CountReferences(DeclaredEdit edit)
+    {
+        int n = 0;
+        foreach (var body in edit.Bodies) foreach (var e in body.Edits) n += CountReferences(e.Value);
+        foreach (var o in edit.Objects) foreach (var e in o.Set) n += CountReferences(e.Value);
+        return n;
+    }
+
+    private static int CountReferences(DeclValue v) => v switch
+    {
+        DeclRef => 1,
+        DeclList l => l.Items.Sum(CountReferences),
+        DeclMap m => m.Entries.Sum(e => CountReferences(e.Value)),
+        DeclStruct s => s.Fields.Sum(e => CountReferences(e.Value)),
+        _ => 0,
+    };
+
+    /// <summary>M815: a <c>-</c> edit removes by value or by key, and <c>ltk_game_data</c> reads the keys of a map removal
+    /// as text (<c>entries.rs</c> <c>remove</c>: anything but a string, integer or bool is <c>KindMismatch</c>), so a
+    /// reference among its operands would be skipped on every machine. Refused here, where the module is rendered.</summary>
+    private static void CheckEdit(string entry, DeclEntry edit)
+    {
+        if (edit.Key.StartsWith('-') && CountReferences(edit.Value) > 0)
+            throw new Refused($"{entry} removes with a reference ('{edit.Key}'), which league-mod refuses as the operand of a removal");
+    }
+
+    /// <summary>M815: the spelling an entry takes as a body key or as the entry of a reference - its name where the name
+    /// hashes back to it and carries a slash, else its hash.</summary>
+    internal static string EntryKey(uint hash, IDeclarationNames names) => new Writer(names).EntryName(hash, needsSlash: true);
+
+    /// <summary>M815: the spelling a field takes in a property key or a path - its name where the name is an identifier that
+    /// hashes back to it, else its hash.</summary>
+    internal static string FieldKey(uint hash, IDeclarationNames names) => new Writer(names).FieldName(hash, 0);
+
     /// <summary>The chunk's target spelling: its path when <paramref name="relPath"/> hashes to
     /// <paramref name="chunkHash"/>, else the 16 hexadecimal digits of the hash (league-mod section 4).
     /// The path is lowercased with ASCII rules by the loader, so a path holding anything else is spelled
@@ -188,6 +349,32 @@ public static class BinDeclarations
 
         try { return Diff(target, r, m, names); }
         catch (Refused ex) { return new(target, null, ex.Message); }
+    }
+
+    /// <summary>
+    /// M815: the diff of two bins that are already parsed. <paramref name="baseline"/> is what the declaration is applied
+    /// ON TOP OF - the game's bin, or the game's bin with the edits an earlier module of the same target already made (the
+    /// map skin switch, declared by reference). The caller has checked that both parsed without loss.
+    /// </summary>
+    internal static DeclaredChunk ConvertTrees(string target, BinTree baseline, BinTree mod, IDeclarationNames names)
+    {
+        try { return Diff(target, baseline, mod, names); }
+        catch (Refused ex) { return new(target, null, ex.Message); }
+    }
+
+    /// <summary>
+    /// M815: a module built from a model instead of from a diff - the edits of the map skin switch, written by reference.
+    /// The YAML text and the model are rendered together, as <see cref="Convert"/> does, so a module that cannot be
+    /// spelled (a reference where none is allowed) is refused here and not later when the document is written.
+    /// </summary>
+    /// <param name="properties">How many property edits the module holds, for the plan's counts.</param>
+    /// <exception cref="Refused">A value this writer cannot spell, or a reference as the operand of a removal.</exception>
+    public static DeclaredChunk FromModel(string target, DeclaredEdit edit, int properties)
+    {
+        if (edit.IsEmpty) return new(target, null, null);
+        string yaml = Yaml.Module(target, edit);          // the signed-key rule is checked in here
+        Json.Body(edit);                                   // and the JSON form is built once now, so it cannot fail at export
+        return new(target, yaml, null, properties) { Edit = edit };
     }
 
     private static bool IsPatch(byte[] b) => b.Length >= 4 && b[0] == (byte)'P' && b[1] == (byte)'T' && b[2] == (byte)'C' && b[3] == (byte)'H';
@@ -544,7 +731,10 @@ public static class BinDeclarations
             {
                 body.Append("    ").Append(Key(entry.Entry)).Append(":\n");
                 foreach (var p in entry.Edits)
+                {
+                    CheckEdit(entry.Entry, p);
                     body.Append("      ").Append(Key(p.Key)).Append(": ").Append(Value(p.Value)).Append('\n');
+                }
             }
 
             if (edit.Objects.Count > 0)
@@ -577,6 +767,7 @@ public static class BinDeclarations
             DeclList l => "[" + string.Join(", ", l.Items.Select(Value)) + "]",
             DeclMap m => "{" + string.Join(", ", m.Entries.Select(e => Quote(e.Key) + ": " + Value(e.Value))) + "}",
             DeclStruct s => Struct(s),
+            DeclRef r => "{\"ref\": " + Quote(r.Text) + "}",   // M815: the document form, which the loader reads as a reference
             _ => throw new Refused($"a value of type {v.GetType().Name}, which this writer does not spell"),
         };
 
@@ -607,7 +798,11 @@ public static class BinDeclarations
             }
             if (edit.AddLinks.Count > 0) body["links"] = new JsonArray(edit.AddLinks.Select(l => (JsonNode?)JsonValue.Create(l)).ToArray());
             if (edit.DropLinks.Count > 0) body["-links"] = new JsonArray(edit.DropLinks.Select(l => (JsonNode?)JsonValue.Create(l)).ToArray());
-            foreach (var entry in edit.Bodies) body[entry.Entry] = Mapping(entry.Edits);
+            foreach (var entry in edit.Bodies)
+            {
+                foreach (var e in entry.Edits) CheckEdit(entry.Entry, e);
+                body[entry.Entry] = Mapping(entry.Edits);
+            }
             return body;
         }
 
@@ -636,6 +831,7 @@ public static class BinDeclarations
             DeclList l => new JsonArray(l.Items.Select(Value).ToArray()),
             DeclMap m => Mapping(m.Entries),
             DeclStruct s => Struct(s),
+            DeclRef r => new JsonObject { ["ref"] = r.Text },   // M815
             _ => throw new Refused($"a value of type {v.GetType().Name}, which this writer does not spell"),
         };
 

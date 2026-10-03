@@ -15906,7 +15906,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var layer in layers)
         {
             int wads = build.Wads.Count(w => w.Layer.Equals(layer.Name, StringComparison.OrdinalIgnoreCase));
-            int declared = plan is not null && plan.Modules.TryGetValue(layer.Name, out var modules) ? modules.Count : 0;
+            // M815: bins, not modules - a forced map skin's bin is two modules (the references, then what the project holds beyond them)
+            int declared = plan is not null ? plan.DeclaredBins.Count(b => b.Layer.Equals(layer.Name, StringComparison.OrdinalIgnoreCase)) : 0;
             parts.Add($"{layer.Name} (priority {layer.Priority}): {wads} WAD(s), {declared} declared bin(s)");
         }
         _log.Info(category, "Layers - " + string.Join("; ", parts) + ".");
@@ -15922,8 +15923,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var (level, line) in plan.Report("shipped"))
             if (level == 0) _log.Success(category, line); else _log.Info(category, line);
         foreach (var bin in plan.DeclaredBins.Take(20))
-            _log.Info(category, $"  declared [{bin.Layer}] {bin.RelPath}: {bin.Chunk.Properties} propert(ies), "
-                + $"{bin.Chunk.ObjectsAdded} object(s) added, {bin.Chunk.ObjectsRemoved} removed");
+        {
+            int refs = bin.Chunks.Sum(c => c.References);
+            _log.Info(category, $"  declared [{bin.Layer}] {bin.RelPath}: {bin.Chunks.Sum(c => c.Properties)} propert(ies), "
+                + $"{bin.Chunks.Sum(c => c.ObjectsAdded)} object(s) added, {bin.Chunks.Sum(c => c.ObjectsRemoved)} removed"
+                + (refs > 0 ? $" - {refs} value(s) by reference to the game's own copy" : ""));
+        }
         if (plan.DeclaredBins.Count > 20) _log.Info(category, $"  ... and {plan.DeclaredBins.Count - 20} more declared.");
 
         if (plan.Declared > 0)
@@ -16110,9 +16115,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private Formats.Meta.DeclarationPlan PlanDeclarations(IEnumerable<Formats.Meta.DeclarationFile> files)
     {
         using var references = OpenReferenceWads();
+        // M815: the project's recorded map skin switches, so a forced map skin is declared by reference to the game's source slot
         return Formats.Meta.BinDeclarationPlanner.Plan(files,
             (hash, rel) => ReadRiotOriginalBytes(new WadAssetEntry { PathHash = hash, Path = rel }, references),
-            _declarationNames ?? new DeclarationNames(_resolver.Database));
+            _declarationNames ?? new DeclarationNames(_resolver.Database),
+            new Formats.Meta.MapSkinDeclarationOptions(Project.BinRecipes, ResolveBinName));
     }
 
     /// <summary>M814 test seam: the plaintext a declaration spells hashes with. Null is the loaded hash tables

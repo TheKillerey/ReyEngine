@@ -122,7 +122,8 @@ public sealed class ReyProject
     /// <summary>
     /// M757: send each overridden GAME bin as LTK Manager game-data declarations - its changes against the
     /// game's copy, in the layer's <c>game_data.yaml</c> - instead of as a whole file, so Riot's later
-    /// changes to every key the mod does not touch survive a patch. Needs LTK Manager 1.20 or newer; off by
+    /// changes to every key the mod does not touch survive a patch. Needs LTK Manager 1.21 or newer (1.20.0 reads
+    /// declarations but refuses a whole layer that creates or removes an object); off by
     /// default because an older manager, or any other loader, would ignore the edits entirely. A bin whose
     /// changes cannot be declared (a removed property, a changed class) still ships whole.
     ///

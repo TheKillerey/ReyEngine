@@ -132,7 +132,9 @@ public static class NewFeatures
         NewFeature.Note("0.5.0", "Event content (Hall of Legends, MSI trophies, esports banners) starts hidden as in a normal game; tick it under Events to show it"),
         NewFeature.Note("0.5.0", "Maps show their critters and decorations: snails, birds, poros, boats and the esports banners, drawn with the placed props"),
         NewFeature.Note("0.5.0", "The gizmo keeps its size from every camera, rotate follows the mouse round the ring, and Focus and F go to whatever is selected"),
-        NewFeature.Note("0.5.0", "Project Settings can send game bin edits to LTK Manager 1.20+ as declarations, so a mod keeps Riot's later changes to those bins"),
+        // M815 measured the floor: LTK Manager 1.20 (ltk_game_data 0.4.0) refuses the `objects` binding outright and cannot
+        // address a field by its hash, so declarations need 1.21. The line said 1.20+ when 0.5.0 shipped.
+        NewFeature.Note("0.5.0", "Project Settings can send game bin edits to LTK Manager 1.21+ as declarations, so a mod keeps Riot's later changes to those bins"),
         NewFeature.Note("0.5.0", "Bake tangents into a skin's .skn for normal-mapped skins, byte for byte what LTK Manager writes"),
     };
 

@@ -8,7 +8,14 @@ namespace ReyEngine.Formats.Meta;
 public sealed record DeclarationFile(string Layer, string WadFolder, string RelPath, string AbsPath);
 
 /// <summary>A game bin declared as changes, with the layer and project path it came from.</summary>
-public sealed record DeclaredBin(string Layer, string WadFolder, string RelPath, DeclaredChunk Chunk);
+/// <param name="Chunk">The bin's first module. M814: its only one.</param>
+public sealed record DeclaredBin(string Layer, string WadFolder, string RelPath, DeclaredChunk Chunk)
+{
+    /// <summary>M815: every module the bin became, in the order they apply. A bin the diff declared is one module
+    /// (<see cref="Chunk"/>); a forced map skin's bin is the references and then, when the project holds more than the
+    /// switch, the values that follow them - two modules of one target, which LTK applies in this order.</summary>
+    public IReadOnlyList<DeclaredChunk> Chunks { get; init; } = [Chunk];
+}
 
 /// <summary>
 /// M814: which of a project's bins ship as declarations and which still ship as files. The one answer behind
@@ -39,6 +46,12 @@ public sealed class DeclarationPlan
     /// compare with. They ship as files; listed so a setting that declared nothing can say why.</summary>
     public required IReadOnlyList<string> NoGameCopy { get; init; }
 
+    /// <summary>M815: one line per forced map skin the plan met - what was declared by reference, or why nothing was.</summary>
+    public IReadOnlyList<string> SwitchNotes { get; init; } = Array.Empty<string>();
+
+    /// <summary>M815: how many values of the plan are references to the installed game (<see cref="DeclRef"/>).</summary>
+    public int References { get; init; }
+
     public int Declared { get; init; }
     public int Unchanged { get; init; }
     public int Properties { get; init; }
@@ -54,6 +67,7 @@ public sealed class DeclarationPlan
             (0, $"Declarations: {Declared} game bin(s) {sent} as changes ({Properties} propert(ies), {ObjectsAdded} object(s) added, "
                 + $"{ObjectsRemoved} removed), {Unchanged} unchanged bin(s) not {sent}, {Whole.Count} {sent} whole."),
         };
+        foreach (var note in SwitchNotes) report.Add((1, "  " + note));
         foreach (var w in Whole.Take(20)) report.Add((1, $"  {sent} whole - " + w));
         if (Whole.Count > 20) report.Add((1, $"  ... and {Whole.Count - 20} more {sent} whole."));
         if (NoGameCopy.Count > 0)
@@ -83,23 +97,30 @@ public static class BinDeclarationPlanner
     /// <param name="readRiot">The game's untouched copy of a chunk: given its hash and its project path, the
     /// bytes, or null when the game has no such chunk (or it cannot be read).</param>
     /// <param name="names">Plaintext for the hashes a declaration spells.</param>
+    /// <param name="mapSkins">M815: the project's recorded map skin switches. Given, a forced map skin's shipping bin and its source
+    /// container are declared BY REFERENCE to the game's source slot (<see cref="MapSkinDeclarations"/>); null leaves every bin to the
+    /// diff, as M814 had it.</param>
     public static DeclarationPlan Plan(
-        IEnumerable<DeclarationFile> files, Func<ulong, string, byte[]?> readRiot, IDeclarationNames names)
+        IEnumerable<DeclarationFile> files, Func<ulong, string, byte[]?> readRiot, IDeclarationNames names,
+        MapSkinDeclarationOptions? mapSkins = null)
     {
         ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(readRiot);
         ArgumentNullException.ThrowIfNull(names);
 
+        var fileList = files as IReadOnlyList<DeclarationFile> ?? files.ToList();
+        var switches = mapSkins is null ? null : MapSkinDeclarations.Read(fileList, readRiot, mapSkins);
+
         var kept = new List<DeclarationFile>();
         var dropped = new List<DeclarationFile>();
-        var modules = new Dictionary<string, List<DeclaredChunk>>(StringComparer.OrdinalIgnoreCase);
+        var layerModules = new Dictionary<string, List<DeclaredChunk>>(StringComparer.OrdinalIgnoreCase);
         var declaredBins = new List<DeclaredBin>();
         var seen = new Dictionary<string, (byte[] Bytes, bool ShipsWhole, string Where)>(StringComparer.Ordinal);
         var whole = new List<string>();
         var noCopy = new List<string>();
         int declared = 0, unchanged = 0, props = 0, added = 0, removed = 0;
 
-        foreach (var f in files)
+        foreach (var f in fileList)
         {
             if (!f.RelPath.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) { kept.Add(f); continue; }
 
@@ -136,7 +157,9 @@ public static class BinDeclarationPlanner
                 continue;
             }
 
-            var chunk = BinDeclarations.Convert(target, riot, mod, names);
+            // M815: a forced map skin is declared by reference, then by value for whatever the project holds beyond it
+            var switched = switches?.Declare(f.RelPath, target, riot, mod, names);
+            var chunk = switched?[0] ?? BinDeclarations.Convert(target, riot, mod, names);
             if (chunk.Unchanged)
             {
                 seen[key] = (mod, false, where);
@@ -153,17 +176,19 @@ public static class BinDeclarationPlanner
             }
 
             seen[key] = (mod, false, where);
-            chunk = chunk with { Label = f.RelPath.Replace('\\', '/') };
-            if (!modules.TryGetValue(f.Layer, out var list)) modules[f.Layer] = list = new List<DeclaredChunk>();
-            list.Add(chunk);
-            declaredBins.Add(new DeclaredBin(f.Layer, f.WadFolder, f.RelPath, chunk));
+            string label = f.RelPath.Replace('\\', '/');
+            var labelled = (switched ?? new[] { chunk }).Select(c => c with { Label = label }).ToList();
+            if (!layerModules.TryGetValue(f.Layer, out var list)) layerModules[f.Layer] = list = new List<DeclaredChunk>();
+            list.AddRange(labelled);
+            declaredBins.Add(new DeclaredBin(f.Layer, f.WadFolder, f.RelPath, labelled[0]) { Chunks = labelled });
             dropped.Add(f);
-            declared++; props += chunk.Properties; added += chunk.ObjectsAdded; removed += chunk.ObjectsRemoved;
+            declared++;
+            foreach (var c in labelled) { props += c.Properties; added += c.ObjectsAdded; removed += c.ObjectsRemoved; }
         }
 
         var ordered = new Dictionary<string, IReadOnlyList<DeclaredChunk>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (layer, list) in modules)
-            ordered[layer] = list.OrderBy(c => c.Target, StringComparer.Ordinal).ToList();
+        foreach (var (layer, list) in layerModules)
+            ordered[layer] = list.OrderBy(c => c.Target, StringComparer.Ordinal).ToList();   // stable: the modules of one bin keep their apply order
 
         return new DeclarationPlan
         {
@@ -178,6 +203,8 @@ public static class BinDeclarationPlanner
             Properties = props,
             ObjectsAdded = added,
             ObjectsRemoved = removed,
+            SwitchNotes = switches?.Notes.ToList() ?? new List<string>(),
+            References = switches?.References ?? 0,
         };
     }
 }
