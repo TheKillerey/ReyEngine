@@ -93,13 +93,15 @@ public sealed record TextureAdjustment(
             // 3. hue / saturation / value, in HSV
             if (HueDegrees != 0f || Saturation != 1f || Brightness != 1f)
             {
-                RgbToHsv(Math.Clamp(r, 0f, 1f), Math.Clamp(g, 0f, 1f), Math.Clamp(b, 0f, 1f),
-                         out float h, out float s, out float v);
+                // M813: the conversion lives in Hsv now, shared with the Chroma Studio's ColorTransform. It does not
+                // clamp, so the clamps stay here, exactly where they were.
+                Hsv.FromRgb(Math.Clamp(r, 0f, 1f), Math.Clamp(g, 0f, 1f), Math.Clamp(b, 0f, 1f),
+                            out float h, out float s, out float v);
                 h += HueDegrees / 360f;
                 h -= MathF.Floor(h);                       // wrap into [0,1)
                 s = Math.Clamp(s * Saturation, 0f, 1f);
                 v = Math.Clamp(v * Brightness, 0f, 1f);
-                HsvToRgb(h, s, v, out r, out g, out b);
+                Hsv.ToRgb(h, s, v, out r, out g, out b);
             }
 
             // 4. tint
@@ -133,36 +135,4 @@ public sealed record TextureAdjustment(
     }
 
     private static byte ToByte(float v) => (byte)Math.Clamp(MathF.Round(v * 255f), 0f, 255f);
-
-    private static void RgbToHsv(float r, float g, float b, out float h, out float s, out float v)
-    {
-        float max = MathF.Max(r, MathF.Max(g, b));
-        float min = MathF.Min(r, MathF.Min(g, b));
-        float d = max - min;
-        v = max;
-        s = max <= 1e-6f ? 0f : d / max;
-        if (d <= 1e-6f) { h = 0f; return; }
-        if (max == r) h = (g - b) / d / 6f + (g < b ? 1f : 0f);
-        else if (max == g) h = ((b - r) / d + 2f) / 6f;
-        else h = ((r - g) / d + 4f) / 6f;
-    }
-
-    private static void HsvToRgb(float h, float s, float v, out float r, out float g, out float b)
-    {
-        if (s <= 1e-6f) { r = g = b = v; return; }
-        float sector = h * 6f;
-        int i = (int)MathF.Floor(sector) % 6;
-        if (i < 0) i += 6;
-        float f = sector - MathF.Floor(sector);
-        float p = v * (1f - s), q = v * (1f - s * f), t = v * (1f - s * (1f - f));
-        (r, g, b) = i switch
-        {
-            0 => (v, t, p),
-            1 => (q, v, p),
-            2 => (p, v, t),
-            3 => (p, q, v),
-            4 => (t, p, v),
-            _ => (v, p, q),
-        };
-    }
 }
