@@ -102,18 +102,22 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
         foreach (var l in p.Layers)
         {
             if (string.Equals(l.Name, ProjectLayer.BaseLayer, StringComparison.OrdinalIgnoreCase)) continue;
-            Layers.Add(new ProjectLayerRow { Name = l.Name, Priority = l.Priority, Description = l.Description });
+            Layers.Add(new ProjectLayerRow { Name = l.Name, Priority = l.Priority, Description = l.Description, Source = l });
         }
 
         // The exporter ships a folder under the leaf of its resolved path, so that is the name a layer
         // claims - not the possibly-relative entry in ProjectFolders.
+        // M816: except a folder a layer claims WHOLE (an imported layer's WAD, layers/<layer>/<Wad>): its leaf is also the leaf of the
+        // base folder of the same WAD, so it is listed, and written back, by its whole entry.
         foreach (string entry in p.ProjectFolders)
         {
-            string folder = Path.GetFileName(p.ResolveProjectPath(entry).TrimEnd('/', '\\'));
+            string folder = p.IsClaimedWhole(entry)
+                ? ReyProject.NormalizeFolderEntry(entry)
+                : Path.GetFileName(p.ResolveProjectPath(entry).TrimEnd('/', '\\'));
             if (folder.Length == 0
                 || FolderLayers.Any(r => string.Equals(r.Folder, folder, StringComparison.OrdinalIgnoreCase)))
                 continue;
-            string owner = p.LayerOf(folder);
+            string owner = p.LayerOfFolder(entry);
             var row = Layers.FirstOrDefault(l => string.Equals(l.Name, owner, StringComparison.OrdinalIgnoreCase))
                       ?? Layers[0];
             FolderLayers.Add(new FolderLayerRow(folder, row, Layers));
@@ -137,11 +141,32 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     }
 
     /// <summary>Delete a layer. Its folders fall back to base rather than vanishing with it - a folder
-    /// always ships somewhere.</summary>
+    /// always ships somewhere.
+    ///
+    /// <para>M816 review: except what an imported .fantome gave the layer, which has nowhere to fall back to. A WAD folder it claims whole
+    /// cannot ship in base (its leaf is the name of a WAD base has too). And its GameData and string overrides belong to the LAYER: Save
+    /// rebuilds the layer list from the rows, so a removed row takes its declarations key and its overrides with it, an export and a send
+    /// leave them out, and the stored files stay behind unused. Removal is refused for each, with the reason (review, round 3).</para></summary>
     [RelayCommand]
     private void RemoveLayer(ProjectLayerRow? row)
     {
         if (row is null || row.IsBase || !Layers.Contains(row)) return;
+        var reasons = new List<string>();
+        var held = FolderLayers.Where(f => ReferenceEquals(f.Layer, row) && f.IsWholeClaim).Select(f => f.Folder).ToList();
+        if (held.Count > 0)
+            reasons.Add($"Layer '{row.Label}' holds the WAD folder {string.Join(", ", held.Select(h => $"'{h}'"))} of an imported .fantome, which cannot ship in base. "
+                      + "Move it to another layer first.");
+        bool gameData = !string.IsNullOrWhiteSpace(row.Source?.DeclarationsKey), strings = row.Source?.StringOverrides is { Count: > 0 };
+        if (gameData || strings)
+            reasons.Add($"Layer '{row.Label}' holds {(gameData && strings ? "GameData and string overrides" : gameData ? "GameData" : "string overrides")} "
+                      + "from an imported .fantome, and removing the layer would drop "
+                      + (gameData ? "its declarations (and the files that go with them)" : "its string overrides")
+                      + " from every export and send. It can only be removed by editing project.json.");
+        if (reasons.Count > 0)
+        {
+            LayerError = string.Join(" ", reasons);
+            return;
+        }
         foreach (var f in FolderLayers.Where(f => ReferenceEquals(f.Layer, row)))
             f.Layer = Layers[0];
         Layers.Remove(row);
@@ -149,11 +174,26 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
     }
 
     /// <summary>The first thing wrong with the layer list, or null. A name becomes a folder under
-    /// <c>content/</c> in the sent mod, so it has to be usable as one and has to be unique.</summary>
+    /// <c>content/</c> in the sent mod, so it has to be usable as one and has to be unique.
+    ///
+    /// <para>M816 review: and the folders. A WAD folder an imported layer claims whole (its entry has a path in it) stays in a layer - in base
+    /// its leaf is the name of the base WAD it sits beside - and no layer holds two folders that would ship as one WAD.</para></summary>
     private string? ValidateLayers()
     {
         foreach (var l in Layers)
             if (l.Problem(Layers) is { } problem) return problem;
+
+        foreach (var f in FolderLayers)
+            if (f.IsWholeClaim && f.Layer.IsBase)
+                return $"The WAD folder '{f.Folder}' came from a layer of an imported .fantome and cannot ship in base, where it would sit beside the WAD of the same name. Move it to a layer.";
+
+        foreach (var group in FolderLayers.GroupBy(f => (Layer: f.Layer, Wad: ReyEngine.Core.Build.FantomeLayers.WadFileName(f.Leaf).ToLowerInvariant())))
+        {
+            var rows = group.ToList();
+            if (rows.Count > 1 && rows.Any(r => r.IsWholeClaim))
+                return $"The folders {string.Join(" and ", rows.Select(r => $"'{r.Folder}'"))} would both ship as {ReyEngine.Core.Build.FantomeLayers.WadFileName(rows[0].Leaf)} "
+                     + $"in layer '{group.Key.Layer.Label}'. A WAD has one folder in a layer: move one of them to another layer.";
+        }
         return null;
     }
 
@@ -179,14 +219,29 @@ public sealed partial class ProjectSettingsViewModel : ViewModelBase
 
         // M744: layers, rebuilt from the rows. A layer with no folders is kept - the user may be setting
         // one up before moving content into it, and dropping it would silently discard their typing.
-        p.Layers = Layers.Where(l => !l.IsBase).Select(l => new ProjectLayer
+        // M816: and the base layer an import gave something to keep (its GameData, display name, string overrides) is not a row of its own
+        // here - the dialog holds base as a fixed row - so it is carried over as it was, ahead of the others.
+        // Review (round 3): carried over WITHOUT its Folders. Base is the layer a folder no other layer claims falls back to, and the dialog
+        // never wrote a folder into it; but ReyProject.LayerOf takes the first layer that lists a folder and base is first, so a
+        // base layer a person had hand-edited to list "Ahri" would claim it ahead of the layer the dialog just assigned it to.
+        var baseKept = p.Layers.Where(l => string.Equals(l.Name, ProjectLayer.BaseLayer, StringComparison.OrdinalIgnoreCase))
+            .Select(l => new ProjectLayer
+            {
+                Name = l.Name, Priority = l.Priority, Description = l.Description, DisplayName = l.DisplayName,
+                StringOverrides = l.StringOverrides, DeclarationsKey = l.DeclarationsKey, Folders = new(),
+            }).ToList();
+        p.Layers = baseKept.Concat(Layers.Where(l => !l.IsBase).Select(l => new ProjectLayer
         {
             Name = l.Name.Trim(),
             Priority = l.Priority,
             Description = l.Description.Trim(),
             Folders = FolderLayers.Where(f => ReferenceEquals(f.Layer, l))
                                   .Select(f => f.Folder).ToList(),
-        }).ToList();
+            // M816: what an import gave the layer rides a rename and a re-prioritising; the dialog neither shows nor edits it
+            DisplayName = l.Source?.DisplayName,
+            StringOverrides = l.Source?.StringOverrides,
+            DeclarationsKey = l.Source?.DeclarationsKey,
+        })).ToList();
     }
 
     [RelayCommand]

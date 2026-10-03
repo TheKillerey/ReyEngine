@@ -9,6 +9,7 @@ using ReyEngine.Core.Assets;
 using ReyEngine.Core.Build;
 using ReyEngine.Core.Cleanup;
 using ReyEngine.Core.Hashing;
+using ReyEngine.Core.Projects;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Meta;
 
@@ -103,6 +104,21 @@ public sealed partial class MainWindowViewModel
                 catch { }
             }
 
+        // M816 review: the GameData documents an imported .fantome left with the project name assets no bin of the project does - a
+        // module's edits point a layer at textures, meshes and particle systems - so an asset that only a declaration uses must not
+        // be listed as unused. A document that cannot be read is a hole in what this scan sees, as an unparseable bin is.
+        foreach (var layer in Project.Layers)
+        {
+            try
+            {
+                if (LtkProjectStore.ReadDeclarationsText(Project, layer) is { } declarations) index.AddGameData(declarations);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                index.NoteGameDataUnreadable();
+            }
+        }
+
         int packedReferenceGaps = 0;
         foreach (var projectWad in Project.ProjectWads)
         {
@@ -150,9 +166,13 @@ public sealed partial class MainWindowViewModel
         if (Project.ThumbnailPath is { Length: > 0 } thumb) protectedPaths.Add(thumb.Replace('\\', '/'));
 
         _log.Info("Cleanup", $"Reference index: {index.BinsRead:n0} bin(s) read, {index.BinsFailed} unreadable, "
-                           + $"{index.NotBins} not bins; {index.PathCount:n0} path(s), {index.HashCount:n0} hash(es).");
+                           + $"{index.NotBins} not bins"
+                           + (index.GameDataRead + index.GameDataFailed > 0 ? $"; {index.GameDataRead:n0} GameData document(s) read, {index.GameDataFailed} unreadable" : "")
+                           + $"; {index.PathCount:n0} path(s), {index.HashCount:n0} hash(es).");
         if (!index.IsComplete || packedReferenceGaps > 0)
-            _log.Warn("Cleanup", $"{index.BinsFailed:n0} bin(s) could not be parsed and "
+            _log.Warn("Cleanup", $"{index.BinsFailed:n0} bin(s)"
+                               + (index.GameDataFailed > 0 ? $" and {index.GameDataFailed:n0} GameData document(s)" : "")
+                               + $" could not be parsed and "
                                + $"{packedReferenceGaps:n0} project-WAD chunk(s) could not be read — references "
                                + "they hold are invisible, so unused results are reported as uncertain.");
 
@@ -187,7 +207,8 @@ public sealed partial class MainWindowViewModel
             ProtectedHashes = protectedHashes,
             ReferencesComplete = index.IsComplete && packedReferenceGaps == 0,
             ReferenceGapReason = index.IsComplete && packedReferenceGaps == 0 ? ""
-                : $"{index.BinsFailed:n0} unparseable bin(s), {packedReferenceGaps:n0} unreadable project-WAD chunk(s)",
+                : $"{index.BinsFailed:n0} unparseable bin(s), {packedReferenceGaps:n0} unreadable project-WAD chunk(s)"
+                  + (index.GameDataFailed > 0 ? $", {index.GameDataFailed:n0} unreadable GameData document(s)" : ""),
         };
         return CleanupScanner.Scan(options, progress);
     }

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Cleanup;
@@ -41,9 +42,55 @@ public sealed class ProjectReferenceIndex : IReferenceIndex
     /// because its type could not be sniffed was never going to contain references.</summary>
     public int NotBins { get; private set; }
 
-    /// <summary>True when every real bin was read, so "nothing references it" is a claim the index can
+    /// <summary>M816 review: GameData documents fed in (<see cref="AddGameData"/>).</summary>
+    public int GameDataRead { get; private set; }
+
+    /// <summary>M816 review: GameData documents that could not be read (a project's stored document is a file; a person can break it). Each
+    /// one is a set of references the scan cannot see, exactly as an unparseable bin is.</summary>
+    public int GameDataFailed { get; private set; }
+
+    /// <summary>True when every real bin and every GameData document was read, so "nothing references it" is a claim the index can
     /// actually support.</summary>
-    public bool IsComplete => BinsFailed == 0;
+    public bool IsComplete => BinsFailed == 0 && GameDataFailed == 0;
+
+    /// <summary>
+    /// M816 review: feed one GameData document (<c>.reyengine/ltk/game_data/&lt;key&gt;/declarations.json</c> of a project imported from an
+    /// LTK-layered .fantome). Declarations are references no bin holds: a module's <c>edits</c> name the textures, meshes and particle
+    /// systems the layer points at, so an asset that ONLY a declaration uses looked like nothing used it, and Cleanup Project listed it as
+    /// unused.
+    ///
+    /// <para>Every string of the document is a reference - values and keys alike, the way <see cref="AddAssetNames"/> prefers recall to
+    /// precision: a spurious name can only spare a file. A string of the form <c>0x%08x</c> is a name hash, and one of sixteen hex digits
+    /// (with or without <c>0x</c>) a path hash - the forms declarations spell hashes in.</para>
+    /// </summary>
+    public void AddGameData(string documentText)
+    {
+        ArgumentNullException.ThrowIfNull(documentText);
+        // read into a side list first: a document that turns out not to be JSON half way through must add nothing
+        var found = new List<string>();
+        try
+        {
+            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(documentText), new JsonReaderOptions { MaxDepth = 256 });
+            while (reader.Read())
+                if (reader.TokenType is JsonTokenType.String or JsonTokenType.PropertyName && reader.GetString() is { } s)
+                    found.Add(s);
+        }
+        catch (JsonException) { GameDataFailed++; return; }
+        foreach (string s in found) AddDeclarationString(s);
+        GameDataRead++;
+    }
+
+    /// <summary>M816 review: a stored GameData document exists and could not be read at all (an I/O error), which is as much a hole in what
+    /// the index can see as a document that is not JSON.</summary>
+    public void NoteGameDataUnreadable() => GameDataFailed++;
+
+    private void AddDeclarationString(string s)
+    {
+        AddReference(s);
+        string hex = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s;
+        if (hex.Length == 8 && s.Length == 10 && uint.TryParse(hex, System.Globalization.NumberStyles.AllowHexSpecifier, null, out uint name)) _nameHashes.Add(name);
+        else if (hex.Length == 16 && ulong.TryParse(hex, System.Globalization.NumberStyles.AllowHexSpecifier, null, out ulong path)) _wadHashes.Add(path);
+    }
 
     /// <summary>Feed one .bin. Broken bins contribute nothing rather than aborting the scan - a mod with
     /// one unreadable bin must still be cleanable, just more cautiously.</summary>

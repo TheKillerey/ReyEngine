@@ -22,18 +22,69 @@ public sealed class FantomeMeta
     /// <summary>M814: every layer of the mod, base included - the table written to <c>Layers</c>. Empty
     /// means a mod of the base layer alone.</summary>
     public IReadOnlyList<FantomeLayer> Layers { get; set; } = Array.Empty<FantomeLayer>();
+
+    // ---- M816: what an LTK-layered package carries beyond the layers. Each is written only when set. ----
+
+    /// <summary><c>License</c>: a bare string, or an object with a name and a link. The shape (<see cref="Projects.ProjectLicense.AsObject"/>)
+    /// is written as it was read.</summary>
+    public Projects.ProjectLicense? License { get; set; }
+
+    /// <summary><c>Tags</c> (for example <c>map-skin</c>); omitted when empty.</summary>
+    public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
+
+    /// <summary><c>Champions</c> the mod targets; omitted when empty.</summary>
+    public IReadOnlyList<string> Champions { get; set; } = Array.Empty<string>();
+
+    /// <summary><c>Maps</c> the mod targets (for example <c>summoners-rift</c>); omitted when empty.</summary>
+    public IReadOnlyList<string> Maps { get; set; } = Array.Empty<string>();
+
+    /// <summary>The package's own text files - <c>META/README.md</c> and <c>META/LICENSE</c> - as (entry name, file on disk).</summary>
+    public IReadOnlyList<(string EntryName, string FilePath)> MetaFiles { get; set; } = Array.Empty<(string, string)>();
 }
+
+/// <summary>M816: a file a layer's declarations name under <c>overrides</c> (a <c>.ptch</c>), stored in the package at
+/// <c>META/game_data/&lt;layer&gt;/&lt;Path&gt;</c>.</summary>
+/// <param name="Path">The layer-relative path the declarations spell it by, with '/' separators.</param>
+/// <param name="FilePath">The file to store, on disk.</param>
+public sealed record FantomeOverrideFile(string Path, string FilePath);
 
 /// <summary>M814: one entry of a .fantome's <c>Layers</c> table (<c>ltk_fantome</c>'s
 /// <c>FantomeLayerInfo</c>). The table key and <see cref="Name"/> are the same string.</summary>
 /// <param name="GameData">The layer's declarations: a <c>DeclarationDocument</c> (<c>{version, modules}</c>);
-/// null when the layer declares nothing.</param>
-public sealed record FantomeLayer(string Name, int Priority, string? DisplayName = null, JsonNode? GameData = null);
+/// null when the layer declares nothing. M816: when the layer also has <see cref="ImportedGameData"/>, these are ReyEngine's OWN
+/// modules, and only their <c>modules</c> are used - they are written behind the imported ones.</param>
+public sealed record FantomeLayer(string Name, int Priority, string? DisplayName = null, JsonNode? GameData = null)
+{
+    /// <summary>
+    /// M816: the GameData document an import stored for this layer (<see cref="Projects.LtkProjectStore"/>), as TEXT. Written
+    /// FIRST and VERBATIM: every imported module keeps its own spelling, its <c>name</c> and its <c>origin</c>, and with no
+    /// own modules to add the document is written as it came. ReyEngine's own modules (<see cref="GameData"/>) follow it - their
+    /// <c>origin.module</c> numbers must count on from the imported ones - so a layer that holds both reads, in
+    /// LTK's order, as what the author declared and then what this project changed.
+    /// </summary>
+    public string? ImportedGameData { get; init; }
+
+    /// <summary>M816: the layer's string overrides (locale, field, text), written after <c>Priority</c> as <c>FantomeLayerInfo</c>
+    /// orders them; null or empty writes none.</summary>
+    public JsonObject? StringOverrides { get; init; }
+
+    /// <summary>M816: the files this layer's declarations name, stored below <c>META/game_data/&lt;layer&gt;/</c>.</summary>
+    public IReadOnlyList<FantomeOverrideFile> OverrideFiles { get; init; } = Array.Empty<FantomeOverrideFile>();
+
+    /// <summary>The own modules <see cref="GameData"/> holds, as nodes (an object with no <c>modules</c> list has none).</summary>
+    internal IReadOnlyList<JsonNode> OwnModules =>
+        GameData is JsonObject o && o["modules"] is JsonArray list ? list.OfType<JsonNode>().ToList() : Array.Empty<JsonNode>();
+}
 
 /// <summary>M814: a packed <c>.wad.client</c> and the layer whose WAD directory holds it.</summary>
 /// <param name="ChunkPaths">The WAD-relative path of every file packed into it. The WAD stores hashes only;
 /// the harvested hashtable keeps these names so an import can give the author's files their paths back.</param>
-public sealed record FantomeWad(string Path, string Layer = FantomeLayers.Base, IReadOnlyList<string>? ChunkPaths = null);
+public sealed record FantomeWad(string Path, string Layer = FantomeLayers.Base, IReadOnlyList<string>? ChunkPaths = null)
+{
+    /// <summary>M816: the name the archive stores the WAD under (<c>Map11.wad.client</c>), when it is not the name of the file.
+    /// A project can hold one WAD in two layers, and the two staged files cannot both be called <c>Map11.wad.client</c>.</summary>
+    public string? Name { get; init; }
+}
 
 /// <summary>
 /// M814: the layer rules of the .fantome layout, as <c>ltk_fantome</c> 0.15.1 states them
@@ -79,7 +130,12 @@ public static class FantomeLayers
         return true;
     }
 
-    /// <summary>Why <paramref name="name"/> cannot be the name of a layer other than base, or null.</summary>
+    /// <summary>Why <paramref name="name"/> cannot be the name of a layer other than base, or null.
+    ///
+    /// <para>M816 review: a layer is also a FOLDER - <c>content/&lt;layer&gt;/</c> in LTK Manager's workshop, and the folder Build Package
+    /// writes a layer's WADs to - and a layer name arrives from a package. Besides the rule of <see cref="IsLayerName"/> (which keeps every
+    /// separator, drive letter and <c>..</c> out) a Windows device name is refused: <c>con</c> is made of letters and passes that rule,
+    /// and no folder on Windows can be called it.</para></summary>
     public static string? NameProblem(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return "A layer needs a name.";
@@ -87,8 +143,166 @@ public static class FantomeLayers
         if (!IsLayerName(name))
             return $"'{name}' cannot name a .fantome layer: a layer's content lives in WAD_{name}/, and a layer name is "
                  + "ASCII letters, digits, '-' and '_' only.";
+        if (IsWindowsDeviceName(name))
+            return $"'{name}' is a Windows device name, which no folder can be called, and a layer is a folder "
+                 + "(content/<layer>/ in LTK Manager's workshop, WAD_<layer>/ in a .fantome).";
+        if (name.Length > MaxLayerNameLength)
+            return $"A layer name is at most {MaxLayerNameLength} characters long ('{name[..20]}...' has {name.Length}): a layer is a folder, "
+                 + "and the files below it must still fit in a path.";
         return null;
     }
+
+    /// <summary>M816 review: the longest layer name <see cref="NameProblem"/> accepts. A layer is a folder with a WAD folder and files
+    /// below it, and a path has a limit; <c>ltk_fantome</c> sets none, and no real layer comes near this.</summary>
+    public const int MaxLayerNameLength = 100;
+
+    /// <summary>M816 review: <c>CON</c>, <c>PRN</c>, <c>AUX</c>, <c>NUL</c>, <c>COM0</c>-<c>COM9</c> and <c>LPT0</c>-<c>LPT9</c>, in any casing:
+    /// the names Windows reserves for devices, which a path cannot use for a file or a folder.</summary>
+    public static bool IsWindowsDeviceName(string name)
+    {
+        if (name.Length == 3)
+            return name.Equals("CON", StringComparison.OrdinalIgnoreCase) || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("AUX", StringComparison.OrdinalIgnoreCase) || name.Equals("NUL", StringComparison.OrdinalIgnoreCase);
+        return name.Length == 4 && name[3] is >= '0' and <= '9'
+            && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// M816 review: a name <see cref="NameProblem"/> accepts that stands in for <paramref name="original"/>, which it refused. What an import
+    /// does with a layer whose name a package spelled in a way no folder can carry (<c>..\..</c>, <c>C:\Temp\x</c>, <c>a/b</c>, <c>con</c>):
+    /// the layer is kept, under a name that is safe to write to disk.
+    ///
+    /// <para>Each run of characters a layer name may not hold becomes one <c>_</c> (at either end it is dropped), so <c>my layer</c>
+    /// is <c>my_layer</c> and <c>C:\Temp\x</c> is <c>C_Temp_x</c>; a name nothing is left of is <c>layer</c>; a name that is
+    /// still the base layer or a device name gets a trailing <c>_</c>; one that another layer already holds (compared without regard to
+    /// case) gets <c>-2</c>, <c>-3</c>, ... The result depends on the name and on <paramref name="taken"/> alone, so importing one package
+    /// twice gives the same names. It is added to <paramref name="taken"/>.</para>
+    /// </summary>
+    public static string SafeName(string original, ISet<string> taken)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(taken);
+        const int MaxLength = 64;
+        var sb = new StringBuilder();
+        bool gap = false;
+        foreach (char c in original.Trim())
+        {
+            if (c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-' or '_')
+            {
+                if (gap && sb.Length > 0) sb.Append('_');
+                gap = false;
+                sb.Append(c);
+            }
+            else gap = true;
+        }
+        string stem = sb.Length == 0 ? "layer" : sb.ToString();
+        if (stem.Length > MaxLength) stem = stem[..MaxLength];
+        if (NameProblem(stem) is not null) stem += "_";
+
+        string candidate = stem;
+        for (int n = 2; taken.Any(t => string.Equals(t, candidate, StringComparison.OrdinalIgnoreCase)); n++)
+            candidate = stem + "-" + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        taken.Add(candidate);
+        return candidate;
+    }
+
+    /// <summary>
+    /// M816 review (round 3): why <paramref name="segment"/> cannot be ONE folder or file name on Windows - the rule for a name that only has
+    /// to be PATH-SAFE, where <see cref="NameProblem"/> is the stricter rule of the .fantome layout. A phrase that completes "it ...", or null.
+    ///
+    /// <list type="bullet">
+    /// <item><description>empty;</description></item>
+    /// <item><description>a character a file name cannot hold: <c>/</c>, <c>\</c>, <c>:</c>, a wildcard or a control character (every character
+    /// <see cref="System.IO.Path.GetInvalidFileNameChars"/> names, and the C1 controls);</description></item>
+    /// <item><description><c>.</c> or <c>..</c>, or any name that ends with a dot or a space (Windows drops them, so the folder made would
+    /// not be the one named);</description></item>
+    /// <item><description>a Windows device name, with or without an extension (<c>con</c>, <c>NUL.txt</c>, <c>com1.x</c>);</description></item>
+    /// <item><description>longer than <paramref name="maxLength"/> characters.</description></item>
+    /// </list>
+    /// </summary>
+    public static string? SegmentProblem(string segment, int maxLength)
+    {
+        if (string.IsNullOrEmpty(segment)) return "is empty";
+        if (segment.IndexOfAny(UnusableChars) >= 0 || segment.Any(char.IsControl))
+            return "has a character a file name cannot hold (a separator, a colon, a wildcard or a control character)";
+        if (segment is "." or "..") return "is a dot name";
+        if (segment[^1] is '.' or ' ') return "ends with a dot or a space, which Windows drops";
+        int dot = segment.IndexOf('.');
+        if (IsWindowsDeviceName((dot < 0 ? segment : segment[..dot]).TrimEnd(' '))) return "is a Windows device name (with or without an extension)";
+        if (segment.Length > maxLength) return $"is longer than {maxLength} characters";
+        return null;
+    }
+
+    private static readonly char[] UnusableChars = System.IO.Path.GetInvalidFileNameChars();
+
+    /// <summary>
+    /// M816 review (round 3): why <paramref name="name"/> cannot be the FOLDER of a layer in LTK Manager's workshop or in a build's output
+    /// folder, or null. The rule for a destination a person or another tool chose, where <see cref="NameProblem"/> is the .fantome layout's:
+    /// LTK Manager does not validate a layer name it reads (the M744 dialog let a layer be called "Particle Fix", and a send wrote it to
+    /// <c>content/Particle Fix/</c>), so a name only has to be a single, safe folder name - <see cref="SegmentProblem"/> - of at most
+    /// <see cref="MaxLayerNameLength"/> characters, and <c>base</c> exactly (another casing of it is a second spelling of base's folder).
+    /// </summary>
+    public static string? PathProblem(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "A layer needs a name.";
+        if (name == Base) return null;
+        if (IsBase(name)) return $"'{name}' is another casing of the base layer's name, so its folder would be a second spelling of base's.";
+        return SegmentProblem(name, MaxLayerNameLength) is { } why ? $"'{Shown(name)}' cannot be a folder name: it {why}." : null;
+    }
+
+    /// <summary>A name for a message: cut to 40 characters, a control character shown as '?'.</summary>
+    private static string Shown(string name)
+    {
+        var sb = new StringBuilder(Math.Min(name.Length, 43));
+        foreach (char c in name.Length > 40 ? name[..40] : name) sb.Append(char.IsControl(c) ? '?' : c);
+        return name.Length > 40 ? sb.Append("...").ToString() : sb.ToString();
+    }
+
+    /// <summary>
+    /// M816 review: the folder below <paramref name="root"/> that a layer's files are written in - <c>root/&lt;layer&gt;</c> - once it is
+    /// shown to be one.
+    ///
+    /// <para>A layer name comes from a package or a project file, and <c>Path.Combine(root, "..\..")</c> is the grandparent of
+    /// <c>root</c> while <c>Path.Combine(root, @"C:\Temp\x")</c> is not below it at all. Writers delete and create below this folder,
+    /// so it is checked twice: the name against <see cref="PathProblem"/>, and then the folder it resolves to against
+    /// <paramref name="root"/>, so a name that reached a writer by a route that skipped the first check still cannot name a place
+    /// outside. The second check is made for every name, whatever the first allows. Nothing is created here.</para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The name cannot be a folder name, or resolves to a place that is not strictly below
+    /// <paramref name="root"/>.</exception>
+    public static string LayerDirectory(string root, string layer)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        if (layer is null) throw new InvalidOperationException("A layer needs a name.");
+        if (PathProblem(layer) is { } problem)
+            throw new InvalidOperationException($"Layer '{Shown(layer)}' cannot be written to a folder: {problem}");
+        string rootFull = System.IO.Path.GetFullPath(root);
+        string dir = System.IO.Path.GetFullPath(System.IO.Path.Combine(rootFull, layer));
+        if (!IsStrictlyBelow(dir, rootFull))
+            throw new InvalidOperationException($"refusing to write outside {rootFull}: layer '{Shown(layer)}' resolves to {dir}");
+        return dir;
+    }
+
+    /// <summary>M816 review: whether <paramref name="path"/> lies inside <paramref name="root"/> and is not <paramref name="root"/> itself.
+    /// Both are resolved first; the comparison ignores case, as the file system of the platform this runs on does.</summary>
+    public static bool IsStrictlyBelow(string path, string root)
+    {
+        char[] separators = { System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar };
+        string r = System.IO.Path.GetFullPath(root).TrimEnd(separators);
+        string p = System.IO.Path.GetFullPath(path).TrimEnd(separators);
+        return p.Length > r.Length && p.StartsWith(r + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// M816: the name a WAD is stored under when its project folder is called <paramref name="folderLeaf"/>: the leaf as it is when it
+    /// already ends in a WAD extension <c>ltk_fantome</c> recognises (<c>.wad.client</c>, <c>.wad</c>, <c>.wad.mobile</c> - the importer
+    /// keeps the latter two on the folder), else the leaf with <c>.wad.client</c>.
+    /// </summary>
+    public static string WadFileName(string folderLeaf) =>
+        folderLeaf.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase)
+        || folderLeaf.EndsWith(".wad", StringComparison.OrdinalIgnoreCase)
+        || folderLeaf.EndsWith(".wad.mobile", StringComparison.OrdinalIgnoreCase)
+            ? folderLeaf : folderLeaf + ".wad.client";
 
     /// <summary>The archive directory a layer's WADs are entries of: <c>WAD</c> or <c>WAD_&lt;layer&gt;</c>.</summary>
     public static string WadDirectory(string layer) => IsBase(layer) ? "WAD" : "WAD_" + layer;
@@ -185,6 +399,38 @@ public static class FantomeHashtables
         return true;
     }
 
+    /// <summary>
+    /// M816: the names in a table file, in file order. <c>ltk_hashtable</c>'s <c>Hashtable::from_reader</c>: one name per line,
+    /// blank lines skipped, CRLF tolerated.
+    ///
+    /// <para>Where the reader refuses the whole file - for a byte order mark, or a line outside the grammar - this keeps the
+    /// names it can: an import has the package in hand and the good lines are still the author's names. The lines it could
+    /// not keep are counted in <paramref name="rejected"/>, and a byte order mark is stripped.</para>
+    /// </summary>
+    public static IReadOnlyList<string> ReadNames(ReadOnlySpan<byte> utf8, out int rejected)
+    {
+        rejected = 0;
+        if (utf8.Length >= 3 && utf8[0] == 0xEF && utf8[1] == 0xBB && utf8[2] == 0xBF) utf8 = utf8[3..];
+
+        var names = new List<string>();
+        string text = Encoding.UTF8.GetString(utf8);
+        int start = 0;
+        while (start <= text.Length)
+        {
+            int end = text.IndexOf('\n', start);
+            if (end < 0) end = text.Length;
+            string line = text[start..end];
+            if (line.EndsWith('\r')) line = line[..^1];
+            if (line.Length > 0)
+            {
+                if (IsTableName(line)) names.Add(line);
+                else rejected++;
+            }
+            start = end + 1;
+        }
+        return names;
+    }
+
     /// <summary><c>ltk_wad::is_hex_chunk_path</c>: the file stem - the last name without its last extension -
     /// is sixteen hexadecimal digits.</summary>
     public static bool IsHexChunkPath(string path)
@@ -224,13 +470,6 @@ public static class FantomeHashtables
 /// </summary>
 public static class FantomeExporter
 {
-    private static readonly JsonSerializerOptions Json = new()
-    {
-        WriteIndented = true,
-        NewLine = "\n",
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
-
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private const string DetailsJson =
@@ -283,44 +522,102 @@ public static class FantomeExporter
     /// <see cref="FantomeHashtables.HarvestedPath"/>.</summary>
     public static string BuildInfoJson(FantomeMeta meta, IReadOnlyList<FantomeLayer> layers, bool hashtable)
     {
-        var info = new JsonObject
+        // M816: written with a Utf8JsonWriter rather than as a JsonObject, because an imported layer's GameData goes in as its own
+        // TEXT (WriteRawValue) and a node cannot hold that. The tokens are the ones JsonObject.ToJsonString wrote for the same document
+        // (it is built on this writer with these options), so a package without imported content is byte-identical to M814's.
+        using var stream = new MemoryStream();
+        using (var w = new Utf8JsonWriter(stream, new JsonWriterOptions
         {
-            ["Name"] = meta.Name,
-            ["Author"] = meta.Author,
-            ["Version"] = meta.Version,
-            ["Description"] = meta.Description,
-        };
-        if (!string.IsNullOrWhiteSpace(meta.Heart)) info["Heart"] = meta.Heart;
-        if (!string.IsNullOrWhiteSpace(meta.Home)) info["Home"] = meta.Home;
-
-        var table = new JsonObject();
-        foreach (var layer in layers)
+            Indented = true,
+            NewLine = "\n",
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            MaxDepth = GameDataDocumentText.MaxDepth,
+        }))
         {
-            var entry = new JsonObject();
-            // FantomeLayerInfo's field order: GameData, Name, DisplayName, Priority
-            if (layer.GameData is not null) entry["GameData"] = layer.GameData.DeepClone();
-            entry["Name"] = layer.Name;
-            if (!string.IsNullOrEmpty(layer.DisplayName)) entry["DisplayName"] = layer.DisplayName;
-            entry["Priority"] = layer.Priority;
-            table[layer.Name] = entry;
-        }
-        info["Layers"] = table;
+            w.WriteStartObject();
+            w.WriteString("Name", meta.Name);
+            w.WriteString("Author", meta.Author);
+            w.WriteString("Version", meta.Version);
+            w.WriteString("Description", meta.Description);
+            if (!string.IsNullOrWhiteSpace(meta.Heart)) w.WriteString("Heart", meta.Heart);
+            if (!string.IsNullOrWhiteSpace(meta.Home)) w.WriteString("Home", meta.Home);
 
-        if (hashtable)
-            info["Hashtables"] = new JsonArray(new JsonObject
+            // M816: ltk_fantome's FantomeInfo order puts License, Tags, Champions and Maps after Description and before Layers
+            if (meta.License is { } license)
             {
-                ["Path"] = FantomeHashtables.HarvestedPath,
-                ["Category"] = "game",
-                ["Algorithm"] = "xxh64",
-                ["Bits"] = 64,
-            });
-        if (!string.IsNullOrWhiteSpace(meta.Generator)) info["Generator"] = meta.Generator;
-        return info.ToJsonString(Json);
+                w.WritePropertyName("License");
+                if (license.AsObject || !string.IsNullOrEmpty(license.Url))
+                {
+                    w.WriteStartObject();
+                    w.WriteString("Name", license.Name);
+                    if (!string.IsNullOrEmpty(license.Url)) w.WriteString("Url", license.Url);
+                    w.WriteEndObject();
+                }
+                else w.WriteStringValue(license.Name);
+            }
+            WriteStrings(w, "Tags", meta.Tags);
+            WriteStrings(w, "Champions", meta.Champions);
+            WriteStrings(w, "Maps", meta.Maps);
+
+            w.WriteStartObject("Layers");
+            foreach (var layer in layers)
+            {
+                w.WriteStartObject(layer.Name);
+                // FantomeLayerInfo's field order: GameData, Name, DisplayName, Priority, StringOverrides
+                if (layer.ImportedGameData is { } imported)
+                {
+                    w.WritePropertyName("GameData");
+                    GameDataDocumentText.Read(imported).WriteTo(w, layer.OwnModules);
+                }
+                else if (layer.GameData is not null)
+                {
+                    w.WritePropertyName("GameData");
+                    layer.GameData.WriteTo(w);
+                }
+                w.WriteString("Name", layer.Name);
+                if (!string.IsNullOrEmpty(layer.DisplayName)) w.WriteString("DisplayName", layer.DisplayName);
+                w.WriteNumber("Priority", layer.Priority);
+                if (layer.StringOverrides is { Count: > 0 } overrides)
+                {
+                    w.WritePropertyName("StringOverrides");
+                    overrides.WriteTo(w);
+                }
+                w.WriteEndObject();
+            }
+            w.WriteEndObject();
+
+            if (hashtable)
+            {
+                w.WriteStartArray("Hashtables");
+                w.WriteStartObject();
+                w.WriteString("Path", FantomeHashtables.HarvestedPath);
+                w.WriteString("Category", "game");
+                w.WriteString("Algorithm", "xxh64");
+                w.WriteNumber("Bits", 64);
+                w.WriteEndObject();
+                w.WriteEndArray();
+            }
+            if (!string.IsNullOrWhiteSpace(meta.Generator)) w.WriteString("Generator", meta.Generator);
+            w.WriteEndObject();
+        }
+        return Utf8.GetString(stream.ToArray());
+    }
+
+    private static void WriteStrings(Utf8JsonWriter w, string key, IReadOnlyList<string> values)
+    {
+        if (values.Count == 0) return;
+        w.WriteStartArray(key);
+        foreach (string v in values) w.WriteStringValue(v);
+        w.WriteEndArray();
     }
 
     /// <summary>The archive entry a packed WAD is stored as.</summary>
     public static string WadEntryName(FantomeWad wad) =>
-        FantomeLayers.WadDirectory(wad.Layer) + "/" + System.IO.Path.GetFileName(wad.Path);
+        FantomeLayers.WadDirectory(wad.Layer) + "/" + (wad.Name ?? System.IO.Path.GetFileName(wad.Path));
+
+    /// <summary>M816: the archive entry of an override file: <c>META/game_data/&lt;layer&gt;/&lt;path&gt;</c>
+    /// (<c>ltk_fantome::game_data_entry_name</c>).</summary>
+    public static string OverrideEntryName(string layer, FantomeOverrideFile file) => "META/game_data/" + layer + "/" + file.Path;
 
     /// <summary>
     /// Writes the package. M814: the archive is built beside its destination as <c>&lt;output&gt;.tmp</c> and moved over
@@ -351,6 +648,25 @@ public static class FantomeExporter
                 throw new InvalidOperationException($"Two WADs would be stored as {WadEntryName(wad)}.");
         }
 
+        // M816: the files an imported layer's declarations name, and the package's own text files, must be there to be stored
+        foreach (var layer in layers)
+            foreach (var file in layer.OverrideFiles)
+            {
+                if (Projects.LtkProjectStore.PathProblem(file.Path) is { } why)
+                    throw new InvalidOperationException($"The override file '{file.Path}' of layer '{layer.Name}' cannot be stored in a package: {why}.");
+                if (!File.Exists(file.FilePath))
+                    throw new InvalidOperationException($"The override file '{file.Path}' of layer '{layer.Name}' is missing from the project ({file.FilePath}).");
+                if (!entryNames.Add(OverrideEntryName(layer.Name, file)))
+                    throw new InvalidOperationException($"Two files would be stored as {OverrideEntryName(layer.Name, file)}.");
+            }
+        foreach (var (entryName, filePath) in meta.MetaFiles)
+        {
+            if (!File.Exists(filePath))
+                throw new InvalidOperationException($"{entryName} is missing from the project ({filePath}).");
+            if (!entryNames.Add(entryName))
+                throw new InvalidOperationException($"Two files would be stored as {entryName}.");
+        }
+
         // 2. build the archive's text before any file exists. Names are kept for the WADs that are written.
         var names = FantomeHashtables.Harvest(wads.Where(w => File.Exists(w.Path)).SelectMany(w => w.ChunkPaths ?? Array.Empty<string>()));
         string? hashtable = names.Count > 0 ? FantomeHashtables.Text(names) : null;
@@ -377,6 +693,13 @@ public static class FantomeExporter
                 using var s = entry.Open();
                 s.Write(thumbnailPng, 0, thumbnailPng.Length);
             }
+
+            // M816: the package's README and license text, then each layer's override files below META/game_data/<layer>/
+            foreach (var (entryName, filePath) in meta.MetaFiles)
+                zip.CreateEntryFromFile(filePath, entryName, CompressionLevel.Optimal);
+            foreach (var layer in layers)
+                foreach (var file in layer.OverrideFiles)
+                    zip.CreateEntryFromFile(file.FilePath, OverrideEntryName(layer.Name, file), CompressionLevel.Optimal);
 
             foreach (var wad in wads)
             {

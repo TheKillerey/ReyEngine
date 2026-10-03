@@ -44,6 +44,72 @@ public sealed class ReyProject
         Layers.FirstOrDefault(l => l.Folders.Any(f =>
             string.Equals(f, folderName, StringComparison.OrdinalIgnoreCase)))?.Name
         ?? ProjectLayer.BaseLayer;
+
+    /// <summary>
+    /// M816: the layer a <c>ProjectFolders</c> entry ships in.
+    ///
+    /// <para>Two folders can be one WAD in two layers: an imported LTK-layered .fantome that has
+    /// <c>WAD/Map11.wad.client</c> and <c>WAD_winter/Map11.wad.client</c> becomes <c>Map11</c> and
+    /// <c>layers/winter/Map11</c>. Their leaf, which names the WAD and which <see cref="LayerOf"/> is asked,
+    /// is the same, so the leaf cannot say which layer is which. A layer that lists a whole entry
+    /// (<see cref="ProjectLayer.Folders"/>) claims that folder alone, and that is asked first.</para>
+    ///
+    /// <para>Every other folder is answered exactly as before: the leaf of the resolved path through
+    /// <see cref="LayerOf"/>. Only an entry that has a path in it can be claimed whole, and Project Settings has only
+    /// ever written leaf names, so a project that predates M816 cannot hold such a claim and ships as it did. An
+    /// unnamed or <c>base</c>-less answer is <see cref="ProjectLayer.BaseLayer"/>.</para>
+    /// </summary>
+    public string LayerOfFolder(string entry)
+    {
+        string whole = NormalizeFolderEntry(entry);
+        if (whole.Contains('/'))
+        {
+            var claimant = Layers.FirstOrDefault(l => l.Folders.Any(f => string.Equals(NormalizeFolderEntry(f), whole, StringComparison.OrdinalIgnoreCase)));
+            if (claimant is not null) return claimant.Name;
+        }
+        return LayerOf(LeafOfFolder(entry));
+    }
+
+    /// <summary>M816: whether a layer lists this <c>ProjectFolders</c> entry whole (see <see cref="LayerOfFolder"/>). Such a folder
+    /// ships as the WAD its leaf names, so two of them can carry one WAD name in two layers.</summary>
+    public bool IsClaimedWhole(string entry)
+    {
+        string whole = NormalizeFolderEntry(entry);
+        return whole.Contains('/')
+            && Layers.Any(l => l.Folders.Any(f => string.Equals(NormalizeFolderEntry(f), whole, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>The leaf of the folder an entry resolves to - the name a plain claim and the WAD itself go by.</summary>
+    public string LeafOfFolder(string entry) =>
+        System.IO.Path.GetFileName(ResolveProjectPath(entry).TrimEnd('/', '\\'));
+
+    /// <summary>
+    /// M816 review: folder entries that would ship as ONE WAD of ONE layer, where at least one is claimed whole. A WAD ships under the leaf of
+    /// its folder, so two folders with one leaf in one layer are one WAD to the game: a send merges their trees and an export would store
+    /// two files under one name. A layer cannot claim two such folders by accident - an import puts each WAD of each layer in a folder of
+    /// its own - but Project Settings can move both into one layer, and then this says so, with the folders, before anything is built.
+    /// Collisions among folders no layer claims whole are not reported: those projects ship as they always have.
+    /// </summary>
+    /// <returns>One item per WAD that more than one folder would ship: the layer, the WAD's file name, and the folder entries.</returns>
+    public IReadOnlyList<(string Layer, string Wad, IReadOnlyList<string> Folders)> WholeClaimCollisions()
+    {
+        var byWad = new Dictionary<(string Layer, string Wad), (string Layer, string Wad, List<string> Folders)>();
+        foreach (string entry in ProjectFolders)
+        {
+            string layer = LayerOfFolder(entry), wad = Build.FantomeLayers.WadFileName(LeafOfFolder(entry));
+            var key = (layer.ToLowerInvariant(), wad.ToLowerInvariant());
+            if (!byWad.TryGetValue(key, out var group)) byWad[key] = group = (layer, wad, new List<string>());
+            group.Folders.Add(entry);
+        }
+        return byWad.Values
+            .Where(g => g.Folders.Count > 1 && g.Folders.Any(IsClaimedWhole))
+            .Select(g => (g.Layer, g.Wad, (IReadOnlyList<string>)g.Folders))
+            .ToList();
+    }
+
+    /// <summary>An entry with '/' separators and no leading or trailing ones, as a layer claims it.</summary>
+    public static string NormalizeFolderEntry(string entry) => entry.Replace('\\', '/').Trim('/');
+
     /// <summary>Read-only Riot reference WAD paths (absolute).</summary>
     public List<string> ReferenceWads { get; set; } = new();
     public List<string> RecentAssets { get; set; } = new();
@@ -95,7 +161,8 @@ public sealed class ReyProject
     public List<BinRecipeRecord> BinRecipes { get; set; } = new();
 
     /// <summary>M132: pack only known game file types into wads — editor leftovers, notes, PSDs and
-    /// other unknown extensions are skipped (each skip is logged). Default on.</summary>
+    /// other unknown extensions are skipped (each skip is logged). Default on. M816 review: a project made by importing a .fantome
+    /// is created with it OFF - the folders hold a package's content, every chunk of which a re-export must pack.</summary>
     public bool PackKnownTypesOnly { get; set; } = true;
 
     // M17 .fantome mod metadata.
@@ -106,6 +173,26 @@ public sealed class ReyProject
     public string? ModHeart { get; set; }
     public string? ModHome { get; set; }
     public string? ThumbnailPath { get; set; }
+
+    // M816: the rest of what an LTK-layered .fantome's META/info.json carries. Written back by Export .fantome and, where
+    // mod.config.json has a field for it, by Send to LTK Manager. A project that never imported one holds none and exports
+    // exactly as before.
+
+    /// <summary>M816: the license the package named (<c>License</c>: a string, or <c>{Name, Url}</c>). Null when none.</summary>
+    public ProjectLicense? ModLicense { get; set; }
+
+    /// <summary>M816: <c>Tags</c> (for example <c>map-skin</c>).</summary>
+    public List<string> ModTags { get; set; } = new();
+
+    /// <summary>M816: <c>Champions</c> the mod targets.</summary>
+    public List<string> ModChampions { get; set; } = new();
+
+    /// <summary>M816: <c>Maps</c> the mod targets (for example <c>summoners-rift</c>).</summary>
+    public List<string> ModMaps { get; set; } = new();
+
+    /// <summary>M816: <c>Generator</c> of the package this project was imported from ("ltk_mod_project 0.16.2"). Informational:
+    /// an export names ReyEngine as its own generator and does not copy this.</summary>
+    public string? ImportedGenerator { get; set; }
 
     /// <summary>
     /// M470: which LTK Manager workshop mod "Send to LTK Manager" targets, by its <c>mod.config.json</c>
@@ -164,6 +251,24 @@ public sealed class ReyProject
             if (Directory.Exists(c)) return c;
         return "";
     }
+}
+
+/// <summary>
+/// M816: a mod's license as a .fantome's <c>META/info.json</c> spells it - either a bare identifier
+/// (<c>"License": "MIT"</c>) or an object naming it with an optional link (<c>{"Name": "...", "Url": "..."}</c>,
+/// <c>ltk_fantome</c>'s <c>FantomeLicense</c>).
+///
+/// <para>The two shapes mean different things to a reader - a bare string is an SPDX identifier, an object is a
+/// license the author named - so the shape is kept: <see cref="AsObject"/> is true for an object, including
+/// one with a name and no link, which the sample (Crauzer's Winter Rift) is.</para>
+/// </summary>
+public sealed class ProjectLicense
+{
+    public string Name { get; set; } = "";
+    public string? Url { get; set; }
+
+    /// <summary>True when the package wrote an object; false for a bare string. A link implies an object.</summary>
+    public bool AsObject { get; set; }
 }
 
 /// <summary>M171: one texture's recolour. The sliders are stored, NOT the recoloured pixels — the file

@@ -837,55 +837,53 @@ public sealed class FantomeExportEndToEndTests : IDisposable
         return FantomeImporter.Import(fantome, projects, null, new HashDatabase());
     }
 
-    /// <summary>The export carries Map11 in base, Ahri in WAD_fix/, and two declared bins (one per layer). The import
-    /// brings in what it always did - Map11 - and counts the rest; the log warns, in the words of the result.</summary>
+    /// <summary>The export carries Map11 in base, Ahri in WAD_fix/, and two declared bins (one per layer). M816: the import brings
+    /// in all of it - both WADs, both layers, both modules - and the log says what came in, with no warning.</summary>
     [Fact]
-    public void ImportingALayeredExportLogsAWarningNamingWhatWasNotImported()
+    public void ImportingALayeredExportBringsEverythingInAndLogsWhatCameIn()
     {
         var vm = new MainWindowViewModel { Project = Fixture(declare: true) };
         string fantome = Export(vm);
 
         var result = ImportBack(fantome);
 
-        Assert.Equal(1, result.Wads);                                  // Map11: the base layer's WAD/ folder
-        Assert.Equal(1, result.LayerWads);                             // Ahri: WAD_fix/
+        Assert.Equal(2, result.Wads);                                  // Map11 from WAD/, and Ahri from WAD_fix/
+        Assert.Equal(1, result.LayerWads);
         Assert.Equal(2, result.GameDataModules);                       // a.bin (base) and skin0.bin (fix)
-        Assert.Equal(new[] { ("base", 0, 1), ("fix", 1, 1) }, result.SkippedLayers.Select(l => (l.Name, l.Wads, l.GameDataModules)).ToArray());
-        Assert.False(Directory.Exists(Path.Combine(result.RootPath, "Ahri")));
+        Assert.Equal(new[] { ("base", 1, 1), ("fix", 1, 1) }, result.Layers.Select(l => (l.Name, l.Wads, l.GameDataModules)).ToArray());
+        Assert.True(Directory.Exists(Path.Combine(result.RootPath, "Map11")));
+        Assert.True(Directory.Exists(Path.Combine(result.RootPath, "layers", "fix", "Ahri")));
+        Assert.Null(result.NotImportedWarning);
 
         var log = CaptureLog(vm);
         LogImport(vm, result);
         List<LogEntry> lines;
         lock (log) lines = log.Where(l => l.Category == "Import").ToList();
-        Assert.Contains(lines, l => l.Level == LogLevel.Success && l.Message.StartsWith("Synthetic: 1 WAD(s)", StringComparison.Ordinal));
-        var warning = Assert.Single(lines, l => l.Level == LogLevel.Warning);
-        Assert.Equal(result.NotImportedWarning, warning.Message);
-        Assert.Contains("NOT imported: 1 WAD(s) stored in WAD_<layer>/ directories and 2 declared game bin(s) (Layers.*.GameData)", warning.Message);
-        Assert.Contains("base: 1 declared bin(s); fix: 1 WAD(s), 1 declared bin(s)", warning.Message);
-        Assert.Contains("a later version will", warning.Message);
+        Assert.Contains(lines, l => l.Level == LogLevel.Success && l.Message.StartsWith("Synthetic: 2 WAD(s)", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Level == LogLevel.Info && l.Message.StartsWith("Layers - base (priority 0): 1 WAD(s), 1 GameData module(s); fix (priority 10): 1 WAD(s), 1 GameData module(s).", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Level == LogLevel.Warning);
     }
 
     [Fact]
-    public void ImportingALayeredExportWithTheSettingOffNamesTheLayerWadsAndNoDeclarations()
+    public void ImportingALayeredExportWithTheSettingOffBringsTheLayerWadsAndNoDeclarations()
     {
         var vm = new MainWindowViewModel { Project = Fixture(declare: false) };
 
         var result = ImportBack(Export(vm));
 
-        Assert.Equal(1, result.Wads);
+        Assert.Equal(2, result.Wads);
         Assert.Equal(1, result.LayerWads);
         Assert.Equal(0, result.GameDataModules);
         var log = CaptureLog(vm);
         LogImport(vm, result);
         List<LogEntry> lines;
         lock (log) lines = log.Where(l => l.Category == "Import").ToList();
-        var warning = Assert.Single(lines, l => l.Level == LogLevel.Warning);
-        Assert.Contains("fix: 1 WAD(s).", warning.Message);
-        Assert.DoesNotContain("declared", warning.Message);
+        Assert.DoesNotContain(lines, l => l.Level == LogLevel.Warning);
+        Assert.Contains(lines, l => l.Message.Contains("fix (priority 10): 1 WAD(s), 0 GameData module(s)"));
     }
 
     [Fact]
-    public void ImportingAPackageWithNothingLayeredLogsNoWarning()
+    public void ImportingAPackageWithNothingLayeredLogsNoLayersAndNoWarning()
     {
         // the layer holds no WAD here (its folder is left out), and nothing is declared: a base-only package
         var project = MatchingFixture(declare: false, withAsset: true);
@@ -893,12 +891,15 @@ public sealed class FantomeExportEndToEndTests : IDisposable
 
         var result = ImportBack(Export(vm));
 
-        Assert.Empty(result.SkippedLayers);
+        Assert.Empty(result.Layers);
         var log = CaptureLog(vm);
         LogImport(vm, result);
         List<LogEntry> lines;
         lock (log) lines = log.Where(l => l.Category == "Import").ToList();
-        Assert.Single(lines);
+        // what it always logged: what was unpacked. M816 adds that the package's own hashtable named the chunks (an export writes one)
         Assert.Equal(LogLevel.Success, lines[0].Level);
+        Assert.DoesNotContain(lines, l => l.Level == LogLevel.Warning);
+        Assert.DoesNotContain(lines, l => l.Message.StartsWith("Layers -", StringComparison.Ordinal));
+        Assert.All(lines.Skip(1), l => Assert.Contains("named from the package's own hashtables", l.Message));
     }
 }

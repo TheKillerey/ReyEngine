@@ -112,7 +112,7 @@
                           IsVisible="{Binding IsEditable}"
                           Command="{Binding $parent[ItemsControl].((vm:ProjectSettingsViewModel)DataContext).RemoveLayerCommand}"
                           CommandParameter="{Binding}"
-                          ToolTip.Tip="Delete this layer. Folders that ship in it fall back to base - nothing is dropped from the mod." />
+                          ToolTip.Tip="Delete this layer. Folders that ship in it fall back to base. A layer that holds a WAD folder, GameData or string overrides from an imported .fantome cannot be deleted here: removing it would drop them from the mod." />
                 </Grid>
                 <TextBox Text="{Binding Description}" FontSize="10" Padding="4,2"
                          IsEnabled="{Binding IsEditable}"

@@ -404,11 +404,39 @@ public sealed class FantomeExporterLayersTests : IDisposable
     [InlineData("BASE", "base layer")]
     [InlineData("my layer", "ASCII letters, digits")]
     [InlineData("caf\u00e9", "ASCII letters, digits")]
+    // review: a layer is a folder, and a name from a package can be a path
+    [InlineData("..", "ASCII letters, digits")]
+    [InlineData("..\\..", "ASCII letters, digits")]
+    [InlineData("C:\\Temp\\x", "ASCII letters, digits")]
+    [InlineData("\\\\server\\share", "ASCII letters, digits")]
+    [InlineData("a/b", "ASCII letters, digits")]
+    [InlineData("con", "Windows device name")]
+    [InlineData("CON", "Windows device name")]
+    [InlineData("Nul", "Windows device name")]
+    [InlineData("aux", "Windows device name")]
+    [InlineData("prn", "Windows device name")]
+    [InlineData("com1", "Windows device name")]
+    [InlineData("COM0", "Windows device name")]
+    [InlineData("LPT9", "Windows device name")]
+    [InlineData("console", null)]
+    [InlineData("com10", null)]
+    [InlineData("aux1", null)]
+    [InlineData("lpt", null)]
+    [InlineData("con_", null)]
     public void LayerNameProblems(string name, string? problem)
     {
         var found = FantomeLayers.NameProblem(name);
         if (problem is null) Assert.Null(found);
         else Assert.Contains(problem, found);
+    }
+
+    [Fact]
+    public void ALayerNameIsAtMostAHundredCharactersAFolderNameThatMustStillFitInAPath()
+    {
+        Assert.Null(FantomeLayers.NameProblem(new string('a', FantomeLayers.MaxLayerNameLength)));
+        var problem = FantomeLayers.NameProblem(new string('a', FantomeLayers.MaxLayerNameLength + 1));
+        Assert.Contains("at most 100 characters", problem);
+        Assert.True(problem!.Length < 200, "the message does not repeat the name");
     }
 
     // ===================================================== the layer table a project declares

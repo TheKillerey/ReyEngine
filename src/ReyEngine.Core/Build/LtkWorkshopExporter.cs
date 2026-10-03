@@ -77,31 +77,113 @@ public sealed record LtkSendOptions(
     /// (<c>content/&lt;layer&gt;/game_data.yaml</c>, where league-mod's project loader looks). A layer with
     /// declarations and no files is still written.</summary>
     public IReadOnlyDictionary<string, string> GameData { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>M816: files that sit in a layer's folder itself rather than in a WAD folder - the <c>.ptch</c> files an imported
+    /// GameData document names under <c>overrides</c>, at the layer-relative paths it names them by
+    /// (<c>content/&lt;layer&gt;/&lt;RelPath&gt;</c>, where league-mod's project loader resolves them).</summary>
+    public IReadOnlyList<(string Layer, string RelPath, string AbsPath)> LayerFiles { get; init; } = System.Array.Empty<(string, string, string)>();
+
+    /// <summary>M816: <c>license</c> of <c>mod.config.json</c> - a string, or <c>{name, url}</c> - when the project has one.</summary>
+    public Projects.ProjectLicense? License { get; init; }
+
+    /// <summary>M816: <c>tags</c>, <c>champions</c> and <c>maps</c> of <c>mod.config.json</c>. Each is written only when it has an
+    /// entry, and a send leaves the config's own list alone otherwise (the manager's editor can set them).</summary>
+    public IReadOnlyList<string> Tags { get; init; } = System.Array.Empty<string>();
+
+    /// <inheritdoc cref="Tags"/>
+    public IReadOnlyList<string> Champions { get; init; } = System.Array.Empty<string>();
+
+    /// <inheritdoc cref="Tags"/>
+    public IReadOnlyList<string> Maps { get; init; } = System.Array.Empty<string>();
 }
 
 /// <summary>M742: the layer list a project sends, base first and priority-ordered.</summary>
 public static class LtkProjectLayers
 {
+    /// <summary>The text of the base layer a send declares when the project does not re-declare it. M816: an imported base layer
+    /// (which a package gave declarations or a display name, and so is re-declared) is given the same text.</summary>
+    public const string BaseDescription = "Base layer of the mod";
+
     /// <summary>
     /// Every layer a send declares: the project's own, plus "base", which always exists because a WAD
     /// folder no layer claims ships there. A project that names no layers yields base alone, which is what
     /// the format shipped with.
     /// </summary>
+    /// <exception cref="InvalidOperationException">A layer name that cannot be a folder name (<see cref="FantomeLayers.PathProblem"/>): a
+    /// send writes <c>content/&lt;layer&gt;/</c>, and the name may have come from a package (review). Only a name that is unsafe as a PATH
+    /// is refused - a layer called "Particle Fix", which the M744 dialog allowed and a send has always written to
+    /// <c>content/Particle Fix/</c>, still sends; it is the .fantome export (<see cref="ForFantome"/>) that needs the stricter
+    /// <see cref="FantomeLayers.NameProblem"/>.</exception>
     public static IReadOnlyList<LtkLayer> Of(Projects.ReyProject project)
     {
         ArgumentNullException.ThrowIfNull(project);
+        RefuseUnsafeNames(project);
         var layers = new List<LtkLayer>
         {
-            new(Projects.ProjectLayer.BaseLayer, 0, "Base layer of the mod"),
+            new(Projects.ProjectLayer.BaseLayer, 0, BaseDescription),
         };
         foreach (var l in project.Layers)
         {
             if (string.IsNullOrWhiteSpace(l.Name)) continue;
             int at = layers.FindIndex(x => string.Equals(x.Name, l.Name, StringComparison.OrdinalIgnoreCase));
-            var mapped = new LtkLayer(l.Name, l.Priority, l.Description);
+            var mapped = new LtkLayer(l.Name, l.Priority, l.Description) { DisplayName = l.DisplayName, StringOverrides = l.StringOverrides };
             if (at >= 0) layers[at] = mapped; else layers.Add(mapped);
         }
         return layers.OrderBy(l => l.Priority).ToList();
+    }
+
+    /// <summary>
+    /// M816 review: every layer of the project is a folder name somewhere - <c>content/&lt;layer&gt;/</c> in a send (which deletes and writes
+    /// there), a folder of the build output - and a name can come from a package. A layer whose name is unsafe as a PATH
+    /// (<see cref="FantomeLayers.PathProblem"/>: a separator, a colon, <c>.</c> or <c>..</c>, a trailing dot or space, a device name, over a
+    /// hundred characters, another casing of <c>base</c>) stops the table before anything is made from it. Exactly <c>base</c> passes (see
+    /// <see cref="ForFantome"/>); an unnamed layer is left out by <see cref="Of"/> and is not a name to check.
+    /// </summary>
+    private static void RefuseUnsafeNames(Projects.ReyProject project)
+    {
+        foreach (var l in project.Layers)
+        {
+            if (string.IsNullOrWhiteSpace(l.Name)) continue;   // Of leaves an unnamed layer out
+            if (FantomeLayers.PathProblem(l.Name) is { } problem)
+                throw new InvalidOperationException(problem + " Rename the layer in Project > Project Settings.");
+        }
+    }
+
+    /// <summary>
+    /// M816 review: the same for the .fantome export, whose rule is the layout's: a layer is a directory called <c>WAD_&lt;layer&gt;/</c>, which
+    /// <c>ltk_fantome</c> only recognises for ASCII letters, digits, '-' and '_' (<see cref="FantomeLayers.NameProblem"/>). A name the send
+    /// writes - "Particle Fix" - is refused here, as it always was.
+    /// </summary>
+    private static void RefuseUnexportableNames(Projects.ReyProject project)
+    {
+        foreach (var l in project.Layers)
+        {
+            if (string.IsNullOrWhiteSpace(l.Name)) continue;   // Of leaves an unnamed layer out
+            if (string.Equals(l.Name, Projects.ProjectLayer.BaseLayer, StringComparison.Ordinal)) continue;   // base re-declared: see ForFantome
+            if (FantomeLayers.NameProblem(l.Name) is { } problem)
+                throw new InvalidOperationException(problem + " Rename the layer in Project > Project Settings.");
+        }
+    }
+
+    /// <summary>
+    /// M816: <paramref name="options"/> with what a project that imported an LTK-layered .fantome adds: the license, tags, champions and
+    /// maps its <c>mod.config.json</c> should name, the layers' manifests (<paramref name="manifests"/>, by layer) and the override
+    /// files the imported declarations name. A project that never imported one changes nothing but the manifests it already had.
+    /// </summary>
+    public static LtkSendOptions ForSend(LtkSendOptions options, Projects.ReyProject project,
+        IReadOnlyList<Projects.ImportedLayerData> imported, IReadOnlyDictionary<string, string> manifests)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(project);
+        return options with
+        {
+            License = project.ModLicense,
+            Tags = project.ModTags,
+            Champions = project.ModChampions,
+            Maps = project.ModMaps,
+            GameData = manifests,
+            LayerFiles = imported.SelectMany(d => d.Files.Select(f => (d.Layer, f.Path, f.FullPath))).ToList(),
+        };
     }
 
     /// <summary>
@@ -111,8 +193,8 @@ public static class LtkProjectLayers
     ///
     /// <para>A .fantome layer is a directory name (<c>WAD_&lt;layer&gt;/</c>), so its name has to be one the
     /// format reads back; <see cref="FantomeLayers.NameProblem"/> says which are not, and one that is not stops
-    /// the export before anything is built. It is checked on the project's own layers, because <see cref="Of"/>
-    /// would fold a layer called "BASE" into the base layer without a word.</para>
+    /// the export before anything is built. It is checked on the project's own layers, ahead of <see cref="Of"/>, whose rule is the looser
+    /// one of a PATH (<see cref="FantomeLayers.PathProblem"/>): a layer called "Particle Fix" is sent and is not exported.</para>
     ///
     /// <para>One layer name passes unchecked: exactly <see cref="Projects.ProjectLayer.BaseLayer"/>, compared
     /// ordinally. <see cref="Of"/> lets a project re-declare its own base layer (to give it a priority or a
@@ -125,18 +207,25 @@ public static class LtkProjectLayers
     /// <exception cref="InvalidOperationException">A layer name the format cannot carry, or declarations for a
     /// layer the project does not have.</exception>
     public static IReadOnlyList<FantomeLayer> ForFantome(
-        Projects.ReyProject project, IReadOnlyDictionary<string, JsonNode>? gameData = null)
+        Projects.ReyProject project, IReadOnlyDictionary<string, JsonNode>? gameData = null,
+        IReadOnlyList<Projects.ImportedLayerData>? imported = null)
     {
         ArgumentNullException.ThrowIfNull(project);
-        foreach (var l in project.Layers)
-        {
-            if (string.IsNullOrWhiteSpace(l.Name)) continue;   // Of leaves an unnamed layer out
-            if (string.Equals(l.Name, Projects.ProjectLayer.BaseLayer, StringComparison.Ordinal)) continue;   // base re-declared: see above
-            if (FantomeLayers.NameProblem(l.Name) is { } problem)
-                throw new InvalidOperationException(problem + " Rename the layer in Project > Project Settings.");
-        }
+        RefuseUnexportableNames(project);
 
-        var table = FantomeExporter.OrderLayers(Of(project).Select(l => new FantomeLayer(l.Name, l.Priority)));
+        var table = FantomeExporter.OrderLayers(Of(project).Select(l =>
+            new FantomeLayer(l.Name, l.Priority, l.DisplayName) { StringOverrides = l.StringOverrides }));
+
+        // M816: what an import stored for a layer rides it, ahead of whatever ReyEngine declares for it
+        if (imported is { Count: > 0 })
+            table = table.Select(l => imported.FirstOrDefault(i => i.Layer.Equals(l.Name, StringComparison.OrdinalIgnoreCase)) is { } data
+                ? l with
+                {
+                    ImportedGameData = data.DocumentText,
+                    OverrideFiles = data.Files.Select(f => new FantomeOverrideFile(f.Path, f.FullPath)).ToList(),
+                }
+                : l).ToList();
+
         if (gameData is null || gameData.Count == 0) return table;
 
         foreach (string key in gameData.Keys)
@@ -152,7 +241,14 @@ public static class LtkProjectLayers
 
 /// <param name="Name">Layer name, matching the content folder under <c>content/</c>.</param>
 /// <param name="Priority">Lowest first; a higher number is applied over a lower one.</param>
-public sealed record LtkLayer(string Name, int Priority, string Description);
+public sealed record LtkLayer(string Name, int Priority, string Description)
+{
+    /// <summary>M816: <c>display_name</c> of the layer's <c>mod.config.json</c> entry; null writes none.</summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>M816: <c>string_overrides</c> (locale, field, text); null or empty writes none.</summary>
+    public JsonObject? StringOverrides { get; init; }
+}
 
 /// <param name="Created">True when the mod folder did not exist and was created.</param>
 public sealed record LtkSendResult(
@@ -254,19 +350,41 @@ public static class LtkWorkshopExporter
         if (string.Equals(modFull, rootFull, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("refusing to treat the workshop root itself as a mod folder");
 
-        Directory.CreateDirectory(modFolder);
-
         // M742: which layers this send owns. Files name their own; anything unnamed lands in o.Layer, so a
         // caller that knows nothing about layers behaves exactly as before.
         var layerNames = new List<string>();
-        foreach (var f in files)
+        var spellings = new HashSet<string>(StringComparer.Ordinal);   // every spelling of a layer name that reaches a path, as it was written
+        void Owns(string name)
         {
-            string name = string.IsNullOrWhiteSpace(f.Layer) ? o.Layer : f.Layer;
+            spellings.Add(name);
             if (!layerNames.Contains(name, StringComparer.OrdinalIgnoreCase)) layerNames.Add(name);
         }
-        foreach (var name in o.GameData.Keys)   // M757: a layer may hold only declarations
-            if (!layerNames.Contains(name, StringComparer.OrdinalIgnoreCase)) layerNames.Add(name);
-        if (layerNames.Count == 0) layerNames.Add(o.Layer);
+        foreach (var f in files) Owns(string.IsNullOrWhiteSpace(f.Layer) ? o.Layer : f.Layer);
+        foreach (var name in o.GameData.Keys) Owns(name);   // M757: a layer may hold only declarations
+        foreach (var (name, _, _) in o.LayerFiles) Owns(name);   // M816: and the files they name
+        if (layerNames.Count == 0) Owns(o.Layer);
+
+        // M816 review: a layer name is a folder name, and this deletes and writes below it. It can come from a package, and
+        // Path.Combine(<mod>/content, "..\..") is the workshop itself while Path.Combine(<mod>/content, @"C:\Temp\x") is not below the
+        // mod at all. Every name that becomes a folder - the layers of the files, of the declarations, of the override files and
+        // the ones the config declares - is proven to be one (FantomeLayers.PathProblem: a name only has to be PATH-safe here, so a
+        // layer called "Particle Fix" is sent as it always was), and its folder to lie below <mod>/content, BEFORE anything is created,
+        // deleted or written, so a name refused here leaves the workshop exactly as it was.
+        // (every spelling is proven, not just the first of those that name one folder: "BASE" beside "base" is the same folder on this file
+        // system and still not a name a send writes)
+        string contentRoot = Path.Combine(modFull, "content");
+        var layerDirs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string spelling in spellings)
+        {
+            string dir = FantomeLayers.LayerDirectory(contentRoot, spelling);
+            if (!layerDirs.ContainsKey(spelling)) layerDirs[spelling] = dir;
+        }
+        foreach (var declared in o.Layers)
+            if (FantomeLayers.PathProblem(declared.Name) is { } why)
+                throw new InvalidOperationException($"Layer '{declared.Name}' cannot be declared: {why}");
+        string LayerRoot(string name) => layerDirs[string.IsNullOrWhiteSpace(name) ? o.Layer : name];
+
+        Directory.CreateDirectory(modFolder);
 
         // Replace the layer's contents so a file deleted from the project disappears from the mod too.
         // Guarded twice: the delete is confined to content/<layer>, and on an UPDATE the folder had to
@@ -275,7 +393,7 @@ public static class LtkWorkshopExporter
         int deleted = 0;
         foreach (string layer in layerNames)
         {
-            string root = Path.Combine(modFolder, "content", layer);
+            string root = layerDirs[layer];
             if (Directory.Exists(root))
             {
                 foreach (var f in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) { deleted++; }
@@ -289,11 +407,10 @@ public static class LtkWorkshopExporter
         foreach (var (fileLayer, wadFolder, rel, abs) in files)
         {
             ct.ThrowIfCancellationRequested();
-            string layerRoot = Path.Combine(modFolder, "content",
-                string.IsNullOrWhiteSpace(fileLayer) ? o.Layer : fileLayer);
+            string layerRoot = LayerRoot(fileLayer);
             string dest = Path.Combine(layerRoot, MountFolderName(wadFolder), rel.Replace('/', Path.DirectorySeparatorChar));
             string destFull = Path.GetFullPath(dest);
-            if (!destFull.StartsWith(Path.GetFullPath(layerRoot) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            if (!FantomeLayers.IsStrictlyBelow(destFull, layerRoot))
                 continue;   // a traversing relative path is skipped, not written
             Directory.CreateDirectory(Path.GetDirectoryName(destFull)!);
             File.Copy(abs, destFull, overwrite: true);
@@ -304,10 +421,24 @@ public static class LtkWorkshopExporter
         // M757: the declarations, after the files - the layer folders were just recreated above
         foreach (var (layer, text) in o.GameData)
         {
-            string path = Path.Combine(modFolder, "content", layer, "game_data.yaml");
+            string path = Path.Combine(LayerRoot(layer), "game_data.yaml");
             File.WriteAllText(path, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             written++;
             bytes += new FileInfo(path).Length;
+        }
+
+        // M816: the override files the declarations name, at the layer-relative paths they spell them by. The relative path
+        // is checked as the WAD files' is: one that climbs out of the layer is skipped, not written.
+        foreach (var (layer, rel, abs) in o.LayerFiles)
+        {
+            ct.ThrowIfCancellationRequested();
+            string layerRoot = LayerRoot(layer);
+            string dest = Path.GetFullPath(Path.Combine(layerRoot, rel.Replace('/', Path.DirectorySeparatorChar)));
+            if (!FantomeLayers.IsStrictlyBelow(dest, layerRoot)) continue;
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Copy(abs, dest, overwrite: true);
+            written++;
+            bytes += new FileInfo(dest).Length;
         }
 
         WriteConfig(modFolder, o);
@@ -378,19 +509,42 @@ public static class LtkWorkshopExporter
             var found = layers.OfType<JsonObject>().FirstOrDefault(j =>
                 string.Equals(j["name"]?.GetValue<string>(), layer.Name, StringComparison.OrdinalIgnoreCase));
             if (found is null)
-                layers.Add(new JsonObject
+            {
+                found = new JsonObject
                 {
                     ["name"] = layer.Name,
                     ["priority"] = layer.Priority,
                     ["description"] = layer.Description,
-                });
+                };
+                layers.Add(found);
+            }
             else
             {
                 found["priority"] = layer.Priority;
                 if (!string.IsNullOrWhiteSpace(layer.Description)) found["description"] = layer.Description;
             }
+            // M816: an imported layer's display name and string overrides (ModProjectLayer's display_name and string_overrides)
+            if (!string.IsNullOrWhiteSpace(layer.DisplayName)) found["display_name"] = layer.DisplayName;
+            if (layer.StringOverrides is { Count: > 0 } overrides) found["string_overrides"] = overrides.DeepClone();
         }
         cfg["layers"] = layers;
+
+        // M816: what an imported package said about itself. Written only when the project has it, so a send of a project that
+        // never imported one leaves these fields as the config (or the manager's editor) has them. mod.config.json spells a
+        // license's object with lowercase keys, unlike the .fantome's.
+        if (o.License is { } license)
+        {
+            if (license.AsObject || !string.IsNullOrEmpty(license.Url))
+            {
+                var licenseObject = new JsonObject { ["name"] = license.Name };
+                if (!string.IsNullOrEmpty(license.Url)) licenseObject["url"] = license.Url;
+                cfg["license"] = licenseObject;
+            }
+            else cfg["license"] = license.Name;
+        }
+        if (o.Tags.Count > 0) cfg["tags"] = new JsonArray(o.Tags.Select(t => (JsonNode?)JsonValue.Create(t)).ToArray());
+        if (o.Champions.Count > 0) cfg["champions"] = new JsonArray(o.Champions.Select(t => (JsonNode?)JsonValue.Create(t)).ToArray());
+        if (o.Maps.Count > 0) cfg["maps"] = new JsonArray(o.Maps.Select(t => (JsonNode?)JsonValue.Create(t)).ToArray());
 
         File.WriteAllText(path, cfg.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }

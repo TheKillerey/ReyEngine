@@ -6,6 +6,7 @@ using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Build;
 using ReyEngine.Core.Hashing;
+using ReyEngine.Core.Projects;
 using LtProp = LeagueToolkit.Core.Meta.BinTreeProperty;
 
 namespace ReyEngine.Formats.Meta;
@@ -467,15 +468,59 @@ public static class BinDeclarations
     }
 
     /// <summary>The manifest for a layer: every declared module, in the order given.</summary>
-    public static string Manifest(IEnumerable<DeclaredChunk> chunks)
+    public static string Manifest(IEnumerable<DeclaredChunk> chunks) => Manifest(chunks, null);
+
+    /// <summary>
+    /// M816: the manifest for a layer that also holds declarations an import stored. The imported modules come FIRST, in the order
+    /// the package declared them, then ReyEngine's own - the order <see cref="FantomeExporter"/> writes them in a .fantome.
+    ///
+    /// <para><b>Imported modules are written as JSON, in YAML flow style, one module to a line.</b> YAML 1.2 is a superset of JSON, so
+    /// the text of the module the package held is already a YAML mapping, and writing it as one means no value is re-spelled: an
+    /// integer stays an integer, a string a string (a JSON string is always a double-quoted YAML string, which no YAML reading can
+    /// take for another type), the order of the keys is the author's. The one change is that the module's <c>origin</c> is left
+    /// out - a manifest module has no <c>origin</c> (the loader works it out from the file and the module's position), and a key
+    /// that is not a manifest key would be read as an entry name and refuse the layer. Checked against league-mod's own loader
+    /// (<c>load_declarations</c>) on Crauzer's 13 modules: the same declarations as the document gives.</para>
+    ///
+    /// <para>A module's <c>name</c> is kept. That is the author's own spelling; an LTK Manager built on <c>ltk_game_data</c> 0.6
+    /// refuses it, as it refuses the package this was imported from.</para>
+    /// </summary>
+    /// <param name="imported">The modules of the stored document, in order. Null or empty is the plain manifest.</param>
+    public static string Manifest(IEnumerable<DeclaredChunk> chunks, IReadOnlyList<GameDataModuleText>? imported)
     {
         var sb = new StringBuilder();
         sb.Append("# Written by ReyEngine: each module is one bin's changes against the game's copy at the time\n");
         sb.Append("# of sending. LTK Manager applies them over the installed patch's bin at every build.\n");
+        if (imported is { Count: > 0 })
+            sb.Append("# The first ").Append(imported.Count).Append(" module(s) are declarations imported from a .fantome, kept as its author wrote\n")
+              .Append("# them (one JSON mapping per line); the modules after them are this project's own.\n");
+        var own = chunks.Where(c => c.Module is not null).ToList();
+        // a manifest of no modules is `modules: []`: a bare `modules:` is YAML null, which is not a list (review; league-mod's loader reads
+        // the null as an empty list - measured - and the explicit list is the one spelling no reader can take for anything else)
+        if ((imported?.Count ?? 0) + own.Count == 0) return sb.Append("version: 1\nmodules: []\n").ToString();
         sb.Append("version: 1\nmodules:\n");
-        foreach (var c in chunks) if (c.Module is { } m) sb.Append(m);
+        if (imported is not null)
+            foreach (var m in imported) sb.Append("  - ").Append(FlowModule(m.Text)).Append('\n');
+        foreach (var c in own) sb.Append(c.Module);
         return sb.ToString();
     }
+
+    /// <summary>
+    /// M816: <paramref name="own"/> (layer to manifest text, as the plan renders it) with a manifest added for every layer whose
+    /// declarations are only imported ones - a layer this project declares nothing for still carries what its package declared.
+    /// </summary>
+    public static Dictionary<string, string> WithImported(IReadOnlyDictionary<string, string> own, IEnumerable<ImportedLayerData> imported)
+    {
+        var all = new Dictionary<string, string>(own, StringComparer.OrdinalIgnoreCase);
+        foreach (var data in imported)
+            if (!all.ContainsKey(data.Layer))
+                all[data.Layer] = Manifest(Array.Empty<DeclaredChunk>(), data.Modules);
+        return all;
+    }
+
+    /// <summary>M816: a document module as a manifest module - its JSON on one line, without <c>origin</c>, every other token as the
+    /// package spelled it (<see cref="GameDataDocumentText.ManifestModule"/>).</summary>
+    internal static string FlowModule(string moduleJson) => GameDataDocumentText.ManifestModule(moduleJson);
 
     // ------------------------------------------------------------------ the JSON document (M814)
 
@@ -491,6 +536,10 @@ public static class BinDeclarations
     /// unchanged. A chunk that is not declared has no module, and a module never holds an empty edit or an
     /// empty body.</para>
     ///
+    /// <para><paramref name="firstModuleIndex"/> (M816): where <c>origin.module</c> starts counting. A layer that holds imported
+    /// modules ahead of these numbers them from the first free place, so the origins of the whole document are 0, 1, 2, ...
+    /// as a loader would number a manifest of the same modules.</para>
+    ///
     /// <para><paramref name="moduleNames"/> (default <see cref="FantomeLayers.ModuleNames"/>, which is
     /// <c>false</c>): a module <c>name</c> exists from <c>ltk_game_data</c> 0.7, and <c>Module</c> is
     /// <c>deny_unknown_fields</c>, so 0.6.0 refuses the whole layer when one module carries a name - measured
@@ -500,10 +549,10 @@ public static class BinDeclarations
     /// until no manager that still pins 0.6 is worth supporting. The renderer keeps the support: with the
     /// flag on, a module is labelled with the project path of its bin.</para>
     /// </summary>
-    public static JsonObject GameDataDocument(IEnumerable<DeclaredChunk> chunks, bool moduleNames = FantomeLayers.ModuleNames)
+    public static JsonObject GameDataDocument(IEnumerable<DeclaredChunk> chunks, bool moduleNames = FantomeLayers.ModuleNames, int firstModuleIndex = 0)
     {
         var modules = new JsonArray();
-        int index = 0;
+        int index = firstModuleIndex;
         foreach (var c in chunks)
         {
             if (c.Edit is not { } edit) continue;

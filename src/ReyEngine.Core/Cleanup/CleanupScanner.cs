@@ -6,7 +6,9 @@ namespace ReyEngine.Core.Cleanup;
 public sealed class CleanupScanOptions
 {
     public required string ProjectRoot { get; init; }
-    /// <summary>The editable project folders, as (display name, absolute root).</summary>
+    /// <summary>The editable project folders, as (display name, absolute root). M816 review: two of them can provide the same path (another
+    /// layer's copy of a WAD, another folder of the same WAD), and a copy identical to Riot's that another folder also provides is not
+    /// offered for removal: taking it out would expose that other copy, not Riot's.</summary>
     public required IReadOnlyList<(string Name, string Root)> Folders { get; init; }
     public required IReferenceIndex References { get; init; }
 
@@ -80,9 +82,15 @@ public static class CleanupScanner
             notes.Add("Some project bins could not be read" + (o.ReferenceGapReason.Length > 0 ? $" ({o.ReferenceGapReason})" : "")
                     + " - references they hold are invisible to this scan, so unused results are listed as uncertain.");
 
+        // M816 review (round 3): which project folders provide each path. A file identical to Riot's is only safe to take out when the game
+        // would fall back to Riot's - and when ANOTHER project folder (another layer, or another folder of the same WAD) also provides the
+        // path, removing this copy exposes that one instead. Only built for the mode that asks.
+        var providers = o.ScanRiotIdentical && riotAvailable ? IndexProviders(o, ct) : null;
+
         int folderNo = 0;
-        foreach (var (name, root) in o.Folders)
+        for (int index = 0; index < o.Folders.Count; index++)
         {
+            var (name, root) = o.Folders[index];
             ct.ThrowIfCancellationRequested();
             if (!Directory.Exists(root)) { notes.Add($"{name}: folder missing on disk, skipped."); continue; }
             progress?.Report((0.9 * folderNo++ / Math.Max(1, o.Folders.Count), $"Scanning {name}…"));
@@ -97,7 +105,12 @@ public static class CleanupScanner
                 scanned++; scannedBytes += bytes;
 
                 var type = AssetTypeDetector.FromPath(rel);
-                var c = Judge(o, name, rel, abs, hash, bytes, type, riotAvailable, canProveUnused);
+                // another FILE, in another folder entry: the same file reached through two entries (a folder inside another) is one copy
+                string? elsewhere = null;
+                if (providers is not null && providers.TryGetValue(hash, out var copies))
+                    foreach (var copy in copies)
+                        if (copy.Folder != index && !string.Equals(copy.Abs, abs, StringComparison.OrdinalIgnoreCase)) { elsewhere = copy.Name; break; }
+                var c = Judge(o, name, rel, abs, hash, bytes, type, riotAvailable, canProveUnused, elsewhere);
                 if (c is not null) candidates.Add(c);
             }
         }
@@ -122,8 +135,32 @@ public static class CleanupScanner
         return new CleanupReport(o.ProjectRoot, riotAvailable, riotStatus, candidates, scanned, scannedBytes, notes);
     }
 
+    /// <summary>
+    /// M816 review (round 3): every file of every project folder by the path hash it ships under, for the hashes more than one file
+    /// holds. The same scope as the scan itself: nothing below an excluded root, nothing in <c>.reyengine/</c>.
+    /// </summary>
+    private static Dictionary<ulong, List<(int Folder, string Name, string Abs)>> IndexProviders(CleanupScanOptions o, CancellationToken ct)
+    {
+        var map = new Dictionary<ulong, List<(int Folder, string Name, string Abs)>>();
+        for (int i = 0; i < o.Folders.Count; i++)
+        {
+            var (name, root) = o.Folders[i];
+            if (!Directory.Exists(root)) continue;
+            foreach (var (hash, abs) in WadPackService.EnumerateChunkFiles(root))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (o.ExcludedRoots.Any(excluded => IsSameOrChild(abs, excluded))) continue;
+                if (Path.GetRelativePath(root, abs).Replace('\\', '/').StartsWith(".reyengine/", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!map.TryGetValue(hash, out var list)) map[hash] = list = new List<(int, string, string)>();
+                list.Add((i, name, abs));
+            }
+        }
+        foreach (var single in map.Where(kv => kv.Value.Count < 2).Select(kv => kv.Key).ToList()) map.Remove(single);
+        return map;
+    }
+
     private static CleanupCandidate? Judge(CleanupScanOptions o, string folder, string rel, string abs,
-        ulong hash, long bytes, AssetType type, bool riotAvailable, bool canProveUnused)
+        ulong hash, long bytes, AssetType type, bool riotAvailable, bool canProveUnused, string? providedElsewhere = null)
     {
         CleanupCandidate Row(CleanupGroup g, string why) =>
             new(g, rel, abs, folder, type, bytes, why);
@@ -157,7 +194,14 @@ public static class CleanupScanner
                 try { mine = File.ReadAllBytes(abs); } catch { return null; }
                 var (same, how) = Equivalent(o, rel, mine, riot);
                 if (same)
+                {
+                    // Removing this copy falls back to Riot's only when nothing else in the project provides the path. Another project
+                    // folder - another layer, or another folder of the same WAD - that does would be exposed instead (review, round 3).
+                    if (providedElsewhere is not null)
+                        return Row(CleanupGroup.Protected,
+                            $"Another project folder also provides this file ({providedElsewhere}) - deleting this copy would expose that one, not Riot's");
                     return Row(CleanupGroup.IdenticalToRiot, $"{how} the Riot original - removing it falls back to Riot");
+                }
             }
         }
 

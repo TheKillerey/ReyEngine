@@ -264,6 +264,174 @@ public class CleanupTests
         finally { Directory.Delete(root, true); }
     }
 
+    // ---------- review, round 3: identical to Riot, but another project folder provides the file too ----------
+
+    /// <summary>A project of several folders (another layer's copy of a WAD, another folder of the same WAD), each holding the given files.</summary>
+    private static (string Root, string[] Folders) MakeFolders(params (string Folder, (string Rel, byte[] Bytes)[] Files)[] folders)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "reyclean-" + Guid.NewGuid().ToString("N")[..8]);
+        var paths = new List<string>();
+        foreach (var (folder, files) in folders)
+        {
+            string dir = Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+            paths.Add(dir);
+            Directory.CreateDirectory(dir);
+            foreach (var (rel, bytes) in files)
+            {
+                string p = Path.Combine(dir, rel.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+                File.WriteAllBytes(p, bytes);
+            }
+        }
+        return (root, paths.ToArray());
+    }
+
+    private static CleanupScanOptions RiotScan(string root, IReadOnlyList<(string Name, string Root)> folders, Func<ulong, byte[]?>? riot,
+        IReadOnlyList<string>? excluded = null, bool riotMode = true) => new()
+        {
+            ProjectRoot = root,
+            Folders = folders,
+            References = new FakeIndex(),
+            GameWadHashes = new HashSet<ulong> { 1 },
+            ReadRiot = riot,
+            ScanRiotIdentical = riotMode && riot is not null,
+            ExcludedRoots = excluded ?? Array.Empty<string>(),
+        };
+
+    [Fact]
+    public void ACopyIdenticalToRiotThatAnotherProjectFolderAlsoProvidesIsProtectedNotTicked()
+    {
+        var bytes = new byte[] { 9, 8, 7, 6 };
+        var (root, dirs) = MakeFolders(
+            ("Map11", new[] { ("assets/x/same.dds", bytes) }),
+            ("layers/winter/Map11", new[] { ("assets/x/same.dds", bytes) }));
+        try
+        {
+            var r = CleanupScanner.Scan(RiotScan(root, new[] { ("Map11", dirs[0]), ("layers/winter/Map11", dirs[1]) }, _ => bytes));
+
+            // taking out either copy would expose the other one, not Riot's: both are kept, unticked, and say why
+            Assert.Equal(2, r.Candidates.Count);
+            Assert.All(r.Candidates, c =>
+            {
+                Assert.Equal(CleanupGroup.Protected, c.Group);
+                Assert.False(c.SelectedByDefault);
+                Assert.Contains("another project folder also provides this file", c.Reason, StringComparison.OrdinalIgnoreCase);
+            });
+            Assert.Contains("(layers/winter/Map11)", r.Candidates.Single(c => c.Folder == "Map11").Reason);          // it names the other folder
+            Assert.Contains("(Map11)", r.Candidates.Single(c => c.Folder == "layers/winter/Map11").Reason);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AProjectOfOneFolderOrOfFoldersThatShareNoPathIsJudgedAsItWas()
+    {
+        var bytes = new byte[] { 9, 8, 7, 6 };
+        var (root, dirs) = MakeFolders(
+            ("Map11", new[] { ("assets/x/one.dds", bytes) }),
+            ("layers/winter/Map11", new[] { ("assets/x/two.dds", bytes) }));
+        try
+        {
+            var two = CleanupScanner.Scan(RiotScan(root, new[] { ("Map11", dirs[0]), ("layers/winter/Map11", dirs[1]) }, _ => bytes));
+            Assert.All(two.Candidates, c => { Assert.Equal(CleanupGroup.IdenticalToRiot, c.Group); Assert.True(c.SelectedByDefault); });
+            Assert.Equal(2, two.Candidates.Count);
+
+            var one = CleanupScanner.Scan(RiotScan(root, new[] { ("Map11", dirs[0]) }, _ => bytes));
+            var c1 = Assert.Single(one.Candidates);
+            Assert.Equal(CleanupGroup.IdenticalToRiot, c1.Group);
+            Assert.Contains("removing it falls back to Riot", c1.Reason);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void ACopyThatDiffersFromRiotIsNotListedBecauseAnotherFolderHasTheSamePath()
+    {
+        var (root, dirs) = MakeFolders(
+            ("Map11", new[] { ("assets/x/edited.dds", new byte[] { 1 }) }),
+            ("layers/winter/Map11", new[] { ("assets/x/edited.dds", new byte[] { 2 }) }));
+        try
+        {
+            var o = RiotScan(root, new[] { ("Map11", dirs[0]), ("layers/winter/Map11", dirs[1]) }, _ => new byte[] { 3 });
+            var game = new HashSet<ulong> { HashAlgorithms.WadPath("assets/x/edited.dds") };
+            var r = CleanupScanner.Scan(new CleanupScanOptions
+            {
+                ProjectRoot = o.ProjectRoot, Folders = o.Folders, References = o.References, GameWadHashes = game, ReadRiot = o.ReadRiot, ScanRiotIdentical = true,
+            });
+
+            Assert.Empty(r.Candidates);                                                              // an edit of the game's file: never offered, as before
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AHashNamedChunkTwoFoldersBothHoldIsProtectedToo()
+    {
+        var bytes = new byte[] { 5, 5 };
+        var (root, dirs) = MakeFolders(
+            ("Map11", new[] { ("a1b2c3d4e5f60718.dds", bytes) }),
+            ("layers/winter/Map11", new[] { ("a1b2c3d4e5f60718.dds", bytes) }));
+        try
+        {
+            var r = CleanupScanner.Scan(RiotScan(root, new[] { ("Map11", dirs[0]), ("layers/winter/Map11", dirs[1]) }, _ => bytes));
+
+            Assert.All(r.Candidates, c => Assert.Equal(CleanupGroup.Protected, c.Group));
+            Assert.Equal(2, r.Candidates.Count);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void TheSameFileReachedThroughTwoEntriesIsOneCopyNotTwo()
+    {
+        var bytes = new byte[] { 4, 4 };
+        var (root, dirs) = MakeFolders(("Map11", new[] { ("assets/x/same.dds", bytes) }));
+        try
+        {
+            // one folder listed twice, or a folder inside another: the path is provided once
+            var r = CleanupScanner.Scan(RiotScan(root, new[] { ("Map11", dirs[0]), ("Map11 again", dirs[0]) }, _ => bytes));
+
+            Assert.All(r.Candidates, c => Assert.Equal(CleanupGroup.IdenticalToRiot, c.Group));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AFolderTheScanExcludesIsNotAnotherFolderThatProvidesTheFile()
+    {
+        var bytes = new byte[] { 6, 6 };
+        var (root, dirs) = MakeFolders(
+            ("Map11", new[] { ("assets/x/same.dds", bytes) }),
+            ("Build/staged/Map11", new[] { ("assets/x/same.dds", bytes) }));      // a build's staging copy of the same WAD, listed as a folder
+        try
+        {
+            var r = CleanupScanner.Scan(RiotScan(root, new[] { ("Map11", dirs[0]), ("Build/staged/Map11", dirs[1]) }, _ => bytes,
+                excluded: new[] { Path.Combine(root, "Build") }));
+
+            var c = Assert.Single(r.Candidates);                                                     // generated output is neither scanned nor a provider
+            Assert.Equal(CleanupGroup.IdenticalToRiot, c.Group);
+            Assert.Equal("Map11", c.Folder);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void WithoutTheRiotModeTheFoldersAreJudgedAsTheyWere()
+    {
+        var bytes = new byte[] { 1, 1 };
+        var (root, dirs) = MakeFolders(
+            ("Map11", new[] { ("assets/x/same.dds", bytes) }),
+            ("layers/winter/Map11", new[] { ("assets/x/same.dds", bytes) }));
+        try
+        {
+            var r = CleanupScanner.Scan(RiotScan(root, new[] { ("Map11", dirs[0]), ("layers/winter/Map11", dirs[1]) }, _ => bytes, riotMode: false));
+
+            Assert.All(r.Candidates, c => Assert.Equal(CleanupGroup.Unused, c.Group));              // nothing references them, the game does not ship them
+            Assert.Equal(2, r.Candidates.Count);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [Fact]
     public void AHashNamedChunkIsJudgedByItsHash()
     {

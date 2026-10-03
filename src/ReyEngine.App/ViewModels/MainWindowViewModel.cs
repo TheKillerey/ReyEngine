@@ -7727,8 +7727,33 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ApplyHashesToOpenWad();
     }
 
+    /// <summary>
+    /// M816: teach the dictionary the names the open project's imported .fantome declared (<c>.reyengine/ltk/hashes</c>).
+    ///
+    /// <para>Called when a project opens and again whenever the dictionary is swapped for a synced one, which replaces what was added
+    /// to the old one. The tables are the project's own, so they outrank nothing and lose to nothing: <c>AddWad</c> keeps the entry a
+    /// dictionary already holds and lists a different spelling as a conflict. On the thread that owns the dictionary.</para>
+    ///
+    /// <para>The dictionary is plain <c>Dictionary</c>s, and a map thumbnail or a colour scan on a worker resolves names through it, so this
+    /// is a change in place of something the thumbnails read through: it is bracketed by <see cref="NoteMapThumbnailInputsChanged"/>, as
+    /// every other such change is (<see cref="ApplyHashesToOpenWad"/>, the hash sync), and a draw that overlapped it is not kept (review).</para>
+    /// </summary>
+    private void LoadProjectHashtables(bool announce)
+    {
+        if (Project.RootPath is not { } root) return;
+        NoteMapThumbnailInputsChanged();
+        try
+        {
+            int offered = LtkProjectStore.LoadHashtables(root, _resolver.Database);
+            if (offered > 0 && announce) _log.Info("Project", $"Loaded {offered:n0} name(s) from the hashtables the imported .fantome declared.");
+        }
+        catch (Exception ex) { _log.Info("Project", $"The project's hashtables could not be read: {ex.Message}"); }
+        finally { NoteMapThumbnailInputsChanged(); }
+    }
+
     private void ApplyHashesToOpenWad()
     {
+        LoadProjectHashtables(announce: false);   // M816: a swapped dictionary does not know the project's own names
         if (!ContentLoaded) return;
 
         // M731: a project is MOUNTS, not an archive. This dereferenced _archive - null in every folder project -
@@ -15199,14 +15224,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>M94: what an import unpacked. M814: and, when the package used LTK's layered layout, a warning naming
-    /// what it did not bring in - the <c>WAD_&lt;layer&gt;/</c> WADs and the <c>GameData</c> declarations that
-    /// Export .fantome writes - because a smaller mod presented as the whole one is how edits get lost.</summary>
+    /// what it did not bring in, because a smaller mod presented as the whole one is how edits get lost. M816: the layered
+    /// layout is imported, so the log says what came in - layers, GameData modules, override files, names from the package's
+    /// hashtables - and the warning is the small print of <see cref="ReyEngine.Core.Projects.FantomeImportResult.Notes"/>, when there is any.</summary>
     private void LogFantomeImport(ReyEngine.Core.Projects.FantomeImportResult result)
     {
         _log.Success("Import", $"{result.ProjectName}: {result.Wads} WAD(s), {result.ExtractedFiles:n0} file(s) unpacked" +
             (result.RawFiles > 0 ? $" + {result.RawFiles} RAW file(s)" : "") +
             (result.FailedChunks > 0 ? $" ({result.FailedChunks} chunk(s) failed — usually subchunked textures)" : "") +
             $" → {result.RootPath}");
+        if (result.Layers.Count > 0)
+        {
+            var layers = result.Layers.Select(l => $"{l.Name} (priority {l.Priority}"
+                + (string.IsNullOrEmpty(l.DisplayName) ? "" : ", " + l.DisplayName)
+                + $"): {l.Wads} WAD(s), {l.GameDataModules} GameData module(s)"
+                + (l.OverrideFiles > 0 ? $", {l.OverrideFiles} override file(s)" : ""));
+            _log.Info("Import", "Layers - " + string.Join("; ", layers) + ". GameData and override files are kept with the project "
+                + "(.reyengine/ltk) and an export writes them back as they were.");
+        }
+        if (result.ChunksNamedByTables > 0)
+            _log.Info("Import", $"{result.ChunksNamedByTables:n0} chunk(s) named from the package's own hashtables ({result.TableNames:n0} name(s)).");
         if (result.NotImportedWarning is { } notImported) _log.Warn("Import", notImported);
     }
 
@@ -15227,6 +15264,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _overrides.LoadFrom(project);
             AbandonMapThumbnails();   // M807: another project: the tile in hand is stopped; the archive it reads through is disposed once it has
             RetireMapThumbnailReader(_archive); _archive = null;
+            // M816: the names an imported package declared, before any bin is read - and AFTER the tile in hand was stopped, because this
+            // changes the dictionary the thumbnail thread reads through (review)
+            LoadProjectHashtables(announce: true);
             Documents.Clear(); ActiveDocument = null; // same path hash in another project is different content
             BuildMounts();
             BuildProjectTree();
@@ -15851,6 +15891,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// in the log, and writes nothing. A project with no packable content at all is still the error
     /// <paramref name="emptyMessage"/>.</para>
     ///
+    /// <para><b>M816: what an import brought in is written back.</b> A project made from an LTK-layered .fantome holds each layer's
+    /// GameData document and override files (<see cref="LtkProjectStore"/>), and its license, tags, champions, maps, README and license
+    /// text. Per layer the imported modules are written FIRST and verbatim, then this project's own declarations (when the setting is
+    /// on) with their <c>origin.module</c> numbers counting on from the imported ones; the imported ones ship whether or not the setting
+    /// is on, because they are the package's content and not a bin this project changed. A layer of imported declarations or string
+    /// overrides is content of its own: such a project is not "nothing to ship" and not "no WAD was produced".</para>
+    ///
     /// <para>The .fantome is written whole or not at all (<see cref="FantomeExporter.Export"/>): a failure leaves an
     /// existing package as it was.</para>
     /// </summary>
@@ -15859,13 +15906,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         Core.Build.LtkProjectLayers.ForFantome(Project);   // refuse a bad layer name before the long part
 
+        // M816: what an LTK-layered .fantome brought into the project - each layer's GameData document and override files, kept as the
+        // package wrote them. They are written FIRST and VERBATIM; ReyEngine's own declarations for the same layer follow them.
+        var imported = Project.RootPath is null ? Array.Empty<ImportedLayerData>() : LtkProjectStore.ReadLayers(Project);
+
         var build = BuildProjectCore(buildRoot, progress, declareBins: Project.ShipBinEditsAsDeclarations);
 
         var gameData = new Dictionary<string, System.Text.Json.Nodes.JsonNode>(StringComparer.OrdinalIgnoreCase);
         if (build.Declarations is { } plan)
             foreach (var (layer, chunks) in plan.Modules)
-                gameData[layer] = Formats.Meta.BinDeclarations.GameDataDocument(chunks, FantomeLayers.ModuleNames);
-        if (build.Wads.Count == 0 && gameData.Count == 0)
+            {
+                // the origins of the whole document count 0, 1, 2, ...: ReyEngine's own modules carry on from the imported ones
+                int first = imported.FirstOrDefault(i => i.Layer.Equals(layer, StringComparison.OrdinalIgnoreCase))?.Modules.Count ?? 0;
+                gameData[layer] = Formats.Meta.BinDeclarations.GameDataDocument(chunks, FantomeLayers.ModuleNames, first);
+            }
+        // a layer with an imported document or string overrides is content of its own, with no WAD and no bin of this project's making
+        bool layerContent = imported.Count > 0 || Project.Layers.Any(l => l.StringOverrides is { Count: > 0 });
+        if (build.Wads.Count == 0 && gameData.Count == 0 && !layerContent)
         {
             // every file the plan looked at matched the game and none is left to pack (a file that WAS left and failed to
             // pack is a failure, not a match, and stays the error below)
@@ -15878,11 +15935,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         meta.Generator = $"ReyEngine {AppInfo.Version}";
-        meta.Layers = Core.Build.LtkProjectLayers.ForFantome(Project, gameData);
+        meta.Layers = Core.Build.LtkProjectLayers.ForFantome(Project, gameData, imported);
+        // M816: the rest of what the package said about itself
+        meta.License = Project.ModLicense;
+        meta.Tags = Project.ModTags;
+        meta.Champions = Project.ModChampions;
+        meta.Maps = Project.ModMaps;
+        meta.MetaFiles = Project.RootPath is null ? Array.Empty<(string, string)>() : LtkProjectStore.ReadMetaFiles(Project.RootPath);
 
         progress.Report((0.98, packagingStage));
         FantomeExporter.Export(meta, build.Wads, thumbnail, outPath);
-        LogFantomeLayout(logCategory, meta.Layers, build);
+        LogFantomeLayout(logCategory, meta.Layers, build, imported);
         return FantomeExportOutcome.Written;
     }
 
@@ -15899,7 +15962,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M814: what went into a .fantome - its layers, the declared bins, the bins that ship whole and
     /// why - and what GameData needs from the player's mod manager.</summary>
-    private void LogFantomeLayout(string category, IReadOnlyList<FantomeLayer> layers, ProjectBuild build)
+    private void LogFantomeLayout(string category, IReadOnlyList<FantomeLayer> layers, ProjectBuild build,
+        IReadOnlyList<ImportedLayerData>? imported = null)
     {
         var plan = build.Declarations;
         var parts = new List<string>();
@@ -15908,7 +15972,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             int wads = build.Wads.Count(w => w.Layer.Equals(layer.Name, StringComparison.OrdinalIgnoreCase));
             // M815: bins, not modules - a forced map skin's bin is two modules (the references, then what the project holds beyond them)
             int declared = plan is not null ? plan.DeclaredBins.Count(b => b.Layer.Equals(layer.Name, StringComparison.OrdinalIgnoreCase)) : 0;
-            parts.Add($"{layer.Name} (priority {layer.Priority}): {wads} WAD(s), {declared} declared bin(s)");
+            // M816: the declarations an import stored are written ahead of those, as they were written
+            var data = imported?.FirstOrDefault(i => i.Layer.Equals(layer.Name, StringComparison.OrdinalIgnoreCase));
+            string kept = data is null ? "" : $", {data.Modules.Count} imported module(s)"
+                + (data.Files.Count > 0 ? $" and {data.Files.Count} override file(s)" : "") + " kept as imported";
+            parts.Add($"{layer.Name} (priority {layer.Priority}): {wads} WAD(s), {declared} declared bin(s){kept}");
         }
         _log.Info(category, "Layers - " + string.Join("; ", parts) + ".");
 
@@ -15918,7 +15986,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (inOwnDirectory.Count > 0)
             _log.Warn(category, $"Layer(s) {string.Join(", ", inOwnDirectory)} are stored in WAD_<layer>/ directories. LTK Manager reads "
                 + "them; cslol-manager and other loaders that predate layers skip them, so on those the mod would lack that content.");
-        if (plan is null) return;
+        bool importedDeclarations = imported?.Any(i => i.Modules.Count > 0) == true;
+        if (plan is null)
+        {
+            // M816: the setting is off, but the declarations an import stored ship all the same
+            if (importedDeclarations) WarnGameDataIsLtkOnly(category, "the imported declarations are not in its WADs");
+            return;
+        }
 
         foreach (var (level, line) in plan.Report("shipped"))
             if (level == 0) _log.Success(category, line); else _log.Info(category, line);
@@ -15932,14 +16006,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (plan.DeclaredBins.Count > 20) _log.Info(category, $"  ... and {plan.DeclaredBins.Count - 20} more declared.");
 
         if (plan.Declared > 0)
-            _log.Warn(category, "GameData in this .fantome is applied by LTK Manager when the mod is installed. cslol-manager and "
-                + "other loaders ignore it, so on those the mod would be incomplete: the bins above are not in its WADs."
-                // names are off (FantomeLayers.ModuleNames): a manager on ltk_game_data 0.6 would refuse the layer for one
-                + (FantomeLayers.ModuleNames
-                    ? " The modules carry names, which need an LTK Manager built on league-mod's ltk_game_data 0.7 or newer; an "
-                      + "older manager refuses the whole layer's declarations."
-                    : ""));
+            WarnGameDataIsLtkOnly(category, "the bins above are not in its WADs");
+        else if (importedDeclarations)
+            WarnGameDataIsLtkOnly(category, "the imported declarations are not in its WADs");
     }
+
+    private void WarnGameDataIsLtkOnly(string category, string what) =>
+        _log.Warn(category, "GameData in this .fantome is applied by LTK Manager when the mod is installed. cslol-manager and "
+            + $"other loaders ignore it, so on those the mod would be incomplete: {what}."
+            // names are off (FantomeLayers.ModuleNames): a manager on ltk_game_data 0.6 would refuse the layer for one
+            + (FantomeLayers.ModuleNames
+                ? " The modules carry names, which need an LTK Manager built on league-mod's ltk_game_data 0.7 or newer; an "
+                  + "older manager refuses the whole layer's declarations."
+                : ""));
 
     /// <summary>
     /// M470: send this project to LTK Manager's workshop folder, creating the mod or updating it in place.
@@ -15987,6 +16066,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Warn("LTK", "LTK Manager is running — it may import while files are still being written. "
                            + "If the mod looks incomplete, re-send it with the manager closed.");
 
+        await SendProjectToWorkshop(root!);
+    }
+
+    /// <summary>
+    /// The part of Send to LTK Manager that follows finding the workshop: build the send from the project and write it there.
+    ///
+    /// <para>Everything that can fail on what the project holds - a layer name that cannot be a folder, a stored GameData document
+    /// someone broke (<see cref="LtkProjectStore.ReadLayers"/> throws <see cref="InvalidDataException"/> by design), a folder collision - is
+    /// inside the <c>try</c>, so it is an error in the log and not an unhandled exception on the UI thread (review). It is a method of its
+    /// own so that a test can point it at a scratch workshop; the command finds the real one in LTK Manager's settings.</para>
+    /// </summary>
+    private async Task SendProjectToWorkshop(string workshopRoot)
+    {
         string name = Project.EffectiveModName;
         string author = string.IsNullOrWhiteSpace(Project.ModAuthor) ? "Unknown" : Project.ModAuthor!;
 
@@ -15998,21 +16090,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ? Core.Build.LtkWorkshopExporter.Slugify(name)
             : Project.LtkWorkshopSlug!.Trim();
 
-        var options = new Core.Build.LtkSendOptions(
-            WorkshopRoot: root!,
-            Slug: slug,
-            DisplayName: name,
-            Version: string.IsNullOrWhiteSpace(Project.ModVersion) ? "1.0.0" : Project.ModVersion,
-            Description: Project.ModDescription ?? "",
-            Author: author,
-            ThumbnailPath: Project.ThumbnailPath)
-        {
-            // M742: the project's modpkg layers, so an optional half of a mod ships as something the
-            // user can switch off in LTK Manager rather than as part of the map. "base" is always
-            // declared, even when the project names no layers, because that is where unclaimed folders go.
-            Layers = Core.Build.LtkProjectLayers.Of(Project),
-        };
-
         bool declare = Project.ShipBinEditsAsDeclarations;
         var declarationReport = new List<(int Level, string Line)>();
         IsBuilding = true; Status = "Sending to LTK Manager…";
@@ -16020,6 +16097,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var result = await Task.Run(() =>
             {
+                var options = new Core.Build.LtkSendOptions(
+                    WorkshopRoot: workshopRoot,
+                    Slug: slug,
+                    DisplayName: name,
+                    Version: string.IsNullOrWhiteSpace(Project.ModVersion) ? "1.0.0" : Project.ModVersion,
+                    Description: Project.ModDescription ?? "",
+                    Author: author,
+                    ThumbnailPath: Project.ThumbnailPath)
+                {
+                    // M742: the project's modpkg layers, so an optional half of a mod ships as something the
+                    // user can switch off in LTK Manager rather than as part of the map. "base" is always
+                    // declared, even when the project names no layers, because that is where unclaimed folders go.
+                    Layers = Core.Build.LtkProjectLayers.Of(Project),
+                };
+
+                // M816: the GameData documents and override files an import stored ride their layers whether or not the project declares its own
+                var imported = Project.RootPath is null ? Array.Empty<ImportedLayerData>() : LtkProjectStore.ReadLayers(Project);
+                bool layerContent = imported.Count > 0 || Project.Layers.Any(l => l.StringOverrides is { Count: > 0 });
+                RefuseWholeClaimCollisions();
+
                 // Same enumeration the WAD packer walks, so what LTK Manager gets is what a build would
                 // have contained - one source of truth for "the project's files".
                 var files = new List<(string Layer, string WadFolder, string RelPath, string AbsPath)>();
@@ -16029,21 +16126,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (!Directory.Exists(abs)) continue;
                     var folderName = Path.GetFileName(abs.TrimEnd('/', '\\'));
                     // M742: which modpkg layer this WAD folder ships in - "base" unless a layer claims it.
-                    string layer = Project.LayerOf(folderName);
+                    // M816: a layer may claim a whole folder entry, which tells two folders of one WAD name apart.
+                    string layer = Project.LayerOfFolder(f);
                     foreach (var (_, path) in Core.Build.WadPackService.EnumerateChunkFiles(abs))
                         files.Add((layer, folderName, Path.GetRelativePath(abs, path).Replace('\\', '/'), path));
                 }
-                if (files.Count == 0)
+                if (files.Count == 0 && !layerContent)
                     throw new InvalidOperationException("The project has no packable content to send.");
                 // M757: game bins as declarations against the game's copy, when the project asks for it
-                var sendOptions = options;
+                var manifests = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 if (declare)
                 {
                     var declared = DeclareGameBins(files);
                     files = declared.Files;
-                    sendOptions = options with { GameData = declared.GameData };
+                    manifests = declared.GameData;
                     declarationReport = declared.Report;
                 }
+                // M816: a layer with imported declarations and no declarations of this project's own still gets its manifest, the
+                // override files ride their layers, and mod.config.json names the license, tags, champions and maps
+                var sendOptions = Core.Build.LtkProjectLayers.ForSend(options, Project, imported,
+                    Formats.Meta.BinDeclarations.WithImported(manifests, imported));
                 return Core.Build.LtkWorkshopExporter.Send(sendOptions, files);
             });
             foreach (var (level, line) in declarationReport)
@@ -16099,7 +16201,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         DeclareGameBins(List<(string Layer, string WadFolder, string RelPath, string AbsPath)> files)
     {
         var plan = PlanDeclarations(files.Select(f => new Formats.Meta.DeclarationFile(f.Layer, f.WadFolder, f.RelPath, f.AbsPath)));
-        var gameData = plan.Modules.ToDictionary(kv => kv.Key, kv => Formats.Meta.BinDeclarations.Manifest(kv.Value),
+        // M816: a layer's imported modules come first in its manifest, then the ones this project declares
+        var imported = Project.RootPath is null ? Array.Empty<ImportedLayerData>() : LtkProjectStore.ReadLayers(Project);
+        var gameData = plan.Modules.ToDictionary(kv => kv.Key,
+            kv => Formats.Meta.BinDeclarations.Manifest(kv.Value,
+                imported.FirstOrDefault(i => i.Layer.Equals(kv.Key, StringComparison.OrdinalIgnoreCase))?.Modules),
             StringComparer.OrdinalIgnoreCase);
         return (plan.Kept.Select(k => (k.Layer, k.WadFolder, k.RelPath, k.AbsPath)).ToList(), gameData, plan.Report().ToList());
     }
@@ -17048,9 +17154,42 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             await Task.Run(() => BuildProjectCore(buildRoot, progress));
             Status = $"Built project to {buildRoot}";
             _log.Success("Build", $"Project build ready: {buildRoot}. Open it via File ▸ Open Project Folder to verify.");
+            WarnBuildPackageCannotCarry();
         }
         catch (Exception ex) { _log.Error("Build", ex.Message); }
         finally { IsBuilding = false; }
+    }
+
+    /// <summary>
+    /// M816 review: Build Package writes WADs, and a project imported from an LTK-layered .fantome is more than WADs. Its layers (priority, display
+    /// name, the switch LTK Manager offers), the GameData documents of its layers, the override files they name and its string overrides are
+    /// not in any WAD, so they are not in the build output - and a build that said nothing would be taken for the whole mod. The WAD of a layer is
+    /// written to <c>Build/&lt;layer&gt;/</c> under its own name. Export .fantome and Send to LTK Manager write all of it.
+    ///
+    /// <para>Said only when the project holds such content, so a project that never imported one builds with the log it always had.</para>
+    /// </summary>
+    private void WarnBuildPackageCannotCarry()
+    {
+        IReadOnlyList<ImportedLayerData> imported = Array.Empty<ImportedLayerData>();
+        string? unreadable = null;
+        if (Project.RootPath is not null)
+            try { imported = LtkProjectStore.ReadLayers(Project); }
+            catch (Exception ex) { unreadable = ex.Message; }
+
+        var wadLayers = Project.Layers.Where(l => !FantomeLayers.IsBase(l.Name) && l.Folders.Any(Project.IsClaimedWhole)).Select(l => l.Name).ToList();
+        int modules = imported.Sum(i => i.Modules.Count), files = imported.Sum(i => i.Files.Count);
+        int withStrings = Project.Layers.Count(l => l.StringOverrides is { Count: > 0 });
+        if (wadLayers.Count == 0 && modules == 0 && files == 0 && withStrings == 0 && unreadable is null) return;
+
+        var parts = new List<string>();
+        if (wadLayers.Count > 0)
+            parts.Add($"{wadLayers.Count} layer(s) with their priorities and switches (the WAD of {string.Join(", ", wadLayers)} is in Build/<layer>/, on its own)");
+        if (modules > 0) parts.Add($"{modules:n0} GameData module(s)");
+        if (files > 0) parts.Add($"{files:n0} override file(s)");
+        if (withStrings > 0) parts.Add($"the string overrides of {withStrings} layer(s)");
+        if (unreadable is not null) parts.Add($"a stored GameData document that could not be read ({unreadable})");
+        _log.Warn("Build", "Build Package writes WAD files only. This project came from an LTK-layered .fantome, and the build output does not carry "
+            + string.Join(", ", parts) + ". Project > Export .fantome and Send to LTK Manager write them.");
     }
 
     /// <summary>M814: what a project build produced - the wads, each with the layer it ships in and the paths
@@ -17061,6 +17200,43 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// LTK Manager applies to the same value.</summary>
     private static string BaseIfBlank(string layer) =>
         string.IsNullOrWhiteSpace(layer) ? ReyEngine.Core.Projects.ProjectLayer.BaseLayer : layer;
+
+    /// <summary>
+    /// M816 review: stops a build, an export or a send whose project has two folders that would ship as one WAD of one layer, when a
+    /// layer claims one of them whole (<see cref="ReyProject.WholeClaimCollisions"/>). A send would merge the trees; an export would store two
+    /// files under one name. Project Settings can move both into one layer, which is how a project gets here.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The folders, the WAD and the layer, and where to move one.</exception>
+    private void RefuseWholeClaimCollisions()
+    {
+        if (Project.WholeClaimCollisions() is not { Count: > 0 } clashes) return;
+        var (layer, wad, folders) = clashes[0];
+        throw new InvalidOperationException(
+            $"The folders {string.Join(" and ", folders.Select(f => $"'{f}'"))} would both ship as {wad} in layer '{layer}'" +
+            (clashes.Count > 1 ? $" (and {clashes.Count - 1} more WAD(s) the same way)" : "") +
+            ". A WAD has one folder in a layer: move one of them to another layer in Project > Project Settings.");
+    }
+
+    /// <summary>
+    /// M816 review: where a WAD a layer claims whole is built. It is written under the name of the WAD (<see cref="FantomeLayers.WadFileName"/> of
+    /// the folder's leaf), which is what the game patches - and not under the name of the project entry (<c>layers_winter_Map11</c>), which is
+    /// what the staging folder is called. A WAD of a layer other than base goes in a folder of its own, <c>Build/&lt;layer&gt;/</c>, because the same
+    /// WAD can be in several layers and the files cannot share a name in one folder.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The layer's name cannot be a folder (<see cref="FantomeLayers.LayerDirectory"/>), or is the
+    /// folder the build stages in.</exception>
+    private static string WholeClaimOutput(string buildRoot, string layer, string leaf)
+    {
+        string file = FantomeLayers.WadFileName(leaf);
+        if (FantomeLayers.IsBase(layer)) return Path.Combine(buildRoot, file);
+        string dir = FantomeLayers.LayerDirectory(buildRoot, layer);
+        if (string.Equals(dir, Path.GetFullPath(Path.Combine(buildRoot, StagingFolder)), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"A layer called '{layer}' cannot have a build folder: Build/{StagingFolder} is where the build stages its files. Rename the layer in Project > Project Settings.");
+        return Path.Combine(dir, file);
+    }
+
+    /// <summary>The folder of the build output the build stages in, and empties at the start of every build.</summary>
+    private const string StagingFolder = "staged";
 
     /// <summary>M131: build the project into <paramref name="buildRoot"/>. Returns the wads this
     /// build produced — callers must bundle exactly these, never "whatever sits in the folder".
@@ -17073,6 +17249,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private ProjectBuild BuildProjectCore(string buildRoot, IProgress<(double Frac, string Stage)>? progress = null,
         bool declareBins = false)
     {
+        RefuseWholeClaimCollisions();   // M816 review: before anything is staged
         var overridesByHash = _overrides.All.ToDictionary(o => o.PathHash, o => o.OverrideFile);
         int wads = 0, staged = 0, files = 0, skipped = 0;
         var produced = new List<string>();
@@ -17080,7 +17257,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M131: a fresh build starts from a CLEAN slate — leftover staging from earlier builds kept
         // files the project has since deleted or renamed, and they leaked into every later package.
-        var stagingRoot = Path.Combine(buildRoot, "staged");
+        var stagingRoot = Path.Combine(buildRoot, StagingFolder);
         progress?.Report((0.02, "Cleaning old staging…"));
         if (Directory.Exists(stagingRoot))
         {
@@ -17109,13 +17286,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
 
         // Project folders: stage (copy tree + apply overrides as files — new files are safe in folder format).
-        var stagedFolders = new List<(string name, string dir, string layer, string leaf)>();
+        var stagedFolders = new List<(string name, string dir, string layer, string leaf, bool wholeClaim)>();
         int folderIdx = 0;
         foreach (var f in Project.ProjectFolders)
         {
             var srcFolder = Project.ResolveProjectPath(f);
             var name = f == "." ? Project.Name : f.Replace('/', '_');
             var outFolder = Path.Combine(stagingRoot, name);
+            // M816 review: the staging folder is written to and later emptied; an entry with a backslash path in it (project.json is a
+            // file a person can edit, and a name from elsewhere ends up in it) must not stage outside it
+            if (!FantomeLayers.IsStrictlyBelow(outFolder, stagingRoot))
+                throw new InvalidOperationException($"The project folder '{f}' would be staged outside the build's staging folder ({stagingRoot}). Remove or rename it in project.json.");
             folderIdx++;
             int idx = folderIdx;
             files += CopyTree(srcFolder, outFolder, buildRoot,
@@ -17125,9 +17306,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // directory that did not exist (DirectoryNotFoundException out of Build Package and Export). Staging it always makes
             // an empty folder the same case as one whose bins were all declared: it packs no WAD.
             Directory.CreateDirectory(outFolder);
-            // M814: the layer and WAD-folder name Send to LTK Manager uses for this folder - the leaf of its resolved path
+            // M814: the layer and WAD-folder name Send to LTK Manager uses for this folder - the leaf of its resolved path.
+            // M816: a layer may claim the whole entry (an imported layer's WAD, layers/<layer>/<Wad>), which is how one WAD name rides
+            // two layers; every other folder is answered by its leaf exactly as before
             string leaf = Path.GetFileName(srcFolder.TrimEnd('/', '\\'));
-            stagedFolders.Add((name, outFolder, BaseIfBlank(Project.LayerOf(leaf)), leaf));
+            stagedFolders.Add((name, outFolder, BaseIfBlank(Project.LayerOfFolder(f)), leaf, Project.IsClaimedWhole(f)));
             staged++;
         }
 
@@ -17157,7 +17340,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M768: no built map may carry vertex buffers no mesh uses - LTK Manager's loader refuses the whole
         // mapgeo. The STAGED copy is compacted, so a project file saved before M768 still builds clean.
-        foreach (var (_, dir, _, _) in stagedFolders)
+        foreach (var (_, dir, _, _, _) in stagedFolders)
             foreach (var geoPath in Directory.EnumerateFiles(dir, "*.mapgeo", SearchOption.AllDirectories))
             {
                 try
@@ -17182,7 +17365,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             progress?.Report((0.29, "Comparing game bins with the game's copy…"));
             var candidates = new List<Formats.Meta.DeclarationFile>();
-            foreach (var (_, dir, layer, leaf) in stagedFolders)
+            foreach (var (_, dir, layer, leaf, _) in stagedFolders)
                 foreach (var (_, path) in WadPackService.EnumerateChunkFiles(dir))
                     candidates.Add(new Formats.Meta.DeclarationFile(layer, leaf,
                         Path.GetRelativePath(dir, path).Replace('\\', '/'), path));
@@ -17194,9 +17377,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Pack each staged folder into a distributable .wad.client.
         int packed = 0;
         int packIdx = 0;
-        foreach (var (name, dir, layer, _) in stagedFolders)
+        foreach (var (name, dir, layer, leaf, wholeClaim) in stagedFolders)
         {
-            var outWad = Path.Combine(buildRoot, name + ".wad.client");
+            // M816 review: a WAD a layer claims whole is written under its real name, below the layer's folder; every other
+            // folder is written as it always was
+            var outWad = wholeClaim ? WholeClaimOutput(buildRoot, layer, leaf) : Path.Combine(buildRoot, name + ".wad.client");
             packIdx++;
             int idx = packIdx;
             if (!WadPackService.EnumerateChunkFiles(dir).Any())
@@ -17224,7 +17409,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 packed++;
                 produced.Add(outWad);
-                built.Add(new FantomeWad(outWad, layer, pr.PackedPaths));
+                // M816: the package names the WAD by the leaf of its folder, which is what tells the game which WAD this patches
+                // (the built file has that name too, since the review; the name is kept explicit)
+                built.Add(new FantomeWad(outWad, layer, pr.PackedPaths) { Name = wholeClaim ? FantomeLayers.WadFileName(leaf) : null });
                 _log.Success("Build", $"Packed {name}.wad.client — {pr.Chunks:n0} chunks, {pr.InputBytes / 1048576.0:0.0}→{pr.OutputBytes / 1048576.0:0.0} MB. {pr.Validation}");
             }
             else _log.Error("Build", $"Pack didn't validate for {name} — the staged folder is at {dir}.");
@@ -17238,6 +17425,26 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 try { File.Delete(w); _log.Info("Build", $"Removed stale build output {Path.GetFileName(w)} (not part of this project anymore)."); }
                 catch (Exception ex) { _log.Warn("Build", $"Stale {Path.GetFileName(w)} could not be removed: {ex.Message}"); }
             }
+
+        // M816 review: the same for the folders of the layers whose WADs are written below the build folder (WholeClaimOutput). Only a layer an
+        // import made is swept - one that claims a folder whole or holds imported declarations - so the folder of an older project's layer,
+        // which a build never wrote to, is left alone; a folder this empties is removed.
+        foreach (string layerName in Project.Layers.Where(l => l.Folders.Any(Project.IsClaimedWhole) || l.DeclarationsKey is not null)
+                     .Select(l => l.Name).Where(n => !string.IsNullOrWhiteSpace(n) && !FantomeLayers.IsBase(n)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string layerDir;
+            try { layerDir = FantomeLayers.LayerDirectory(buildRoot, layerName); }
+            catch (InvalidOperationException) { continue; }   // a name that is no folder has no output to sweep
+            if (!Directory.Exists(layerDir) || string.Equals(layerDir, Path.GetFullPath(stagingRoot), StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var w in Directory.GetFiles(layerDir, "*.wad.client"))
+                if (!produced.Contains(w, StringComparer.OrdinalIgnoreCase))
+                {
+                    try { File.Delete(w); _log.Info("Build", $"Removed stale build output {layerName}/{Path.GetFileName(w)} (not part of this project anymore)."); }
+                    catch (Exception ex) { _log.Warn("Build", $"Stale {layerName}/{Path.GetFileName(w)} could not be removed: {ex.Message}"); }
+                }
+            try { if (!Directory.EnumerateFileSystemEntries(layerDir).Any()) Directory.Delete(layerDir); }
+            catch { /* an empty folder left behind is harmless */ }
+        }
 
         progress?.Report((1.0, "Build finished."));
         _log.Info("Build", $"project WADs: {wads} · folders packed: {packed}/{staged} · files: {files:n0} · skipped: {skipped}");

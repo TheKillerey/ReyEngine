@@ -24,6 +24,11 @@ public sealed partial class ProjectLayerRow : ObservableObject
     /// <summary>True for the one row standing for <see cref="ProjectLayer.BaseLayer"/>.</summary>
     public bool IsBase { get; init; }
 
+    /// <summary>M816: the project layer this row was made from, null for a layer added in the dialog. The dialog edits a layer's name,
+    /// priority, description and folders; what an imported .fantome gave it - its display name, string overrides and the key to
+    /// its stored GameData - is not the dialog's to show, and is carried over to the layer it writes back.</summary>
+    public ProjectLayer? Source { get; init; }
+
     public bool IsEditable => !IsBase;
 
     /// <summary>What the combo box shows. Kept in step with <see cref="Name"/> so renaming a layer
@@ -67,8 +72,16 @@ public sealed partial class FolderLayerRow : ObservableObject
         Choices = choices;
     }
 
-    /// <summary>The WAD folder's name, as the exporter derives it - the leaf of the resolved path.</summary>
+    /// <summary>The WAD folder's name, as the exporter derives it - the leaf of the resolved path.
+    /// M816: a folder a layer claims WHOLE (an imported layer's WAD, <c>layers/winter/Map11</c>) is listed, and written back, by its whole entry.</summary>
     public string Folder { get; }
+
+    /// <summary>M816 review: whether <see cref="Folder"/> is a whole entry with a path in it (<see cref="ReyProject.IsClaimedWhole"/>): only those are
+    /// listed with a '/', since a leaf name has none.</summary>
+    public bool IsWholeClaim => Folder.Contains('/');
+
+    /// <summary>The name the WAD goes by: the last part of <see cref="Folder"/>.</summary>
+    public string Leaf => Folder[(Folder.LastIndexOf('/') + 1)..];
 
     /// <summary>Shared with every other row, so adding or renaming a layer is offered here at once.</summary>
     public ObservableCollection<ProjectLayerRow> Choices { get; }
