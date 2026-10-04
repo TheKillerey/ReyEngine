@@ -52,7 +52,7 @@ public sealed class CharacterControlPanelTests
     public void CastingDoesNothingWhileControlModeIsOff()
     {
         var preview = Preview();
-        preview.CastAbility(0);
+        preview.CastAbility(0, new Vector3(500, 0, 0));
         Assert.Null(preview.SelectedAction);
     }
 
@@ -66,7 +66,7 @@ public sealed class CharacterControlPanelTests
 
         foreach (var (slot, letter) in new[] { (0, "Q"), (1, "W"), (2, "E"), (3, "R") })
         {
-            preview.CastAbility(slot);
+            preview.CastAbility(slot, new Vector3(500, 0, 0));
             Assert.NotNull(preview.SelectedAction);
             Assert.StartsWith(letter, preview.SelectedAction!.Label);
         }
@@ -96,7 +96,7 @@ public sealed class CharacterControlPanelTests
             new[] { Clip("Run") }));                 // no Spell clips at all
         preview.ControlMode = true;
 
-        preview.CastAbility(0);
+        preview.CastAbility(0, new Vector3(500, 0, 0));
 
         Assert.Contains("no animation", preview.ControlStatus, StringComparison.OrdinalIgnoreCase);
         preview.StopControl();
@@ -110,7 +110,7 @@ public sealed class CharacterControlPanelTests
         preview.OrderMove(new Vector3(5000, 0, 0));
         var before = preview.CharacterPosition;
 
-        preview.CastAbility(0);
+        preview.CastAbility(0, new Vector3(500, 0, 0));
 
         Assert.StartsWith("Q", preview.ControlStatus);
         Assert.Equal(before, preview.CharacterPosition);

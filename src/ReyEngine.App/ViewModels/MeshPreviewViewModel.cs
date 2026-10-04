@@ -687,6 +687,19 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 CharacterYaw = MathF.Atan2(direction.X, direction.Z);
         }
         _eventBundle = BuildEventBundle(ev);
+        if (_castPlan is not null && LogDx11 is { } logCast)
+            foreach (var item in _eventBundle)
+                foreach (var emitter in item.System.Emitters)
+                {
+                    var frame = Formats.Vfx.VfxEmitterOverride.Frame(emitter) * item.Transform;
+                    logCast("CastFrame", $"{item.System.Name}/{emitter.Name}: "
+                        + $"rootYaw={MathF.Atan2(item.Transform.M31, item.Transform.M33)}; "
+                        + $"emitterRotation={emitter.BirthRotation?.Constant}; "
+                        + $"spawnOffset={emitter.SpawnShape?.EmitOffset.Constant}; "
+                        + $"worldSpawn={System.Numerics.Vector3.Transform(emitter.EmitterPosition.Constant
+                            + (emitter.SpawnShape?.EmitOffset.Constant ?? System.Numerics.Vector3.Zero), frame)}; "
+                        + $"renderedForward={Formats.Vfx.VfxCastFrame.WorldForward(frame)}");
+                }
         LogDx11?.Invoke("Event", $"'{ev.Name}': composite {_eventBundle.Count} item(s), "
             + $"clip {(ev.ClipAnmFile ?? "(none)")}");
 
@@ -756,9 +769,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         float castDelay = ability?.CastSecondsAt(ClipFps()) ?? 0.15f;
 
         // M635: every spell item is AIMED. Caster-side systems and missiles point their local forward at
-        // the target; a target-side system faces back at the caster - its sparks are authored to fly on
-        // along +Z, which is "away from the caster" only when -Z looks back at him. VfxCastFrame holds the
-        // axis convention and the evidence for it.
+        // the target; a target-side system faces back at the caster. VfxCastFrame holds the shared
+        // world-space axis convention, also used by the character controller.
         VfxPlaybackItem? Make(uint hash, System.Numerics.Vector3 at, System.Numerics.Vector3 faceToward,
             System.Numerics.Vector3? travelTo, string? bone = null)
         {
@@ -768,8 +780,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             return BuildItem(def, VfxCastFrame.Toward(at, faceToward, at)) with
             {
                 TravelTo = travelTo,
-                BeamTarget = travelTo is not null && def.Emitters.Any(e => e.Beam is not null && e.IsMeshPrimitive)
-                    ? at : null,
+                BeamTarget = def.Emitters.Any(e => e.Beam is not null)
+                    ? travelTo is not null && def.Emitters.Any(e => e.Beam is not null && e.IsMeshPrimitive)
+                        ? at : faceToward
+                    : null,
                 // M631: the champion's own numbers where it authored them. The fallbacks are the old
                 // constants, kept for the 20 slots that author no motion at all and the ones with no
                 // record to read - a guess is still better than an instant hit.

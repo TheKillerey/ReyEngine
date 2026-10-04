@@ -72,10 +72,16 @@ public sealed class SpellVariantPreviewTests
         }
     }
 
-    [Fact]
-    public void AatroxQVariantsKeepTheirAimWhenFollowingACasterBone()
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(-1, 0)]
+    [InlineData(0, 1)]
+    [InlineData(0, -1)]
+    [InlineData(1, -1)]
+    public void AatroxQVariantsKeepTheirAimWhenFollowingACasterBone(float x, float z)
     {
         if (Read("Aatrox") is not { } skin) return;
+        var direction = Vector3.Normalize(new Vector3(x, 0, z));
         var vm = new MeshPreviewViewModel
         { CharacterPosition = new Vector3(7500, 80, 7500), CharacterYaw = MathF.PI / 2 };
         vm.SetVfx(skin.Systems, skin.Resources);
@@ -87,7 +93,7 @@ public sealed class SpellVariantPreviewTests
         {
             for (int cast = 1; cast <= 3; cast++)
             {
-                vm.CastAbility(0, vm.CharacterPosition + Vector3.UnitX * 250);
+                vm.CastAbility(0, vm.CharacterPosition + direction * 250);
                 Assert.Equal("Q" + cast, vm.SelectedEvent?.Name);
                 var indicator = Assert.Single(vm.Playback!.Items,
                     i => i.System.Name == $"Aatrox_Base_Q_Indicator_0{cast}");
@@ -96,9 +102,17 @@ public sealed class SpellVariantPreviewTests
                 Assert.Equal(vm.CharacterPosition, indicator.WorldPos);
                 var attached = ReyEngine.App.Services.VfxPlaybackSim.AttachmentTransform(
                     indicator, Matrix4x4.CreateRotationY(0.8f), vm.ModelWorld);
-                Assert.True(Vector3.Distance(Vector3.UnitX, VfxCastFrame.WorldForward(attached)) < 0.0001f);
+                Assert.True(Vector3.Distance(direction, VfxCastFrame.WorldForward(attached)) < 0.0001f);
                 Assert.True(Vector3.Distance(Vector3.TransformNormal(Vector3.UnitZ, vm.ModelWorld),
                     VfxCastFrame.WorldForward(attached)) < 0.0001f);
+                // Verify the actual authored spawn, not just a forward vector agreeing with itself.
+                var sim = ReyEngine.App.Services.VfxPlaybackSim.Create(indicator)!;
+                sim.SetWorldTransform(attached);
+                sim.Update(0.1f);
+                var ground = Assert.Single(sim.Emitters, e => e.Def.Name == "GroundLines");
+                Assert.True(ground.InstanceCount > 0);
+                var particle = new Vector3(ground.Instances[0], ground.Instances[1], ground.Instances[2]);
+                Assert.True(Vector3.Dot(particle - vm.CharacterPosition, direction) > 190);
             }
         }
         finally { vm.StopControl(); }

@@ -2084,7 +2084,11 @@ public sealed class ViewportControl : OpenGlControlBase
         foreach (var item in playback.Items)
         {
             if (!Services.VfxPlaybackSim.IsActive(item, _lastCamPos, maxDistanceSq, viewProj)) continue;
-            if (_particleSimCache.TryGetValue(item, out var sim)) wanted.Add(sim);
+            if (_particleSimCache.TryGetValue(item, out var sim))
+            {
+                wanted.Add(sim);
+                if (item.SkipCameraCulling) _warmedParticleSims.Add(sim);
+            }
         }
 
         // M694: a system that just entered the gate is queued and warmed under the frame budget (M595's

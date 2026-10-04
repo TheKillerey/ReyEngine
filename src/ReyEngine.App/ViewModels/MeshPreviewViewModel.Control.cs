@@ -154,7 +154,7 @@ public sealed partial class MeshPreviewViewModel
     private (int Slot, Vector3? Cursor)? _pendingCast;
 
     /// <summary>Q/W/E/R, as 0..3. <paramref name="cursorGround"/> is the ground point under the mouse when
-    /// the key went down - the only aim a player has in game - and null falls back to the dummy. The spell's
+    /// the key went down - the only aim a player has in game. Directional casts require a ground hit. The spell's
     /// authored targeting kind decides what that point means (SpellAim); its cooldown gates the cast; a
     /// plain location cast beyond range walks into range first and fires on arrival.</summary>
     public void CastAbility(int slot, Vector3? cursorGround = null)
@@ -169,7 +169,11 @@ public sealed partial class MeshPreviewViewModel
         // Aatrox's R again serves nothing; the authored cooldown stays readable on the AbilitySlot.
         var ability = _abilities.FirstOrDefault(a => a.Index == slot);
         var dummy = TargetDummyPosition;
-        var cursor = cursorGround ?? dummy ?? CharacterPosition + Forward() * 500f;
+        bool self = ability?.TargetingKind is { } kind
+            && (kind.Equals("Self", StringComparison.OrdinalIgnoreCase) || kind.Equals("SelfAoe", StringComparison.OrdinalIgnoreCase));
+        if (cursorGround is null && !self)
+        { ControlStatus = "Move the cursor onto the arena ground to cast."; return; }
+        var cursor = cursorGround ?? CharacterPosition;
         var plan = SpellAim.Plan(ability, CharacterPosition, cursor, dummy);
 
         // Out of range: walk in, then cast from there. The pending cast re-plans on arrival, so the aim is
@@ -189,6 +193,11 @@ public sealed partial class MeshPreviewViewModel
         CharacterPosition = _controller.Position;
         CharacterYaw = _controller.Facing;
         _castPlan = plan;
+        var castDirection = new Vector3(plan.Aim.X - CharacterPosition.X, 0, plan.Aim.Z - CharacterPosition.Z);
+        if (castDirection.LengthSquared() > 1e-6f) castDirection = Vector3.Normalize(castDirection);
+        LogDx11?.Invoke("CastAim", $"caster={CharacterPosition}; mouse={cursor}; direction={castDirection}; "
+            + $"yaw={MathF.Atan2(castDirection.X, castDirection.Z)}; characterYaw={CharacterYaw}; "
+            + $"characterForward={Vector3.TransformNormal(Vector3.UnitZ, ModelWorld)}");
         ShowRangeRingFor(slot);   // M639: where the range was, for a moment
 
         if (!row.HasClip)

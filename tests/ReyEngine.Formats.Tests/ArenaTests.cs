@@ -139,7 +139,8 @@ public sealed class ArenaTests
         // height field first, the character's plane only when there is no arena.
         Assert.Contains("if (vm.TryArenaGroundHit(origin, dir, out point)) return true;", window);
         Assert.Contains("if (!vm.OrderMoveOnArena(point)) vm.OrderMove(point);", window);
-        Assert.Contains("vm.CastAbility(slot, TryGroundPoint(_hover, vm, out var aim) ? aim : null);", window);
+        Assert.Contains("TryGroundPoint(cursor, vm, out var aim)", window);
+        Assert.Contains("vm.CastAbility(slot, aim);", window);
     }
 
     [Fact]

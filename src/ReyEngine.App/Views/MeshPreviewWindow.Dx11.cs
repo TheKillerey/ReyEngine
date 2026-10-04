@@ -246,6 +246,7 @@ public partial class MeshPreviewWindow
         // length PreviewViewport.HitTestGizmoAxis measures against - so what is DRAWN and what is
         // GRABBABLE are the same geometry by construction, which is the whole reason the map viewport
         // builds it this way too.
+        PreviewViewport.SyncPickMatrices(surface.Width, surface.Height);
         if (vm.DummyGizmoPivot is { } pivot)
         {
             float arm = PreviewViewport.GizmoArmLengthFor(pivot);
@@ -261,8 +262,6 @@ public partial class MeshPreviewWindow
         // rendering. Refreshing them after an early return meant that any frame the renderer declined to
         // produce also froze picking - at Identity/1x1 on the very first one - and the failure was silent
         // in both places at once.
-        PreviewViewport.SyncPickMatrices(surface.Width, surface.Height);
-
         if (!_dx11.Render(PreviewViewport.Camera, w, h))
         {
             // M627: say so. A failed frame used to return in silence while the last good bitmap stayed on

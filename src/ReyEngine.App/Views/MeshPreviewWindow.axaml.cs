@@ -22,6 +22,7 @@ public partial class MeshPreviewWindow : Window
         InitializeComponent();
         PreviewInput.PointerPressed += OnPressed;
         PreviewInput.PointerMoved += OnMoved;
+        PreviewInput.PointerExited += (_, _) => _hover = null;
         PreviewInput.PointerReleased += OnReleased;
         PreviewInput.PointerWheelChanged += OnWheel;
         // M613: ability keys. Tunnelling because a focused list or text box would otherwise eat them.
@@ -49,9 +50,11 @@ public partial class MeshPreviewWindow : Window
         int slot = e.Key switch { Key.Q => 0, Key.W => 1, Key.E => 2, Key.R => 3, _ => -1 };
         if (slot >= 0)
         {
-            // M637: aimed at the ground under the cursor; null when the cursor is off the ground (the sky,
-            // or outside the viewport), in which case the cast falls back to the dummy.
-            vm.CastAbility(slot, TryGroundPoint(_hover, vm, out var aim) ? aim : null);
+            PreviewViewport.SyncPickMatrices(PreviewInput.Bounds.Width, PreviewInput.Bounds.Height);
+            if (_hover is { } cursor && PreviewInput.Bounds.Size.Width > cursor.X && cursor.X >= 0
+                && PreviewInput.Bounds.Size.Height > cursor.Y && cursor.Y >= 0
+                && TryGroundPoint(cursor, vm, out var aim))
+                vm.CastAbility(slot, aim);
             e.Handled = true;
         }
         else if (e.Key == Key.S) { vm.StopMovement(); e.Handled = true; }
@@ -111,6 +114,7 @@ public partial class MeshPreviewWindow : Window
         _lmb = props.IsLeftButtonPressed;
         _mmb = props.IsMiddleButtonPressed;
         _last = e.GetPosition(PreviewInput);
+        _hover = _last;
         e.Pointer.Capture(PreviewInput);
 
         // M613: the right button is the only one control mode claims. Left still orbits, middle still
@@ -135,13 +139,13 @@ public partial class MeshPreviewWindow : Window
 
     /// <summary>M637: where the mouse last was over the viewport, pressed or not - a cast key aims at the
     /// ground under it, the way the game aims every spell at the cursor.</summary>
-    private Avalonia.Point _hover;
+    private Avalonia.Point? _hover;
 
     private void OnMoved(object? sender, PointerEventArgs e)
     {
-        _hover = e.GetPosition(PreviewInput);
+        var p = e.GetPosition(PreviewInput);
+        _hover = p;
         if (!(_lmb || _mmb)) return;
-        var p = _hover;
 
         if (_dummyAxis is { } axis && DataContext is MeshPreviewViewModel vm)
         {

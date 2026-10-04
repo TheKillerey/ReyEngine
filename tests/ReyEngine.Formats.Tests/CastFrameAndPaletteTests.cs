@@ -40,13 +40,11 @@ public sealed class CastFrameAndPaletteTests
     }
 
     [Fact]
-    public void TheLocalForwardIsMinusZAndTheModelsIsPlusZ()
+    public void SystemsAndModelsSharePlusZForward()
     {
-        // The whole point: the two conventions differ by half a turn. A model facing (0,0,1) has yaw 0;
-        // a cast system aimed at (0,0,1) is turned by pi so that its -Z lands there.
-        Assert.Equal(-Vector3.UnitZ, VfxCastFrame.LocalForward);
-        Assert.Equal(MathF.PI, VfxCastFrame.YawToward(Vector3.UnitZ), 5);
-        Assert.Equal(MathF.Atan2(1f, 0f) + MathF.PI, VfxCastFrame.YawToward(Vector3.UnitX), 5);
+        Assert.Equal(Vector3.UnitZ, VfxCastFrame.LocalForward);
+        Assert.Equal(0f, VfxCastFrame.YawToward(Vector3.UnitZ), 5);
+        Assert.Equal(MathF.Atan2(1f, 0f), VfxCastFrame.YawToward(Vector3.UnitX), 5);
     }
 
     [Fact]

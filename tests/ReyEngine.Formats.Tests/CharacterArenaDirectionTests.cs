@@ -7,6 +7,44 @@ namespace ReyEngine.Formats.Tests;
 
 public sealed class CharacterArenaDirectionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShortCastStartsAtAgeZeroWithOrWithoutAmbientMapParticles(bool withAmbient)
+    {
+        const string final = @"C:\Riot Games\League of Legends\Game\DATA\FINAL";
+        if (!Directory.Exists(final)) return;
+        using var cache = ReyEngine.Formats.Shaders.ShaderCacheReader.Open(final, null, out _);
+        Assert.NotNull(cache);
+        using var renderer = new ReyEngine.Rendering.D3D11.ShaderPreviewRenderer();
+        Assert.True(renderer.Initialize(out var error), error);
+        var emitter = new VfxEmitterDefinition("short-cast", VfxCurveF.Const(1), VfxCurveF.Const(0.25f),
+            0.2f, 0, 0, true, false, 3, VfxCurve3.Const(new Vector3(50)), null,
+            VfxCurve4.Const(Vector4.One), null, null, null, null, VfxCurve3.Const(Vector3.Zero),
+            "assets/test/white.dds", Vector2.One, 1, false, false);
+        var system = new VfxSystemDefinition(1, "short-cast", "", new[] { emitter });
+        var cast = new VfxPlaybackItem(system, Matrix4x4.Identity,
+            new ReyEngine.Core.Decoding.TextureImage?[] { new(1, 1, new byte[] { 255, 255, 255, 255 }) });
+        var map = withAmbient ? new VfxPlayback(new[] { cast with
+        {
+            System = system with { PathHash = 2, Emitters = new[] { emitter with
+                { Name = "ambient", EmitterLifetime = null, ParticleLifetime = VfxCurveF.Const(10) } } }
+        } }, true) : null;
+        var playback = VfxPlaybackSim.Combine(map, new VfxPlayback(new[] { cast }));
+        var driver = new D3D11MapParticles(renderer, cache);
+        driver.SetPlayback(playback);
+        var view = Matrix4x4.CreateLookAt(new Vector3(0, 100, 300), Vector3.Zero, Vector3.UnitY);
+        var projection = Matrix4x4.CreatePerspectiveFieldOfView(0.9f, 1, 1, 5000);
+        driver.Tick(0.016f, view, view * projection, new Vector3(0, 100, 300), 300);
+        var sims = (Dictionary<VfxPlaybackItem, ReyEngine.Rendering.Vfx.VfxParticleSimulator>)
+            typeof(D3D11MapParticles).GetField("_sims", System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Instance)!.GetValue(driver)!;
+        var liveCast = Assert.Single(sims.Where(pair => pair.Key.System.PathHash == 1)).Value.Emitters[0];
+        Assert.InRange(liveCast.EmitterAge, 0.015f, 0.017f);
+        Assert.Equal(1, liveCast.InstanceCount);
+        Assert.True(driver.QuadsRequested > 0, driver.BuildReport);
+    }
+
     private static VfxPlaybackItem Item(Matrix4x4 transform) => new(
         new VfxSystemDefinition(1, "direction", "", Array.Empty<VfxEmitterDefinition>()),
         transform, Array.Empty<ReyEngine.Core.Decoding.TextureImage?>());
@@ -35,7 +73,7 @@ public sealed class CharacterArenaDirectionTests
             Assert.True(Vector3.Distance(direction, modelForward) < 0.0001f);
             Assert.True(Vector3.Distance(modelForward, VfxCastFrame.WorldForward(placed)) < 0.0001f);
             Assert.Equal(Vector3.Transform(bone.Translation, preview.ModelWorld), placed.Translation);
-            Assert.True(Vector3.Dot(Vector3.TransformNormal(new Vector3(0, 0, -200), placed), direction) > 199);
+            Assert.True(Vector3.Dot(Vector3.TransformNormal(new Vector3(0, 0, 200), placed), direction) > 199);
             Assert.Equal(caster, preview.CharacterPosition);
         }
         finally { preview.StopControl(); }

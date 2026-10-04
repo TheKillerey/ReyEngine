@@ -1006,7 +1006,12 @@ public sealed class D3D11MapParticles
         foreach (var item in pb.Items)
         {
             if (!VfxPlaybackSim.IsActive(item, mirroredCam, maxDistSq, viewProj)) continue;
-            if (_sims.TryGetValue(item, out var sim)) _wanted.Add(sim);
+            if (_sims.TryGetValue(item, out var sim))
+            {
+                _wanted.Add(sim);
+                // A cast starts now; ambient pre-warm would consume its finite lifetime.
+                if (item.SkipCameraCulling) _warmed.Add(sim);
+            }
         }
 
         // M694: a system that just entered the gate is queued and warmed under the frame budget (M536's

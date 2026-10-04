@@ -127,13 +127,15 @@ public sealed class CastControlTests
     }
 
     [Fact]
-    public void WithNoCursorTheCastFallsBackToTheDummyOrForward()
+    public void WithNoCursorADirectionalCastDoesNotUseTheDummyOrForward()
     {
         var preview = Preview();
         preview.ControlMode = true;
         preview.TargetDummyEnabled = true;                        // the dummy defaults to (350, 0, 0)
         preview.CastAbility(0, null);
-        Assert.Equal(MathF.PI / 2f, (float)preview.CharacterYaw, 3);   // turned toward the dummy
+        Assert.Null(preview.SelectedAction);
+        Assert.Equal(0f, (float)preview.CharacterYaw);
+        Assert.Contains("cursor", preview.ControlStatus);
         preview.StopControl();
     }
 }

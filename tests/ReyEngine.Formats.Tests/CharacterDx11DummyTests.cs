@@ -65,6 +65,8 @@ public sealed class CharacterDx11DummyTests
         Assert.True(sync > 0 && render > 0, "the pick sync or the render call is gone");
         Assert.True(sync < render,
             "SyncPickMatrices must run BEFORE the render, or a failed frame leaves picking stale");
+        int size = text.IndexOf("PreviewViewport.GizmoArmLengthFor(pivot)", StringComparison.Ordinal);
+        Assert.True(sync < size, "Dummy sizing must use this frame's pick matrices, like the map viewport.");
     }
 
     // ===================================================== the dummy itself
