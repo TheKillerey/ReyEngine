@@ -7,6 +7,31 @@ namespace ReyEngine.Formats.Meta;
 /// and where the bytes live.</summary>
 public sealed record DeclarationFile(string Layer, string WadFolder, string RelPath, string AbsPath);
 
+/// <summary>
+/// M823: the two bins a project's copy of a bin is declared between when the imported GameData also targets that bin.
+/// </summary>
+/// <param name="Game">The game's bin with the modules that run in front of the new one applied to it - the bin LTK has when the new module runs.</param>
+/// <param name="Mod">The project's copy with the same modules applied to it: the bin the module has to produce.</param>
+public sealed record DeclarationBaseline(byte[] Game, byte[] Mod);
+
+/// <summary>
+/// M823: tells the planner where a project bin that an imported package's GameData also targets stands in the install order.
+///
+/// <para>A project that holds a whole bin and a GameData module for it has LTK's "mod copy as base" case: the module runs over the project's copy. Declared against the raw game
+/// the copy would be diffed without the modules, and the module that results would run on top of the package's own modules - the package's effects applied twice, or reverted. So the
+/// copy is declared between the game's bin and the copy, BOTH with the modules that run in front of the new one applied: what it states is only what the copy changes beyond what the
+/// package's modules (and the edits kept on top of them) already do.</para>
+/// </summary>
+public interface IDeclarationBaselines
+{
+    /// <summary>The pair for a project bin, or null when the GameData does not target it (it is declared against the game's bin as ever).</summary>
+    /// <param name="file">The project's file: its layer says which modules run in front of its module.</param>
+    /// <param name="chunk">The bin's path hash.</param>
+    /// <param name="game">The game's bin, as the planner reads it.</param>
+    /// <param name="mod">The project's copy.</param>
+    DeclarationBaseline? For(DeclarationFile file, ulong chunk, byte[] game, byte[] mod);
+}
+
 /// <summary>A game bin declared as changes, with the layer and project path it came from.</summary>
 /// <param name="Chunk">The bin's first module. M814: its only one.</param>
 public sealed record DeclaredBin(string Layer, string WadFolder, string RelPath, DeclaredChunk Chunk)
@@ -100,9 +125,10 @@ public static class BinDeclarationPlanner
     /// <param name="mapSkins">M815: the project's recorded map skin switches. Given, a forced map skin's shipping bin and its source
     /// container are declared BY REFERENCE to the game's source slot (<see cref="MapSkinDeclarations"/>); null leaves every bin to the
     /// diff, as M814 had it.</param>
+    /// <param name="baselines">M823: where a bin the imported GameData also targets stands in the install order (<see cref="IDeclarationBaselines"/>). Null declares every bin against the game's, as it was.</param>
     public static DeclarationPlan Plan(
         IEnumerable<DeclarationFile> files, Func<ulong, string, byte[]?> readRiot, IDeclarationNames names,
-        MapSkinDeclarationOptions? mapSkins = null)
+        MapSkinDeclarationOptions? mapSkins = null, IDeclarationBaselines? baselines = null)
     {
         ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(readRiot);
@@ -157,9 +183,12 @@ public static class BinDeclarationPlanner
                 continue;
             }
 
+            // M823: a bin the imported GameData also targets is declared between the game's bin and the project's, both with the modules in front of the new one applied
+            var baseline = baselines?.For(f, hash, riot, mod);
+
             // M815: a forced map skin is declared by reference, then by value for whatever the project holds beyond it
-            var switched = switches?.Declare(f.RelPath, target, riot, mod, names);
-            var chunk = switched?[0] ?? BinDeclarations.Convert(target, riot, mod, names);
+            var switched = switches?.Declare(f.RelPath, target, riot, mod, names, baseline);
+            var chunk = switched?[0] ?? BinDeclarations.Convert(target, baseline?.Game ?? riot, baseline?.Mod ?? mod, names);
             if (chunk.Unchanged)
             {
                 seen[key] = (mod, false, where);

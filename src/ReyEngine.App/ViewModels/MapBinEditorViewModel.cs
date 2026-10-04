@@ -187,9 +187,22 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
     public Action<string>? Info;
     public Action<string>? Warn;
 
+    /// <summary>M823: the bin as it is served for a bin the mod's GameData changes, read after a save - what the editor then shows (the save merged its edits onto it); null for any other bin, which shows what it saved.</summary>
+    public Func<WadAssetEntry, byte[]?>? ReadServedAfterSave;
+
+    /// <summary>M823: why a patch update cannot be made of this bin, or null: a bin the mod's GameData changes has no file of its own to update, and what the update would save is a whole file.</summary>
+    public Func<WadAssetEntry, string?>? WhyCannotUpdateFromPatch;
+
+    /// <summary>
+    /// M823: the bytes <see cref="_doc"/> was parsed from when the bin was opened or last saved - what a save rebases onto the bin as it is served by then (see <c>MainWindowViewModel.SaveGameDataEditAsync</c>): a document opened
+    /// while the mod's GameData was still being applied, or before another editor saved the same bin, does not hold what they put into it.
+    /// </summary>
+    public byte[]? BaseBytes { get; private set; }
+
     public void Load(WadAssetEntry entry, byte[] bytes)
     {
         Entry = entry;
+        BaseBytes = bytes;
         _doc = BinEditorDocument.Parse(bytes, h => Resolve?.Invoke(h));
         _allObjects.Clear();
         foreach (var root in _doc.Roots)
@@ -274,15 +287,25 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
     private async Task Save()
     {
         if (_doc is null || Entry is null || SaveBytes is null) return;
+        var savedEntry = Entry;   // M823: the save can take a while (a preview to wait for), and the window may be showing another bin when it is done
+        var savedDocument = _doc;
         byte[] bytes;
         try { bytes = _doc.Serialize(); }
         catch (Exception ex) { Status = $"Serialize failed: {ex.Message}"; return; }
-        if (await SaveBytes(Entry, bytes))
+        if (await SaveBytes(savedEntry, bytes))
         {
+            if (!ReferenceEquals(Entry, savedEntry) || !ReferenceEquals(_doc, savedDocument))
+            {
+                // the editor was opened on another bin (or the same one again) while it saved: what it shows is that one's, and is left alone - loading this save's bytes into it would show one bin's data under another's name
+                Status = $"Saved {savedEntry.DisplayName} ({bytes.Length:n0} bytes); the editor shows another bin now and was left as it is.";
+                return;
+            }
             // M98e: re-baseline from the saved bytes so every row shows the saved value as its new
             // original (dirty dots clear); keep the user's place in the object list.
+            // M823: for a bin the mod's GameData changes the save merged the edits onto what is served, so that is what is shown - and the base the next save rebases from
             uint keep = SelectedObject?.Root.NameHash ?? 0;
-            Load(Entry, bytes);
+            bytes = ReadServedAfterSave?.Invoke(savedEntry) ?? bytes;
+            Load(savedEntry, bytes);
             if (keep != 0 && _allObjects.FirstOrDefault(o => o.Root.NameHash == keep) is { } again)
                 SelectedObject = again;
             IsDirty = false;
@@ -296,6 +319,12 @@ public sealed partial class MapBinEditorViewModel : ObservableObject
     private async Task UpdateFromOldPatch()
     {
         if (_doc is null || Entry is null || PickOldOriginal is null) return;
+        if (WhyCannotUpdateFromPatch?.Invoke(Entry) is { } why)
+        {
+            Status = $"Patch update: {why}.";
+            Warn?.Invoke($"{Entry.DisplayName}: {Status}");
+            return;
+        }
         var oldPath = await PickOldOriginal();
         if (oldPath is null) return;
         try

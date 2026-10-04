@@ -140,7 +140,7 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
     /// <para>It never throws at a poster. A continuation that comes after the context is disposed - the test has ended - has nothing left to do and is dropped, as a dispatcher that has stopped drops what is posted to it:
     /// a throw here would be on a pool thread, where it ends the whole test run. A callback that throws is recorded (<see cref="Faults"/>) and the thread goes on.</para>
     /// </summary>
-    private sealed class UiLikeContext : SynchronizationContext, IDisposable
+    internal sealed class UiLikeContext : SynchronizationContext, IDisposable
     {
         private readonly object _gate = new();
         private readonly Queue<(SendOrPostCallback Callback, object? State)> _queue = new();
@@ -570,7 +570,7 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
     // ================================================================================================ read-only until editing GameData targets is supported
 
     [Fact]
-    public async Task Every_write_path_refuses_a_chunk_the_GameData_changes_with_one_message_and_writes_nothing()
+    public async Task Every_write_path_that_writes_a_FILE_refuses_a_chunk_the_GameData_changes_with_one_message_and_writes_nothing()
     {
         var project = LayeredProject(Game("g-guard"));
         var vm = await Open(project);
@@ -579,24 +579,25 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         var modCopy = EntryOf(vm, M);                                           // a bin the mod ships, and the GameData names
         var plain = EntryOf(vm, P);                                             // a bin the mod ships and nothing names
         Assert.Equal(AssetSourceKind.LtkGameData, target.SourceKind);
-        Assert.True(target.ReadOnly);
+        Assert.False(target.ReadOnly);                                          // M823: an edit is kept as a declaration on top of the GameData, so the editors treat the bin as editable
         Assert.Equal(AssetSourceKind.LtkGameData, modCopy.SourceKind);
         string mFile = Path.Combine(project.RootPath!, "Map11", "data", "t", "m.bin");
         string mBefore = Convert.ToHexString(File.ReadAllBytes(mFile));
         string overrides = Path.Combine(project.RootPath!, ".reyengine", "overrides");
         string message = $"is {MainWindowViewModel.GameDataEditRefusal}";
 
-        // the guard every editor starts a save with
+        // the guard of a flow that writes WHOLE FILES stays strict (M823 changed only the editors whose save is kept as a declaration: GuardBinEdit)
         Assert.False((bool)Call(vm, "GuardEditable", target)!);
         Assert.False((bool)Call(vm, "GuardEditable", modCopy)!);
         Assert.True((bool)Call(vm, "GuardEditable", plain)!);                 // a bin nothing names is edited as ever
         Assert.Contains(Lines(log, "GameData"), l => l.Level == LogLevel.Warning && l.Message.Contains(message));
-        // the one choke point every editor, repair, import and patch update saves a bin through
-        Assert.False(await (Task<bool>)Call(vm, "SaveMapBinBytesAsync", target, Bin(Obj("Test/Obj/A", new[] { "x" })))!);
-        Assert.False(await (Task<bool>)Call(vm, "SaveMapBinBytesAsync", modCopy, Bin(Obj("Test/Obj/M", new[] { "overlaid saved back" })))!);
-        // the low paths refuse by throwing, so a caller that forgot to guard cannot write
+        // M823: the editors let such a bin through, because what they save is not a file
+        Assert.True((bool)Call(vm, "GuardBinEdit", target)!);
+        Assert.True((bool)Call(vm, "GuardBinEdit", modCopy)!);
+        Assert.True((bool)Call(vm, "GuardBinEdit", plain)!);
+        // the low paths refuse a write that is no bin, by throwing, so a caller that forgot to guard cannot write
         var ex = Assert.Throws<InvalidOperationException>(() => Call(vm, "TryWriteToProjectFile", modCopy, new byte[] { 1 }, ""));
-        Assert.Contains(message, ex.Message);
+        Assert.Contains("cannot be saved on top of the mod's GameData", ex.Message);
         Assert.Throws<InvalidOperationException>(() => Call(vm, "TryPlaceInProjectFolder", target, new byte[] { 1 }, ""));
         Assert.Throws<InvalidOperationException>(() => Call(vm, "ThrowIfGameDataTarget", target));
         // the writer the lightmap flows end in (a materials.bin rewritten under the map): it must fail rather than write
@@ -674,7 +675,9 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         // and it does not offer a bin it could not save
         Assert.True((bool)Call(vm, "SkipsGameDataBin", EntryOf(vm, M))!);
         Assert.False((bool)Call(vm, "SkipsGameDataBin", EntryOf(vm, P))!);
-        Assert.Contains(Lines(log, "PatchUpdate"), l => l.Message.Contains("not rebased onto the new patch"));
+        Assert.Contains(Lines(log, "PatchUpdate"), l => l.Message.Contains("the project's own copy of it is the base the GameData's declarations are applied over"));   // M823: M is the mod's own copy, which is a file
+        Assert.True((bool)Call(vm, "SkipsGameDataBin", EntryOf(vm, A))!);
+        Assert.Contains(Lines(log, "PatchUpdate"), l => l.Message.Contains("the project holds no file of it to rebase"));            // and A lives only in the game
     }
 
     [Fact]
@@ -768,12 +771,12 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         Assert.Equal(Hash(A), a.Entry!.PathHash);
         Assert.Equal("LTK", a.SourceTag);
         Assert.True(a.IsGameData);
-        Assert.True(a.IsReadOnly);
+        Assert.False(a.IsReadOnly);                                              // M823: an edit is kept as a declaration on top of the GameData, so the editors treat the bin as editable
         Assert.Contains("LTK GameData", a.ReadOnlyTip);
         // the project's own copy of M is listed in its folder as what the editor reads for it
         var m = Walk(roots.Where(r => r.Name == "Project")).Single(n => n.Entry?.PathHash == Hash(M));
         Assert.Equal("LTK", m.SourceTag);
-        Assert.True(m.IsReadOnly);
+        Assert.False(m.IsReadOnly);                                              // M823
         Assert.False(m.HasConflict);                                             // the project's copy sits under what is read by design: no conflict between mounts
         // a bin nothing names is what it was
         var p = Walk(roots.Where(r => r.Name == "Project")).First(n => n.Entry?.PathHash == Hash(P));
@@ -794,7 +797,7 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         var view = GameDataDiagnosticsView.Build(Preview(vm)!, bin => (string)Call(vm, "GameDataBinName", bin)!, null);
 
         Assert.StartsWith("LTK GameData - GameData: 2 modules changed 1 bin; ", view.BinName);
-        Assert.Contains("Read-only: editing a changed bin comes with the next update", view.Description);
+        Assert.Contains("A bin you edit is saved as a declaration on top of it", view.Description);   // M823
         Assert.Null(view.RepairAsync);
         var unchanged = Assert.Single(view.Groups, g => g.BinName.StartsWith(A, StringComparison.Ordinal));
         Assert.Contains("not changed", unchanged.BinName);                          // every edit of its module was skipped: the bin is as it was
@@ -1040,6 +1043,26 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task A_placement_whose_bins_the_GameData_changes_is_let_through_when_their_edits_can_be_kept_and_refused_with_the_reason_before_anything_is_staged_when_they_cannot()
+    {
+        var (vm, _) = await DescribedTile("place-edit");
+        Assert.True(Mounts(vm).IsOverlayTarget(Hash(MapMaterials)));
+
+        // the preview works: the placement ends in the map's materials.bin, saved through the editors' choke point as a declaration on top of the GameData, so nothing is held against it
+        Assert.Null(await (Task<string?>)Call(vm, "PlacementEditRefusalAsync", EntryOf(vm, MapGeo))!);
+        // what writes whole files is still told the file reason
+        Assert.Contains($"is {MainWindowViewModel.GameDataEditRefusal}", (string?)Call(vm, "PlacementWriteRefusal", EntryOf(vm, MapGeo)));
+
+        // the preview gone (as when it failed): no declaration can be kept, and the placement is refused with that reason, before a file is staged
+        SetField(vm, "_gameData", null);
+        string? refusal = await (Task<string?>)Call(vm, "PlacementEditRefusalAsync", EntryOf(vm, MapGeo))!;
+        Assert.NotNull(refusal);
+        Assert.Contains("cannot be saved on top of the mod's GameData", refusal);
+        Assert.Contains("Nothing was written.", refusal);
+        Assert.False(Directory.Exists(Path.Combine(vm.Project.RootPath!, ".reyengine", "backups")));
+    }
+
+    [Fact]
     public async Task The_flows_that_end_by_writing_the_maps_materials_bin_say_no_before_they_stage_a_thing()
     {
         var (vm, _) = await DescribedTile("preflight");
@@ -1056,11 +1079,8 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains(message, StringComparison.Ordinal));
         Assert.DoesNotContain(Lines(log, "AddMesh"), l => l.Message.StartsWith("Materials bin:", StringComparison.Ordinal));   // it never got as far as reading the bin to change it
 
-        // the Workshop imports: the textures and assets they bring are staged before the bin is written
-        var material = await Assert.ThrowsAsync<InvalidOperationException>(() => (Task<string>)Call(vm, "ImportWorkshopMaterialAsync", null, "NewMat")!);
-        Assert.Contains(message, material.Message);
-        var particle = await Assert.ThrowsAsync<InvalidOperationException>(() => (Task<string>)Call(vm, "ImportWorkshopParticleAsync", null, "NewFx")!);
-        Assert.Contains(message, particle.Message);
+        // the Workshop imports (M823): the textures and assets they bring are staged before the bin is saved, so they ask whether the bin's edit can be kept as a declaration - and prove it - before staging
+        // anything (LtkEditFlowTests); what is left to refuse here is a flow that writes whole files
         Assert.False(Directory.Exists(Path.Combine(vm.Project.RootPath!, ".reyengine", "overrides")) && Directory.EnumerateFiles(Path.Combine(vm.Project.RootPath!, ".reyengine", "overrides")).Any());
     }
 
@@ -1494,7 +1514,7 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         var project = WithQ(game);
         var vm = await Open(project);                                            // Ready once: it names A and M
         var log = CaptureLog(vm);
-        SetField(vm, "GameDataWriteWait", TimeSpan.FromSeconds(3));              // a save that did not get its answer at once would wait this long, and then fail the test
+        SetField(vm, "GameDataWriteWait", TimeSpan.FromSeconds(1));              // a save that did not get its answer at once would wait this long, and then fail the test (a target's waits it out)
 
         Assert.True(await Save(vm, EntryOf(vm, P), Bin(Obj("Test/Obj/P", new[] { "first save" }))));      // the editor saves a bin...
         var gated = Gated(new InstalledGame(game, _temp.Combine("cache-own-saves", "i.idx")));
@@ -1508,13 +1528,14 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         string qFile = Path.Combine(project.RootPath!, "Map11", "data", "t", "q.bin");
         Assert.Equal(QBytes("second save"), File.ReadAllBytes(qFile));
 
-        // a target stays refused, with its own words and not the pending ones
+        // a target is known at once too, so it is not written as a file; its edit (M823) is the difference from the bin the preview makes, which the new preview has not made yet: it waits, and is refused as pending when the preview does not come
         string mFile = Path.Combine(project.RootPath!, "Map11", "data", "t", "m.bin");
         byte[] mBefore = File.ReadAllBytes(mFile);
         Assert.False(await Save(vm, EntryOf(vm, M), Bin(Obj("Test/Obj/M", new[] { "held from before" }))));
         Assert.Equal(mBefore, File.ReadAllBytes(mFile));
-        Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains($"is {MainWindowViewModel.GameDataEditRefusal}", StringComparison.Ordinal));
-        Assert.DoesNotContain(Lines(log, "GameData"), l => l.Message.Contains(MainWindowViewModel.GameDataPendingRefusal, StringComparison.Ordinal));
+        Assert.False(File.Exists(LtkEditStore.PathOf(project.RootPath!, "base")));
+        Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains("cannot be saved on top of the mod's GameData", StringComparison.Ordinal)
+                                                     && l.Message.Contains(MainWindowViewModel.GameDataPendingRefusal, StringComparison.Ordinal));
 
         gated.Gate.Set();
         await Applied(vm);
@@ -1551,13 +1572,13 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
 
         gated.Gate.Set();
         Assert.True(await saveQ.WaitAsync(TimeSpan.FromSeconds(60)));            // no module names q.bin
-        Assert.False(await saveM.WaitAsync(TimeSpan.FromSeconds(60)));           // and one does name m.bin
+        Assert.True(await saveM.WaitAsync(TimeSpan.FromSeconds(60)));            // and one does name m.bin: M823 - it is kept as a declaration on top of the GameData, now that the preview can say what the bin is
         await editorSave.WaitAsync(TimeSpan.FromSeconds(60));
         Assert.Contains(Lines(log, "Bin"), l => l.Message.StartsWith("Saved edited plain.bin", StringComparison.Ordinal));
         await Applied(vm);
         Assert.Equal(QBytes("saved"), File.ReadAllBytes(qFile));
-        Assert.Equal(mBefore, File.ReadAllBytes(mFile));
-        Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains($"is {MainWindowViewModel.GameDataEditRefusal}", StringComparison.Ordinal));
+        Assert.Equal(mBefore, File.ReadAllBytes(mFile));                          // the project's own copy is the base the declarations apply to: it is not written
+        Assert.True(File.Exists(LtkEditStore.PathOf(project.RootPath!, "base")));   // the edit is
         Assert.DoesNotContain(Lines(log, "GameData"), l => l.Message.Contains(MainWindowViewModel.GameDataPendingRefusal, StringComparison.Ordinal));
     }
 
@@ -1710,9 +1731,16 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
     [Fact]
     public async Task The_auto_save_does_not_say_it_saved_what_the_GameData_refused()
     {
-        var vm = await Open(WithQ(Game("g-autosave")));
+        string game = Game("g-autosave");
+        var vm = await Open(WithQ(game));                                        // Ready once: it names A and M
         var log = CaptureLog(vm);
         vm.Settings.AutoSaveEdits = true;                                        // in this instance only: nothing here calls Save
+        // M823: an edit of a target is kept as a declaration, which needs the preview; the next one is held at the game's table, so the save waits for it and is refused as pending
+        var gated = Gated(new InstalledGame(game, _temp.Combine("c-autosave-2", "i.idx")));
+        SetField(vm, "GameDataWriteWait", TimeSpan.FromMilliseconds(200));
+        SetField(vm, "GameDataGameFactory", new Func<string, IGameDataGame>(_ => gated));
+        Call(vm, "BuildMounts");
+        Assert.True(Preview(vm)!.IsPending);
         void Hold(WadAssetEntry entry)
         {
             typeof(MaterialEditorViewModel).GetProperty("BinEntry")!.SetValue(vm.MaterialEditor, entry);   // as Load leaves it, without a document: the save asks the guard first
@@ -1729,11 +1757,13 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         var refused = await Tick(0);
         Assert.DoesNotContain(refused, l => l.Message.StartsWith("Saved pending edits", StringComparison.Ordinal));
         Assert.Contains(refused, l => l.Level == LogLevel.Warning && l.Message.Contains("were not saved", StringComparison.Ordinal));
-        Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains($"is {MainWindowViewModel.GameDataEditRefusal}", StringComparison.Ordinal));
+        Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains("cannot be saved on top of the mod's GameData", StringComparison.Ordinal));
 
         Hold(EntryOf(vm, P));                                                    // and one on a bin nothing names: the tick says what it always said
         var accepted = await Tick(refused.Count);
         Assert.Contains(accepted, l => l.Message.StartsWith("Saved pending edits", StringComparison.Ordinal));
+        gated.Gate.Set();
+        await Applied(vm);
     }
 
     [Fact]
@@ -2038,6 +2068,7 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         var project = Import("degraded", Layers(Doc(Entries("\"Test/Obj/A\":{\"+tags\":[\"e\"]}"))), game, Table(A));
         var vm = await Open(project);                                            // a whole preview: it binds the entry to a.bin
         var log = CaptureLog(vm);
+        SetField(vm, "GameDataWriteWait", TimeSpan.FromMilliseconds(200));       // M823: a save of a target waits for the preview that is still working; here it is held, so the wait ends in a refusal
         Assert.True(Mounts(vm).IsOverlayTarget(Hash(A)));
 
         // the next preview is made over a game that cannot be read (as with an index left unsettled, or a table or object index that failed): it binds nothing, and names nothing
@@ -2060,8 +2091,10 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         var entryA = new WadAssetEntry { PathHash = Hash(A), Path = A, IsResolved = true, Type = AssetType.Bin };
         Assert.False(await Save(vm, entryA, Bin(Obj("Test/Obj/A", new[] { "edited" }))));
         Assert.False(OverridesWritten(project));                                 // nothing was written for a target the degraded preview forgot
-        Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains($"is {MainWindowViewModel.GameDataEditRefusal}", StringComparison.Ordinal));
-        Assert.DoesNotContain(Lines(log, "GameData"), l => l.Message.Contains(MainWindowViewModel.GameDataPendingRefusal, StringComparison.Ordinal));
+        Assert.False(File.Exists(LtkEditStore.PathOf(project.RootPath!, "base")));   // M823: and no declaration was kept either: the bin an edit is the difference from is made by a preview that has not finished
+        // M823: it is a target from the first moment (the refusal says what it is, and why not now), not a bin the guard cannot yet name
+        Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains("cannot be saved on top of the mod's GameData", StringComparison.Ordinal)
+                                                     && l.Message.Contains(MainWindowViewModel.GameDataPendingRefusal, StringComparison.Ordinal));
 
         gated.Gate.Set();
         await Applied(vm);

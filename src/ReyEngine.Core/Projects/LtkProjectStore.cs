@@ -38,13 +38,15 @@ public sealed record ImportedOverrideFile(string Path, string FullPath, long Len
 /// </summary>
 public sealed class ImportedLayerData
 {
-    internal ImportedLayerData(string layer, string key, string directory, GameDataDocumentText document, IReadOnlyList<ImportedOverrideFile> files)
+    internal ImportedLayerData(string layer, string key, string directory, GameDataDocumentText document, IReadOnlyList<ImportedOverrideFile> files,
+        IReadOnlyList<GameDataModuleText>? edits = null)
     {
         Layer = layer;
         Key = key;
         Directory = directory;
         Document = document;
         Files = files;
+        Edits = edits ?? Array.Empty<GameDataModuleText>();
     }
 
     /// <summary>The project layer these declarations belong to - its CURRENT name.</summary>
@@ -66,6 +68,16 @@ public sealed class ImportedLayerData
 
     /// <summary>The modules in execution order (see <see cref="GameDataDocumentText.Modules"/>).</summary>
     public IReadOnlyList<GameDataModuleText> Modules => Document.Modules;
+
+    /// <summary>
+    /// M823: the modules ReyEngine keeps on top of this layer's imported ones (<see cref="LtkEditStore"/>) - one per bin the person edited - in the order they
+    /// are applied, which is after every imported module of the layer. <see cref="Modules"/> is the package's alone and stays so: an export writes the imported
+    /// document as it came, then these, then the declarations the planner makes of the project's own bins.
+    /// </summary>
+    public IReadOnlyList<GameDataModuleText> Edits { get; }
+
+    /// <summary>M823: the first free place in the layer's numbering - the <c>origin.module</c> of the first module added after the imported and edit modules.</summary>
+    public int OwnStart => Modules.Count + Edits.Count;
 
     /// <summary>The override files the layer carries, sorted by path. A document's <c>overrides</c> name them by
     /// <see cref="ImportedOverrideFile.Path"/>.</summary>
@@ -312,7 +324,9 @@ public static class LtkProjectStore
     /// The layers that imported declarations, in the order a loader applies them: the base layer first, then by priority and
     /// name as a person reads it. A layer whose <see cref="ProjectLayer.DeclarationsKey"/> names a missing document is left out.
     /// </summary>
-    public static IReadOnlyList<ImportedLayerData> ReadLayers(ReyProject project)
+    /// <param name="includeEdits">M823: whether the edits kept on top of each layer (<see cref="LtkEditStore"/>) are read too. An export reads them (a damaged file must not be left out of a package behind
+    /// the person's back); the preview does not need to: it reads them itself, and a file it cannot use refuses the EDITS and leaves the package's own modules to preview.</param>
+    public static IReadOnlyList<ImportedLayerData> ReadLayers(ReyProject project, bool includeEdits = true)
     {
         ArgumentNullException.ThrowIfNull(project);
         var found = new List<ImportedLayerData>();
@@ -320,7 +334,7 @@ public static class LtkProjectStore
                      .OrderBy(l => FantomeLayers.IsBase(l.Name) ? 0 : 1)
                      .ThenBy(l => l.Priority)
                      .ThenBy(l => l.Name, Comparer<string>.Create(FantomeLayers.NaturalCompare)))
-            if (ReadLayer(project, layer) is { } data) found.Add(data);
+            if (ReadLayer(project, layer, includeEdits) is { } data) found.Add(data);
         return found;
     }
 
@@ -338,6 +352,20 @@ public static class LtkProjectStore
         if (project.RootPath is null || !IsSafeKey(layer.DeclarationsKey)) return null;
         string document = System.IO.Path.Combine(DirectoryOf(project.RootPath, layer.DeclarationsKey!), DeclarationsFileName);
         return System.IO.File.Exists(document) ? Utf8.GetString(System.IO.File.ReadAllBytes(document)) : null;
+    }
+
+    /// <summary>
+    /// M823: the text of the edits kept on top of a layer's GameData (<see cref="LtkEditStore"/>), untouched and unparsed; null when the layer keeps none. The edits are a GameData document in the same shape as
+    /// <see cref="ReadDeclarationsText"/>, for a reader that wants to see what they name (Cleanup Project counts the assets they point at as used).
+    /// </summary>
+    /// <exception cref="IOException">The file could not be read, or holds more than <see cref="LtkEditStore.MaxFileBytes"/>.</exception>
+    public static string? ReadEditsText(ReyProject project, ProjectLayer layer)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(layer);
+        if (project.RootPath is null || !IsSafeKey(layer.DeclarationsKey)) return null;
+        string file = LtkEditStore.PathOf(project.RootPath, layer.DeclarationsKey!);
+        return System.IO.File.Exists(file) ? LtkEditStore.ReadFileText(file) : null;
     }
 
     /// <summary>
@@ -365,10 +393,10 @@ public static class LtkProjectStore
     {
         ArgumentNullException.ThrowIfNull(project);
         var layer = project.Layers.FirstOrDefault(l => string.Equals(l.Name, layerName, StringComparison.OrdinalIgnoreCase));
-        return layer is null ? null : ReadLayer(project, layer);
+        return layer is null ? null : ReadLayer(project, layer, includeEdits: true);
     }
 
-    private static ImportedLayerData? ReadLayer(ReyProject project, ProjectLayer layer)
+    private static ImportedLayerData? ReadLayer(ReyProject project, ProjectLayer layer, bool includeEdits)
     {
         if (project.RootPath is null || string.IsNullOrWhiteSpace(layer.DeclarationsKey)) return null;
         if (!IsSafeKey(layer.DeclarationsKey)) return null;   // project.json is a file a person can edit: a key that is no folder name of ours names nothing
@@ -393,7 +421,8 @@ public static class LtkProjectStore
                     System.IO.Path.GetRelativePath(filesDir, file).Replace('\\', '/'), file, new FileInfo(file).Length));
         files.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
 
-        return new ImportedLayerData(layer.Name, layer.DeclarationsKey, dir, text, files);
+        // M823: and the edits kept on top of it, which are the person's own file (a damaged one is said, by its name, and not dropped)
+        return new ImportedLayerData(layer.Name, layer.DeclarationsKey, dir, text, files, includeEdits ? LtkEditStore.Read(project.RootPath, layer) : null);
     }
 
     /// <summary>The layer-relative paths of the override files stored for a layer key, with '/' separators.</summary>

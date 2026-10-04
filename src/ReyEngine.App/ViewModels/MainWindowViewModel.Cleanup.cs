@@ -112,6 +112,8 @@ public sealed partial class MainWindowViewModel
             try
             {
                 if (LtkProjectStore.ReadDeclarationsText(Project, layer) is { } declarations) index.AddGameData(declarations);
+                // M823: and the edits made on top of them point at assets as well (a texture a material parameter was set to): they are the project's own declarations, in the same shape
+                if (LtkProjectStore.ReadEditsText(Project, layer) is { } edits) index.AddGameData(edits);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

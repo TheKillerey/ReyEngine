@@ -71,9 +71,24 @@ public sealed record FantomeLayer(string Name, int Priority, string? DisplayName
     /// <summary>M816: the files this layer's declarations name, stored below <c>META/game_data/&lt;layer&gt;/</c>.</summary>
     public IReadOnlyList<FantomeOverrideFile> OverrideFiles { get; init; } = Array.Empty<FantomeOverrideFile>();
 
-    /// <summary>The own modules <see cref="GameData"/> holds, as nodes (an object with no <c>modules</c> list has none).</summary>
-    internal IReadOnlyList<JsonNode> OwnModules =>
-        GameData is JsonObject o && o["modules"] is JsonArray list ? list.OfType<JsonNode>().ToList() : Array.Empty<JsonNode>();
+    /// <summary>
+    /// M823: the modules ReyEngine keeps on top of this layer's imported ones - the edits a person made to bins the imported GameData targets, one literal
+    /// module per bin (<see cref="Projects.LtkEditStore"/>) - already numbered for their place in the document (<see cref="GameDataDocumentText.ModuleNode"/>).
+    /// They are written right after the imported modules, so at install they run after every imported module that touches their bin, and before the
+    /// declarations the planner makes of the project's own bins (<see cref="GameData"/>), whose numbering continues from them.
+    /// </summary>
+    public IReadOnlyList<JsonNode> EditModules { get; init; } = Array.Empty<JsonNode>();
+
+    /// <summary>The own modules, as nodes, in the order they are written behind the imported ones: the edits (<see cref="EditModules"/>), then the planner's
+    /// (<see cref="GameData"/>; an object with no <c>modules</c> list has none).</summary>
+    internal IReadOnlyList<JsonNode> OwnModules
+    {
+        get
+        {
+            var planned = GameData is JsonObject o && o["modules"] is JsonArray list ? list.OfType<JsonNode>().ToList() : new List<JsonNode>();
+            return EditModules.Count == 0 ? planned : EditModules.Concat(planned).ToList();
+        }
+    }
 }
 
 /// <summary>M814: a packed <c>.wad.client</c> and the layer whose WAD directory holds it.</summary>

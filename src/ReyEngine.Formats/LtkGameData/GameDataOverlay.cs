@@ -667,6 +667,31 @@ public sealed class GameDataOverlay
         }
     }
 
+    /// <summary>
+    /// M823: the bytes the modules of <paramref name="chunk"/> run over - the mod's own copy when it ships one (<c>RAW</c> over every layer, then the highest-priority active layer's), else the game's from
+    /// the chunk's first holder - which is the base <see cref="Apply"/> starts from, whether or not any module changed it. The bin as LTK finds it before any declaration touches it. Null when there is
+    /// none to read, and <paramref name="problem"/> says why. The array is the caller's.
+    /// </summary>
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    public byte[]? ReadBase(ulong chunk, out GameDataBaseKind kind, out string? problem, CancellationToken cancellationToken = default)
+    {
+        var chosen = ChooseBase(chunk, cancellationToken);
+        kind = chosen.Kind;
+        problem = chosen.Error;
+        if (chosen.Kind == GameDataBaseKind.None) return null;
+        if (chosen.Bytes is { } copy) return (byte[])copy.Clone();
+        try
+        {
+            var bytes = _game.ReadChunk(chosen.Archive, chunk, _options.MaxGameChunkBytes, cancellationToken);
+            if (bytes.Length <= _options.MaxGameChunkBytes) return bytes;
+            problem = $"the chunk is {GameDataOverlayDiagnostics.Count(bytes.Length)} bytes, more than the {GameDataOverlayDiagnostics.Count(_options.MaxGameChunkBytes)} the overlay reads";
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception e) { problem = Unforeseen(e); }
+        kind = GameDataBaseKind.None;
+        return null;
+    }
+
     /// <summary>Keeps <paramref name="result"/> for the next ask of its chunk, if it may be kept and the overlay's budget of bytes kept (<see cref="GameDataOverlayOptions.MaxCachedBytes"/>) has room for it. What
     /// the slot held before is let go either way: it was the result for another base. Called with the slot's gate held.</summary>
     private void Keep(ChunkSlot slot, GameDataChunkResult result)

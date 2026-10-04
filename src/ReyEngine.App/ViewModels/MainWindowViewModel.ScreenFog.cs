@@ -126,7 +126,7 @@ public sealed partial class MainWindowViewModel
         { _log.Warn("Lighting", "No map is open, so there is nowhere to save the screen fog."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
         { _log.Error("Lighting", "No materials.bin was found alongside this mapgeo."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -151,6 +151,8 @@ public sealed partial class MainWindowViewModel
             var back = MapPostFog.Extract(bytes);
             if (back is null || back != fog)
             { _log.Error("Lighting", "The rewritten bin did not read back with the saved screen fog - not saved."); return; }
+            if (RebaseForSave(binEntry, bytes, source, "Lighting") is not { } rebased) return;   // M823: the bin it read may have changed while the work ran: merged onto it, or refused
+            bytes = rebased;
 
             string savedTo;
             if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;

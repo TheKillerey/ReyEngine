@@ -486,21 +486,37 @@ public static class BinDeclarations
     /// refuses it, as it refuses the package this was imported from.</para>
     /// </summary>
     /// <param name="imported">The modules of the stored document, in order. Null or empty is the plain manifest.</param>
-    public static string Manifest(IEnumerable<DeclaredChunk> chunks, IReadOnlyList<GameDataModuleText>? imported)
+    public static string Manifest(IEnumerable<DeclaredChunk> chunks, IReadOnlyList<GameDataModuleText>? imported) => Manifest(chunks, imported, null);
+
+    /// <summary>
+    /// M823: the manifest of a layer that also holds the edits a person made on top of the imported declarations (<see cref="LtkEditStore"/>): one literal
+    /// module per bin the imported GameData targets. They follow the imported modules, as the .fantome writes them, and come before the modules the planner
+    /// makes of the project's own bins. Written like the imported ones - one JSON mapping to a line, without <c>origin</c>.
+    /// </summary>
+    /// <param name="edits">The edit modules of the layer, in order. Null or empty adds nothing, and the manifest is what it was.</param>
+    public static string Manifest(IEnumerable<DeclaredChunk> chunks, IReadOnlyList<GameDataModuleText>? imported, IReadOnlyList<GameDataModuleText>? edits)
     {
         var sb = new StringBuilder();
         sb.Append("# Written by ReyEngine: each module is one bin's changes against the game's copy at the time\n");
         sb.Append("# of sending. LTK Manager applies them over the installed patch's bin at every build.\n");
         if (imported is { Count: > 0 })
             sb.Append("# The first ").Append(imported.Count).Append(" module(s) are declarations imported from a .fantome, kept as its author wrote\n")
-              .Append("# them (one JSON mapping per line); the modules after them are this project's own.\n");
+              .Append(edits is { Count: > 0 }
+                  ? "# them (one JSON mapping per line); then come the edits made on top of them in ReyEngine, and then this project's own.\n"
+                  : "# them (one JSON mapping per line); the modules after them are this project's own.\n");
+        if (edits is { Count: > 0 })
+            sb.Append("# ").Append(imported is { Count: > 0 } ? "The next " : "The first ").Append(edits.Count)
+              .Append(" module(s) are edits made in ReyEngine to bins the declarations change: literal values, one module per bin,\n")
+              .Append("# which run after every imported module that touches their bin.\n");
         var own = chunks.Where(c => c.Module is not null).ToList();
         // a manifest of no modules is `modules: []`: a bare `modules:` is YAML null, which is not a list (review; league-mod's loader reads
         // the null as an empty list - measured - and the explicit list is the one spelling no reader can take for anything else)
-        if ((imported?.Count ?? 0) + own.Count == 0) return sb.Append("version: 1\nmodules: []\n").ToString();
+        if ((imported?.Count ?? 0) + (edits?.Count ?? 0) + own.Count == 0) return sb.Append("version: 1\nmodules: []\n").ToString();
         sb.Append("version: 1\nmodules:\n");
         if (imported is not null)
             foreach (var m in imported) sb.Append("  - ").Append(FlowModule(m.Text)).Append('\n');
+        if (edits is not null)
+            foreach (var m in edits) sb.Append("  - ").Append(FlowModule(m.Text)).Append('\n');
         foreach (var c in own) sb.Append(c.Module);
         return sb.ToString();
     }
@@ -514,7 +530,7 @@ public static class BinDeclarations
         var all = new Dictionary<string, string>(own, StringComparer.OrdinalIgnoreCase);
         foreach (var data in imported)
             if (!all.ContainsKey(data.Layer))
-                all[data.Layer] = Manifest(Array.Empty<DeclaredChunk>(), data.Modules);
+                all[data.Layer] = Manifest(Array.Empty<DeclaredChunk>(), data.Modules, data.Edits);   // M823: and the edits made on top of them
         return all;
     }
 

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -289,6 +290,38 @@ public sealed class GameDataDocumentText
             value = (value << 4) | v;
         }
         return true;
+    }
+
+    /// <summary>
+    /// M823: one module of ReyEngine's own as a node, numbered for the place it takes in a document: its <c>origin.module</c> is
+    /// <paramref name="index"/> (the first free place after the modules in front of it), the rest of the module is kept as it was
+    /// written - number tokens, key order, string escapes. A module with no <c>origin</c> gets the one the document requires
+    /// (<c>manifest: game_data.yaml</c>, no source), because the loader refuses a module without one.
+    /// </summary>
+    /// <exception cref="JsonException">The text is not a JSON object.</exception>
+    public static JsonNode ModuleNode(string moduleText, int index)
+    {
+        ArgumentNullException.ThrowIfNull(moduleText);
+        var node = JsonNode.Parse(moduleText, documentOptions: new JsonDocumentOptions { MaxDepth = MaxDepth }) as JsonObject
+                   ?? throw new JsonException("A module is a JSON object.");
+        if (node["origin"] is JsonObject origin) origin["module"] = index;
+        else node["origin"] = new JsonObject { ["manifest"] = "game_data.yaml", ["source"] = null, ["module"] = index };
+        return node;
+    }
+
+    /// <summary>
+    /// M823: this document with ReyEngine's <paramref name="own"/> modules behind the ones it holds, as one compact text. The
+    /// imported modules go in as their own text, byte for byte (<see cref="WriteTo"/>); what the preview applies, so that the
+    /// edits made on top of an imported package run exactly where an export will put them.
+    /// </summary>
+    public string WithModules(IReadOnlyList<JsonNode> own)
+    {
+        ArgumentNullException.ThrowIfNull(own);
+        if (own.Count == 0) return Text;
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false, MaxDepth = MaxDepth, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+            WriteTo(writer, own);
+        return Utf8.GetString(stream.ToArray());
     }
 
     /// <summary>

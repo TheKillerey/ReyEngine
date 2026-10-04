@@ -43,6 +43,12 @@ public interface IAssetOverlay
     /// once the game's index has been read, so a chunk <see cref="IsTarget"/> answers false for may still turn out to be one. A caller that guards a write must treat a bin as a target until this is true.
     /// </summary>
     bool TargetsKnown => true;
+
+    /// <summary>
+    /// M823: whether what the overlay serves can be edited. True for LTK GameData: an edit of a chunk it changes is not written back as a file (the declarations would apply to their own
+    /// output) but kept as a declaration on top of them, so the editors treat the chunk as editable. False for an overlay whose chunks are read-only, as it was before.
+    /// </summary>
+    bool AllowsEdits => false;
 }
 
 /// <summary>
@@ -66,7 +72,8 @@ public sealed class OverlayMount : IAssetMount
     public string Name => _overlay.Name;
     public string Location => _overlay.Name;
     public AssetSourceKind Kind => AssetSourceKind.LtkGameData;
-    public bool IsEditable => false;
+    /// <summary>M823: what <see cref="IAssetOverlay.AllowsEdits"/> says. The chunk is still no file: nothing here is written to (<see cref="TryGetFilePath"/> is false).</summary>
+    public bool IsEditable => _overlay.AllowsEdits;
 
     /// <summary>The overlay's own fingerprint of the bytes it serves for a chunk, or null when it serves none.</summary>
     public string? IdentityOf(ulong pathHash) => _entries.TryGetValue(pathHash, out var entry) ? entry.Identity : null;

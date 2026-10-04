@@ -1597,6 +1597,14 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     /// </summary>
     public byte[]? BaseBytes { get; private set; }
 
+    /// <summary>M823: the bin it was parsed from now stands for what the document holds - the edits it has kept are part of it. Told after a save that kept the document as it was (<c>MainWindowViewModel.TakeServedAfterSave</c>): its next save is rebased from here, and the edits kept already are not the mod's changes since. A save that had to merge something in does not call this - see <see cref="BaseBytes"/>.</summary>
+    public void RebaseTo(byte[] served) => BaseBytes = served;
+
+    /// <summary>M823: why a save of this editor is refused - the edits of its bin were reverted under it, and what it holds would put them back - or null. Reset by loading the editor again.</summary>
+    public string? StaleReason { get; private set; }
+
+    public void MarkStale(string reason) => StaleReason = reason;
+
     public WadAssetEntry? BinEntry { get; private set; }
     public MaterialSourceKind Kind { get; private set; }
     public ObservableCollection<MaterialBindingViewModel> Materials { get; } = new();
@@ -2129,6 +2137,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public void Load(MaterialDocument doc, WadAssetEntry binEntry, byte[]? sourceBytes = null)
     {
         BaseBytes = sourceBytes;
+        StaleReason = null;
         if (_doc is not null) UndoService?.PurgeContext(_doc); // stale commands must never mutate a replaced doc
         _doc = doc;
         BinEntry = binEntry;

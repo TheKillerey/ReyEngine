@@ -1,4 +1,5 @@
 using System.Text;
+using ReyEngine.Core.Build;
 using ReyEngine.Core.Projects;
 
 namespace ReyEngine.Formats.LtkGameData;
@@ -190,6 +191,26 @@ public sealed class InstalledGame : IGameDataGame
 /// <param name="DocumentProblem">Why a document the layer does declare could not be given (it is too large, or its file could not be read); the layer is then rejected with this as the reason.</param>
 public sealed record GameDataLayerInput(string Name, int Priority, string? DocumentText, IGameDataLayerFiles? Files = null, string? DocumentProblem = null)
 {
+    /// <summary>
+    /// M823: the document the package declared for this layer, when <see cref="DocumentText"/> is not that but that with the edits a person made on top of it
+    /// (<see cref="LtkEditStore"/>) written behind its modules; null when the two are the same. The overlay applies <see cref="DocumentText"/>, which is what
+    /// LTK installs from an export; this is what the bin was before the edits, so that an edit can be taken as the difference between the two (<see cref="ImportedOnly"/>).
+    /// </summary>
+    public string? ImportedDocumentText { get; init; }
+
+    /// <summary>M823: the chunks the edits composed into <see cref="DocumentText"/> are for; null when there are none.</summary>
+    public IReadOnlyList<ulong>? EditedChunks { get; init; }
+
+    /// <summary>
+    /// M823: why the edits kept on top of this layer are NOT part of <see cref="DocumentText"/> although the project keeps some - the file cannot be read, is damaged, is larger than the layer has room for, or would take the
+    /// composed document past the limit. The layer is not refused for it: its own modules still apply, and the edits wait. Null when there is nothing to say.
+    /// </summary>
+    public string? EditsProblem { get; init; }
+
+    /// <summary>M823: this layer as the package declared it, without the edits made on top of it. The layer itself when it holds none.</summary>
+    public GameDataLayerInput ImportedOnly() =>
+        ImportedDocumentText is null ? this : this with { DocumentText = ImportedDocumentText, ImportedDocumentText = null, EditedChunks = null };
+
     /// <summary>The layers of <paramref name="project"/> that declare GameData, and the others, as overlay inputs. A document larger than <paramref name="maxDocumentBytes"/>, one that would take the
     /// documents read so far past <paramref name="maxTotalBytes"/>, or a file that cannot be read is a <see cref="DocumentProblem"/>, which rejects that layer and leaves the rest. The documents are
     /// read in the order the overlay applies the layers in, so it is the layers applied last that the total refuses. The base layer is present whether or not the project lists it.</summary>
@@ -206,7 +227,8 @@ public sealed record GameDataLayerInput(string Name, int Priority, string? Docum
         ordered.Sort((a, b) => GameDataLayerOrder.Compare(a.Name, a.Priority, b.Name, b.Priority));
         foreach (var layer in ordered)
         {
-            string? text = null, problem = null;
+            string? text = null, problem = null, imported = null, editsProblem = null;
+            IReadOnlyList<ulong>? edited = null;
             IGameDataLayerFiles? files = null;
             if (project.RootPath is not null && LtkProjectStore.IsSafeKey(layer.DeclarationsKey))
             {
@@ -224,6 +246,7 @@ public sealed record GameDataLayerInput(string Name, int Priority, string? Docum
                             byte[] bytes = BoundedFile.Read(document, Math.Min(maxDocumentBytes, remaining));
                             remaining -= bytes.Length;
                             text = new UTF8Encoding(false).GetString(bytes);
+                            (text, imported, edited, editsProblem) = WithEdits(project, layer, text, bytes.Length, maxDocumentBytes, ref remaining);   // M823
                         }
                     }
                 }
@@ -232,10 +255,58 @@ public sealed record GameDataLayerInput(string Name, int Priority, string? Docum
                     problem = "the document cannot be read: " + e.Message;
                 }
             }
-            layers.Add(new GameDataLayerInput(layer.Name, layer.Priority, text, files, problem));
+            layers.Add(new GameDataLayerInput(layer.Name, layer.Priority, text, files, problem) { ImportedDocumentText = imported, EditedChunks = edited, EditsProblem = editsProblem });
         }
         if (!layers.Any(l => l.Name == ProjectLayer.BaseLayer)) layers.Add(new GameDataLayerInput(ProjectLayer.BaseLayer, 0, null));
         return layers;
+    }
+
+    /// <summary>
+    /// M823: the layer's document with the edits kept on top of it (<see cref="LtkEditStore"/>) written behind its modules - the document LTK installs from an export, and so the one the preview applies.
+    /// Returns it with the document as the package declared it, the chunks the edits are for, and why the edits were left out when they were. With no edits, or a document that is not JSON (the overlay says so
+    /// itself, and nothing is composed into it), the text as it came and no more.
+    ///
+    /// <para>The edits file is the person's own and is read like the document: with a limit, counted against the documents together (<paramref name="remaining"/>), and without being trusted - a file that cannot be read, is
+    /// damaged, does not fit, or would take the composed document past <paramref name="maxDocumentBytes"/> refuses the EDITS, not the layer: the package's own modules still apply, and the problem is told
+    /// (<see cref="GameDataLayerInput.EditsProblem"/>).</para>
+    /// </summary>
+    private static (string Text, string? Imported, IReadOnlyList<ulong>? Edited, string? Problem) WithEdits(
+        ReyProject project, ProjectLayer layer, string text, long textBytes, long maxDocumentBytes, ref long remaining)
+    {
+        string path = LtkEditStore.PathOf(project.RootPath!, layer.DeclarationsKey!);
+        string editsText;
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists) return (text, null, null, null);
+            // what the edits may add is what the layer's document and the documents together have room for
+            long room = Math.Max(0, Math.Min(maxDocumentBytes - textBytes, remaining));
+            if (info.Length > room)
+                return (text, null, null, $"the edits ({path}) are {GameDataOverlayDiagnostics.Count(info.Length)} bytes, more than the {GameDataOverlayDiagnostics.Count(room)} bytes the layer's document has room for");
+            byte[] bytes = BoundedFile.Read(path, room, FileShare.ReadWrite | FileShare.Delete, "the overlay");
+            remaining -= bytes.Length;
+            editsText = new UTF8Encoding(false).GetString(bytes);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return (text, null, null, $"the edits ({path}) cannot be read: {e.Message}");
+        }
+
+        IReadOnlyList<GameDataModuleText> edits;
+        try { edits = LtkEditStore.Parse(editsText, path, layer); }
+        catch (InvalidDataException e) { return (text, null, null, e.Message); }
+        if (edits.Count == 0) return (text, null, null, null);
+        try
+        {
+            var document = GameDataDocumentText.Read(text);
+            var own = edits.Select((m, i) => GameDataDocumentText.ModuleNode(m.Text, document.Modules.Count + i)).ToList();
+            var chunks = edits.Select(m => LtkEditStore.TryChunkOf(m, out ulong chunk) ? chunk : 0UL).Where(c => c != 0).ToList();
+            string composed = document.WithModules(own);
+            if (Encoding.UTF8.GetByteCount(composed) > maxDocumentBytes)
+                return (text, null, null, $"the layer's document with the edits ({path}) is more than the {GameDataOverlayDiagnostics.Count(maxDocumentBytes)} bytes the overlay reads");
+            return (composed, text, chunks, null);
+        }
+        catch (System.Text.Json.JsonException) { return (text, null, null, null); }   // the package's document is not JSON: the overlay says so, and nothing is composed into it
     }
 
     /// <summary>The override files a project stores for a layer (<see cref="LtkProjectStore"/>): only the listed files can be read, so a path the document spells cannot reach outside the folder.</summary>

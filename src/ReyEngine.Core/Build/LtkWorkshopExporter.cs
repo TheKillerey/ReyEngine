@@ -223,6 +223,8 @@ public static class LtkProjectLayers
                 {
                     ImportedGameData = data.DocumentText,
                     OverrideFiles = data.Files.Select(f => new FantomeOverrideFile(f.Path, f.FullPath)).ToList(),
+                    // M823: the edits made on top of it follow, numbered on from the imported modules
+                    EditModules = data.Edits.Select((m, i) => GameDataDocumentText.ModuleNode(m.Text, data.Modules.Count + i)).ToList(),
                 }
                 : l).ToList();
 

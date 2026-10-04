@@ -13,8 +13,9 @@ public enum AssetSourceKind
     RiotReference = 3,   // read-only Riot source/reference WAD (lowest priority)
 
     /// <summary>
-    /// M819: what an imported mod's LTK GameData makes of a game bin (<see cref="OverlayMount"/>) - read-only, and above every other source of the chunk: it is the bytes LTK Manager would
-    /// install. Not part of the mount order below (<see cref="AssetMountService.Rebuild"/> merges it last, over the winner), so its value is not a priority.
+    /// M819: what an imported mod's LTK GameData makes of a game bin (<see cref="OverlayMount"/>) - above every other source of the chunk: it is the bytes LTK Manager would
+    /// install. It is no file (M823: it can still be edited, but an edit is kept as a declaration on top of the GameData, never written as a file - see <see cref="IAssetOverlay.AllowsEdits"/>).
+    /// Not part of the mount order below (<see cref="AssetMountService.Rebuild"/> merges it last, over the winner), so its value is not a priority.
     /// </summary>
     LtkGameData = 4,
 }

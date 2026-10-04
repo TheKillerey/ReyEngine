@@ -11,7 +11,7 @@ using ReyEngine.Formats.MapGeo;
 namespace ReyEngine.App.ViewModels;
 
 /// <summary>
-/// M819: a project's imported LTK GameData, shown the way LTK Manager installs it - read-only.
+/// M819: a project's imported LTK GameData, shown the way LTK Manager installs it - never written back as a file (M823: an edit of it is kept as a declaration on top).
 ///
 /// <para><b>What it is.</b> A project that stores GameData (<see cref="LtkProjectStore.HasGameData"/>) gets a <see cref="GameDataPreview"/> whenever its mounts are built: the stored documents applied over the INSTALLED
 /// game, in the background, and attached to the mounts as an overlay (<see cref="AssetMountService.SetOverlay"/>). Every read of a chunk the declarations change then answers the result - the viewport, the material and
@@ -29,7 +29,7 @@ namespace ReyEngine.App.ViewModels;
 /// is missing or cannot be read is not a failure: the preview is Ready, serves what the mod's own copies make of the declarations (nothing of the game's bins), still names what the declarations target - so the write guard holds -
 /// and warns of it.</para>
 ///
-/// <para><b>Read-only until editing GameData targets is supported.</b> Saving the overlaid bytes of a chunk would make LTK apply the modules to their own output (<c>+list</c> duplicates, clone <c>ObjectExists</c>, <c>-list</c> <c>RemovalUnmatched</c>). Every path
+/// <para><b>Never written back as a file (M819); edited as a declaration (M823, <c>MainWindowViewModel.GameDataEdit.cs</c>).</b> Saving the overlaid bytes of a chunk as a file would make LTK apply the modules to their own output (<c>+list</c> duplicates, clone <c>ObjectExists</c>, <c>-list</c> <c>RemovalUnmatched</c>); an editor's save keeps the edit as a declaration on top of the GameData instead (<see cref="SaveGameDataEditAsync"/>), and what no declaration can express is refused with the reason. Every path
 /// that writes a bin back into the project or the override store refuses a chunk the declarations name (<see cref="RefusesGameDataWrite"/>), with one message. Until the preview has bound its declarations to the game it cannot say which
 /// bins a module that edits ENTRIES names (the <c>target</c> modules are known at once), so until then ANY bin is refused, with another message (<see cref="GameDataPendingRefusal"/>) - unless the same documents over the same game
 /// were previewed before, whose answer the new preview inherits at once (<see cref="GameDataPreviewMemory"/>: the rebuild that follows each of the editor's own saves must not refuse the next one). A flow that can wait for the
@@ -38,8 +38,8 @@ namespace ReyEngine.App.ViewModels;
 /// </summary>
 public sealed partial class MainWindowViewModel
 {
-    /// <summary>The one sentence that says why a chunk cannot be written back.</summary>
-    public const string GameDataEditRefusal = "changed by the mod's GameData; editing it comes with the next update";
+    /// <summary>The one sentence that says why a chunk cannot be written back as a file. (What to do instead - M823: open the bin in an editor and save, which keeps the edit as a declaration on top of the GameData - is <see cref="GameDataEditInPlaceHint"/>, said only by the flows it applies to: a copy into the project. A Map Skin Switcher, a placement or a bake cannot be redirected to an editor.)</summary>
+    public const string GameDataEditRefusal = "changed by the mod's GameData, so a whole file of it would have LTK apply the GameData to it again";
 
     /// <summary>What a bin is told while the preview has not yet worked out which bins the declarations name: any bin of a project that stores GameData is refused until it has.</summary>
     public const string GameDataPendingRefusal = "the GameData preview is still being prepared; try again in a moment";
@@ -129,11 +129,15 @@ public sealed partial class MainWindowViewModel
         var mounts = _mounts;
         var project = Project;
         _gameDataUnavailable = null;   // a preview is about to be made: what stopped the last one is not this one's
+        _gameDataRefused.Clear();   // M823: a new preview may make another bin of the same bytes
         if (mounts is null || !LtkProjectStore.HasGameData(project))
         {
             _gameDataMemory = null;   // a project that stores no GameData has no result of it for an editor to hold
+            _gameDataEdited = new();
             return;
         }
+        // M823: the bins the project keeps an edit on top of the GameData for are NOT read here, on the UI thread: the preview's worker reads the store (bounded) and the editor takes the answer when it settles
+        // (ApplyGameDataSettled). Until then the set is what it was - it is only ever changed by this editor's own saves, which keep it right across the rebuilds that follow them.
 
         var modFiles = new MountModFiles(
             layerMounts.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<IAssetMount>)pair.Value, StringComparer.Ordinal), rawMounts);
@@ -286,6 +290,9 @@ public sealed partial class MainWindowViewModel
         var summary = preview.Summary!;
         mounts.RefreshOverlay();
         _gameDataUnavailable = null;
+        // M823: what the worker read of the edits kept on top of the GameData is the truth about them (a file changed by hand, a layer that was renamed); the tree and the commands follow it
+        _gameDataEdited = preview.Setup!.EditedChunks.ToHashSet();
+        RevertGameDataEditsCommand.NotifyCanExecuteChanged();
         _gameDataMemory?.RememberNamed(GameDataPreview.FingerprintOf(preview.Setup!.Layers), _gameDataGameKey, preview.NamedChunks());   // what the next preview of these documents over this game inherits: it is added to, never cut down by a degraded preview
         string? key = GameDataKeyOf(preview);
         // a chunk the preview serves was read while it was still preparing: what read it has the unchanged bytes, whatever the key says
@@ -314,6 +321,8 @@ public sealed partial class MainWindowViewModel
     /// <summary>Another project (or no project) is being opened: what the editor was showing of the last one's GameData, and said of it, is forgotten.</summary>
     private void ForgetGameDataShown()
     {
+        _gameDataEdited = new();   // M823
+        _gameDataRefused.Clear();
         _gameDataMemory = null;
         _gameDataUnavailable = null;
         _gameDataShownKey = null;
@@ -379,10 +388,15 @@ public sealed partial class MainWindowViewModel
 
     /// <summary>Show what the preview serves where something was built from the unchanged bins: the open map is loaded again - unless it holds edits nobody has saved, which a reload would throw away - and the editors open on a
     /// chunk it changed are loaded again or, when they hold edits, say they are stale.</summary>
-    private void RefreshForGameData(GameDataPreview preview)
+    private void RefreshForGameData(GameDataPreview preview) => RefreshForGameDataChunks(preview, null);
+
+    /// <param name="alsoChunks">M823: chunks whose editors are shown again although the preview serves nothing of them: the bin whose edit was just taken away is what the GameData makes of it - which may be the game's own bin, unchanged,
+    /// and then not among the preview's entries.</param>
+    private void RefreshForGameDataChunks(GameDataPreview preview, IReadOnlySet<ulong>? alsoChunks)
     {
         if (_gameData is not { } current || !ReferenceEquals(current, preview) || _mounts is null) return;
         var served = preview.Entries.Select(e => e.PathHash).ToHashSet();
+        if (alsoChunks is not null) served.UnionWith(alsoChunks);
         if (served.Count == 0) return;
 
         if (_currentMapEntry is { } map && _mapLoadsWaitingForGameData == 0)
@@ -404,10 +418,22 @@ public sealed partial class MainWindowViewModel
         if (MeshPreview.MaterialEditor.BinEntry is { } skin && served.Contains(skin.PathHash) && !MeshPreview.MaterialEditor.IsDirty
             && TryResolveEntry(skin.PathHash, out var skinEntry))
             _ = LoadMaterialBinAsync(skinEntry, alsoRawBin: false);
+        // M823: these two held the bytes they were opened with whatever the preview served afterwards. Clean, they are loaded again (as the Materials and bin editors are); with edits they keep them, and a save merges
+        // those onto the bin as it is served (SaveGameDataEditAsync) - so what the package put into the bin is not taken out by a document that never had it
         if (ParticleEditor.Entry is { } particle && served.Contains(particle.PathHash))
-            _log.Warn("GameData", $"The Particle Editor holds {particle.DisplayName}, which the mod's GameData changes; reopen it to see the result.");
+        {
+            if (ParticleEditor.Document?.IsDirty == true) _log.Warn("GameData", $"The Particle Editor holds unsaved edits to {particle.DisplayName}, which the mod's GameData changes; it shows the bin as it was loaded, and a save merges the edits onto the bin as the GameData makes it.");
+            else if (TryResolveEntry(particle.PathHash, out var particleEntry)) OpenParticleEditorFor(particleEntry, show: false);
+        }
         if (MapBinEditor.Entry is { } mapBin && served.Contains(mapBin.PathHash))
-            _log.Warn("GameData", $"The Map Bin Editor holds {mapBin.DisplayName}, which the mod's GameData changes; reopen it to see the result.");
+        {
+            if (MapBinEditor.IsDirty) _log.Warn("GameData", $"The Map Bin Editor holds unsaved edits to {mapBin.DisplayName}, which the mod's GameData changes; it shows the bin as it was loaded, and a save merges the edits onto the bin as the GameData makes it.");
+            else if (TryResolveEntry(mapBin.PathHash, out var mapBinEntry))
+            {
+                try { MapBinEditor.Load(mapBinEntry, ReadAsset(mapBinEntry.PathHash)); }
+                catch (Exception ex) { _log.Warn("GameData", $"The Map Bin Editor could not show {mapBin.DisplayName} again: {ex.Message}"); }
+            }
+        }
         if (BinEditor.Entry is { } bin && served.Contains(bin.PathHash))
         {
             if (BinEditor.IsDirty) _log.Warn("GameData", $"The bin editor holds unsaved edits to {bin.DisplayName}, which the mod's GameData changes; it shows the bin as it was loaded.");
@@ -448,10 +474,12 @@ public sealed partial class MainWindowViewModel
     /// <param name="whatWaits">What is waiting, for the status line: "the map opens".</param>
     /// <param name="limit">The longest it waits, in all; null for as long as it takes. A caller that is refused afterwards anyway (a save) gives up.</param>
     /// <param name="holdsMapReload">Whether the wait keeps the open map from being reloaded when the preview settles: true for a map that is loading itself (it reads the settled bins), false for a save (the map is reloaded as ever).</param>
-    private async Task WaitForGameDataToSettleAsync(string whatWaits, TimeSpan? limit = null, bool holdsMapReload = true)
+    /// <param name="untilApplied">M823: wait until the editor has APPLIED the settled preview too (<see cref="_gameDataTask"/> completes then), not only until it is no longer pending: in between, a read still answers what the mounts hold. For an edit, which is
+    /// built from what the editor reads; the others (the map that opens, the patch update) are refreshed when it is applied, as ever.</param>
+    private async Task WaitForGameDataToSettleAsync(string whatWaits, TimeSpan? limit = null, bool holdsMapReload = true, bool untilApplied = false)
     {
         long deadline = limit is { } wait ? Environment.TickCount64 + (long)wait.TotalMilliseconds : 0;
-        for (int round = 0; round < 4 && _gameData is { IsPending: true }; round++)
+        for (int round = 0; round < 4 && _gameData is { } waiting && (waiting.IsPending || (untilApplied && !_gameDataTask.IsCompleted)); round++)
         {
             Status = $"LTK GameData: {whatWaits} when the preview is ready...";
             if (holdsMapReload) Interlocked.Increment(ref _mapLoadsWaitingForGameData);
@@ -495,7 +523,7 @@ public sealed partial class MainWindowViewModel
 
     // ============================================================================================ the tree
 
-    /// <summary>The entry the browser shows for an asset a mount holds: what the editor READS for that chunk. A chunk the GameData serves is read-only and says LTK GameData, whichever mount holds a copy of it; every
+    /// <summary>The entry the browser shows for an asset a mount holds: what the editor READS for that chunk. A chunk the GameData serves says LTK GameData (and is edited as a declaration on top of it, M823), whichever mount holds a copy of it; every
     /// other asset - and every asset of a project with no overlay, without a lookup - is its own entry.</summary>
     private WadAssetEntry EntryOf(MountedAsset held)
     {
@@ -504,7 +532,7 @@ public sealed partial class MainWindowViewModel
         return held.ToEntry();
     }
 
-    /// <summary>The group of bins only the game has and the GameData changes (the ones no project mount holds), or null when there are none: the tree's third root, listed read-only beside the project's and the Riot references'.</summary>
+    /// <summary>The group of bins only the game has and the GameData changes (the ones no project mount holds), or null when there are none: the tree's third root, listed beside the project's and the Riot references' (an edit of one is kept as a declaration on top of the GameData, M823).</summary>
     private AssetTreeNode? GameDataTreeGroup()
     {
         if (_mounts is not { Overlay: not null } mounts) return null;
@@ -518,13 +546,18 @@ public sealed partial class MainWindowViewModel
     // ============================================================================================ the read-only guard
 
     /// <summary>
-    /// Whether a chunk must not be written back (true: refused, and said). A chunk the project's GameData names - changed by it or not - is the mod's declarations applied over the game's copy: saving what the editor
-    /// read would give LTK its own output to apply the declarations to again, so editing it is not supported yet. A project with no GameData refuses nothing.
+    /// Whether a chunk must not be written back AS A FILE (true: refused, and said). A chunk the project's GameData names - changed by it or not - is the mod's declarations applied over the game's copy: saving what the editor
+    /// read would give LTK its own output to apply the declarations to again. (M823: the editors that save a bin through <see cref="SaveMapBinBytesAsync"/> or <see cref="TryWriteToProjectFile"/> keep its edit as a declaration
+    /// on top of the GameData instead, before this is asked - see <c>MainWindowViewModel.GameDataEdit.cs</c>; every other write stays refused.) A project with no GameData refuses nothing.
     /// </summary>
-    internal bool RefusesGameDataWrite(WadAssetEntry? entry)
+    internal bool RefusesGameDataWrite(WadAssetEntry? entry) => RefusesGameDataWriteHinted(entry, null);
+
+    /// <param name="hint">What the person can do instead, when the flow has an alternative (<see cref="GameDataEditInPlaceHint"/> for a copy into the project); said after the reason.</param>
+    private bool RefusesGameDataWriteHinted(WadAssetEntry? entry, string? hint)
     {
         if (entry is null || GameDataWriteRefusal(entry.PathHash, entry.DisplayName, IsBinEntry(entry)) is not { } why) return false;
         _gameDataRefusals++;
+        if (hint is not null) why += " " + hint;
         _log.Warn("GameData", why + " Nothing was written.");
         Status = why;
         return true;
@@ -685,7 +718,15 @@ public sealed partial class MainWindowViewModel
     private bool SkipsGameDataBin(WadAssetEntry entry)
     {
         if (!IsGameDataTarget(entry.PathHash)) return false;
-        _log.Info("PatchUpdate", $"'{entry.Path}' is {GameDataEditRefusal}, so it is not rebased onto the new patch here.");
+        // M823: what the project keeps of such a bin is the edit, a declaration of values, which applies to the new patch's bin as it is. Whether it also holds a FILE of the bin (the mod's own copy, which the
+        // declarations are applied over) decides what is said: a file there is, and it is left as it is - its result could not be saved back, and the declarations apply over it at install
+        bool holdsFile = _mounts is { } mounts && mounts.TryGet(entry.PathHash, out var held)
+            && new[] { held.Source }.Concat(held.AllSources).Any(s => s.Kind is AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectOverride or AssetSourceKind.ProjectWad);
+        string edit = _gameDataEdited.Contains(entry.PathHash)
+            ? " The edit kept on top of the GameData is a declaration of values, which applies to the new patch's bin as it is." : "";
+        _log.Info("PatchUpdate", holdsFile
+            ? $"'{entry.Path}' is changed by the mod's GameData: the project's own copy of it is the base the GameData's declarations are applied over, so the update leaves it as it is (rebasing it onto the new patch is left to you).{edit}"
+            : $"'{entry.Path}' is changed by the mod's GameData: the project holds no file of it to rebase.{edit}");
         return true;
     }
 

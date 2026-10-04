@@ -99,8 +99,23 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     public bool Load(WadAssetEntry entry, byte[] bytes, bool editable)
     {
         var (doc, defs) = Parse(bytes, ResolveBinName);
-        return doc is not null && Load(entry, doc, defs, editable);
+        return doc is not null && Load(entry, doc, defs, editable, bytes);
     }
+
+    /// <summary>
+    /// M823: the bytes <see cref="Document"/> was parsed from, kept for as long as it is open - what a save rebases onto the bin as it is served by then (see <c>MainWindowViewModel.SaveGameDataEditAsync</c>): a document opened while the
+    /// mod's GameData was still being applied, or before another editor saved the same bin, does not hold what they put into it. Never moved forward by a save, for the reason the Materials editor gives
+    /// (<c>MaterialEditorViewModel.BaseBytes</c>): the merge needs the base the edits were made against.
+    /// </summary>
+    public byte[]? BaseBytes { get; private set; }
+
+    /// <summary>M823: the bin it was parsed from now stands for what the document holds - the edits it has kept are part of it. Told after a save that kept the document as it was (<c>MainWindowViewModel.TakeServedAfterSave</c>): its next save is rebased from here, and the edits kept already are not the mod's changes since.</summary>
+    public void RebaseTo(byte[] served) => BaseBytes = served;
+
+    /// <summary>M823: why a save of this editor is refused - the edits of its bin were reverted under it, and what it holds would put them back - or null. Reset by loading the editor again.</summary>
+    public string? StaleReason { get; private set; }
+
+    public void MarkStale(string reason) => StaleReason = reason;
 
     /// <summary>M197 (4.5): the expensive half, safe to run off the UI thread. map22.bin measures roughly
     /// 3 seconds through here, which is a visible freeze if it runs on the dispatcher.</summary>
@@ -114,9 +129,12 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     }
 
     /// <summary>The UI half: everything here touches observable state and must run on the dispatcher.</summary>
+    /// <param name="sourceBytes">M823: the bytes <paramref name="doc"/> was parsed from (<see cref="BaseBytes"/>).</param>
     public bool Load(WadAssetEntry entry, ParticleDocument doc,
-        IReadOnlyDictionary<uint, VfxSystemDefinition> defs, bool editable)
+        IReadOnlyDictionary<uint, VfxSystemDefinition> defs, bool editable, byte[]? sourceBytes = null)
     {
+        BaseBytes = sourceBytes;
+        StaleReason = null;
         Entry = entry;
         Document = doc;
         AssetName = entry.DisplayName;

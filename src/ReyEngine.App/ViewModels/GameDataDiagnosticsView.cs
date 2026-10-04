@@ -63,7 +63,7 @@ public static class GameDataDiagnosticsView
     {
         var parts = new List<string>
         {
-            "The mod's LTK GameData applied over the installed game, as LTK Manager installs it. Read-only: editing a changed bin comes with the next update.",
+            "The mod's LTK GameData applied over the installed game, as LTK Manager installs it. A bin you edit is saved as a declaration on top of it (after the mod's own modules); the bins listed here show the mod's GameData with those edits.",
         };
         parts.AddRange(summary.Notes);
         parts.AddRange(summary.Warnings);

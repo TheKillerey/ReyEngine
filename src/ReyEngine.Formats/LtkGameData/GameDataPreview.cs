@@ -57,6 +57,44 @@ public sealed class GameDataSetup
 
     /// <summary>The identity of the class schema of <see cref="NewerSchemaOptions"/>.</summary>
     public string? NewerSchemaIdentity { get; init; }
+
+    /// <summary>M823: the layers as the PACKAGE declared them, without the edits kept on top of them (<see cref="LtkEditStore"/>); null when no layer holds an edit - <see cref="Layers"/> is then the same thing.</summary>
+    public IReadOnlyList<GameDataLayerInput>? ImportedLayers { get; init; }
+
+    /// <summary>M823: the chunks the edits kept on top of the GameData are for. Empty when there are none.</summary>
+    public IReadOnlySet<ulong> EditedChunks { get; init; } = new HashSet<ulong>();
+
+    /// <summary>M823: the layers of a project with and without the edits kept on top of them, and the chunks the edits are for.</summary>
+    internal static (IReadOnlyList<GameDataLayerInput>? Imported, IReadOnlySet<ulong> Edited) SplitEdits(IReadOnlyList<GameDataLayerInput> layers)
+    {
+        var edited = new HashSet<ulong>();
+        foreach (var layer in layers)
+            if (layer.EditedChunks is not null) edited.UnionWith(layer.EditedChunks);
+        return (layers.Any(l => l.ImportedDocumentText is not null) ? layers.Select(l => l.ImportedOnly()).ToList() : null, edited);
+    }
+
+    /// <summary>M823: this setup over other layers (the same ones with an edit stored or taken away): the game, the class schema and the options are the ones it has.</summary>
+    public GameDataSetup WithLayers(IReadOnlyList<GameDataLayerInput> layers)
+    {
+        var (imported, edited) = SplitEdits(layers);
+        return new GameDataSetup
+        {
+            Layers = layers,
+            Game = Game,
+            ModFiles = ModFiles,
+            Options = Options,
+            Build = Build,
+            SchemaLatest = SchemaLatest,
+            SchemaNote = SchemaNote,
+            SchemaSource = SchemaSource,
+            NewerSchemaOptions = NewerSchemaOptions,
+            NewerSchemaLatest = NewerSchemaLatest,
+            SchemaIdentity = SchemaIdentity,
+            NewerSchemaIdentity = NewerSchemaIdentity,
+            ImportedLayers = imported,
+            EditedChunks = edited,
+        };
+    }
 }
 
 /// <summary>M819: the setups of the editor.</summary>
@@ -90,7 +128,8 @@ public static class GameDataSetups
 
         // a document that is not JSON is a mod LTK Manager cannot read at all (its info.json is one file): there is nothing to preview, and the error says which one. A document that is JSON and
         // is refused by the engine is one layer refused, as the manager installs it, and the overlay says so itself.
-        LtkProjectStore.ReadLayers(project);
+        // (M823: the edits kept on top of the package are not asked here - they are the person's own file, and one that cannot be used refuses the EDITS, with the reason, while the package's own modules still preview)
+        LtkProjectStore.ReadLayers(project, includeEdits: false);
         var layers = GameDataLayerInput.FromProject(project);
 
         var build = buildOverride ?? (gameDirectory is null ? null : GameBuild.ReadInstalled(gameDirectory));
@@ -135,9 +174,12 @@ public static class GameDataSetups
 
         IGameDataGame game = gameDirectory is null ? new UnavailableGame(gameProblem ?? "no League game folder is configured")
             : gameFactory is not null ? gameFactory(gameDirectory) : new InstalledGame(gameDirectory, cachePath, null, indexProgress);
+        var (importedLayers, editedChunks) = GameDataSetup.SplitEdits(layers);   // M823
         return new GameDataSetup
         {
             Layers = layers,
+            ImportedLayers = importedLayers,
+            EditedChunks = editedChunks,
             Game = game,
             ModFiles = modFiles,
             Options = new GameDataOverlayOptions { Schema = schema },
@@ -341,7 +383,15 @@ public sealed class GameDataPreview : IAssetOverlay, IDisposable
 {
     private sealed record Prepared(
         GameDataSetup Setup, GameDataOverlay Overlay, GameDataPlan Plan, GameDataOverlayBuild Build, GameDataSummary Summary,
-        IReadOnlyList<GameDataBinReport> Bins, IReadOnlyList<AssetOverlayEntry> Entries, IReadOnlyList<MapGameContainer> Containers);
+        IReadOnlyList<GameDataBinReport> Bins, IReadOnlyList<AssetOverlayEntry> Entries, IReadOnlyList<MapGameContainer> Containers,
+        int? MoreEdits = null)
+    {
+        /// <summary>M823: what each target came to, by chunk - the results <see cref="Build"/> holds, which a preview refreshed after an edit shares with the one before it.</summary>
+        public IReadOnlyDictionary<ulong, GameDataChunkResult> Results { get; } = Build.Chunks.ToDictionary(c => c.Chunk);
+
+        /// <summary>M823: the overlay over the layers as the package declared them, without the edits kept on top: where the bin an edit is the difference from is made. Made on the first ask.</summary>
+        public Lazy<GameDataOverlay>? ImportedOverlay { get; init; }
+    }
 
     /// <summary>What the declarations name without the game's help: the chunks of the <c>target</c> modules, and the paths they were given by.</summary>
     private sealed record Declared(HashSet<ulong> Chunks, Dictionary<ulong, string> Names);
@@ -596,7 +646,13 @@ public sealed class GameDataPreview : IAssetOverlay, IDisposable
         }
 
         var summary = BuildSummary(setup, plan, build, entries.Count, moreEdits);
-        return new Prepared(setup, overlay, plan, build, summary, bins, entries, containers);
+        return new Prepared(setup, overlay, plan, build, summary, bins, entries, containers, moreEdits)
+        {
+            // M823: the bin an edit on top of the GameData is the difference from is made by the layers as the package declared them; a project with no edit has the overlay it already has
+            ImportedOverlay = setup.ImportedLayers is { } imported
+                ? new Lazy<GameDataOverlay>(() => new GameDataOverlay(imported, setup.Game, setup.ModFiles, setup.Options), LazyThreadSafetyMode.ExecutionAndPublication)
+                : null,
+        };
     }
 
     /// <summary>Whether a path is a shipping map's own bin: <c>data/maps/shipping/map11/map11.bin</c>.</summary>
@@ -644,6 +700,10 @@ public sealed class GameDataPreview : IAssetOverlay, IDisposable
         if (transient.Count > 0)
             warnings.Add($"{Count(transient.Count, "game archive")} could not be read just now ({string.Join(", ", transient.Take(3).Select(a => a.Name))}"
                          + (transient.Count > 3 ? ", ..." : "") + "), so the index lacks them until the mounts are rebuilt.");
+        // M823: the edits a person made on top of a layer that could not be used - the package's own modules were applied without them
+        foreach (var layer in setup.Layers)
+            if (layer.EditsProblem is { } editsProblem)
+                warnings.Add($"The edits kept on top of layer '{layer.Name}' are not applied: {editsProblem}. The package's own modules are; the edits are as they were saved, and a new edit of a bin of this layer is refused until the file is usable.");
         if (plan.TableError is { } tableError)
             warnings.Add($"The game cannot be read ({tableError}): a bin whose base is the game's could not be applied, so it shows as the project and the game hold it.");
         if (plan.ObjectIndexError is { } indexError) warnings.Add($"The game's object index is unavailable ({indexError}): entries are skipped and references cannot resolve.");
@@ -666,11 +726,99 @@ public sealed class GameDataPreview : IAssetOverlay, IDisposable
         bytes = Array.Empty<byte>();
         if (State != GameDataPreviewState.Ready || _prepared is not { } p) return false;
         // every target was applied when the preview became ready, so this is the overlay's cached answer (a result too large to keep is made again). Cancel() stops WORK: a preview that is Ready has none left, and
-        // the service it was attached to may still be read by a job that began before the mounts were rebuilt - which sees what that service always showed
-        var result = p.Overlay.Apply(pathHash, CancellationToken.None);
+        // the service it was attached to may still be read by a job that began before the mounts were rebuilt - which sees what that service always showed.
+        // M823: the result the preview itself holds is the answer - the one a read after an edit finds, whichever overlay made it; a result a read failed for (not Cacheable) is made again, as before
+        var result = p.Results.TryGetValue(pathHash, out var held) && held.Cacheable ? held : p.Overlay.Apply(pathHash, CancellationToken.None);
         if (result is not { Applied: true, Bytes: { } served }) return false;
         bytes = (byte[])served.Clone();   // the overlay keeps its own: a caller may do what it likes with the one it is given, as with every other mount's
         return true;
+    }
+
+    /// <summary>M823: what the preview serves can be edited: an edit of a changed bin is kept as a declaration on top of the GameData (<see cref="LtkEditStore"/>).</summary>
+    public bool AllowsEdits => true;
+
+    /// <summary>
+    /// M823: the bin as LTK makes it from the game (or the project's own copy of it) and the layers as the PACKAGE declared them, with none of the edits kept on top: the <c>B</c> of
+    /// <c>diff(B, E)</c>. Where the chunk has no edit on top that is what the preview serves; where it has one, it is made by a second overlay over the imported layers alone,
+    /// on the first ask and then from its cache. A declaration the package makes that does not change the bin is no reason to refuse: the bin is then the base itself.
+    /// </summary>
+    /// <param name="bytes">The bytes, the caller's own.</param>
+    /// <param name="problem">Why there are none: the preview is not ready, no module names the chunk, the game cannot be read.</param>
+    /// <returns>Whether there are bytes.</returns>
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    public bool TryReadImportedOnly(ulong chunk, out byte[]? bytes, out string? problem, CancellationToken cancellationToken = default)
+    {
+        bytes = null;
+        problem = null;
+        if (State != GameDataPreviewState.Ready || _prepared is not { } p)
+        {
+            problem = State == GameDataPreviewState.Pending ? "the GameData preview is still being prepared" : "the GameData preview is not available" + (Failure is { } why ? $" ({why})" : "");
+            return false;
+        }
+        // the chunk has no edit on top: what the preview serves is the imported GameData's alone - the same applications, the same bytes
+        bool edited = p.Setup.EditedChunks.Contains(chunk);
+        var overlay = edited && p.ImportedOverlay is { } imported ? imported.Value : p.Overlay;
+        var result = overlay.Apply(chunk, cancellationToken);
+        if (result is null)
+        {
+            problem = "no declaration of the package names this bin";
+            return false;
+        }
+        if (result.Applied)
+        {
+            bytes = (byte[])result.Bytes!.Clone();
+            return true;
+        }
+        bytes = overlay.ReadBase(chunk, out _, out problem, cancellationToken);
+        return bytes is not null;
+    }
+
+    /// <summary>
+    /// M823: the edit kept on top of one chunk changed (stored or taken away): makes this preview serve the declarations as they are now, in place - the overlay is made again over
+    /// <paramref name="layers"/> (the project's layers composed with the edits as they are now), and the one chunk whose edit changed is applied anew; every other chunk keeps the result it
+    /// had, which the new layers cannot have changed. Nothing is pending in between, so a reader that asks right after the save is answered with the edit, as it would be for a
+    /// project file. Returns false, with the preview as it was, when this cannot be done (the preview is not ready, or the game cannot be read); the caller then rebuilds the mounts.
+    /// </summary>
+    /// <remarks>The caller publishes the result to the mounts (<see cref="AssetMountService.RefreshOverlay"/>), on the thread that owns them.</remarks>
+    public bool TryRefreshEdited(IReadOnlyList<GameDataLayerInput> layers, ulong chunk, out string? problem, CancellationToken cancellationToken = default)
+    {
+        problem = null;
+        if (State != GameDataPreviewState.Ready || _prepared is not { } p)
+        {
+            problem = "the GameData preview is not ready";
+            return false;
+        }
+        try
+        {
+            var setup = p.Setup.WithLayers(layers);
+            var overlay = new GameDataOverlay(setup.Layers, setup.Game, setup.ModFiles, setup.Options);
+            var plan = overlay.Plan(cancellationToken);
+            var results = new List<GameDataChunkResult>(plan.Targets.Count);
+            var diagnostics = new List<GameDataOverlayDiagnostic>(plan.Diagnostics);
+            foreach (var target in plan.Targets)
+            {
+                // the edit is the only thing that changed, and it is a literal module of one chunk: no other chunk's applications are different
+                var result = target.Chunk != chunk && p.Results.TryGetValue(target.Chunk, out var kept) && kept.Cacheable
+                    ? kept
+                    : overlay.Apply(target.Chunk, cancellationToken)!;
+                results.Add(result);
+                diagnostics.AddRange(result.Diagnostics);
+            }
+            var build = new GameDataOverlayBuild(plan, results, diagnostics);
+            var declared = _declared ?? ReadDeclared(setup.Layers);
+            var prepared = Summarise(setup, overlay, plan, build, declared, p.MoreEdits);
+            // the layers as the package declared them are the same as before (only the edits on top of them changed), so the overlay made of them keeps what it has worked out
+            if (prepared.ImportedOverlay is not null && p.ImportedOverlay is not null) prepared = prepared with { ImportedOverlay = p.ImportedOverlay };
+            _plan = plan;
+            _prepared = prepared;   // published whole: a reader sees the preview as it was or as it is, never half of either
+            return true;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception e)
+        {
+            problem = e.Message;
+            return false;
+        }
     }
 
     /// <inheritdoc />

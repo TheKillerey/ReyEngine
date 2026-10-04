@@ -190,7 +190,7 @@
           <MenuItem Header="Map Material Diagnostics" Command="{Binding MapMaterialDiagnosticsCommand}"
                     ToolTip.Tip="Scan the loaded map's bins + mapgeo and write an honest diagnostics report (classes, unknown fields, lighting/lightmap/visibility) to .reyengine/reports/" />
           <MenuItem Header="LTK GameData Diagnostics…" Command="{Binding OpenGameDataDiagnosticsCommand}"
-                    ToolTip.Tip="What an imported mod's LTK GameData did to each game bin, as LTK Manager installs it: the bins it changed, and per bin the edits it skipped and why. A game build newer than the class schema makes LTK Manager skip the same edits. Read-only until editing a changed bin arrives." />
+                    ToolTip.Tip="What an imported mod's LTK GameData did to each game bin, as LTK Manager installs it: the bins it changed, and per bin the edits it skipped and why. A game build newer than the class schema makes LTK Manager skip the same edits. A bin you edit is saved as a declaration on top of it, after the mod's own modules." />
           <Separator />
           <MenuItem Header="Cleanup Project…" Command="{Binding CleanupProjectCommand}"
                     ToolTip.Tip="Find files nothing can load and project copies that are identical to the Riot original. Scan first, review a full preview, then move the selection into a project-local backup you can undo — nothing is deleted outright" />
@@ -1066,6 +1066,8 @@
                             <MenuItem Header="Copy Asset To Project" Command="{Binding $parent[Window].DataContext.CopyAssetToProjectCommand}" />
                             <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[Window].DataContext.ReplaceSelectedCommand}" />
                             <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
+                            <!-- M823: a bin the mod's LTK GameData changes keeps the edits made to it as a declaration on top of the GameData; this takes them away -->
+                            <MenuItem Header="Revert Edits On Top Of GameData" Command="{Binding $parent[Window].DataContext.RevertGameDataEditsCommand}" />
                             <Separator />
                             <!-- M100: these act on the whole browser selection -->
                             <MenuItem Header="New Folder…" Command="{Binding $parent[Window].DataContext.NewFolderCommand}" />
@@ -1113,7 +1115,7 @@
                                          IsVisible="{Binding IsReadOnly}" ToolTip.Tip="{Binding ReadOnlyTip}" />
                               <!-- M819: a bin the mod's LTK GameData changes: read-only, and its bytes are what LTK Manager would install -->
                               <Border Classes="badge violet" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="2,0,0,2"
-                                      Padding="3,0" IsVisible="{Binding IsGameData}" ToolTip.Tip="Source: LTK GameData - changed by the mod's GameData, read-only">
+                                      Padding="3,0" IsVisible="{Binding IsGameData}" ToolTip.Tip="Source: LTK GameData - the mod's GameData applied over the game; an edit is saved as a declaration on top of it">
                                 <TextBlock Text="LTK" FontSize="7" />
                               </Border>
                             </Grid>
@@ -1149,6 +1151,7 @@
                               <MenuItem Header="Copy Asset To Project" Command="{Binding $parent[Window].DataContext.CopyAssetToProjectCommand}" />
                               <MenuItem Header="Replace Selected Asset…" Command="{Binding $parent[Window].DataContext.ReplaceSelectedCommand}" />
                               <MenuItem Header="Revert Asset" Command="{Binding $parent[Window].DataContext.RevertSelectedCommand}" />
+                              <MenuItem Header="Revert Edits On Top Of GameData" Command="{Binding $parent[Window].DataContext.RevertGameDataEditsCommand}" />
                               <Separator />
                               <!-- M100: these act on the whole browser selection -->
                               <MenuItem Header="New Folder…" Command="{Binding $parent[Window].DataContext.NewFolderCommand}" />
@@ -1188,7 +1191,7 @@
                             <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="3" VerticalAlignment="Center" Margin="2,0">
                               <!-- M819: source LTK GameData -->
                               <Border Classes="badge violet" Padding="3,0" VerticalAlignment="Center" IsVisible="{Binding IsGameData}"
-                                      ToolTip.Tip="Source: LTK GameData - changed by the mod's GameData, read-only">
+                                      ToolTip.Tip="Source: LTK GameData - the mod's GameData applied over the game; an edit is saved as a declaration on top of it">
                                 <TextBlock Text="LTK" FontSize="7" />
                               </Border>
                               <TextBlock Text="🔒" FontSize="9" VerticalAlignment="Center"

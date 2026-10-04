@@ -2080,7 +2080,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             throw new InvalidOperationException("Open the destination map before adding a material.");
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
             throw new InvalidOperationException("The open map has no companion materials .bin.");
-        await ThrowIfGameDataTargetAsync(binEntry);   // M819: before the textures are staged, not after
+        await ThrowIfNotGameDataEditableAsync(binEntry);   // M819: before the textures are staged, not after (M823: a bin whose edit can be kept as a declaration passes)
         if (!await EnsureProjectSavedAsync())
             throw new InvalidOperationException("Save the project before adding Workshop content.");
 
@@ -2090,13 +2090,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         byte[]? imported = MapMaterialFactory.ImportMaterial(target, source, template.MaterialHash,
             template.MaterialName, newName, out var error);
         if (imported is null) throw new InvalidOperationException(error ?? "The material could not be imported.");
+        if (await GameDataEditPreflightAsync(binEntry, imported) is { } notKept) throw new InvalidOperationException(notKept);   // M823: the declaration is proven before the textures are staged
 
         var staged = StageWorkshopAssets(template.TexturePaths, mapEntry);
         if (staged.Refusal is { } stagedRefusal) throw new InvalidOperationException(stagedRefusal);   // M819: the real reason
         if (staged.Missing.Count > 0)
             throw new InvalidOperationException("Required texture(s) were not found in the installed patch: "
                 + string.Join(", ", staged.Missing.Take(4)) + (staged.Missing.Count > 4 ? "..." : ""));
-        if (!await SaveMapBinBytesAsync(binEntry, imported))
+        if (!await SaveEditorBinBytesAsync(binEntry, imported, target, "Workshop", holdsDocument: false))   // M823: the bytes it read, so that a bin that changed meanwhile has the import merged onto it
             throw new InvalidOperationException("The edited materials bin could not be saved.");
 
         // M516: remembered across the reload below, which clears the selection.
@@ -2186,7 +2187,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             throw new InvalidOperationException("Open the destination map before adding a particle.");
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
             throw new InvalidOperationException("The open map has no companion materials .bin.");
-        await ThrowIfGameDataTargetAsync(binEntry);   // M819: before the particle's assets are staged, not after
+        await ThrowIfNotGameDataEditableAsync(binEntry);   // M819: before the particle's assets are staged, not after (M823: a bin whose edit can be kept as a declaration passes)
         if (!await EnsureProjectSavedAsync())
             throw new InvalidOperationException("Save the project before adding Workshop content.");
 
@@ -2233,6 +2234,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         };
         byte[] placed = MapPlaceableWriter.WriteEdits(graph.Bytes, new[] { edit }, out var placeError)
             ?? throw new InvalidOperationException(placeError ?? "The particle placement could not be created.");
+        if (await GameDataEditPreflightAsync(binEntry, placed) is { } notKept) throw new InvalidOperationException(notKept);   // M823: the declaration is proven before the assets are staged
 
         var staged = legacy is not null
             ? StageLegacyTroyAssets(legacy.Assets, mapEntry)
@@ -2242,7 +2244,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             throw new InvalidOperationException("Required particle asset(s) were not found"
                 + (template.IsUser ? " in this project or in the installed patch: " : " in the installed patch: ")
                 + string.Join(", ", staged.Missing.Take(4)) + (staged.Missing.Count > 4 ? "..." : ""));
-        if (!await SaveMapBinBytesAsync(binEntry, placed))
+        if (!await SaveEditorBinBytesAsync(binEntry, placed, target, "Workshop", holdsDocument: false))   // M823: as above
             throw new InvalidOperationException("The edited materials bin could not be saved.");
 
         FinishWorkshopMutation();
@@ -3918,7 +3920,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Materials", "No map is open."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
         { _log.Error("Materials", "No materials.bin was found alongside this mapgeo."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -4095,7 +4097,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Lighting", "The light list is empty — import a Light.dat or add lights first."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
         { _log.Error("Lighting", "No materials.bin was found alongside this mapgeo."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -4147,6 +4149,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _log.Error("Lighting", $"{issues.Count} shape issue(s) — not saved.");
                 return;
             }
+            if (RebaseForSave(binEntry, bytes, source, "Lighting") is not { } rebased) return;   // M823: the bin it read may have changed while the work ran: merged onto it, or refused
+            bytes = rebased;
 
             string savedTo;
             if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
@@ -5504,7 +5508,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     private void RepairMaterialWireForms(WadAssetEntry binEntry)
     {
-        if (!GuardEditable(binEntry)) return;
+        if (!GuardBinEdit(binEntry)) return;   // M823
         if (Project.ProjectFilePath is null && Project.SourceWadPath is null)
         { _log.Warn("Materials", "Create or open a project before repairing."); return; }
 
@@ -5578,7 +5582,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task<bool> RemoveUnusedMaterialsAsync(WadAssetEntry binEntry, IEnumerable<string> usedMaterials,
         IReadOnlyList<string> candidates)
     {
-        if (!await GuardEditableAsync(binEntry)) return false;
+        if (!await GuardBinEditAsync(binEntry)) return false;   // M823
         if (Project.ProjectFilePath is null && Project.SourceWadPath is null)
         { _log.Warn("Materials", "Create or open a project before removing materials."); return false; }
 
@@ -5611,14 +5615,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (PromptOwner is not null && !await Views.PromptWindow.ConfirmAsync(PromptOwner, "Remove Unused Materials",
                     $"Remove {names.Count:n0} material(s) from {binEntry.DisplayName}?\n\n"
                     + "No mesh in this map uses them and nothing else in the bin links to them." + kept
-                    + "\n\nA copy of the bin as it is now goes to .reyengine/cleanup/ first.\n\n" + listed,
+                    + (IsGameDataTarget(binEntry.PathHash)
+                        ? "\n\nThe mod's GameData changes this bin, so the removal is saved as a declaration on top of it (Revert Edits On Top Of GameData in the Content Browser takes it away). A copy of the bin WITHOUT the GameData applied goes to .reyengine/cleanup/ first."
+                        : "\n\nA copy of the bin as it is now goes to .reyengine/cleanup/ first.")
+                    + "\n\n" + listed,
                     "Remove"))
                 return false;
+            await GameDataFlowPaused();   // M823 test seam: the dialog lasts as long as the person likes; the bin can change under `before` meanwhile
 
             var after = Formats.Materials.MapMaterialFactory.RemoveUnusedStaticMaterials(before, used,
                 out int removed, out var error, candidates);
             if (after is null) { _log.Error("Materials", "Cleanup failed: " + error); return false; }
             if (removed == 0) { _log.Info("Materials", "Nothing was removed."); return false; }
+            if (RebaseForSave(binEntry, after, before, "Materials") is not { } rebased) return false;   // M823: a bin the mod's GameData changes may have changed while the dialog was open: the removal is merged onto it, or refused
+            after = rebased;
 
             string? backup = BackupMaterialsBin(binEntry, before, names);
             string savedTo = SaveMaterialsBin(binEntry, after);
@@ -5639,6 +5649,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (Project.RootPath is null) return null;
         try
         {
+            // M823: the bin as the GameData makes it is no file anyone should put back (the GameData would be applied to it again): the backup of a bin the GameData changes is what the project and the game hold
+            if (IsGameDataTarget(binEntry.PathHash)) before = ReadAssetRaw(binEntry.PathHash);
             string dir = System.IO.Path.Combine(ReyEngine.Core.Cleanup.CleanupExecutor.BackupRoot(Project.RootPath),
                 "materials-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
             Directory.CreateDirectory(dir);
@@ -5763,7 +5775,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Formats.Materials.MaterialPresetParts parts, bool write)
     {
         var empty = Array.Empty<Formats.Materials.MaterialPresetPlanRow>();
-        if (write && !GuardEditable(binEntry)) return empty;
+        if (write && !GuardBinEdit(binEntry)) return empty;   // M823
         if (write && Project.ProjectFilePath is null && Project.SourceWadPath is null)
         { _log.Warn("Materials", "Create or open a project before applying a preset."); return empty; }
 
@@ -5853,14 +5865,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var entry = ContextNode?.Entry ?? SelectedNode?.Entry;
         if (entry is null || entry.Type != AssetType.Bin)
         { _log.Warn("Ritobin", "Select a .bin first — this edits bins as ritobin text."); return; }
-        if (!GuardEditable(entry)) return;
+        if (!GuardBinEdit(entry)) return;   // M823
 
+        byte[]? openedFrom = null;   // M823: the bin the text was made from - what a save is merged onto the bin served from, for a bin the mod's GameData changes
         ShowRitobinEditorWindow?.Invoke(new RitobinTarget(
             entry.DisplayName,
-            () => ReadAsset(entry.PathHash),
-            async bytes =>
+            () => openedFrom = ReadAsset(entry.PathHash),
+            async edited =>
             {
                 if (!await EnsureProjectSavedAsync()) throw new InvalidOperationException("The project was not saved.");
+                if (RebaseForSave(entry, edited, openedFrom, "Ritobin") is not { } bytes) throw new InvalidOperationException(Status);   // M823
 
                 string savedTo;
                 if (TryWriteToProjectFile(entry, bytes, out var projectFile)) savedTo = projectFile;
@@ -5880,6 +5894,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 Project.IsDirty = true;
                 if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
                 UpdateTitle();
+                openedFrom = edited;   // M823: the editor holds what it just wrote as its tree from now on
                 return savedTo;
             },
             ResolveBinName,
@@ -6761,7 +6776,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             new Avalonia.Platform.Storage.FilePickerFileType("League .bin") { Patterns = new[] { "*.bin" } },
             DialogService.All);
         MapBinEditor.ReadRiotOriginal = ReadRiotOriginalBytes;
-        MapBinEditor.SaveBytes = SaveMapBinBytesAsync;
+        MapBinEditor.SaveBytes = SaveMapBinEditorBytesAsync;   // M823: with the bytes the document was parsed from
+        MapBinEditor.ReadServedAfterSave = e => IsGameDataTarget(e.PathHash) ? ReadAsset(e.PathHash) : null;   // M823
+        MapBinEditor.WhyCannotUpdateFromPatch = e => IsGameDataTarget(e.PathHash)
+            ? "this bin is changed by the mod's GameData: a patch update would save a whole file that LTK applies the GameData to again; the declarations, and the edits kept on top of them (values), apply to the new patch's bin as they are" : null;   // M823
         ParticleEditor.ResolveBinName = ResolveBinName;   // M187 (3.1): field names instead of raw hashes
         ParticleEditor.Info = m => _log.Info("Particle", m);
         ParticleEditor.Error = m => _log.Error("Particle", m);
@@ -6947,8 +6965,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// the main layout stays untouched).</summary>
     public Action? ShowParticleEditorWindow; // wired by MainWindow (owns the window instance)
 
-    private async void OpenParticleEditorFor(WadAssetEntry entry)
+    /// <param name="show">M823: false when the editor that is open is only loaded again (a preview settled, an edit was taken away) and the window is not to be raised.</param>
+    private async void OpenParticleEditorFor(WadAssetEntry entry, bool show = true) => await OpenParticleEditorForAsync(entry, show);
+
+    private async Task OpenParticleEditorForAsync(WadAssetEntry entry, bool show)
     {
+        var heldEntry = ParticleEditor.Entry;   // M823: what the editor holds when a reload nobody asked for starts - it only takes the result if it still does, and has no edits of its own
+        var heldDocument = ParticleEditor.Document;
         try
         {
             var bytes = ReadAsset(entry.PathHash);
@@ -6966,13 +6989,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     var (d, dd) = ParticleEditorViewModel.Parse(bytes, resolveName);
                     return (d, dd, BuildParticleRoles(binPath));
                 });
+            if (!show && (!ReferenceEquals(ParticleEditor.Entry, heldEntry) || !ReferenceEquals(ParticleEditor.Document, heldDocument) || ParticleEditor.Document?.IsDirty == true)) return;   // M823
             _particleRoles = roles;
-            if (doc is null || !ParticleEditor.Load(entry, doc, defs, editable))
+            if (doc is null || !ParticleEditor.Load(entry, doc, defs, editable, bytes))
             {
                 _log.Warn("Particle", $"{entry.DisplayName} contains no VFX systems.");
                 return;
             }
-            ShowParticleEditorWindow?.Invoke();
+            if (show) ShowParticleEditorWindow?.Invoke();
             _log.Info("Particle", $"Particle Editor: {entry.DisplayName} — {ParticleEditor.Systems.Count} system(s){(editable ? "" : " (read-only Riot reference)")}.");
         }
         catch (Exception ex) { _log.Error("Particle", ex.Message); }
@@ -6991,7 +7015,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveParticleOverride()
     {
         if (ParticleEditor.Entry is not { } entry) { _log.Warn("Particle", "No particle .bin open."); return; }
-        if (!await GuardEditableAsync(entry)) return;
+        if (!await GuardBinEditAsync(entry)) return;   // M823
+        if (RefusesStaleEditor(entry, ParticleEditor.StaleReason)) return;   // M823: its bin's edits were reverted under it
         if (ParticleEditor.Document is not { } pdoc) return;
         if (!pdoc.IsDirty) { _log.Info("Particle", "No particle edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
@@ -7002,7 +7027,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         // M126: one save path for project bins — folder-project files are written IN PLACE (and any
         // stale shadow override dissolves); only wad-backed assets go to the override workspace.
-        await SaveMapBinBytesAsync(entry, bytes);
+        if (await SaveEditorBinBytesAsync(entry, bytes, ParticleEditor.BaseBytes, "Particle") && TakeServedAfterSave(bytes) is { } served)   // M823: a bin the mod's GameData changes is merged onto what is served, not written over
+            ParticleEditor.RebaseTo(served);   // and a document kept as it was stands for the bin as served now: its next save is rebased from there
     }
 
     /// <summary>M121: the Model Preview window closed — its document tabs go with it. Mesh and
@@ -7601,6 +7627,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         foreach (var ov in _overrides.All)
             if (_nodesByHash.TryGetValue(ov.PathHash, out var node)) node.Status = AssetStatus.Modified;
+        foreach (ulong chunk in _gameDataEdited)   // M823: an edit kept on top of the mod's GameData marks its bin Modified, as an override does
+            if (_nodesByHash.TryGetValue(chunk, out var edited)) edited.Status = AssetStatus.Modified;
     }
 
     private void SetNodeStatus(ulong hash, AssetStatus status)
@@ -7910,12 +7938,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         Inspector.ShowEntry(entry);
         Inspector.SetPreview(null);
-        bool modified = _overrides.Has(entry.PathHash);
+        bool modified = _overrides.Has(entry.PathHash) || _gameDataEdited.Contains(entry.PathHash);   // M823: an edit on top of the GameData is a modification too
         string source = !ProjectMode ? "WAD"
             : entry.SourceKind switch
             {
                 AssetSourceKind.RiotReference => "Read-only Riot asset",
-                AssetSourceKind.LtkGameData => "Read-only - changed by the mod's LTK GameData",   // M819
+                AssetSourceKind.LtkGameData => "Changed by the mod's LTK GameData (an edit is saved as a declaration on top of it)",   // M819, M823
                 AssetSourceKind.ProjectOverride => "Project override (editable)",
                 _ => "Project asset (editable)",
             };
@@ -8205,19 +8233,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveMaterialOverrideFor(MaterialEditorViewModel editor, Action applyToViewport)
     {
         if (editor.BinEntry is not { } binEntry) { _log.Warn("Material", "No material .bin open."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
+        if (RefusesStaleEditor(binEntry, editor.StaleReason)) return;   // M823: its bin's edits were reverted under it
         if (!editor.IsDirty) { _log.Info("Material", "No material edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
 
         var bytes = editor.Serialize();
         if (bytes is null) return;
-        bytes = RebaseOntoCurrent(binEntry, bytes, editor.BaseBytes, "Material");
+        bytes = RebaseOntoCurrent(binEntry, bytes, editor.BaseBytes, "Material");   // M823: a bin the mod's GameData changes is rebased by its save instead (below), after the preview has settled
         try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
         catch (Exception ex) { _log.Error("Material", $"Edited material .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
 
         // M126: one save path for project bins — folder-project files are written IN PLACE (and any
         // stale shadow override dissolves); only wad-backed assets go to the override workspace.
-        if (!await SaveMapBinBytesAsync(binEntry, bytes)) return;
+        if (!await SaveEditorBinBytesAsync(binEntry, bytes, editor.BaseBytes, "Material")) return;
+        if (TakeServedAfterSave(bytes) is { } served) editor.RebaseTo(served);   // M823: a document kept as it was stands for the bin as served now
         applyToViewport();
         UndoService.MarkSaved();
     }
@@ -10574,7 +10604,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (row is null) return;
         if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Map", "No map materials.bin is open."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10637,7 +10667,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Map", $"{row.Name} is a {row.TypeName} field — it needs structured content this editor will not invent."); return; }
         if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Map", "No map materials.bin is open."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10690,7 +10720,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Map", $"{row.Name} appears in no shipped map, so there is no configuration to copy."); return; }
         if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Map", "No map materials.bin is open."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10798,7 +10828,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Map", "No map materials.bin is open."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -11212,7 +11242,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
         }
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) { _log.Error("Particles", "No materials .bin to save into."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         // M199 (5.2): edits are addressed by tree identity, not by a 64-byte transform signature. 1,450 of
@@ -11352,13 +11382,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveBinToOverride()
     {
         if (BinEditor.Entry is not { } entry) { _log.Warn("Bin", "No .bin open."); return; }
-        if (!await GuardEditableAsync(entry)) return;
+        if (!await GuardBinEditAsync(entry)) return;   // M823
         if (!BinEditor.IsDirty) { _log.Info("Bin", "No applied edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
 
         var bytes = BinEditor.Serialize();
         if (bytes is null) return;
         bytes = RebaseOntoCurrent(entry, bytes, BinEditor.BaseBytes, "Bin");
+        if (RebaseForSave(entry, bytes, BinEditor.BaseBytes, "Bin") is not { } rebased) return;   // M823: a bin the mod's GameData changes is merged onto what is served, or refused (the line above leaves it as it is)
+        bytes = rebased;
 
         // Validate the edited .bin re-parses before committing it to the override layer.
         try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
@@ -12672,7 +12704,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Lighting", "No map is open, so there is nowhere to save the sun."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
         { _log.Error("Lighting", "No materials.bin was found alongside this mapgeo."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -12732,6 +12764,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var back = Formats.MapGeo.MapSunProperties.Extract(bytes);
             if (back is null || back != sun)
             { _log.Error("Lighting", "The rewritten bin did not read back with the saved sun — not saved."); return; }
+            if (RebaseForSave(binEntry, bytes, source, "Lighting") is not { } rebased) return;   // M823: as above
+            bytes = rebased;
 
             string savedTo;
             if (TryWriteToProjectFile(binEntry, bytes, out var projectFile)) savedTo = projectFile;
@@ -13888,6 +13922,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private byte[] RebaseOntoCurrent(WadAssetEntry entry, byte[] edited, byte[]? baseBytes, string channel)
     {
         if (baseBytes is null || baseBytes.Length == 0) return edited;
+        if (_mounts is not null && IsBinEntry(entry) && IsGameDataTarget(entry.PathHash)) return edited;   // M823: a bin the mod's GameData changes is rebased by its own save (SaveGameDataEditAsync, RebaseForSave), where a merge that fails refuses instead of falling back to the stale document
 
         byte[] current;
         try { current = ReadAsset(entry.PathHash); }
@@ -13915,8 +13950,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private async Task<bool> SaveMapBinBytesAsync(WadAssetEntry entry, byte[] bytes)
+    private Task<bool> SaveMapBinBytesAsync(WadAssetEntry entry, byte[] bytes) => SaveEditorBinBytesAsync(entry, bytes, null, "Bin", holdsDocument: false);
+
+    /// <summary>
+    /// <see cref="SaveMapBinBytesAsync"/> for an editor that holds a parsed document. M823: <paramref name="openedFrom"/> is the bytes it parsed it from; a bin the mod's GameData changes is merged onto what is served before
+    /// the edit is declared (see <c>SaveGameDataEditAsync</c>), instead of the stale document being diffed against the GameData's bin.
+    /// </summary>
+    private async Task<bool> SaveEditorBinBytesAsync(WadAssetEntry entry, byte[] bytes, byte[]? openedFrom, string channel, bool holdsDocument = true)
     {
+        if (await SaveGameDataEditAsync(entry, bytes, openedFrom, channel, holdsDocument) is { } kept) return kept;   // M823: a bin the mod's GameData changes is kept as a declaration on top of it, never as a file
         if (await RefusesGameDataWriteAsync(entry)) return false;   // M819: the one choke point every editor, repair, import and patch update saves a bin through; it waits for a preview that is still working
         try { _ = Formats.Meta.SafeBinTree.Parse(bytes); }
         catch (Exception ex) { _log.Error("MapBin", $"Edited .bin failed to re-parse — NOT saved: {ex.Message}"); return false; }
@@ -13958,14 +14000,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var vm = new BinIssuesWindowViewModel
         {
             BinName = entry.DisplayName,
-            RepairAsync = entry.ReadOnly ? null : async () =>
-            {
-                // The tolerantly-parsed tree IS the healed form — re-saving it writes a clean file.
-                var bytes = editor.Serialize();
-                if (bytes is null || !await SaveMapBinBytesAsync(entry, bytes)) return false;
-                await LoadMaterialBinAsync(entry, alsoRawBin: false);   // reload: the red marks clear
-                return true;
-            },
+            RepairAsync = entry.ReadOnly ? null : () => RepairMaterialBinAsync(entry, editor),   // M823: guarded and rebased like the Materials editor's save
         };
         var group = new BinIssueGroupViewModel { BinName = entry.DisplayName };
         vm.Groups.Add(group);
@@ -14000,13 +14035,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var vm = new BinIssuesWindowViewModel
         {
             BinName = entry.DisplayName,
-            RepairAsync = entry.ReadOnly ? null : async () =>
-            {
-                var bytes = doc.Serialize();
-                if (!await SaveMapBinBytesAsync(entry, bytes)) return false;
-                ParticleEditor.Load(entry, bytes, editable: true);   // reload from the healed bytes
-                return true;
-            },
+            RepairAsync = entry.ReadOnly ? null : () => RepairParticleBinAsync(entry, doc),   // M823: guarded and rebased like the Particle Editor's save
         };
         var group = new BinIssueGroupViewModel { BinName = entry.DisplayName };
         vm.Groups.Add(group);
@@ -14406,6 +14435,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// bin through the normal pipeline (in place for folder projects; shadows dissolve).</summary>
     private async Task<bool> RepointAssetRefAsync(WadAssetEntry entry, string fromPath, string toPath)
     {
+        if (!await GuardBinEditAsync(entry)) return false;   // M823: before the bin is read - a bin the mod's GameData changes is read once the preview is applied, and is saved as a declaration on top of it
         byte[] bytes;
         try { bytes = ReadAsset(entry.PathHash); }
         catch (Exception ex) { _log.Error("Validate", $"{entry.DisplayName}: {ex.Message}"); return false; }
@@ -14418,7 +14448,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         using var ms = new MemoryStream();
         tree.Write(ms);
-        if (!await SaveMapBinBytesAsync(entry, ms.ToArray())) return false;
+        if (!await SaveEditorBinBytesAsync(entry, ms.ToArray(), bytes, "Validate", holdsDocument: false)) return false;   // M823: the bytes it read, so that a bin that changed meanwhile has the repoint merged onto it
         _log.Success("Validate", $"{entry.DisplayName}: repointed {hits} reference(s) {fromPath} → {toPath}.");
         if (MaterialEditor.BinEntry?.PathHash == entry.PathHash)
             await LoadMaterialBinAsync(entry, alsoRawBin: false);   // refresh the open editor
@@ -15688,7 +15718,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             assetsRoot ??= GetOrAddChildFolder(mountVm, "ASSETS");
             foreach (var m in mats)
             {
-                var matVm = new MaterialAssetViewModel(m, e, readOnly || e.SourceKind == AssetSourceKind.LtkGameData);   // M819: a bin the GameData changes is read-only
+                var matVm = new MaterialAssetViewModel(m, e, readOnly || e.ReadOnly);   // M819, M823: a bin the GameData changes is editable (its edit is a declaration on top), so it is no longer read-only
                 var parts = m.Name.Split('/', StringSplitOptions.RemoveEmptyEntries);
                 var folder = assetsRoot;
                 for (int i = 0; i < parts.Length - 1; i++) folder = GetOrAddChildFolder(folder, parts[i]);
@@ -16080,8 +16110,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (build.Declarations is { } plan)
             foreach (var (layer, chunks) in plan.Modules)
             {
-                // the origins of the whole document count 0, 1, 2, ...: ReyEngine's own modules carry on from the imported ones
-                int first = imported.FirstOrDefault(i => i.Layer.Equals(layer, StringComparison.OrdinalIgnoreCase))?.Modules.Count ?? 0;
+                // the origins of the whole document count 0, 1, 2, ...: ReyEngine's own modules carry on from the imported ones (M823: and from the edits made on top of them)
+                int first = imported.FirstOrDefault(i => i.Layer.Equals(layer, StringComparison.OrdinalIgnoreCase))?.OwnStart ?? 0;
                 gameData[layer] = Formats.Meta.BinDeclarations.GameDataDocument(chunks, FantomeLayers.ModuleNames, first);
             }
         // a layer with an imported document or string overrides is content of its own, with no WAD and no bin of this project's making
@@ -16139,7 +16169,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M816: the declarations an import stored are written ahead of those, as they were written
             var data = imported?.FirstOrDefault(i => i.Layer.Equals(layer.Name, StringComparison.OrdinalIgnoreCase));
             string kept = data is null ? "" : $", {data.Modules.Count} imported module(s)"
-                + (data.Files.Count > 0 ? $" and {data.Files.Count} override file(s)" : "") + " kept as imported";
+                + (data.Files.Count > 0 ? $" and {data.Files.Count} override file(s)" : "") + " kept as imported"
+                + (data.Edits.Count > 0 ? $", then {data.Edits.Count} edit(s) made on top of them" : "");   // M823
             parts.Add($"{layer.Name} (priority {layer.Priority}): {wads} WAD(s), {declared} declared bin(s){kept}");
         }
         _log.Info(category, "Layers - " + string.Join("; ", parts) + ".");
@@ -16368,8 +16399,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M816: a layer's imported modules come first in its manifest, then the ones this project declares
         var imported = Project.RootPath is null ? Array.Empty<ImportedLayerData>() : LtkProjectStore.ReadLayers(Project);
         var gameData = plan.Modules.ToDictionary(kv => kv.Key,
-            kv => Formats.Meta.BinDeclarations.Manifest(kv.Value,
-                imported.FirstOrDefault(i => i.Layer.Equals(kv.Key, StringComparison.OrdinalIgnoreCase))?.Modules),
+            kv =>
+            {
+                var data = imported.FirstOrDefault(i => i.Layer.Equals(kv.Key, StringComparison.OrdinalIgnoreCase));
+                return Formats.Meta.BinDeclarations.Manifest(kv.Value, data?.Modules, data?.Edits);   // M823: the edits made on top of the imported modules follow them
+            },
             StringComparer.OrdinalIgnoreCase);
         return (plan.Kept.Select(k => (k.Layer, k.WadFolder, k.RelPath, k.AbsPath)).ToList(), gameData, plan.Report().ToList());
     }
@@ -16389,7 +16423,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return Formats.Meta.BinDeclarationPlanner.Plan(files,
             (hash, rel) => ReadRiotOriginalBytes(new WadAssetEntry { PathHash = hash, Path = rel }, references),
             _declarationNames ?? new DeclarationNames(_resolver.Database),
-            new Formats.Meta.MapSkinDeclarationOptions(Project.BinRecipes, ResolveBinName));
+            new Formats.Meta.MapSkinDeclarationOptions(Project.BinRecipes, ResolveBinName),
+            DeclarationBaselinesForExport());   // M823: a project bin the imported GameData also targets is declared against the game's bin with the modules in front of it applied
     }
 
     /// <summary>M814 test seam: the plaintext a declaration spells hashes with. Null is the loaded hash tables
@@ -16491,7 +16526,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var entry = srcNode?.Entry;
         if (entry is null) return false;
-        if (RefusesGameDataWrite(entry)) return false;   // M819: Copy To Project of a bin the declarations name stays refused: a whole copy of it would be a base the declarations apply to again
+        if (RefusesGameDataWriteHinted(entry, GameDataEditInPlaceHint)) return false;   // M819: Copy To Project of a bin the declarations name stays refused: a whole copy of it would be a base the declarations apply to again (M823: the way to change it is an editor)
 
         // M98b: don't trust the node's SourceKind — deleting the project copy from the browser leaves the
         // mount index stale. Check whether the project copy actually EXISTS on disk; if it does, offer to
@@ -16649,6 +16684,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool TryWriteToProjectFile(WadAssetEntry entry, byte[] bytes, out string file)
     {
         file = "";
+        if (SaveGameDataEdit(entry, bytes, out file) is { } kept) return kept;   // M823: a bin the mod's GameData changes is kept as a declaration on top of it (a refusal throws, with its reason)
         ThrowIfGameDataTarget(entry);   // M819: no write to the project - a file or the override store behind it - reaches a chunk the GameData changes
         if (_mounts is null || !_mounts.TryGet(entry.PathHash, out var a)) return false;
         // M126: prefer the real project FILE over a shadow override. Overrides outrank folder files in
@@ -16739,9 +16775,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 IncludeSubdirectories = true,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
             };
-            FileSystemEventHandler onChange = (_, _) => ScheduleBrowserRefresh();
+            FileSystemEventHandler onChange = (_, e) => ScheduleBrowserRefresh(e.FullPath);
             w.Created += onChange; w.Deleted += onChange; w.Changed += onChange;
-            w.Renamed += (_, _) => ScheduleBrowserRefresh();
+            w.Renamed += (_, e) => ScheduleBrowserRefresh(e.FullPath, e.OldFullPath);
             w.EnableRaisingEvents = true;
             _projectWatchers.Add(w);
         }
@@ -16754,8 +16790,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _projectWatchers.Clear();
     }
 
-    private void ScheduleBrowserRefresh()
+    /// <param name="paths">M823: the file(s) the event is about. An event only about the LTK store (<c>.reyengine/ltk/</c>) changes nothing the mounts hold - no mount lists it - and is no reason to rebuild them: the rebuild would
+    /// be pure cost, and it opens a window in which the GameData preview is pending (the write of an edit on top of the GameData is the store's, and the editor refreshes the preview itself).</param>
+    private void ScheduleBrowserRefresh(params string?[] paths)
     {
+        if (paths.Length > 0 && paths.All(IsInLtkStore)) return;
         // .reyengine/ churn (project.json saves, reports) must not loop back into a refresh storm
         _watchDebounce?.Dispose();
         _watchDebounce = new System.Threading.Timer(_ =>
@@ -17052,6 +17091,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CopyAssetToProjectCommand.NotifyCanExecuteChanged();
         ReplaceSelectedCommand.NotifyCanExecuteChanged();
         RevertSelectedCommand.NotifyCanExecuteChanged();
+        RevertGameDataEditsCommand.NotifyCanExecuteChanged();   // M823
         CopySelectionToCommand.NotifyCanExecuteChanged();
         MoveSelectionToCommand.NotifyCanExecuteChanged();
         DeleteSelectionCommand.NotifyCanExecuteChanged();
@@ -17351,7 +17391,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             catch (Exception ex) { unreadable = ex.Message; }
 
         var wadLayers = Project.Layers.Where(l => !FantomeLayers.IsBase(l.Name) && l.Folders.Any(Project.IsClaimedWhole)).Select(l => l.Name).ToList();
-        int modules = imported.Sum(i => i.Modules.Count), files = imported.Sum(i => i.Files.Count);
+        int modules = imported.Sum(i => i.Modules.Count + i.Edits.Count), files = imported.Sum(i => i.Files.Count);   // M823: the edits made on top of them are modules too
         int withStrings = Project.Layers.Count(l => l.StringOverrides is { Count: > 0 });
         if (wadLayers.Count == 0 && modules == 0 && files == 0 && withStrings == 0 && unreadable is null) return;
 

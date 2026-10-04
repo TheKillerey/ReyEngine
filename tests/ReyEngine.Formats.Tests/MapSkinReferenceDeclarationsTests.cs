@@ -584,6 +584,72 @@ public sealed class MapSkinReferenceDeclarationsTests : IDisposable
         AssertSameBin(mine, Oracle.Apply(s.Riot, maps), "references then the edit");
     }
 
+    // ===================================================== M823: a bin the imported GameData also targets
+
+    /// <summary>The planner's baselines, made by the test: the modules in front of the new one, as a small edit applied to the game's bin and the project's copy alike.</summary>
+    private sealed class FrontModule(Func<byte[], byte[]> apply) : IDeclarationBaselines
+    {
+        public readonly List<ulong> Asked = new();
+        public DeclarationBaseline? For(DeclarationFile file, ulong chunk, byte[] game, byte[] mod)
+        {
+            Asked.Add(chunk);
+            return chunk == HashAlgorithms.WadPath(MapPath) ? new DeclarationBaseline(apply(game), apply(mod)) : null;
+        }
+    }
+
+    private static byte[] Edit(byte[] bin, Action<BinTree> change)
+    {
+        var tree = SafeBinTree.Parse(bin);
+        change(tree);
+        return Write(tree);
+    }
+
+    [Fact]
+    public void AMapBinTheImportedGameDataAlsoTargetsIsDeclaredBetweenTheGamesAndTheCopyBothWithTheModulesInFrontApplied()
+    {
+        var s = Switch(carry: true);
+        // the package's module in front changes an object the switch has nothing to do with, in the game's bin and (applied to it) in the project's copy
+        byte[] Front(byte[] bin) => Edit(bin, t => t.Objects[H("Maps/Shipping/Map11/Extra")].Properties[H("name")] = new BinTreeString(H("name"), "from-the-package"));
+        var front = new FrontModule(Front);
+        var files = new[] { Put(MapPath, s.Map), Put(SourcePath, s.Container) };
+        var options = new MapSkinDeclarationOptions(new[] { s.Record }, Resolve);
+
+        var without = BinDeclarationPlanner.Plan(files, Game(s.Riot), Names, options);
+        var with = BinDeclarationPlanner.Plan(files, Game(s.Riot), Names, options, front);
+
+        Assert.Equal(new[] { HashAlgorithms.WadPath(SourcePath), HashAlgorithms.WadPath(MapPath) }.Order(), front.Asked.Order());     // every bin of the plan is asked about, the container too
+        // the switch is the same switch: the references read the game's own bin whatever stands in front, so they are exactly what they were
+        Assert.Equal(Json(Bodies(ModuleOf(without, MapPath))), Json(Bodies(ModuleOf(with, MapPath))));
+        Assert.Equal(Json(Bodies(ModuleOf(without, SourcePath))), Json(Bodies(ModuleOf(with, SourcePath))));
+        // the module in front is in both sides, so nothing of it is stated again, and the project holds nothing beyond the switch
+        Assert.Single(with.Modules["base"], m => m.Target == MapPath);
+        // applied over the bin the module in front leaves, the module gives the project's copy with that module applied to it
+        AssertSameBin(Front(s.Map), Oracle.Apply(Front(s.Riot), new[] { ModuleOf(with, MapPath) }), "the copy as it is when the module runs");
+    }
+
+    [Fact]
+    public void AGroupTheModuleInFrontDisturbedInTheCopyIsDecidedAsValuesAndWhatItSetsInBothSidesIsNotStatedAgain()
+    {
+        var s = Switch(carry: true);
+        // the module in front sets the base slot's grass tint - a route field the switch writes. Applied to the copy it undoes the switch's tint there, so the copy no longer holds the slot's route group whole.
+        byte[] Front(byte[] bin) => Edit(bin, t => t.Objects[Slot("Default")].Properties[H("mGrassTintTexture")] =
+            new BinTreeWadChunkLink(H("mGrassTintTexture"), HashAlgorithms.WadPath("assets/mine.tex")));
+        var front = new FrontModule(Front);
+        var files = new[] { Put(MapPath, s.Map), Put(SourcePath, s.Container) };
+
+        var plan = BinDeclarationPlanner.Plan(files, Game(s.Riot), Names, new MapSkinDeclarationOptions(new[] { s.Record }, Resolve), front);
+
+        var maps = plan.Modules["base"].Where(m => m.Target == MapPath).ToList();
+        Assert.Equal(2, maps.Count);                                                                                                // references, then the values of the group that was disturbed
+        Assert.Equal(new[] { "0x2d3285eb" }, Bodies(maps[0])[SlotName("Default")]!.AsObject().Select(p => p.Key).ToArray());      // its character skins are another group: still by reference
+        Assert.Contains(SlotName("Odyssey"), Bodies(maps[0]).Select(b => b.Key));                                                   // and the other slots keep every reference
+        // the route fields differ from the game's only where the switch moved them (the CFG and the particles Default shares with the source today are equal); the tint is the module in front's in BOTH sides
+        Assert.Equal("""{"mMapContainerLink":"Maps/MapGeometry/Map11/Milkshake_SRS"}""", Json(Bodies(maps[1])[SlotName("Default")]));
+        Assert.DoesNotContain("mGrassTintTexture", Json(Bodies(maps[1])));
+        AssertSameBin(Front(s.Map), Oracle.Apply(Front(s.Riot), maps), "the copy as it is when the module runs");
+        Assert.Contains(plan.SwitchNotes, n => n.Contains("map11.bin") && n.Contains("by reference") && n.Contains("group(s)"));
+    }
+
     [Fact]
     public void AnObjectAddedOrRemovedBeyondTheSwitchShipsInTheModuleOfValues()
     {

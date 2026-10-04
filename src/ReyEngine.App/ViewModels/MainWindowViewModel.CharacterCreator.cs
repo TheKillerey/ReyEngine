@@ -131,7 +131,7 @@ public sealed partial class MainWindowViewModel
         if (_currentMap is not { } map) throw new InvalidOperationException("No map is open.");
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
             throw new InvalidOperationException("The open map has no companion materials .bin, so it cannot hold placements.");
-        if (await PlacementWriteRefusalAsync(mapEntry) is { } refusal) throw new InvalidOperationException(refusal);   // M819: both bins the placement ends in, before the first is written
+        if (await PlacementEditRefusalAsync(mapEntry) is { } refusal) throw new InvalidOperationException(refusal);   // M819: both bins the placement ends in, before the first is written (M823: a bin whose edit is kept as a declaration passes; a flow that stages files first asked the strict question already)
 
         byte[] target = GetAssetBytes(binEntry);
         int existing = MapContent.AllProps.Count(p => p.Prop.CharacterName.Equals(character, StringComparison.OrdinalIgnoreCase));
@@ -177,14 +177,12 @@ public sealed partial class MainWindowViewModel
             };
         byte[] written = MapPlaceableWriter.WriteEdits(target, new[] { edit }, out var error)
             ?? throw new InvalidOperationException(error ?? "The character placement could not be created.");
-        if (!await SaveMapBinBytesAsync(binEntry, written))
-            throw new InvalidOperationException("The edited materials bin could not be saved.");
 
         // M722: the game preloads only the characters the map's own bin lists; one placed and not listed is
         // drawn unskinned (a WORLD_MATRIX error and a shader hash miss) and never appears. Every character on
         // the map is checked, so a prop placed before this existed is registered too.
         var onMap = MapContent.AllProps.Select(p => p.Prop.CharacterName).Append(character).ToList();
-        string listed = await RegisterMapCharactersAsync(mapEntry, onMap);
+        string listed = await SavePlacementAsync(binEntry, written, mapEntry, onMap);   // M823: the two bins, as one unit when the mod's GameData changes either
 
         // M701: show what was just added. The prop-mesh overlay is off by default, so a placement made
         // with it off is a marker and nothing else - which reads exactly like the placement having failed.
@@ -217,7 +215,7 @@ public sealed partial class MainWindowViewModel
         }
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Error("Props", "The open map has no materials .bin."); return; }
-        if (!await GuardEditableAsync(binEntry)) return;
+        if (!await GuardBinEditAsync(binEntry)) return;   // M823
         if (!await EnsureProjectSavedAsync()) return;
 
         var id = node.Prop.Id;
@@ -247,16 +245,18 @@ public sealed partial class MainWindowViewModel
             + "and the game client creates it, so it spawns where a character placement never did.");
     }
 
-    /// <summary>M722: list every given character in the map's own bin (<c>mapNNN.bin</c>) so the game preloads
-    /// it. The placement is already saved when this runs, so a failure here is reported, not thrown.</summary>
-    private async Task<string> RegisterMapCharactersAsync(Core.Assets.WadAssetEntry mapEntry, IReadOnlyList<string> characters)
+    /// <summary>What registering the characters in the map's own bin comes to: the bin to save, its new bytes and what they add - or, when there is nothing to save, the sentence to say.</summary>
+    private sealed record CharacterRegistration(Core.Assets.WadAssetEntry? Entry, byte[]? Bytes, IReadOnlyList<string> Added, uint List, string Said, string? FileName);
+
+    /// <summary>M722: works out what listing every given character in the map's own bin (<c>mapNNN.bin</c>) comes to, and says why when it comes to nothing. Writes nothing.</summary>
+    private CharacterRegistration PrepareCharacterRegistration(Core.Assets.WadAssetEntry mapEntry, IReadOnlyList<string> characters)
     {
         string? path = MapBinPathFor(mapEntry.Path);
         if (path is null || !TryResolveEntry(HashAlgorithms.WadPath(path), out var mapBinEntry))
         {
             _log.Warn("Props", $"No map bin at '{path ?? "?"}' - the character could not be added to the map's "
                 + "character lists, so the game will not preload it.");
-            return " The map bin was not found, so it is NOT in the map's character lists.";
+            return new CharacterRegistration(null, null, Array.Empty<string>(), 0, " The map bin was not found, so it is NOT in the map's character lists.", null);
         }
 
         byte[] bytes = GetAssetBytes(mapBinEntry);
@@ -264,16 +264,59 @@ public sealed partial class MainWindowViewModel
         if (written is null)
         {
             _log.Warn("Props", $"{Path.GetFileName(path)}: {error} The game will not preload the placed character.");
-            return " It could NOT be added to the map's character lists.";
+            return new CharacterRegistration(null, null, Array.Empty<string>(), 0, " It could NOT be added to the map's character lists.", null);
         }
-        if (added.Count == 0) return "";
-        if (!await SaveMapBinBytesAsync(mapBinEntry, written))
+        if (added.Count == 0) return new CharacterRegistration(null, null, added, list, "", null);
+        return new CharacterRegistration(mapBinEntry, written, added, list, "", Path.GetFileName(path));
+    }
+
+    /// <summary>The words for a registration that was saved.</summary>
+    private string SaidRegistrationSaved(CharacterRegistration registration)
+    {
+        _log.Success("Props", $"Added {string.Join(", ", registration.Added.Select(c => "Characters/" + c))} to MapCharacterList "
+            + $"0x{registration.List:x8} in {registration.FileName}, so the game preloads it.");
+        return $" Added to the map's character list 0x{registration.List:x8}.";
+    }
+
+    /// <summary>M722: list every given character in the map's own bin (<c>mapNNN.bin</c>) so the game preloads
+    /// it. The placement is already saved when this runs, so a failure here is reported, not thrown.</summary>
+    private async Task<string> RegisterMapCharactersAsync(Core.Assets.WadAssetEntry mapEntry, IReadOnlyList<string> characters)
+    {
+        var registration = PrepareCharacterRegistration(mapEntry, characters);
+        if (registration.Entry is null || registration.Bytes is null) return registration.Said;
+        if (!await SaveMapBinBytesAsync(registration.Entry, registration.Bytes))
         {
-            _log.Warn("Props", $"{Path.GetFileName(path)} could not be saved - {string.Join(", ", added)} NOT added to the character lists.");
+            _log.Warn("Props", $"{registration.FileName} could not be saved - {string.Join(", ", registration.Added)} NOT added to the character lists.");
             return " The map bin could NOT be saved with the character list entry.";
         }
-        _log.Success("Props", $"Added {string.Join(", ", added.Select(c => "Characters/" + c))} to MapCharacterList "
-            + $"0x{list:x8} in {Path.GetFileName(path)}, so the game preloads it.");
-        return $" Added to the map's character list 0x{list:x8}.";
+        return SaidRegistrationSaved(registration);
+    }
+
+    /// <summary>
+    /// The two bins a placement ends in: the map's materials.bin, which holds the placement, and the map's own bin, which lists the characters the game preloads. Without the mod's GameData in either, as it always was: the
+    /// placement is saved, and the registration after it (a failure of that one is reported, not thrown).
+    ///
+    /// <para>M823: when the GameData changes either, the two are ONE unit (<see cref="SaveMapBinsTogetherAsync"/>): both edits are declared and proven before either is kept, and one that fails after the other was kept puts it
+    /// back. A placement kept without its registration is drawn unskinned and never spawns, and trying again places it twice.</para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The placement could not be saved; with the GameData in play, nothing of it was.</exception>
+    private async Task<string> SavePlacementAsync(Core.Assets.WadAssetEntry binEntry, byte[] written, Core.Assets.WadAssetEntry mapEntry, IReadOnlyList<string> onMap)
+    {
+        Core.Assets.WadAssetEntry? mapBin = MapBinPathFor(mapEntry.Path) is { } mapBinPath && TryResolveEntry(HashAlgorithms.WadPath(mapBinPath), out var resolved) ? resolved : null;
+        bool declared = _mounts is not null && (IsGameDataTarget(binEntry.PathHash) || (mapBin is not null && IsGameDataTarget(mapBin.PathHash)));
+        if (!declared)
+        {
+            if (!await SaveMapBinBytesAsync(binEntry, written))
+                throw new InvalidOperationException("The edited materials bin could not be saved.");
+            // M722: the game preloads only the characters the map's own bin lists
+            string listed = await RegisterMapCharactersAsync(mapEntry, onMap);
+            return listed;
+        }
+
+        var registration = PrepareCharacterRegistration(mapEntry, onMap);
+        var bins = new List<(Core.Assets.WadAssetEntry Entry, byte[] Bytes)> { (binEntry, written) };
+        if (registration.Entry is { } registeredBin && registration.Bytes is { } registeredBytes) bins.Add((registeredBin, registeredBytes));
+        if (await SaveMapBinsTogetherAsync(bins) is { } why) throw new InvalidOperationException(why);
+        return registration.Entry is null ? registration.Said : SaidRegistrationSaved(registration);
     }
 }

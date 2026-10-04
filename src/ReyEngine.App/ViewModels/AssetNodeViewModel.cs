@@ -96,11 +96,11 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
         };
     public bool HasSourceTag => SourceTag.Length > 0;
 
-    /// <summary>M819: the bytes the editor reads for this asset are the mod's LTK GameData applied over the game's - read-only.</summary>
+    /// <summary>M819: the bytes the editor reads for this asset are the mod's LTK GameData applied over the game's. M823: editing it keeps the edit as a declaration on top of the GameData; it is never written as a file.</summary>
     public bool IsGameData => !IsMaterial && Entry is { SourceKind: AssetSourceKind.LtkGameData };
 
     /// <summary>M819: why the lock is on: a Riot reference, or a bin the mod's GameData changes.</summary>
-    public string ReadOnlyTip => IsGameData ? "Read-only: changed by the mod's LTK GameData" : "Read-only Riot reference";
+    public string ReadOnlyTip => IsGameData ? "Changed by the mod's LTK GameData: an edit is saved as a declaration on top of it" : "Read-only Riot reference";
 
     public string Kind => IsFolder ? "DIR" : IsMaterial ? "MAT"
         : Entry?.Type switch

@@ -149,6 +149,22 @@ public sealed class LtkCleanupTests : IDisposable
     }
 
     [Fact]
+    public void AnAssetOnlyAnEditOnTopOfTheGameDataNamesIsNotListedAsUnusedEither()
+    {
+        // M823: the person pointed a material at a texture of the project in an edit kept on top of the GameData; the edit is a module of the project's own, in a file beside the package's document
+        var project = ImportedProject();
+        LtkEditStore.Set(project, project.Layers[0], HashAlgorithms.WadPath("data/maps/b.bin"),
+            "{\"target\":\"data/maps/b.bin\",\"edits\":[{\"Maps/B\":{\"texture\":\"ASSETS/Maps/Orphan.dds\"}}],\"origin\":{\"manifest\":\"game_data.yaml\",\"source\":null,\"module\":1}}");
+
+        var report = Scan(project);
+
+        var listed = report.Candidates.ToDictionary(c => c.RelPath, c => c.Group);
+        Assert.DoesNotContain("assets/maps/orphan.dds", listed.Keys);                              // the edit points at it: spared, though nothing else does
+        Assert.DoesNotContain("assets/maps/used-by-gamedata.dds", listed.Keys);                    // and the package's document still does
+        Assert.Empty(report.Notes.Where(n => n.Contains("could not be read")));
+    }
+
+    [Fact]
     public void WithoutTheDocumentTheSameAssetIsListedAsItWasBeforeTheFix()
     {
         // the control of the control: with no stored document (a project that never imported one) the asset is unused, so it is the

@@ -13,6 +13,13 @@ public sealed record BinMergeReport(
     /// <summary>M590: asset references rewritten from String to WadChunkLink to match the wire form the
     /// target patch uses. Reported because it changes bytes the mod author never edited.</summary>
     public int Relinked { get; init; }
+
+    /// <summary>
+    /// M823: where the mod and the patch both changed something to values that DIFFER - the conflicts that are conflicts. <see cref="Conflicts"/> also counts a property both sides changed to the SAME value (the patch's value
+    /// and the mod's agree, so nothing is lost by taking either), which a caller that must not lose the patch's work cannot tell from the others. One entry per place ("object.property", or "object"); the places are in the order the merge met
+    /// them. A caller that resolves conflicts mod-wins (the patch update) reads <see cref="Conflicts"/> and is unchanged; one that refuses them (an edit on top of an imported mod's GameData) reads this.
+    /// </summary>
+    public IReadOnlyList<string> RealConflicts { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>
@@ -38,6 +45,7 @@ public static class BinThreeWayMerge
 
         int added = 0, removed = 0, modified = 0, conflicts = 0;
         var conflictDetails = new List<string>();
+        var realConflicts = new List<string>();   // M823: the places where the two sides' values differ - see BinMergeReport.RealConflicts
         var notes = new List<string>();
 
         foreach (uint key in oldT.Objects.Keys.Union(modT.Objects.Keys).ToList())
@@ -55,7 +63,7 @@ public static class BinThreeWayMerge
             {
                 // mod added the object → carry it over (mod wins if the patch added the same hash)
                 if (newT.Objects.ContainsKey(key) && !BinPropEquality.ObjectsEqual(newT.Objects[key], m!))
-                { conflicts++; conflictDetails.Add($"object {R(key)}: added by both mod and patch — mod version kept"); }
+                { conflicts++; conflictDetails.Add($"object {R(key)}: added by both mod and patch — mod version kept"); realConflicts.Add($"object {R(key)}"); }
                 newT.Objects[key] = m!;
                 added++;
             }
@@ -68,6 +76,7 @@ public static class BinThreeWayMerge
                     newT.Objects[key] = m;
                     modified++; conflicts++;
                     conflictDetails.Add($"object {R(key)}: edited by mod but removed by the patch — mod version restored");
+                    realConflicts.Add($"object {R(key)}");
                     continue;
                 }
                 if (n.ClassHash != m.ClassHash)
@@ -76,6 +85,7 @@ public static class BinThreeWayMerge
                     newT.Objects[key] = m;
                     modified++; conflicts++;
                     conflictDetails.Add($"object {R(key)}: meta class changed in the patch — mod version kept whole");
+                    realConflicts.Add($"object {R(key)}");
                     continue;
                 }
 
@@ -92,7 +102,7 @@ public static class BinThreeWayMerge
                     else if (!pOld && pMod)
                     {
                         if (n.Properties.TryGetValue(ph, out var existing) && !BinPropEquality.PropsEqual(existing, pm))
-                        { conflicts++; conflictDetails.Add($"{R(key)}.{R(ph)}: added by both mod and patch — mod value kept"); }
+                        { conflicts++; conflictDetails.Add($"{R(key)}.{R(ph)}: added by both mod and patch — mod value kept"); realConflicts.Add($"{R(key)}.{R(ph)}"); }
                         n.Properties[ph] = pm!;                          // mod added the property
                         anyChange = true;
                     }
@@ -101,7 +111,11 @@ public static class BinThreeWayMerge
                         // mod changed the property; did the patch change it too?
                         bool patchChanged = !n.Properties.TryGetValue(ph, out var pn) || !BinPropEquality.PropsEqual(pn, po);
                         if (patchChanged)
-                        { conflicts++; conflictDetails.Add($"{R(key)}.{R(ph)}: changed by both mod and patch — mod value kept"); }
+                        {
+                            conflicts++; conflictDetails.Add($"{R(key)}.{R(ph)}: changed by both mod and patch — mod value kept");
+                            // M823: a conflict only where the patch's value is not the mod's value too (pn is null when the patch removed the property)
+                            if (pn is null || !BinPropEquality.PropsEqual(pn, pm)) realConflicts.Add($"{R(key)}.{R(ph)}");
+                        }
                         n.Properties[ph] = pm;
                         anyChange = true;
                     }
@@ -132,6 +146,6 @@ public static class BinThreeWayMerge
         _ = SafeBinTree.Parse(bytes);   // must round-trip or the merge is unusable
 
         return (bytes, new BinMergeReport(newT.Objects.Count, added, removed, modified, conflicts,
-            conflictDetails, notes) { Relinked = relinked });
+            conflictDetails, notes) { Relinked = relinked, RealConflicts = realConflicts });
     }
 }

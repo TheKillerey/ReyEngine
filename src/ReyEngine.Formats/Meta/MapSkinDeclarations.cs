@@ -194,14 +194,14 @@ internal sealed class MapSkinDeclarations
     /// the switch as values. Null when <paramref name="relPath"/> is not governed by a switch or nothing about it can be
     /// declared by reference - the caller then diffs the bin as M814 does.
     /// </summary>
-    public IReadOnlyList<DeclaredChunk>? Declare(string relPath, string target, byte[] riot, byte[] mod, IDeclarationNames names)
+    public IReadOnlyList<DeclaredChunk>? Declare(string relPath, string target, byte[] riot, byte[] mod, IDeclarationNames names, DeclarationBaseline? baseline = null)
     {
         if (!_byPath.TryGetValue(Norm(relPath), out var governed)) return null;
         try
         {
             return governed.Role == Role.Shipping
-                ? DeclareShipping(governed.Switch, relPath, target, riot, mod, names)
-                : DeclareContainer(governed.Switch, relPath, target, riot, mod, names);
+                ? DeclareShipping(governed.Switch, relPath, target, riot, mod, names, baseline)
+                : DeclareContainer(governed.Switch, relPath, target, riot, mod, names, baseline);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -218,12 +218,15 @@ internal sealed class MapSkinDeclarations
     private const string AudioGroup = "audio profile";
 
     private IReadOnlyList<DeclaredChunk>? DeclareShipping(Switch sw, string relPath, string target, byte[] riotBytes, byte[] modBytes,
-        IDeclarationNames names)
+        IDeclarationNames names, DeclarationBaseline? baseline)
     {
         if (modBytes.AsSpan().SequenceEqual(riotBytes)) return null;   // the project holds the game's own bin: the plain path says unchanged
         var riot = SafeBinTree.Parse(riotBytes, out var riotIssues);
         var mod = SafeBinTree.Parse(modBytes, out var modIssues);
         if (riotIssues.Count > 0 || modIssues.Count > 0) return null;   // the plain path says why a lossy parse ships whole
+        // M823: a bin the imported GameData also targets: the references still read their values from the game's bin (riot), but are applied over the bin the modules in front of this
+        // one leave (over), and what is left is diffed against that and the project's bin with the same modules applied (mod)
+        if (!TryBaseline(baseline, out var over, ref mod)) return null;
 
         var wanted = ShippingEdits(sw, riot, out int notExpressible);
         var kept = KeepHeld(wanted, riot, mod, out int groupsDropped);
@@ -235,7 +238,7 @@ internal sealed class MapSkinDeclarations
         if (notExpressible > 0)
             Note($"{relPath}: {notExpressible} object(s) the switch writes cannot be produced by copying from the source slot and ship as values.");
 
-        var expected = ApplyReferences(riot, kept);
+        var expected = ApplyReferences(riot, kept, over);
         var residual = BinDeclarations.ConvertTrees(target, expected, mod, names);
         if (residual.WhyNot is not null)
         {
@@ -332,7 +335,7 @@ internal sealed class MapSkinDeclarations
     // ===================================================== the source container
 
     private IReadOnlyList<DeclaredChunk>? DeclareContainer(Switch sw, string relPath, string target, byte[] riotBytes, byte[] modBytes,
-        IDeclarationNames names)
+        IDeclarationNames names, DeclarationBaseline? baseline)
     {
         if (modBytes.AsSpan().SequenceEqual(riotBytes)) return null;   // the project holds the game's own container: the plain path says unchanged
         if (sw.TargetContainerPath is null) return null;            // a base slot with no container: the switch moves no key
@@ -348,6 +351,7 @@ internal sealed class MapSkinDeclarations
         var riot = SafeBinTree.Parse(riotBytes, out var riotIssues);
         var mod = SafeBinTree.Parse(modBytes, out var modIssues);
         if (riotIssues.Count > 0 || modIssues.Count > 0) return null;
+        if (!TryBaseline(baseline, out var over, ref mod)) return null;   // M823: see DeclareShipping
 
         uint items = HashAlgorithms.Fnv1a("items");
         var wanted = compat.Remaps.OrderBy(r => r.ContainerHash).ThenBy(r => r.OldKey)
@@ -365,7 +369,7 @@ internal sealed class MapSkinDeclarations
         DeclaredChunk residual;
         while (true)
         {
-            var expected = ApplyReferences(riot, kept);
+            var expected = ApplyReferences(riot, kept, over);
             residual = BinDeclarations.ConvertTrees(target, expected, mod, names);
             if (residual.WhyNot is not null) { why = residual.WhyNot; break; }
             var overwritten = OverwrittenMaps(residual, kept, names);
@@ -392,6 +396,23 @@ internal sealed class MapSkinDeclarations
              + ".");
         References += chunks[0].References;
         return chunks;
+    }
+
+    /// <summary>
+    /// M823: the trees a bin the imported GameData also targets is declared between. <paramref name="over"/> is the game's bin with the modules in front of the new one applied (what the references are
+    /// applied over, and what the rest is diffed from); <paramref name="mod"/> becomes the project's copy with the same modules applied. Without a baseline <paramref name="over"/> is null and <paramref name="mod"/>
+    /// stays. False when either does not parse without loss: the plain path then says why the bin ships whole.
+    /// </summary>
+    private static bool TryBaseline(DeclarationBaseline? baseline, out BinTree? over, ref BinTree mod)
+    {
+        over = null;
+        if (baseline is null) return true;
+        var game = SafeBinTree.Parse(baseline.Game, out var gameIssues);
+        var copy = SafeBinTree.Parse(baseline.Mod, out var copyIssues);
+        if (gameIssues.Count > 0 || copyIssues.Count > 0) return false;
+        over = game;
+        mod = copy;
+        return true;
     }
 
     /// <summary>The (object, map field) pairs the diff sets whole although a key move edits them.</summary>
@@ -477,11 +498,13 @@ internal sealed class MapSkinDeclarations
     /// a key move removes every old key and then appends the new ones. The same reading the harness checks against LTK's own
     /// <c>apply</c> over the installed Map11 and Map12 bins.
     /// </summary>
-    private static BinTree ApplyReferences(BinTree game, IReadOnlyList<RefEdit> edits)
+    private static BinTree ApplyReferences(BinTree game, IReadOnlyList<RefEdit> edits, BinTree? over = null)
     {
+        // M823: the values are read from the game's bin (game); what they are written into is the bin the modules in front of these left (over), when there is one
+        var target = over ?? game;
         var byEntry = edits.GroupBy(e => e.Entry).ToDictionary(g => g.Key, g => g.ToList());
-        var objects = new List<BinTreeObject>(game.Objects.Count);
-        foreach (var obj in game.Objects.Values)
+        var objects = new List<BinTreeObject>(target.Objects.Count);
+        foreach (var obj in target.Objects.Values)
         {
             if (!byEntry.TryGetValue(obj.PathHash, out var mine)) { objects.Add(obj); continue; }
             var props = obj.Properties.Values.ToList();
@@ -504,7 +527,7 @@ internal sealed class MapSkinDeclarations
             }
             objects.Add(new BinTreeObject(obj.PathHash, obj.ClassHash, props));
         }
-        return new BinTree(objects, game.Dependencies);
+        return new BinTree(objects, target.Dependencies);
     }
 
     /// <summary>The module of the kept edits: one body per object, in the order the game's bin lists them; a key move is a
