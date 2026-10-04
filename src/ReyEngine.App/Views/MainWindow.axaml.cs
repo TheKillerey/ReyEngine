@@ -1533,10 +1533,14 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             _faceBoxDragging = false;
             FaceSelectionBox.IsVisible = false;
             if (DataContext is MainWindowViewModel faceVm && faceVm.FaceEditMode)
-                faceVm.SelectFacesInBox(
+            {
+                if (!_pressMoved && Viewport.TryGetPickRay(end, out var faceOrigin, out var faceDirection))
+                    faceVm.SelectFaceFromViewport(faceOrigin, faceDirection, additive: true);
+                else faceVm.SelectFacesInBox(
                     new Vector2((float)Math.Min(_faceBoxStart.X, end.X), (float)Math.Min(_faceBoxStart.Y, end.Y)),
                     new Vector2((float)Math.Max(_faceBoxStart.X, end.X), (float)Math.Max(_faceBoxStart.Y, end.Y)),
                     world => Viewport.TryProjectToScreen(world, out var point) ? point : null);
+            }
             _lmb = _rmb = _mmb = false;
             e.Pointer.Capture(null);
             return;

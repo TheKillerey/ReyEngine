@@ -9770,7 +9770,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Group bounds box only makes sense for a multi-selection; a single mesh already has its highlight box.
         GroupBoundsMin = _selection.IsMulti ? gmin : null;
         GroupBoundsMax = _selection.IsMulti ? gmax : null;
-        GizmoPivot = (gmin + gmax) * 0.5f; // selection center = combined bbox center
+        GizmoPivot = FaceEditMode ? FaceGizmoPivot : (gmin + gmax) * 0.5f; // faces keep their own target
     }
 
     // Drag state captured at gizmo-press so the WHOLE drag is one undo step. For a multi-selection we

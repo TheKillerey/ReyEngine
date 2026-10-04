@@ -21,6 +21,54 @@ public sealed class FaceEditModeTests
     }
 
     [Fact]
+    public void FacePickingIgnoresOverlappingObjectsAndFollowsTheActiveMesh()
+    {
+        var map = new ReyEngine.Formats.MapGeo.MapGeoAsset
+        {
+            Positions = new float[] { 0,0,0, 10,0,0, 0,0,10, 0,10,0, 10,10,0, 0,10,10 },
+            Normals = new float[] { 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0 },
+            Uvs = new float[12], Indices = new uint[] { 0,1,2,3,4,5 },
+            Groups = new[] { new ReyEngine.Formats.MapGeo.MapGeoGroup("a",0,3,MeshIndex:0), new ReyEngine.Formats.MapGeo.MapGeoGroup("b",3,3,MeshIndex:1) },
+            Meshes = Enumerable.Range(0,2).Select(i => new ReyEngine.Formats.MapGeo.MapGeoMesh
+            { Index=i, Name="mesh"+i, VertexStart=i*3, VertexCount=3, Transform=System.Numerics.Matrix4x4.Identity, Pivot=System.Numerics.Vector3.Zero }).ToArray()
+        };
+        var vm = new MainWindowViewModel();
+        vm.StopEditorAutoSave();
+        const System.Reflection.BindingFlags flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+        typeof(MainWindowViewModel).GetField("_currentMap",flags)!.SetValue(vm,map);
+        var selection=(ReyEngine.Core.Selection.SelectionSet<ReyEngine.Formats.MapGeo.MapGeoMesh>)typeof(MainWindowViewModel).GetField("_selection",flags)!.GetValue(vm)!;
+        selection.SetSingle(map.Meshes[0]);
+        vm.FaceEditMode=true;
+        vm.SelectFaceFromViewport(new(2,100,2),-System.Numerics.Vector3.UnitY,false);
+        var selected=(HashSet<int>)typeof(MainWindowViewModel).GetField("_selectedFaces",flags)!.GetValue(vm)!;
+        Assert.Equal(new[]{0},selected);
+        Assert.Same(map.Meshes[0],selection.Primary);
+        vm.SelectLinkedFacesFromViewport(new(2,100,2),-System.Numerics.Vector3.UnitY,false);
+        Assert.Equal(new[]{0},selected);
+        vm.SelectFacesInBox(new(-1,-1),new(11,11),p=>new(p.X,p.Z));
+        Assert.Equal(new[]{0},selected);
+        selection.SetSingle(map.Meshes[1]);
+        Assert.Empty(selected);
+        Assert.Null(vm.GizmoPivot);
+        Assert.Same(map.Meshes[1],vm.ActiveEditableMesh);
+        vm.SelectFacesInBox(new(-1,-1),new(11,11),p=>new(p.X,p.Z));
+        Assert.Equal(new[]{1},selected);
+        vm.SelectFaceFromViewport(new(2,100,2),-System.Numerics.Vector3.UnitY,true);
+        Assert.Empty(selected); // additive click toggles only B
+        vm.FaceEditMode=false;
+        Assert.Null(vm.ActiveEditableMesh);
+        Assert.Same(map.Meshes[1],selection.Primary);
+        selection.SetMany(map.Meshes);
+        Assert.Equal(2,selection.Count); // object multi-selection is untouched
+        vm.FaceEditMode=true;
+        Assert.Same(selection.Primary,vm.ActiveEditableMesh);
+        selection.Clear();
+        vm.SelectFacesInBox(new(-1,-1),new(11,11),p=>new(p.X,p.Z));
+        Assert.Empty(selected);
+        vm.StopEditorAutoSave();
+    }
+
+    [Fact]
     public void BoxSelectionRespectsVisibilityAndDragUndoRedoKeepsTheGeometryBasis()
     {
         var map = new ReyEngine.Formats.MapGeo.MapGeoAsset
@@ -35,6 +83,7 @@ public sealed class FaceEditModeTests
         var vm = new MainWindowViewModel { FaceEditMode=true, CurrentModelSubmeshVisible=new[] { true,false } };
         vm.StopEditorAutoSave();
         typeof(MainWindowViewModel).GetField("_currentMap",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.SetValue(vm,map);
+        vm.SelectedMapMesh=map.Meshes[0];
         vm.SelectFacesInBox(new(-1,-1),new(120,120),p=>new(p.X,p.Z));
         Assert.Equal(1,vm.SelectedFaceCount);
         var before=(float[])map.Positions.Clone();
@@ -49,8 +98,13 @@ public sealed class FaceEditModeTests
         Assert.Equal(25,map.Positions[1]);
         Assert.Equal(before.Skip(9),map.Positions.Skip(9));
         vm.CurrentModelSubmeshVisible=new[] { true,true };
+        vm.SelectFacesInBox(new(-1,-1),new(120,120),p=>new(p.X,p.Z));
+        Assert.Equal(1,vm.SelectedFaceCount);
+        Assert.Same(map.Meshes[0],vm.ActiveEditableMesh);
+        vm.SelectedMapMesh=map.Meshes[1];
+        Assert.False(vm.HasFaceSelection);
         vm.SelectFacesInBox(new(102,102),new(103,103),p=>new(p.X,p.Z));
-        Assert.Equal(2,vm.SelectedFaceCount); // inside a triangle without enclosing any of its corners
+        Assert.Equal(1,vm.SelectedFaceCount); // inside a triangle without enclosing any of its corners
         vm.StopEditorAutoSave();
     }
 

@@ -68,9 +68,41 @@ public sealed partial class MainWindowViewModel
 
     public bool HasFaceEdits => _faceGeometryDirty || _faceEdits.Count > 0;
 
+    private MapGeoMesh? _activeFaceMesh;
+    private (int Index, MapGeoGroup Group)[] _activeFaceGroups = Array.Empty<(int, MapGeoGroup)>();
+    public MapGeoMesh? ActiveEditableMesh => _activeFaceMesh;
+
+    private void UpdateFaceEditTarget()
+    {
+        var target = FaceEditMode && _currentMap is { } map && SelectedMapMesh is { } selected
+            && map.Meshes.Contains(selected) ? selected : null;
+        if (ReferenceEquals(target, _activeFaceMesh)) return;
+        EndFaceDrag();
+        ClearFaceSelection();
+        _activeFaceMesh = target;
+        _activeFaceGroups = target is not null && _currentMap is { } current
+            ? current.Groups.Select((g, i) => (Index: i, Group: g)).Where(g => g.Group.MeshIndex == target.Index).ToArray()
+            : Array.Empty<(int, MapGeoGroup)>();
+        OnPropertyChanged(nameof(ActiveEditableMesh));
+    }
+
+    partial void OnSelectedMapMeshChanged(MapGeoMesh? value) => UpdateFaceEditTarget();
+
+    private bool[]? FacePickVisibility()
+    {
+        if (_currentMap is not { } map || _activeFaceMesh is null || !map.Meshes.Contains(_activeFaceMesh)) return null;
+        var mask = new bool[map.Groups.Count];
+        foreach (var (index, _) in _activeFaceGroups)
+            mask[index] = CurrentModelSubmeshVisible is not { } visible || index >= visible.Count || visible[index];
+        return mask;
+    }
+
+
     partial void OnFaceEditModeChanged(bool value)
     {
-        if (!value) ClearFaceSelection();
+        EndFaceDrag();
+        ClearFaceSelection();
+        UpdateFaceEditTarget();
         // Leaving the mode hands the gizmo back to whatever mesh is selected; entering it parks the gizmo
         // until a face is picked, so the arms never point at a target the mode cannot move.
         GizmoPivot = value ? FaceGizmoPivot : _selection.Primary is { } m ? m.Pivot + m.Offset : null;
@@ -101,16 +133,14 @@ public sealed partial class MainWindowViewModel
     public void SelectFaceFromViewport(Vector3 rayOrigin, Vector3 rayDir, bool additive)
     {
         if (_currentMap is not { } map) return;
-        var hits = RayIndex?.AllHits(rayOrigin, rayDir, CurrentModelSubmeshVisible);
-        if (hits is null || hits.Count == 0)
+        if (FacePickVisibility() is not { } mask) return;
+        var hit = RayIndex?.ClosestHit(rayOrigin, rayDir, mask);
+        if (hit is null)
         {
-            if (!additive) { ClearFaceSelection(); _log.Info("Faces", "Nothing under the cursor."); }
+            if (!additive) { ClearFaceSelection(); _log.Info("Faces", "No face of the active mesh under the cursor."); }
             return;
         }
-
-        // Nearest first: AllHits does not promise an order, and a face editor that picks the far side of
-        // a hill because it happened to be tested first is unusable.
-        int triangle = hits.OrderBy(h => h.Distance).First().Triangle;
+        int triangle = hit.Value.Triangle;
         if (triangle < 0 || triangle * 3 + 2 >= map.Indices.Length) return;
 
         if (additive)
@@ -137,15 +167,15 @@ public sealed partial class MainWindowViewModel
     public void SelectLinkedFacesFromViewport(Vector3 rayOrigin, Vector3 rayDir, bool additive)
     {
         if (_currentMap is not { } map) return;
-        var hits = RayIndex?.AllHits(rayOrigin, rayDir, CurrentModelSubmeshVisible);
-        if (hits is null || hits.Count == 0) return;
-
-        int seed = hits.OrderBy(h => h.Distance).First().Triangle;
+        if (FacePickVisibility() is not { } mask) return;
+        var hit = RayIndex?.ClosestHit(rayOrigin, rayDir, mask);
+        if (hit is null) return;
+        int seed = hit.Value.Triangle;
         if (seed < 0 || seed * 3 + 2 >= map.Indices.Length) return;
 
         // The group that owns it bounds the search.
         MapGeoGroup? owner = null;
-        foreach (var g in map.Groups)
+        foreach (var (_, g) in _activeFaceGroups)
             if (seed * 3 >= g.StartIndex && seed * 3 < g.StartIndex + g.IndexCount) { owner = g; break; }
         if (owner is null) { SelectFaceFromViewport(rayOrigin, rayDir, additive); return; }
 
@@ -207,7 +237,7 @@ public sealed partial class MainWindowViewModel
     private void RebuildFaceSelectionLines()
     {
         if (_currentMap is not { } map || _selectedFaces.Count == 0)
-        { SelectedFaceLines = null; NotifyFaceState(); return; }
+        { SelectedFaceLines = null; if (FaceEditMode) GizmoPivot = null; NotifyFaceState(); return; }
 
         var verts = new List<float>(_selectedFaces.Count * 18);
         foreach (int t in _selectedFaces)
@@ -331,12 +361,11 @@ public sealed partial class MainWindowViewModel
 
     public void SelectFacesInBox(Vector2 min, Vector2 max, Func<Vector3, Vector2?> project)
     {
-        if (_currentMap is not { } map) return;
+        if (_currentMap is not { } map || _activeFaceMesh is null || !map.Meshes.Contains(_activeFaceMesh)) return;
         Span<Vector2> points = stackalloc Vector2[3];
-        for (int gi = 0; gi < map.Groups.Count; gi++)
+        foreach (var (gi, g) in _activeFaceGroups)
         {
             if (CurrentModelSubmeshVisible is { } visible && gi < visible.Count && !visible[gi]) continue;
-            var g = map.Groups[gi];
             for (int i = g.StartIndex; i + 2 < g.StartIndex + g.IndexCount; i += 3)
             {
                 if (map.Indices[i] == map.Indices[i + 1] || map.Indices[i] == map.Indices[i + 2] || map.Indices[i + 1] == map.Indices[i + 2]) continue;
