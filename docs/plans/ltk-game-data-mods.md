@@ -16,8 +16,8 @@ modules in `META/info.json`, across the layers `base`, `snowdown-baron` and `sno
 | 3 = M816 | **Import the layered format.** Layers (Name, DisplayName, Priority), `WAD_<layer>/` folders, `META/hashes/*.txt` (names for the packed chunks, kept with the project), License/Tags/Maps/Champions/Generator, and each layer's GameData stored VERBATIM in the project (number tokens and key order kept). The same WAD name may appear in several layers. Export writes imported GameData first, then ReyEngine's own declarations for the same layer. | Crauzer's file imports with its 3 layers and 347 named chunks; re-export reproduces each layer's GameData text exactly and the WADs chunk for chunk; a synthetic project with the same WAD in two layers round-trips. |
 | 4 = M817 | **Apply engine (C#).** One `apply` call of ltk_game_data v1 in Formats, per `ltk-apply-engine-spec.md`: the PROP and PTCH paths, objects (class / clone / remove), links / -links / +links, signed paths with selectors, struct and type pins, refs through a supplied entry reader, override files, typing from LTK Manager's PatchSchema rules over meta.db.json, and LTK's diagnostics (skip, never abort). | Byte-equal to the Rust engine (ltk_game_data 0.8.0), bytes and diagnostics, with both sides fed the same entries: on Crauzer's 13 modules, M814/M815's corpus and switches, and a crafted document that reaches every diagnostic kind. |
 | 5 = M818 | **Game object index and layered overlay.** The first-declaring-chunk index over the installed game (built lazily, cached per game fingerprint), and the overlay stage over it: several layers and modules on one chunk, entries fan-out, refs read once from the unmodified game, NoEffect / TargetSkipped / EntryUnresolved / EntryFanOut / ObjectShadowsGame / IndexUnavailable. | Crauzer's file over the installed game equals ltk_overlay's game-data output chunk for chunk, diagnostics included; a second run is served from the cache. |
-| 6 = M819 | **Preview (read-only).** A project's GameData is applied when the editor reads a declared bin, so the viewport, the material/particle editors and the Character window show the mod as LTK installs it (Crauzer's Winter Rift on the map). Layers follow LTK's file precedence. Diagnostics are shown, not hidden. Until milestone 7 every path that would write a target bin back is refused, because saving overlaid bytes makes LTK apply the modules twice. | The imported sample previews as the Snowdown map (render check) and reads byte-equal to the overlay; legacy projects read byte-identical before and after. |
-| 7 | **Edit and export** (numbered when it starts: M820-M822 went to the legacy particle work). An edit to a target bin is saved as a declaration, never as a whole bin: one ReyEngine literal module per bin, diffed against "game + imported GameData" and recomputed on every save. It is placed after the imported modules in the last layer that touches that bin, so at install it runs after them. A whole copy would make LTK apply the imported modules again. An edit a declaration cannot express is refused with the reason. Export and Send emit the imported modules verbatim, then these edit modules. The planner diffs a project bin that GameData also targets against "game + imported GameData", not the raw game. | An edit on top round-trips through export and LTK's apply; it survives a simulated patch; legacy exports are unchanged; the user's in-game check. |
+| 6 = M819 | **Preview (read-only).** A project's GameData is applied when the editor reads a declared bin, so the viewport, the material/particle editors and the Character window show the mod as LTK installs it (Crauzer's Winter Rift on the map). Layers follow LTK's file precedence. Diagnostics are shown, not hidden. Every path that would write a target bin back as a FILE is refused, because saving overlaid bytes makes LTK apply the modules twice (M823 keeps an edit as a declaration instead). | The imported sample previews as the Snowdown map (render check) and reads byte-equal to the overlay; legacy projects read byte-identical before and after. |
+| 7 = M823 | **Edit and export.** An edit to a target bin is saved as a declaration, never as a whole bin: one ReyEngine literal module per bin, diffed against "game + imported GameData" (B) and recomputed on every save. It is placed after the imported modules in the last layer that touches that bin, so at install it runs after them. A whole copy would make LTK apply the imported modules again. An edit a declaration cannot express is refused with the reason. Export and Send emit the imported modules verbatim, then these edit modules. The planner diffs a project bin that GameData also targets against "game + the modules in front of its own", not the raw game. | An edit on top round-trips through export and LTK's own apply; it survives a simulated patch; legacy exports are unchanged; the user's in-game check (not done by the milestone). |
 
 ## Done
 
@@ -129,6 +129,84 @@ modules in `META/info.json`, across the layers `base`, `snowdown-baron` and `sno
   - Byte-equal to ltk_overlay on Crauzer's package.
   - Four legacy projects read byte-identical before and after.
   - Unchanged maps render pixel-identical.
+
+**Milestone 7 = M823.** An edit on top of the GameData (`LtkEditStore`, `GameDataEditPlanner`, `MainWindowViewModel.GameDataEdit.cs`).
+- **What is kept.** An edit of a target bin is ONE literal module per bin, `diff(B, E)`: `B` is the bin LTK makes from the
+  game and the imported modules alone, `E` is what the editor saved.
+  - It lives in `.reyengine/ltk/game_data/<layer key>/reyengine-edits.json`, beside the package's `declarations.json`. The
+    package's document is never written after the import.
+  - It is placed in the LAST layer (LTK apply order, `GameDataTarget.Layers`) that applies anything to the bin, after that
+    layer's imported modules. Saving again replaces the module, recomputed against the current `B`.
+  - A declaration states values, so the edit keeps applying after Riot's next patch.
+- **Proof before keeping.** The planner applies the module to `B` with the C# engine and the preview's schema. LTK's skips
+  (any diagnostic but the schema fallback) or a result that differs from `E` refuse the edit with the reason, and nothing is
+  written. The editor keeps its unsaved state. There is no fallback to a whole copy.
+- **Refused by construction.** A removed property, a changed object or embed class, a PTCH or lossy bin, a non-finite float.
+  A property or object that needs the class schema is refused where the schema is silent (see below).
+- **Preview.** The preview applies the edit exactly where the export puts it and refreshes in place after a save (no pending
+  window); a reload structurally equals `E`. The bins are editable (`IAssetOverlay.AllowsEdits`); the tile keeps its LTK badge.
+- **Export and Send.** The imported modules are written as they came, then the edits, then ReyEngine's own planner modules,
+  numbered `origin.module` 0, 1, 2... in file order (M816 numbering carries on past the edits).
+- **Planner baseline.** `IDeclarationBaselines` (`GameDataDeclarationBaselines`): a project bin that the GameData also targets
+  is declared between the game's bin and the project's copy, BOTH with the modules in front of the planner's applied (the
+  imported modules and the edits of the layers up to the bin's own). The map skin switcher's references still read the game's
+  bin but apply over the baseline (`MapSkinDeclarations.ApplyReferences`). Without declarations the project's file ships
+  as ever, and the modules apply over it.
+- **Revert.** "Revert Edits On Top Of GameData" in the Content Browser menu takes a bin's module away.
+- **Writers.** The two choke points every editor saves a bin through (`SaveMapBinBytesAsync`, `TryWriteToProjectFile`) route a
+  target to the declaration save. The editors whose save ends there use `GuardBinEdit(Async)`; `GuardEditable` stays strict for
+  everything that writes whole files. Flows that stage other files before the bin prove the declaration first (Workshop imports,
+  `GameDataEditPreflightAsync`). Copy To Project of a target, Add Mesh, Create Character from a folder, the lightmap and
+  bake flows, `PortLegacyMap`, the Map Skin Switcher and the patch update keep their refusal.
+- **Never a file.** A ReyEngine save never writes a target's bytes into a project folder or the override store (tests).
+- **An editor that holds a parsed document is merged, or refused.** `diff(B, E)` is only the person's edit when `E` was made
+  from `B`. A document parsed while the preview was still working, or before another editor saved the same bin, lacks what
+  the package put into the bin: saved as it is, its diff would state the game's values again and remove the objects the
+  package created, and the proof would pass. So the Particle, Map Bin, Material, raw Bin and Ritobin editors and the Bin Issues
+  repairs hand over the bytes they parsed their document from, and the save merges their edits onto the bin as it is served
+  (`BinThreeWayMerge`) after the preview has settled. When that cannot be done - the editor cannot say what it was opened from,
+  or the merge fails - the save is refused. A property that both the package (or another editor's save) and the stale editor
+  changed to DIFFERENT values is a conflict, and the save is refused too ("the mod's GameData changed X since this editor opened
+  it; reopen the editor and make the edit again"): neither value is known to be the wrong one (`BinMergeReport.RealConflicts`;
+  the patch update still resolves its conflicts mod-wins, and a property both sides changed to the same value is no conflict).
+  After a save that kept the editor's document as it was, the Particle and Materials editors move their base to the bin as
+  served, so the edits they have kept are not taken for the mod's changes since; a save that had to merge something in leaves
+  the base where it was (the document lacks what was merged, and moving the base forward would make the next save delete it).
+  A Map Bin Editor patch update of such a bin is refused (its result is a whole file). Clean Particle and Map Bin editors are
+  loaded again when the preview settles (only the editor the reload started from, and only if it is still clean) or an edit is
+  taken away; a Particle or Materials editor that holds the edits of a bin whose edits were reverted is marked stale, and its
+  saves - the auto-save's included - are refused until it is opened again.
+- **Ready is not applied.** The preview is ready on its worker before the editor (the UI thread) has applied it; in between a
+  READ still answers the bytes the declarations were not applied to, and an edit built from them would put the package's
+  values back with the proof passing. The preview's task completes after the editor has applied it: the writers that can
+  wait (`SettleGameDataForEditAsync`) wait for it, the ones that cannot (`GameDataEditBlocker`, so `TryWriteToProjectFile`, the
+  raw Bin and Ritobin editors) refuse with "try again in a moment". Flows that read a bin and hold it across a pause (the
+  cleanup's dialog, a repoint, the Workshop imports, the lighting and fog saves) hand the bytes they read to the save, so a
+  bin that changed meanwhile has their edit merged onto it.
+- **A save is made against ONE preview.** The mounts are rebuilt a moment after a file changes, and the plan is made off the UI
+  thread: when the preview it was made against is not the editor's any more (or another save changed the bin it was merged onto),
+  nothing is written and the save plans again. Bins saved together (the two a placement ends in) are proven before any is kept
+  and put back if one fails - in the project they were kept in, whichever one the editor shows by then, with the mounts
+  rebuilt (once) when the preview cannot follow in place, and what could not be put back said. A bin that is no target never
+  waits for a pending preview. The LTK store is not a mount: a change under `.reyengine/ltk/` does not wake the browser's
+  refresh.
+- **The store is the person's file**: it is read with a limit (16 MiB), counted with the layer's document against the totals, off
+  the UI thread (the preview's worker; the editor takes the set of edited bins when it settles). A file that cannot be read, is
+  damaged or does not fit refuses the EDITS of that layer, with the reason in the preview's warnings, and the package's own
+  modules still apply; a write puts the files back if one fails.
+- **Cleanup** counts an asset only an edit names as referenced, and backs up the bin WITHOUT the GameData applied. **Patch
+  update** leaves such a bin out of its rebase and says whether the project holds the mod's own copy of it.
+- **The schema on this machine.** LTK Manager's cached schema stops at build 8217343 and the game is 8230722. Edits that
+  construct a struct or add a property the bin does not hold (material parameter lists, new particle fields) are typed
+  from the schema and are skipped by LTK today, so ReyEngine refuses them with the schema named as the cause. Edits of
+  values the bin already holds (counts, strings, flags, existing list restatements) keep. With ReyEngine's own schema
+  (`data/meta/meta.db.json`, which describes 8230722) the material edit keeps and installs.
+- **Results.**
+  - Crauzer's Winter Rift, through the real view model: a map edit and a material edit round-trip; `ovstage` (the code LTK
+    Manager runs) over the export gives the editor's bins on all 11 chunks; `fantomecheck` and league-mod's loader read the
+    export and the Send manifest; the imported modules are verbatim; a simulated patch of the game's bins gives the same
+    result in the preview and in LTK's apply.
+  - Legacy exports are byte-identical (M814-M816 golden suites).
 
 ## The format (league-mod @219d84a: ltk_mod_project 0.16.2, ltk_game_data 0.8.0, ltk_fantome 0.15.1)
 
