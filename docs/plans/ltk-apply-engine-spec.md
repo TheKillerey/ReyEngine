@@ -78,6 +78,19 @@ The normative prose is `league-mod/docs/design/game-data.md` §6. Everything bel
 - The highest-precedence mod's copy of the chunk.
 - Else the game copy from the chunk's first holder.
 
+**File precedence inside one mod** (ov/builder/metadata.rs:36-57, 117-158, 291-310).
+- Layers are read in apply order. Each layer's WAD files are inserted into ONE map keyed by chunk path hash,
+  whatever WAD folder they sit in. A later layer's copy therefore REPLACES an earlier one: the higher-priority
+  layer wins over base.
+- RAW files are collected after every layer, so they win over all of them.
+- A GameData target's base is the mod's copy from this map before game-identical copies are filtered out.
+
+**Layer activation** (ov/builder/mod.rs:254-264).
+- Base is always active.
+- Another layer is active when the mod's `enabled_layers` is None (the default) or names it.
+- An inactive layer contributes no files, no GameData (game_data.rs:423) and no StringOverrides
+  (strings.rs:257).
+
 **Applications on one chunk.**
 - Each application is one `apply` call over the bytes the previous one left.
 - `changed()==false` discards the output and records `NoEffect`; the bytes stay, undeduped dependencies
@@ -552,13 +565,17 @@ ReyEngine's copy has latest 8217343; the manager ships the same format with late
 - s2 = the item or map value kind;
 - s3 = the class of an Embed, Pointer, Link or item.
 
-**`to` is inclusive.** 785 revisions have `from == to`.
+**`to` is inclusive.** 785 property revisions and 234 class revisions have `from == to`.
 
 ### 7.4 `MetaClassDatabase.cs`: what must change for an LTK-faithful schema
 
-1. **`PickRevision` treats `to` as exclusive** (line ~301, `build >= to`). It must be inclusive. As it stands it
-   drops 491 property revisions that end at 16.16 (8049184) and never matches the 785 single-build revisions.
-   This is a bug for every existing user of the class too; fix it with tests and check those callers.
+1. **`PickRevision` treated `to` as exclusive** (`build >= to`). It must be inclusive. **Fixed in M817.**
+   - The exclusive reading dropped 491 property and 9 class revisions that end at 16.16 (8049184).
+   - It never matched the 785 property and 234 class single-build revisions.
+   - Across all builds, it lost 5,891 property and 1,485 class (entity, build) pairs.
+   - No two revisions of one entity overlap in today's data, so "first in file order" (LTK) and "highest
+     `from`" (the old code) agree.
+   - The latest build was unaffected: all callers load it.
 2. **The class set is build-filtered, but `has_class` must be "any build".** `expected` must look at the class's
    own properties even when no class revision covers the build; only the bases come from covering revisions.
 3. **Resolve per query.** Add `describes` (`build <= latest`) and an undescribed mode: `expected` None,
@@ -589,6 +606,21 @@ ReyEngine's copy has latest 8217343; the manager ships the same format with late
 
 **Overlay-only kinds** (ov/builder/game_data.rs:25-95): `declarationsRejected`, `targetSkipped`, `noEffect`,
 `entryUnresolved`, `entryFanOut`, `indexUnavailable`, `objectShadowsGame`.
+
+## 8b. Found while porting (M817)
+
+The spec above was silent on these; the C# engine matches the Rust behaviour.
+- **Refusal texts** follow serde_json's wording. The column counts UTF-8 bytes, and a duplicate key is reported
+  only once its object closes.
+- **Fields are read in document order.** The document, module and origin structs also accept serde's positional
+  array form, so `[1, []]` is a valid document.
+- **`validate()` runs after the whole document is read.** An empty `edits` error names the module's list
+  position. An empty-name error carries its `target:` / `entries:` / `class:` location.
+- **PTCH `deleted` order is not deterministic in Rust:** `drop_missing` iterates a std HashSet. The C# engine
+  writes bin order.
+- **Corrupt counts.** A bin whose counts are corrupt can make the Rust process abort on a huge allocation; the
+  C# engine raises a Bin error.
+- **Unicode.** `RustLowercase` and `RustDebug` are tables dumped from rustc 1.92.0 (Unicode 17).
 
 ## 9. Behaviours most likely to make a port differ
 

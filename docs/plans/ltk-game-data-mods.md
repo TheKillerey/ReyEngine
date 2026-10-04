@@ -79,6 +79,20 @@ modules in `META/info.json`, across the layers `base`, `snowdown-baron` and `sno
 - **Build Package** cannot carry layers or GameData. It says so and points to Export .fantome and Send.
 - **Not done here:** GameData is not applied yet. That is M817-M819.
 
+**Milestone 4 = M817.** The C# apply engine, `ReyEngine.Formats.LtkGameData`.
+- **Equal to the Rust crate**, bytes and diagnostics, on every corpus: Crauzer's modules, M814-M816's exports,
+  56k crafted cases, 14.6k random edits and 323k fuzzed documents.
+- **Hardened for packages.** These are the only places it differs from the Rust crate, and no real bin reaches
+  them:
+  - the nesting cap after edits;
+  - the zero-width budget and the reservation caps;
+  - `GameDataLimits` (work, output and override size) and cancellation;
+  - the writer refuses a u16 overflow.
+- **Where M818/M819 must feed limits.**
+  - The caller caps what it reads from a package (the document and the override files, about 16-32 MiB).
+  - A tree costs about 8x its file size in memory.
+- **MetaClassDatabase's `to` is now inclusive.** The latest build is unchanged.
+
 ## The format (league-mod @219d84a: ltk_mod_project 0.16.2, ltk_game_data 0.8.0, ltk_fantome 0.15.1)
 
 Clone: `.codex_tmp/league-mod` (`git pull` before re-verifying). Abbreviations: `gd/` = crates/ltk_game_data/src,
@@ -248,5 +262,7 @@ applied in `Read`.
 - Bins that exist only in the game are not listed in the Content Browser or in `AssetEntries`. Sibling controller
   bins and the switcher's list come from `AssetEntries`.
 - Map open picks the materials.bin next to the mapgeo. It does not follow an overlaid `mMapContainerLink`.
-- Two layers holding the same WAD resolve first-added-wins, and the importer adds base first. Check LTK's in-mod
-  rule before relying on it.
+- Two layers holding the same file resolve first-added-wins in ReyEngine's mounts, and the importer adds base
+  first. LTK's rule is the reverse (spec §1.4): the higher-priority layer's copy replaces base's, RAW wins over
+  all, and an inactive layer contributes nothing. The preview must mount layers in LTK's order and honour
+  which layers are active.
