@@ -130,6 +130,11 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     public MainWindow()
     {
         InitializeComponent();
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Key.S && e.KeyModifiers == KeyModifiers.Control && DataContext is MainWindowViewModel vm)
+            { vm.SaveProjectCommand.Execute(null); e.Handled = true; }
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         // M808: a map opened before the viewport has a size is framed the moment it gets one
         ViewportInput.SizeChanged += (_, _) =>
         {
@@ -185,6 +190,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         Closed += (_, _) =>
         {
             _closed = true; _dx11?.Dispose(); _dx11 = null;
+            (DataContext as MainWindowViewModel)?.StopEditorAutoSave();
             (DataContext as MainWindowViewModel)?.ShutDownMapThumbnails();   // M807: stop the thumbnail thread, give back its device
         };
     }
@@ -1309,6 +1315,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
 
     private void OnViewportPointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        SyncDx11Interaction();
         var pt = e.GetCurrentPoint(ViewportInput);
         _lmb = pt.Properties.IsLeftButtonPressed;
         _rmb = pt.Properties.IsRightButtonPressed;
@@ -1401,10 +1408,22 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         }
     }
 
+    // Hidden GL controls can retain stale binding/layout state. Hit-test the visible DX11 surface
+    // with the current gizmo and camera, using the same CPU picking as OpenGL.
+    private void SyncDx11Interaction()
+    {
+        if (DataContext is not MainWindowViewModel { UseDx11Viewport: true } vm) return;
+        Viewport.GizmoPivot = vm.GizmoPivot;
+        Viewport.GizmoMode = vm.TransformMode;
+        Viewport.GizmoAxes = vm.GizmoAxes;
+        Viewport.SyncPickMatrices(ViewportInput.Bounds.Width, ViewportInput.Bounds.Height);
+    }
+
     private bool _painting;
 
     private void OnViewportPointerMoved(object? sender, PointerEventArgs e)
     {
+        SyncDx11Interaction();
         var p = e.GetPosition(ViewportInput);
         if (Math.Abs(p.X - _pressPos.X) > ClickSlopPixels || Math.Abs(p.Y - _pressPos.Y) > ClickSlopPixels)
             _pressMoved = true;
@@ -1598,6 +1617,13 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if (!e.Handled && e.Key == Key.S && e.KeyModifiers == KeyModifiers.Control
+            && DataContext is MainWindowViewModel saveVm)
+        {
+            saveVm.SaveProjectCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
         if (e.Handled || e.Source is TextBox) return;
         if (DataContext is not MainWindowViewModel vm) return;
 

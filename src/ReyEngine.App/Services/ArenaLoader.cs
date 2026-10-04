@@ -225,7 +225,7 @@ public static class ArenaLoader
 
     /// <summary>Near the low-X / low-Z corner - the blue fountain on Summoner's Rift and the Abyss - snapped
     /// to the nearest walkable cell when there is a grid to ask.</summary>
-    private static Vector3 SpawnFor(NavGrid? nav, Vector3 min, Vector3 max)
+    internal static Vector3 SpawnFor(NavGrid? nav, Vector3 min, Vector3 max)
     {
         if (nav is null)
             return new Vector3(min.X + (max.X - min.X) * 0.5f, 0f, min.Z + (max.Z - min.Z) * 0.5f);

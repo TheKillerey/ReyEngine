@@ -3213,7 +3213,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// cannot darken it further. What it adds is props, anything the bake omits, and maps whose bake is
     /// stale or absent.</para>
     /// </summary>
-    [ObservableProperty] private bool _showSunShadows = true;
+    [ObservableProperty] private bool _showSunShadows;
 
     /// <summary>
     /// M462: hide every piece of editor decoration at once, so the viewport shows only what the GAME draws.
@@ -3291,7 +3291,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// should composite over, and come out BLACK. A diagnostic for "looks right here, wrong in game", not
     /// an authoring mode.</para>
     /// </summary>
-    [ObservableProperty] private bool _clientDepthRules;
+    [ObservableProperty] private bool _clientDepthRules = true;
 
     partial void OnClientDepthRulesChanged(bool value)
     {
@@ -6656,6 +6656,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _meta = new Lazy<MetaClassDatabase>(() => _metaSync.LoadLocal(m => _log.Info("Meta", m)));
         _cullBackfaces = Settings.CullBackfacesDefault;   // M40: honor saved viewport default
         _useDx11Viewport = !Settings.UseOpenGlViewport;   // M762: Direct3D 11 by default
+        Services.Dx11SceneBuilder.EmulateClientDepthRules = ClientDepthRules;
+        StartRegularAutoSave();
+        MeshPreview.SaveEditorEdits = SaveProject;
         NewFeature.LastSeenVersion = Settings.LastSeenFeatureVersion;   // M593
         Project.GameDirectory = ReyProject.GuessGameDirectory();
         _log.Info("ReyEngine", "Editor started.");
@@ -7075,15 +7078,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (Project.ProjectFilePath is null) return;
 
             int refusedBefore = _gameDataRefusals;   // M819
-            bool savedAnything = false;
-            if (HasPendingMapGeoWork)
-            {
-                await SaveMeshMoves();
-                savedAnything = true;
-            }
-            if (HasParticleMoves) { await SaveParticleMoves(); savedAnything = true; }
-            if (MaterialEditor.IsDirty && MaterialEditor.BinEntry is not null)
-            { await SaveMaterialOverride(); savedAnything = true; }
+            bool savedAnything = HasPendingMapGeoWork || HasParticleMoves || HasUnsavedPaint
+                || MaterialEditors.Any(e => e.IsDirty) || MapBinEditor.IsDirty || BinEditor.HasPendingChanges
+                || ParticleEditor.Document?.IsDirty == true || Project.IsDirty;
+            if (!savedAnything) return;
+            await SavePendingEditorEdits();
+            _overrides.SaveTo(Project);
+            ReyProjectService.Save(Project, Project.ProjectFilePath);
+            UpdateTitle();
 
             // M819: a save the mod's GameData refused (the log above says which) saved nothing: it is not reported as saved, and the edit stays pending
             if (savedAnything && _gameDataRefusals != refusedBefore)
@@ -8404,7 +8406,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Compute per-group visibility from the map-defined axes and push it to the viewport.</summary>
     // M104: render regions (mapgeo v18 renderRegionHash). Off hides every region-assigned mesh, leaving
     // the region-independent base geometry — the fastest way to see what a region is contributing.
-    [ObservableProperty] private bool _renderRegionsEnabled = true;
+    [ObservableProperty] private bool _renderRegionsEnabled;
     [ObservableProperty] private bool _hasRenderRegions;
     partial void OnRenderRegionsEnabledChanged(bool value) => ApplyMapVisibility();
 
@@ -11362,6 +11364,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 UpdateTitle();
                 UndoService.MarkSaved();
                 _log.Success("Bin", $"Saved edited {entry.DisplayName} to {projectFile} ({bytes.Length:n0} bytes, re-parse OK).");
+                BinEditor.Load(BinEditorDocument.Parse(bytes, ResolveBinName, ResolveWadPath), entry, bytes);
                 return;
             }
             var dest = ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, bytes, ".bin");
@@ -11378,6 +11381,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             UpdateTitle();
             UndoService.MarkSaved();
             _log.Success("Bin", $"Saved edited {entry.DisplayName} to project override ({bytes.Length:n0} bytes, re-parse OK). Build Package will include it.");
+            BinEditor.Load(BinEditorDocument.Parse(bytes, ResolveBinName, ResolveWadPath), entry, bytes);
         }
         catch (Exception ex) { _log.Error("Bin", ex.Message); }
     }
@@ -13462,12 +13466,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task SaveProject()
     {
-        if (Project.ProjectFilePath is null) { await SaveProjectAs(); return; }
-        _overrides.SaveTo(Project);
-        ReyProjectService.Save(Project, Project.ProjectFilePath);
-        UndoService.MarkSaved();
-        _log.Success("Project", $"Saved {Project.ProjectFilePath}");
-        UpdateTitle();
+        if (_autoSaving) return;
+        if (Project.ProjectFilePath is null) await SaveProjectAs();
+        if (Project.ProjectFilePath is null) return;
+        _autoSaving = true;
+        try
+        {
+            await SavePendingEditorEdits();
+            _overrides.SaveTo(Project);
+            ReyProjectService.Save(Project, Project.ProjectFilePath);
+            if (!HasPendingMapGeoWork && !HasParticleMoves && !HasUnsavedPaint && !MaterialEditors.Any(e => e.IsDirty)
+                && !BinEditor.HasPendingChanges && !MapBinEditor.IsDirty && ParticleEditor.Document?.IsDirty != true)
+                UndoService.MarkSaved();
+            _log.Success("Project", $"Saved {Project.ProjectFilePath}");
+            UpdateTitle();
+        }
+        catch (Exception ex) { _log.Error("Save", ex.Message); }
+        finally { _autoSaving = false; }
     }
 
     [RelayCommand]
@@ -16660,6 +16675,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (RefusesGameDataWrite(entry)) return false;   // M819: a chunk the mod's GameData changes is read-only: what the editor shows of it is the declarations' result, which cannot be written back
         if (ProjectMode && entry is { SourceKind: AssetSourceKind.RiotReference })
         {
+            if (entry.IsResolved && (entry.Path.StartsWith("data/characters/", StringComparison.OrdinalIgnoreCase)
+                || entry.Path.StartsWith("assets/characters/", StringComparison.OrdinalIgnoreCase)))
+                return CopyCharacterReferencesForEdit(entry);
             _log.Warn("Project", $"'{entry.DisplayName}' is a read-only Riot asset. Right-click ▸ Copy Asset To Project to edit it.");
             return false;
         }

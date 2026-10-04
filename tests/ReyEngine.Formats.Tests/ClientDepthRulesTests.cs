@@ -14,11 +14,11 @@ namespace ReyEngine.Formats.Tests;
 public sealed class ClientDepthRulesTests
 {
     [Fact]
-    public void TheEmulationIsOffUntilAskedFor()
+    public void TheViewportDefaultsToGameDepthRules()
     {
         // A diagnostic, not an authoring mode: on, every transparent keeps the depth mask, which is wrong
         // for looking at a map and right for predicting what the client draws.
-        Assert.False(new MainWindowViewModel().ClientDepthRules);
+        Assert.True(new MainWindowViewModel().ClientDepthRules);
     }
 
     [Fact]

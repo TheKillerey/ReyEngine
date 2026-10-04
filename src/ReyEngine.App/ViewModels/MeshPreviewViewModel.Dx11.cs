@@ -20,7 +20,7 @@ namespace ReyEngine.App.ViewModels;
 /// </summary>
 public sealed partial class MeshPreviewViewModel
 {
-    [ObservableProperty] private bool _useDx11Preview;
+    [ObservableProperty] private bool _useDx11Preview = true;
     [ObservableProperty] private string _dx11Status = "";
 
     /// <summary>The resolved scene, or null when this subject is not a character the resolver understood.
@@ -123,7 +123,7 @@ public sealed partial class MeshPreviewViewModel
     /// way whichever renderer is drawing it.</summary>
     public Matrix4x4 ModelWorld =>
         Matrix4x4.CreateScale((float)ModelScale)
-        * Matrix4x4.CreateRotationY((float)CharacterYaw)
+        * Matrix4x4.CreateRotationY((float)RenderedCharacterYaw)
         * Matrix4x4.CreateTranslation(CharacterPosition);
 
     partial void OnUseDx11PreviewChanged(bool value)

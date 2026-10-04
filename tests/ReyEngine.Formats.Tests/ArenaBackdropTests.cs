@@ -110,7 +110,7 @@ public sealed class ArenaBackdropTests
     {
         var src = Source("src", "ReyEngine.App", "ViewModels", "MeshPreviewViewModel.Arena.cs");
         if (src.Length == 0) return;
-        Assert.Contains("if (UseDx11Preview && _arena is { } arena)", src);
+        Assert.Contains("if (UseDx11Preview && ArenaViewport is null && _arena is { } arena)", src);
         Assert.Contains("SetArenaBackdrop(scene.Background)", src);
     }
 

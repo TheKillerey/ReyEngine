@@ -43,15 +43,18 @@ public partial class MeshPreviewWindow
         // M667: the GL viewport's own breadcrumbs go to the same app log as everything else, so a native
         // fault during a backdrop upload leaves its last step behind in session.log.
         PreviewViewport.Log ??= (cat, msg) => vm.LogDx11?.Invoke(cat, msg);
+        PreviewViewport.ArenaMapViewport = vm.ArenaViewport;
         vm.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName == nameof(MeshPreviewViewModel.ArenaViewport))
+                PreviewViewport.ArenaMapViewport = vm.ArenaViewport;
             if (e.PropertyName is nameof(MeshPreviewViewModel.UseDx11Preview) && vm.UseDx11Preview)
                 StartDx11(vm);
             // M810: the camera follows FocusPoint - the arena puts it on the champion at the spawn and keeps it there while he
             // walks. The GL control applies that on its next render (the binding in the XAML); hidden under Direct3D 11 it never
             // renders, and the camera stayed where it was. FocusOnPoint is the one implementation, and the camera is the one both
             // renderers draw with; the D3D11 loop is continuous, so the next frame shows it.
-            else if (e.PropertyName is nameof(MeshPreviewViewModel.FocusPoint) && vm.UseDx11Preview && vm.FocusPoint is { } focus)
+            else if (e.PropertyName is nameof(MeshPreviewViewModel.FocusPoint) && !vm.ControlMode && vm.UseDx11Preview && vm.FocusPoint is { } focus)
                 PreviewViewport.FocusOnPoint(focus);
         };
         if (vm.UseDx11Preview) StartDx11(vm);
@@ -123,6 +126,7 @@ public partial class MeshPreviewWindow
         int w = (int)(surface.Width * scale);
         int h = (int)(surface.Height * scale);
         if (w <= 0 || h <= 0) return;
+        if (!EnsureArenaDx11Scene(vm)) return;
 
         if (vm.Dx11SceneRevision != _dx11CommittedRevision)
         {
@@ -203,7 +207,7 @@ public partial class MeshPreviewWindow
         // M619: the VFX. The SAME playback object the GL viewport is bound to in XAML, so both viewports
         // show the same effect at the same age rather than two independent simulations.
         _dx11.ShaderCache = vm.Dx11ShaderCache;
-        _dx11.ParticlePlayback = vm.Playback;
+        if (vm.ArenaViewport is null) _dx11.ParticlePlayback = vm.Playback;
 
         // M630: the two things that make a spell land where it should. Clip particle events ride their
         // bone, and beams terminate at the dummy - both pushed per frame, because the pose changes every
@@ -227,9 +231,10 @@ public partial class MeshPreviewWindow
         vm.Dx11BackdropFailed = _dx11.BackdropFailed;
         _dx11.Backdrop = vm.Dx11Backdrop;
         _dx11.BackdropLighting = vm.Dx11BackdropFrame();
-        _dx11.PropMeshes = vm.SceneProps;
+        if (vm.ArenaViewport is null) _dx11.PropMeshes = vm.SceneProps;
+        ApplyArenaDx11Frame(vm);
         _dx11.RangeLines = vm.RangeRingLines;   // M639: the cast-range ring, same line list GL draws
-        _dx11.PlayPropAnimations = true;
+        _dx11.PlayPropAnimations = vm.ArenaViewport?.PlayPropAnimations ?? true;
         _dx11.DummyLines = vm.DummyCubePosition is { } box
             ? Rendering.ViewportMeshRenderer.BuildBoxLines(
                 box - new System.Numerics.Vector3(60f, 0f, 60f),

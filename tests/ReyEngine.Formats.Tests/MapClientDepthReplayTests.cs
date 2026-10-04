@@ -100,7 +100,7 @@ public sealed class MapClientDepthReplayTests
         if (scene is null) return;
         using var renderer = new ShaderPreviewRenderer();
         if (!renderer.Initialize(out _)) return;   // no D3D11 device on this machine
-        Dx11SceneBuilder.Commit(renderer, scene.Prepared, "");
+        Dx11SceneBuilder.Commit(renderer, scene.Prepared, "", emulateClientDepthRules: false);
 
         // The board: blended, so the editor draws it without depth (M279) - and writeMask 31, so the client
         // writes it. Exactly the case the replay exists for.
@@ -122,7 +122,7 @@ public sealed class MapClientDepthReplayTests
         if (scene is null) return;
         using var renderer = new ShaderPreviewRenderer();
         if (!renderer.Initialize(out _)) return;
-        Dx11SceneBuilder.Commit(renderer, scene.Prepared, "");
+        Dx11SceneBuilder.Commit(renderer, scene.Prepared, "", emulateClientDepthRules: false);
 
         var eye = new Vector3(2000f, 3500f, 800f);
         var view = Matrix4x4.CreateLookAt(eye, new Vector3(2000f, 0f, 2000f), Vector3.UnitY);

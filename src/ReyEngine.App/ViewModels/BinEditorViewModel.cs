@@ -88,6 +88,14 @@ public sealed partial class EditableBinFieldViewModel : ViewModelBase
     }
 
     public bool AnyDirty() => IsDirty || Children.Any(c => c.AnyDirty());
+    public bool HasPendingChanges() => IsDirty || (IsEditable && EditedText != _lastApplied) || Children.Any(c => c.HasPendingChanges());
+    public bool ApplyPendingEdits()
+    {
+        if (IsEditable && EditedText != _lastApplied) Apply();
+        bool valid = !HasError;
+        foreach (var child in Children) valid &= child.ApplyPendingEdits();
+        return valid;
+    }
 
     public bool ApplyFilter(string filter)
     {
@@ -147,6 +155,13 @@ public sealed partial class BinEditorViewModel : ViewModelBase
     }
 
     public byte[]? Serialize() => _doc?.Serialize();
+    public bool HasPendingChanges => Roots.Any(r => r.HasPendingChanges());
+    public bool ApplyPendingEdits()
+    {
+        bool valid = true;
+        foreach (var row in Roots) valid &= row.ApplyPendingEdits();
+        return valid;
+    }
 
     /// <summary>M555: the bytes <see cref="_doc"/> was parsed from - the base a save rebases onto.
     /// See <c>MaterialEditorViewModel.BaseBytes</c> for why it is never refreshed on save.</summary>

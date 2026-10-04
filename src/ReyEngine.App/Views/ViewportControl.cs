@@ -420,6 +420,9 @@ public sealed class ViewportControl : OpenGlControlBase
     private GridRenderer? _grid;
     private ViewportMeshRenderer? _meshRenderer;
     private ViewportMeshRenderer? _bgRenderer;      // M88: NVR map backdrop
+    public ReyEngine.App.ViewModels.MainWindowViewModel? ArenaMapViewport { get; set; }
+    private TextureImage? _arenaGrassTint, _arenaGrassTintAlt;
+    private IReadOnlyList<PointLight>? _arenaPointLights;
     private bool _bgMeshDirty, _bgTexDirty;
     private readonly OrbitCamera _camera = new();
 
@@ -1220,7 +1223,8 @@ public sealed class ViewportControl : OpenGlControlBase
         if (ShowGrid) _grid.Render(viewProj);   // M89: reference grid is now toggleable
         var view = Matrix4x4.CreateScale(-1f, 1f, 1f) * _camera.View; // same X-mirror as viewProj, for the matcap lookup
         // M44: advance the flowmap-water clock so the river flows; only ticks while water is on screen.
-        if (AnimateWater) { if (!_waterClock.IsRunning) _waterClock.Start(); _meshRenderer.SetTime((float)_waterClock.Elapsed.TotalSeconds); }
+        if (AnimateWater || ArenaMapViewport?.AnimationsPlaying == true)
+        { if (!_waterClock.IsRunning) _waterClock.Start(); _meshRenderer.SetTime((float)_waterClock.Elapsed.TotalSeconds); }
         else if (_waterClock.IsRunning) _waterClock.Reset();
         _meshRenderer.SetLightFalloffSoftness((float)LightFalloffSoftness);   // M160
         _meshRenderer.SetLightmapScale((float)LightmapScale);   // M45: MapSunProperties.lightMapColorScale
@@ -1367,7 +1371,56 @@ public sealed class ViewportControl : OpenGlControlBase
                 bg.SetSunLighting(bsun.SunDirection, bsun.SunColor * bright, bsun.SkyLightColor * bright, bsun.SkyLightScale);
             else
                 bg.SetSunLighting(lit.DirectionToSun, new Vector4(lit.SunColor, 1f), new Vector4(lit.SkyColor, 1f), 1f);
-            bg.Render(viewProj, view, _camera.Position, 0, Wireframe, false, false, cullBackfaces: false);
+            if (ArenaMapViewport is { } arenaMap)
+            {
+                bg.SetNvrFourBlend(false);
+                bg.SetVertexLightmap(false, 1f);
+                bg.SetVertexBakedLight(false, 0f);
+                bg.SetLightmapScale((float)arenaMap.CurrentLightmapScale);
+                bg.SetLightmapsEnabled(arenaMap.ShowLightmaps);
+                bg.SetWorldTransform(Matrix4x4.Identity);
+                if (arenaMap.AnimationsPlaying)
+                {
+                    if (!_waterClock.IsRunning) _waterClock.Start();
+                    bg.SetTime((float)_waterClock.Elapsed.TotalSeconds);
+                }
+                else bg.SetTime(0f);
+                bg.SetDynamicLightsEnabled(arenaMap.ShowDynamicLights);
+                bg.SetLightIntensity((float)arenaMap.DynamicLightIntensity);
+                bg.SetLightRadiusScale((float)arenaMap.DynamicLightRadiusScale);
+                bg.SetLightFalloffSoftness((float)arenaMap.LightFalloffSoftness);
+                bg.SetLightPositionScale((float)arenaMap.DynamicLightPositionScale);
+                bg.SetLightPositionScaleXZ((float)arenaMap.DynamicLightScaleX, (float)arenaMap.DynamicLightScaleZ);
+                bg.SetLightPositionOffset((float)arenaMap.DynamicLightOffsetX, (float)arenaMap.DynamicLightOffsetZ);
+                if (!ReferenceEquals(_arenaPointLights, arenaMap.DynamicLights))
+                {
+                    _arenaPointLights = arenaMap.DynamicLights;
+                    bg.SetPointLights(_arenaPointLights ?? Array.Empty<PointLight>());
+                }
+                if (!ReferenceEquals(_arenaGrassTint, arenaMap.CurrentGrassTint)
+                    || !ReferenceEquals(_arenaGrassTintAlt, arenaMap.CurrentGrassTintAlt))
+                {
+                    _arenaGrassTint = arenaMap.CurrentGrassTint;
+                    _arenaGrassTintAlt = arenaMap.CurrentGrassTintAlt;
+                    bg.SetGrassTintTexture(_arenaGrassTint?.Rgba, _arenaGrassTint?.Width ?? 0,
+                        _arenaGrassTint?.Height ?? 0, arenaMap.CurrentGrassTintRect);
+                    bg.SetGrassTintTransition(_arenaGrassTintAlt?.Rgba, _arenaGrassTintAlt?.Width ?? 0,
+                        _arenaGrassTintAlt?.Height ?? 0, arenaMap.GrassInterp);
+                }
+                bg.SetGrassTintInterp(arenaMap.GrassInterp);
+                var mapSun = arenaMap.CurrentSunProperties;
+                bg.SetFog(arenaMap.ShowFog && mapSun is { FogEnabled: true }, mapSun?.FogColor ?? Vector4.One,
+                    mapSun?.FogAlternateColor ?? Vector4.One, mapSun?.FogStartAndEnd ?? new Vector2(0f, -2000f));
+                var mapFog = arenaMap.ShowFog && arenaMap.CurrentPostFog is { DrawsAnything: true } postFog
+                    ? MapPostFog.ShaderParams(postFog) : default;
+                bg.SetScreenFog(mapFog.DepthParams, mapFog.DepthColor, mapFog.HeightParams, mapFog.HeightColor);
+                for (int i = 0; i < bg.SubmeshCount; i++)
+                    bg.SetSubmeshVisible(i, arenaMap.CurrentModelSubmeshVisible is not { } visible || i >= visible.Count || visible[i]);
+                if (mapSun is not null)
+                    bg.SetSunLighting(mapSun.SunDirection, mapSun.SunColor, mapSun.SkyLightColor, mapSun.SkyLightScale);
+            }
+            bg.Render(viewProj, view, _camera.Position, 0, Wireframe, false, false,
+                cullBackfaces: ArenaMapViewport?.CullBackfaces ?? false);
         }
         // M90: uniform preview-model scale (identity at 1.0 — the main map viewport never changes it).
         // M613: plus where the character is standing, so click-to-move actually moves something.

@@ -49,6 +49,13 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
 
     string? ICharacterBrowserHost.GameDirectory => Project.GameDirectory;
     IHashResolver? ICharacterBrowserHost.Resolver => _resolver;
+    IReadOnlyList<string> ICharacterBrowserHost.ProjectCharacterPaths => _mounts?.Assets
+        .Where(a => a.IsResolved && a.Source.Kind is AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectWad or AssetSourceKind.ProjectOverride)
+        .Select(a => a.VirtualPath.Replace('\\', '/')).Where(p => p.StartsWith("data/characters/", StringComparison.OrdinalIgnoreCase))
+        .ToArray() ?? Array.Empty<string>();
+    byte[]? ICharacterBrowserHost.ReadProjectCharacterAsset(string path) =>
+        _mounts is { } mounts && mounts.TryGet(HashAlgorithms.WadPath(path), out var asset)
+            && asset.Source.Kind != AssetSourceKind.RiotReference ? TryReadAssetBytes(asset.PathHash) : null;
 
     /// <summary>M643: opens the Character Editor window, whose left panel is the champion picker. The
     /// separate browser window of M610 still exists; nothing opens it any more.</summary>
@@ -67,7 +74,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     {
         if (MeshPreview.Browser is null)
             MeshPreview.Browser = new CharacterBrowserViewModel(this, (category, message) => _log.Info(category, message));
-        else if (!string.Equals(_browserGameDirectory, Project.GameDirectory, StringComparison.OrdinalIgnoreCase))
+        else
             MeshPreview.Browser.Reload();
         _browserGameDirectory = Project.GameDirectory;
     }
@@ -80,7 +87,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         try
         {
             _openedCharacterSkins = (character.Name, character.Skins.Where(s => !s.IsRoot).Select(s => s.Number).ToArray());
-            if (!MakeCharacterWadReadable(champion.WadPath)) return;
+            if (!string.IsNullOrEmpty(champion.WadPath) && !MakeCharacterWadReadable(champion.WadPath)) return;
 
             // The mesh is addressed the same way every other asset is: by hash, resolved or hex (M592).
             ulong hash = BinTexturePath.HashOfReference(meshPath);
@@ -117,7 +124,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         if (_resolver is { } resolver)
         {
             MeshPreview.ConfigureArena(new MeshPreviewViewModel.ArenaHost(
-                Project.GameDirectory, resolver, ResolveBinName, ResolveWadPath));
+                Project.GameDirectory, resolver, ResolveBinName, ResolveWadPath, CreateArenaViewport));
             // M725: put the configured NVR backdrop back when an arena is unloaded.
             MeshPreview.ReapplyBackdrop = ApplyPreviewBackgroundAsync;
         }

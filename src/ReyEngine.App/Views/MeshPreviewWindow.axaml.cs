@@ -27,13 +27,22 @@ public partial class MeshPreviewWindow : Window
         // M613: ability keys. Tunnelling because a focused list or text box would otherwise eat them.
         AddHandler(KeyDownEvent, OnControlKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         HookDx11();   // M618: the Direct3D 11 surface, off until the toggle turns it on
-        Closed += (_, _) => (DataContext as MeshPreviewViewModel)?.StopControl();
+        InstallGameplayCamera();
+        Closed += (_, _) =>
+        {
+            if (DataContext is not MeshPreviewViewModel vm) return;
+            vm.StopControl();
+            if (vm.ArenaViewport is { } arena) arena.Dx11RebindGrassTintPair = null;
+        };
     }
 
     /// <summary>Q/W/E/R cast, S stops. Only while control mode is on, and never while something is
     /// being typed into — a champion search box would otherwise fire an ability per keystroke.</summary>
     private void OnControlKey(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.S && e.KeyModifiers == KeyModifiers.Control
+            && DataContext is MeshPreviewViewModel { SaveEditorEdits: { } save })
+        { _ = save(); e.Handled = true; return; }
         if (DataContext is not MeshPreviewViewModel { ControlMode: true } vm) return;
         if (FocusManager?.GetFocusedElement() is TextBox) return;
 
@@ -45,7 +54,7 @@ public partial class MeshPreviewWindow : Window
             vm.CastAbility(slot, TryGroundPoint(_hover, vm, out var aim) ? aim : null);
             e.Handled = true;
         }
-        else if (e.Key == Key.S) { vm.ResetCharacterCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.S) { vm.StopMovement(); e.Handled = true; }
     }
 
     /// <summary>M613: a right-click order. On the dummy it is an attack, anywhere else on the ground
@@ -93,6 +102,11 @@ public partial class MeshPreviewWindow : Window
 
     private void OnPressed(object? sender, PointerPressedEventArgs e)
     {
+        if (DataContext is MeshPreviewViewModel { UseDx11Preview: true } current)
+        {
+            PreviewViewport.GizmoPivot = current.DummyGizmoPivot;
+            PreviewViewport.SyncPickMatrices(PreviewInput.Bounds.Width, PreviewInput.Bounds.Height);
+        }
         var props = e.GetCurrentPoint(PreviewInput).Properties;
         _lmb = props.IsLeftButtonPressed;
         _mmb = props.IsMiddleButtonPressed;
@@ -144,6 +158,7 @@ public partial class MeshPreviewWindow : Window
         var dx = (float)(p.X - _last.X);
         var dy = (float)(p.Y - _last.Y);
         _last = p;
+        if (DataContext is MeshPreviewViewModel { ControlMode: true, ArenaFollowCamera: true }) return;
         if (_lmb) PreviewViewport.OrbitBy(dx, dy);
         else if (_mmb) PreviewViewport.PanBy(dx, dy);
     }
@@ -157,6 +172,10 @@ public partial class MeshPreviewWindow : Window
         if (!(_lmb || _mmb)) e.Pointer.Capture(null);
     }
 
-    private void OnWheel(object? sender, PointerWheelEventArgs e) =>
-        PreviewViewport.ZoomBy((float)e.Delta.Y);
+    private void OnWheel(object? sender, PointerWheelEventArgs e)
+    {
+        if (DataContext is MeshPreviewViewModel { ControlMode: true, ArenaFollowCamera: true })
+            _gameplayDistance = Math.Clamp(_gameplayDistance * MathF.Exp(-(float)e.Delta.Y * 0.1f), 1200f, 3200f);
+        else PreviewViewport.ZoomBy((float)e.Delta.Y);
+    }
 }

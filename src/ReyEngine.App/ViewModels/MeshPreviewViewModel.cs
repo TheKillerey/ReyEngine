@@ -247,7 +247,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         IsLegacyMap = false; NvrFourBlend = false; NvrHeightBlend = false;
         NvrVertexLight = 0; NvrBrightness = 0.55;
         NvrSun = null; NvrUseMapSun = true;   // M149
-        ShowBones = skeleton is not null;
+        ShowBones = false;
         Stats = $"{mesh.VertexCount:n0} verts · {mesh.TriangleCount:n0} tris · {mesh.SubMeshes.Count} submesh(es)" +
                 (skeleton is not null ? $" · {skeleton.BoneCount} bones" : "");
         CurrentAnimation = null;
@@ -330,7 +330,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public static (double X, double Y, double Z, double Rotation) BackdropPlacement(string? mapName) =>
         string.Equals(mapName, "Map8", StringComparison.OrdinalIgnoreCase)
             ? (-6400d, -60d, 2000d, 180d)
-            : (0d, 0d, 0d, 0d);
+            : string.Equals(mapName, "Map10", StringComparison.OrdinalIgnoreCase)
+                ? (500d, -40d, 2650d, 180d)
+                : (0d, 0d, 0d, 0d);
 
     [RelayCommand] private void ResetBackgroundOffset() => ApplyBackdropPlacement(BackgroundMapName);
 

@@ -36,6 +36,7 @@
             <DataTemplate x:DataType="vm:ChampionRowViewModel">
               <StackPanel Margin="2,1">
                 <TextBlock Text="{Binding Name}" FontSize="12" />
+                <TextBlock Text="{Binding SourceLabel}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
                 <TextBlock Text="{Binding Folder}" FontSize="10" IsVisible="{Binding ShowFolder}"
                            Foreground="{DynamicResource ReyTextDimBrush}" />
               </StackPanel>

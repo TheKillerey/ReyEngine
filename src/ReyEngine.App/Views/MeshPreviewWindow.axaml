@@ -74,6 +74,7 @@
                     <DataTemplate x:DataType="vm:ChampionRowViewModel">
                       <StackPanel Margin="2,0">
                         <TextBlock Text="{Binding Name}" FontSize="11" />
+                        <TextBlock Text="{Binding SourceLabel}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
                         <TextBlock Text="{Binding Folder}" FontSize="9" IsVisible="{Binding ShowFolder}"
                                    Foreground="{DynamicResource ReyTextDimBrush}" />
                       </StackPanel>
@@ -190,7 +191,7 @@
                              ModelSubmeshVisible="{Binding SubmeshVisible}"
                              ModelScale="{Binding ModelScale}"
                              ModelPosition="{Binding CharacterPosition}"
-                             ModelYaw="{Binding CharacterYaw}"
+                             ModelYaw="{Binding RenderedCharacterYaw}"
                              BackgroundMesh="{Binding BackgroundMesh}"
                              BackgroundTextures="{Binding BackgroundTextures}"
                              BackgroundBlendTextures="{Binding BackgroundBlendTextures}"
@@ -537,6 +538,29 @@
                         <Button Classes="tool" Content="Unload" Command="{Binding UnloadArenaCommand}" IsVisible="{Binding HasArena}" />
                       </StackPanel>
                       <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
+                      <StackPanel DataContext="{Binding ArenaViewport}" Spacing="4">
+                        <TextBlock Classes="cardTitle" Text="VISIBILITY LAYERS" IsVisible="{Binding HasVisibilityAxes}" />
+                        <ItemsControl ItemsSource="{Binding VisibilityAxes}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                              <StackPanel>
+                                <TextBlock Text="{Binding Name}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                                <ComboBox ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}" FontSize="10" />
+                              </StackPanel>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <ItemsControl ItemsSource="{Binding MapEvents}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate><CheckBox Content="{Binding Label}" IsChecked="{Binding IsOn}" FontSize="10" /></DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <ItemsControl ItemsSource="{Binding BoardStageSelectors}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate><ComboBox ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}" FontSize="10" /></DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </StackPanel>
                       <TextBlock Text="{Binding StatsSummary, StringFormat='Champion: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
                       <!-- M639: pin a slot's cast-range ring on the ground; a cast shows its own ring briefly anyway -->
                       <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">

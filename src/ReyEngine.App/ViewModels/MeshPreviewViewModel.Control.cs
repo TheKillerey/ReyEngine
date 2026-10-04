@@ -24,6 +24,8 @@ namespace ReyEngine.App.ViewModels;
 public sealed partial class MeshPreviewViewModel
 {
     private readonly CharacterController _controller = new();
+    private Vector3? _pendingAttackTarget;
+    public Func<System.Threading.Tasks.Task>? SaveEditorEdits { get; set; }
     private DispatcherTimer? _controlTimer;
     private DateTime _lastControlTick;
     /// <summary>Wall-clock time until which a cast owns the animation. Without it the walk cycle would
@@ -33,6 +35,8 @@ public sealed partial class MeshPreviewViewModel
     [ObservableProperty] private bool _controlMode;
     [ObservableProperty] private Vector3 _characterPosition;
     [ObservableProperty] private double _characterYaw;
+    public double RenderedCharacterYaw => CharacterYaw + (ControlMode ? Math.PI : 0);
+    partial void OnCharacterYawChanged(double value) => OnPropertyChanged(nameof(RenderedCharacterYaw));
     [ObservableProperty] private string _controlStatus = "";
 
     public double MoveSpeed
@@ -55,9 +59,10 @@ public sealed partial class MeshPreviewViewModel
 
     partial void OnControlModeChanged(bool value)
     {
+        OnPropertyChanged(nameof(RenderedCharacterYaw));
         if (value)
         {
-            _controller.Teleport(CharacterPosition);
+            _controller.Teleport(CharacterPosition, (float)CharacterYaw);
             _lastControlTick = DateTime.UtcNow;
             _controlTimer ??= CreateTimer();
             _controlTimer.Start();
@@ -66,7 +71,7 @@ public sealed partial class MeshPreviewViewModel
         else
         {
             _controlTimer?.Stop();
-            _controller.Stop();
+            StopMovement();
             ControlStatus = "";
         }
     }
@@ -106,10 +111,20 @@ public sealed partial class MeshPreviewViewModel
             });
     }
 
+    public void StopMovement()
+    {
+        _pendingAttackTarget = null;
+        _waypoints.Clear();
+        CancelPendingCast();
+        _controller.Stop();
+        PlayKind(CharacterActionKind.Idle);
+    }
+
     /// <summary>Right-click on the ground: walk there.</summary>
     public void OrderMove(Vector3 groundPoint)
     {
         if (!ControlMode) return;
+        _pendingAttackTarget = null;
         _controller.MoveTo(groundPoint);
         _castBusyUntil = DateTime.MinValue;    // a move order cancels the cast, as it does in game
     }
@@ -118,6 +133,13 @@ public sealed partial class MeshPreviewViewModel
     public void OrderAttack(Vector3 target)
     {
         if (!ControlMode) return;
+        _waypoints.Clear();
+        if (_arena?.Nav is not null && Vector2.Distance(new(CharacterPosition.X, CharacterPosition.Z), new(target.X, target.Z)) > AttackRange)
+        {
+            OrderMoveOnArena(target);
+            _pendingAttackTarget = target;
+            return;
+        }
         _controller.Attack(target);
         _castBusyUntil = DateTime.MinValue;
     }
@@ -320,8 +342,10 @@ public sealed partial class MeshPreviewViewModel
     [RelayCommand]
     private void ResetCharacter()
     {
-        _controller.Teleport(Vector3.Zero);
-        CharacterPosition = Vector3.Zero;
+        StopMovement();
+        var spawn = _arena?.Spawn ?? Vector3.Zero;
+        _controller.Teleport(spawn);
+        CharacterPosition = spawn;
         CharacterYaw = 0;
         _castBusyUntil = DateTime.MinValue;
     }

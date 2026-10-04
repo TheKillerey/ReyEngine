@@ -15,12 +15,14 @@ public interface ICharacterBrowserHost
     string? GameDirectory { get; }
 
     IHashResolver? Resolver { get; }
+    IReadOnlyList<string> ProjectCharacterPaths => Array.Empty<string>();
+    byte[]? ReadProjectCharacterAsset(string path) => null;
 
     /// <summary>Load this skin into the model preview. The browser knows nothing about rendering.</summary>
     void OpenSkin(ChampionPackage champion, CharacterEntry character, CharacterSkinInfo skin);
 }
 
-public sealed class ChampionRowViewModel(ChampionPackage package, ClientChampion? client)
+public sealed class ChampionRowViewModel(ChampionPackage package, ClientChampion? client, bool inProject = false)
 {
     public ChampionPackage Package { get; } = package;
     public string Name { get; } = client?.DisplayName is { Length: > 0 } n ? n : package.Name;
@@ -28,6 +30,7 @@ public sealed class ChampionRowViewModel(ChampionPackage package, ClientChampion
     /// "Twisted Fate" is the difference between finding a file and not.</summary>
     public string Folder { get; } = package.Name;
     public string Title { get; } = client?.Title ?? "";
+    public string SourceLabel { get; } = inProject ? "PROJECT" : "RIOT REFERENCE";
     public bool ShowFolder => !Folder.Equals(Name, StringComparison.Ordinal);
 
     public bool Matches(string query) =>
@@ -146,20 +149,28 @@ public sealed partial class CharacterBrowserViewModel : ObservableObject, IDispo
 
     private void Load()
     {
-        if (ChampionsDirectory is not { } directory)
+        string? directory = ChampionsDirectory;
+        var projectPaths = _host.ProjectCharacterPaths;
+        if (directory is null && projectPaths.Count == 0)
         {
             Status = "No game folder is set. Project > Set Game Folder..., then reopen this window.";
             return;
         }
 
-        var packages = CharacterCatalog.Champions(directory);
+        var packages = (directory is null ? Array.Empty<ChampionPackage>() : CharacterCatalog.Champions(directory)).ToList();
+        var projectCharacters = CharacterCatalog.Characters(projectPaths, null);
+        foreach (var character in projectCharacters)
+            if (!packages.Any(p => p.Name.Equals(character.Name, StringComparison.OrdinalIgnoreCase)))
+                packages.Add(new ChampionPackage(character.Name, ""));
 
         // The marketing names are enrichment, never a dependency: without the client plugin the list is
         // exactly as complete, just spelled the way the folders are.
-        string? installRoot = ClientNameCatalog.InstallRootFromChampions(directory);
+        string? installRoot = directory is null ? null : ClientNameCatalog.InstallRootFromChampions(directory);
         _names = ClientNameCatalog.Load(installRoot is null ? null : ClientNameCatalog.FindDataWad(installRoot));
 
-        _allChampions = packages.Select(p => new ChampionRowViewModel(p, _names.Champion(p.Name))).ToList();
+        _allChampions = packages.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(p => new ChampionRowViewModel(p, _names.Champion(p.Name),
+                projectCharacters.Any(c => c.Name.Equals(p.Name, StringComparison.OrdinalIgnoreCase)))).ToList();
         ApplyFilter();
         Status = _names.ChampionCount > 0
             ? $"{packages.Count} champions."
@@ -193,17 +204,22 @@ public sealed partial class CharacterBrowserViewModel : ObservableObject, IDispo
         try
         {
             Busy = true;
-            _archive = WadArchive.Open(value.Package.WadPath, _host.Resolver);
+            if (!string.IsNullOrEmpty(value.Package.WadPath))
+                _archive = WadArchive.Open(value.Package.WadPath, _host.Resolver);
 
             // A WAD whose chunks are still 0x-named lists nothing, and "no characters" would be the only
             // symptom. Say which of the two it is instead.
-            if (_archive.ResolvedCount == 0)
+            if (_archive is not null && _archive.ResolvedCount == 0)
             {
                 Status = $"{value.Name}: no hash dictionary loaded, so nothing in this WAD can be named.";
                 return;
             }
 
-            foreach (var character in CharacterCatalog.Characters(_archive, value.Package.Name))
+            var paths = _archive?.Entries.Where(e => e.IsResolved).Select(e => e.Path).ToList() ?? new List<string>();
+            var names = CharacterCatalog.Characters(paths, value.Package.Name).Select(c => c.Name)
+                .Append(value.Package.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            paths.AddRange(_host.ProjectCharacterPaths.Where(p => p.Split('/').Length > 2 && names.Contains(p.Split('/')[2])));
+            foreach (var character in CharacterCatalog.Characters(paths, value.Package.Name))
                 Characters.Add(new CharacterRowViewModel(character));
 
             SelectedCharacter = Characters.FirstOrDefault();
@@ -237,16 +253,19 @@ public sealed partial class CharacterBrowserViewModel : ObservableObject, IDispo
     partial void OnSelectedSkinChanged(SkinRowViewModel? value)
     {
         ClearSkinDetails();
-        if (value is null || _archive is null) return;
+        if (value is null) return;
 
         try
         {
             ulong hash = HashAlgorithms.WadPath(value.Reference.BinPath);
-            if (!_archive.TryGetEntry(hash, out _)) { Status = $"{value.Reference.BinPath} is not in this WAD."; return; }
+            var projectBytes = _host.ReadProjectCharacterAsset(value.Reference.BinPath);
+            if (projectBytes is null && (_archive is null || !_archive.TryGetEntry(hash, out _)))
+            { Status = $"{value.Reference.BinPath} is not available."; return; }
 
             var archive = _archive;
-            _skinInfo = CharacterSkinReader.Read(archive.Extract(hash), value.Reference.BinPath,
-                h => archive.TryGetEntry(h, out var e) && e.IsResolved ? e.Path : null);
+            _skinInfo = CharacterSkinReader.Read(projectBytes ?? archive!.Extract(hash), value.Reference.BinPath,
+                h => _host.Resolver is { } resolver && resolver.TryGetPath(h, out var resolved) ? resolved
+                    : (archive is not null && archive.TryGetEntry(h, out var e) && e.IsResolved ? e.Path : null));
             if (_skinInfo is null) { Status = $"{value.Reference.BinPath} is not a skin."; return; }
 
             CodeName = _skinInfo.CodeName;

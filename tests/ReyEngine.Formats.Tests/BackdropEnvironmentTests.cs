@@ -57,10 +57,10 @@ public sealed class BackdropEnvironmentTests
         // the honest default for a map nobody has framed by hand. Twisted Treeline used to silently take
         // Dominion's numbers: 6,400 units away and turned 180 degrees.
         var treeline = MeshPreviewViewModel.BackdropPlacement("Map10");
-        Assert.Equal((0d, 0d, 0d, 0d), treeline);
+        Assert.Equal((500d, -40d, 2650d, 180d), treeline);
         Assert.NotEqual(dominion, treeline);
 
-        Assert.Equal(treeline, MeshPreviewViewModel.BackdropPlacement(null));
+        Assert.Equal((0d, 0d, 0d, 0d), MeshPreviewViewModel.BackdropPlacement(null));
         Assert.Equal(dominion, MeshPreviewViewModel.BackdropPlacement("map8"));   // case-insensitive
     }
 

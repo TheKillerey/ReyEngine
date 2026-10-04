@@ -192,6 +192,6 @@ public sealed class CharacterControlPanelTests
 
         string text = File.ReadAllText(xaml);
         Assert.Contains("ModelPosition=\"{Binding CharacterPosition}\"", text);
-        Assert.Contains("ModelYaw=\"{Binding CharacterYaw}\"", text);
+        Assert.Contains("ModelYaw=\"{Binding RenderedCharacterYaw}\"", text);
     }
 }

@@ -39,7 +39,8 @@ public sealed partial class MeshPreviewViewModel
         string? GameDirectory,
         ReyEngine.Core.Hashing.IHashResolver Resolver,
         Func<uint, string?> ResolveBinName,
-        Func<ulong, string?> ResolveWadPath);
+        Func<ulong, string?> ResolveWadPath,
+        Func<string, Task<MainWindowViewModel>>? LoadViewport = null);
 
     private ArenaHost? _arenaHost;
 
@@ -93,6 +94,7 @@ public sealed partial class MeshPreviewViewModel
     [ObservableProperty] private bool _arenaFollowCamera = true;
 
     private ArenaScene? _arena;
+    [ObservableProperty] private MainWindowViewModel? _arenaViewport;
     public bool HasArena => _arena is not null;
     public string ArenaName => _arena?.MapKey ?? "";
 
@@ -109,7 +111,7 @@ public sealed partial class MeshPreviewViewModel
         // The D3D11 host has no backdrop channel, so under it the floor stays the diffuse-only prop it has
         // always been. Exactly one of the two per renderer.
         var list = new List<PropInstanceData>();
-        if (UseDx11Preview && _arena is { } arena)
+        if (UseDx11Preview && ArenaViewport is null && _arena is { } arena)
             list.Add(new PropInstanceData(arena.Dx11Geometry, Matrix4x4.Identity));
         // M725: the NVR preview backdrop gets the same treatment the arena floor has had since M665.
         // Ticking Direct3D 11 used to make Dominion / Twisted Treeline silently vanish while the MAP
@@ -217,10 +219,33 @@ public sealed partial class MeshPreviewViewModel
         ArenaStatus = $"Loading {key}…";
         try
         {
-            var lines = new List<string>();
-            var scene = await Task.Run(() => ArenaLoader.Load(wad, host.Resolver, host.ResolveBinName,
-                host.ResolveWadPath, l => lines.Add(l)));
-            foreach (var l in lines) LogDx11?.Invoke("Arena", l);
+            ArenaScene scene;
+            if (host.LoadViewport is { } loadViewport)
+            {
+                var previous = ArenaViewport;
+                ArenaViewport = await loadViewport(wad);
+                previous?.ReleaseArenaViewport();
+                var background = ArenaViewport.ArenaBackground(key);
+                var mesh = background.Mesh;
+                var min = new Vector3(float.MaxValue);
+                var max = new Vector3(float.MinValue);
+                for (int i = 0; i < mesh.Positions.Length; i += 3)
+                {
+                    var p = new Vector3(mesh.Positions[i], mesh.Positions[i + 1], mesh.Positions[i + 2]);
+                    min = Vector3.Min(min, p); max = Vector3.Max(max, p);
+                }
+                var arenaNav = ArenaViewport.ArenaNavGrid;
+                scene = new ArenaScene(key, background,
+                    new PropMesh(key, mesh.Positions, mesh.Normals, mesh.Uvs, mesh.Indices, new List<PropSubmesh>()),
+                    arenaNav, ArenaLoader.SpawnFor(arenaNav, min, max), min, max, mesh.SubMeshes.Count, 0, 0, 0);
+            }
+            else
+            {
+                var lines = new List<string>();
+                scene = await Task.Run(() => ArenaLoader.Load(wad, host.Resolver, host.ResolveBinName,
+                    host.ResolveWadPath, l => lines.Add(l)));
+                foreach (var l in lines) LogDx11?.Invoke("Arena", l);
+            }
 
             // M667: the apply is breadcrumbed step by step. A session log ended exactly here - after the
             // loader's own lines and before anything else - with the process gone and no crash.log, which
@@ -278,6 +303,8 @@ public sealed partial class MeshPreviewViewModel
     private async Task UnloadArena()
     {
         _arena = null;
+        ArenaViewport?.ReleaseArenaViewport();
+        ArenaViewport = null;
         _waypoints.Clear();
         RebuildSceneProps();
         SetArenaBackdrop(null);   // M665: and give the backdrop back to whatever owned it
@@ -389,6 +416,7 @@ public sealed partial class MeshPreviewViewModel
         _waypoints.Clear();
         if (path.Count == 0)
         {
+            StopMovement();
             ControlStatus = "No route there - that ground is not walkable.";
             return true;
         }
@@ -404,6 +432,13 @@ public sealed partial class MeshPreviewViewModel
     private void AdvanceArena()
     {
         if (_arena is not { } arena) return;
+        if (_pendingAttackTarget is { } attack
+            && Vector2.Distance(new(CharacterPosition.X, CharacterPosition.Z), new(attack.X, attack.Z)) <= AttackRange)
+        {
+            _pendingAttackTarget = null;
+            _waypoints.Clear();
+            _controller.Attack(attack);
+        }
 
         if (_controller.Destination is null && _controller.Target is null && _waypoints.Count > 0)
             _controller.MoveTo(_waypoints.Dequeue());
@@ -418,7 +453,7 @@ public sealed partial class MeshPreviewViewModel
             }
         }
 
-        if (ArenaFollowCamera && _controller.Stance != CharacterStance.Idle) FocusPoint = CharacterPosition;
+        // The gameplay camera follows smoothly in the view; FocusPoint would snap the orbit every tick.
     }
 
     /// <summary>The ground under a pick ray on the arena: marched against the navgrid's height field, so a
