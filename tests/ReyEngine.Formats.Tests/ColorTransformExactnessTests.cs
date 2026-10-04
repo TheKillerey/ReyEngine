@@ -313,10 +313,17 @@ public sealed class ColorTransformExactnessTests
         var floats = new[] { new Vector4(2f, 1f, 0.5f, 1f) };
         t.ApplyInPlace(floats);
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 4; i++) t.ApplyInPlace(pixels);
-        for (int i = 0; i < 1000; i++) t.ApplyInPlace(floats);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // The smallest of three runs: a collection that other test threads trigger mid-run can move this thread's
+        // counter by a whole allocation block once (seen once in a full suite), while an allocation the transform
+        // really makes shows up in every run.
+        long allocated = long.MaxValue;
+        for (int run = 0; run < 3; run++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 4; i++) t.ApplyInPlace(pixels);
+            for (int i = 0; i < 1000; i++) t.ApplyInPlace(floats);
+            allocated = Math.Min(allocated, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
 
         Assert.True(allocated < 512, Inv($"{allocated} bytes allocated"));
     }
