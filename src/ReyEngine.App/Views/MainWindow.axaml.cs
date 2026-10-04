@@ -1328,6 +1328,16 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             return;
         }
 
+        if (_lmb && !_alt && e.KeyModifiers.HasFlag(KeyModifiers.Shift)
+            && DataContext is MainWindowViewModel faceVm && faceVm.FaceEditMode)
+        {
+            _faceBoxDragging = true;
+            _faceBoxStart = pt.Position;
+            UpdateFaceSelectionBox(pt.Position);
+            FaceSelectionBox.IsVisible = true;
+            return;
+        }
+
         if (_lmb && !_alt)
         {
             var axis = Viewport.HitTestGizmoAxis(pt.Position);
@@ -1410,6 +1420,16 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     }
 
     private bool _painting;
+    private bool _faceBoxDragging;
+    private Point _faceBoxStart;
+
+    private void UpdateFaceSelectionBox(Point end)
+    {
+        Canvas.SetLeft(FaceSelectionBox, Math.Min(_faceBoxStart.X, end.X));
+        Canvas.SetTop(FaceSelectionBox, Math.Min(_faceBoxStart.Y, end.Y));
+        FaceSelectionBox.Width = Math.Abs(end.X - _faceBoxStart.X);
+        FaceSelectionBox.Height = Math.Abs(end.Y - _faceBoxStart.Y);
+    }
 
     private void OnViewportPointerMoved(object? sender, PointerEventArgs e)
     {
@@ -1417,6 +1437,12 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         var p = e.GetPosition(ViewportInput);
         if (Math.Abs(p.X - _pressPos.X) > ClickSlopPixels || Math.Abs(p.Y - _pressPos.Y) > ClickSlopPixels)
             _pressMoved = true;
+
+        if (_faceBoxDragging)
+        {
+            UpdateFaceSelectionBox(p);
+            return;
+        }
 
         if (DataContext is MainWindowViewModel mvm && mvm.IsPaintMode
             && Viewport.TryGetPickRay(p, out var mOrigin, out var mDir))
@@ -1500,6 +1526,21 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
 
     private void OnViewportPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
+        if (_faceBoxDragging)
+        {
+            SyncDx11Interaction();
+            var end = e.GetPosition(ViewportInput);
+            _faceBoxDragging = false;
+            FaceSelectionBox.IsVisible = false;
+            if (DataContext is MainWindowViewModel faceVm && faceVm.FaceEditMode)
+                faceVm.SelectFacesInBox(
+                    new Vector2((float)Math.Min(_faceBoxStart.X, end.X), (float)Math.Min(_faceBoxStart.Y, end.Y)),
+                    new Vector2((float)Math.Max(_faceBoxStart.X, end.X), (float)Math.Max(_faceBoxStart.Y, end.Y)),
+                    world => Viewport.TryProjectToScreen(world, out var point) ? point : null);
+            _lmb = _rmb = _mmb = false;
+            e.Pointer.Capture(null);
+            return;
+        }
         if (_painting)
         {
             _painting = false;
@@ -1559,8 +1600,24 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         else Viewport.ZoomBy((float)e.Delta.Y);
     }
 
+    private void OnViewportPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        if (!_faceBoxDragging) return;
+        _faceBoxDragging = false;
+        FaceSelectionBox.IsVisible = false;
+        _lmb = _rmb = _mmb = false;
+    }
+
     private void OnViewportKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && _faceBoxDragging)
+        {
+            _faceBoxDragging = false;
+            FaceSelectionBox.IsVisible = false;
+            _lmb = _rmb = _mmb = false;
+            e.Handled = true;
+            return;
+        }
         if (e.Key == _kFocus) { FocusSelectionOrFrame(); return; }   // M808: Frame; M810: the selection first
         _heldKeys.Add(e.Key);
     }

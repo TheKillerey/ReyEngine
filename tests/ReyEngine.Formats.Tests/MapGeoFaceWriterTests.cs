@@ -38,6 +38,94 @@ public sealed class MapGeoFaceWriterTests
     }
 
     [Fact]
+    public void EditingASharedBufferDoesNotChangeOtherMeshInstances()
+    {
+        const string sharedWad = @"C:\Riot Games\League of Legends\Game\DATA\FINAL\Maps\Shipping\Map11.wad.client";
+        if (!File.Exists(sharedWad)) return;
+        using var archive = ReyEngine.Core.Wad.WadArchive.Open(sharedWad);
+        byte[] bytes = archive.Extract(HashAlgorithms.WadPath("data/maps/mapgeometry/map11/base.mapgeo"));
+        Assert.True(MapGeoBinary.TryReadEditable(bytes, out var binary));
+        int owner = Enumerable.Range(0,binary.Meshes.Count).First(i => binary.Meshes.Any(m => !ReferenceEquals(m,binary.Meshes[i]) && m.VertexBufferIds.Contains(binary.Meshes[i].VertexBufferIds[0])));
+        var map = MapGeoDecoder.Decode(bytes);
+        var group = map.Groups.First(g => g.MeshIndex == owner);
+        int face = group.StartIndex / 3;
+        var untouched = (float[])map.Positions.Clone();
+        var vertices = map.Indices.Skip(face * 3).Take(3).ToArray();
+        map.MoveVertices(vertices,new Vector3(0,100,0));
+        var edited = MapGeoFaceWriter.TryWriteCurrentFaces(bytes,map,new[]{face},out var error);
+        Assert.True(edited is not null,error);
+        var reloaded = MapGeoDecoder.Decode(edited!);
+        foreach (var mesh in map.Meshes.Where(m=>m.Index!=owner))
+            for(int v=mesh.VertexStart*3;v<(mesh.VertexStart+mesh.VertexCount)*3;v++)
+                Assert.Equal(untouched[v],reloaded.Positions[v],2);
+    }
+
+    [Fact]
+    public void WorldFaceMovementComposesWithMeshRotationAndScale()
+    {
+        if (Shipped() is not { } bytes) return;
+        var map=MapGeoDecoder.Decode(bytes);
+        int face=FirstRealTriangle(map);
+        var owner=map.Meshes[map.Groups.First(g=>face*3>=g.StartIndex&&face*3<g.StartIndex+g.IndexCount).MeshIndex];
+        map.RotateMesh(owner,new Vector3(0,65,0));
+        map.ScaleMesh(owner,new Vector3(2,1,3));
+        var vertices=map.Indices.Skip(face*3).Take(3).Distinct().ToArray();
+        var before=vertices.Select(v=>new Vector3(map.Positions[v*3],map.Positions[v*3+1],map.Positions[v*3+2])).ToArray();
+        var delta=new Vector3(15,75,-40);
+        map.MoveVertices(vertices,delta);
+        var edited=MapGeoFaceWriter.TryWriteCurrentFaces(bytes,map,new[]{face},out var error);
+        Assert.True(edited is not null,error);
+        var saved=MapGeoWriter.TryWriteWithMoves(edited!,map.Meshes,out error);
+        Assert.True(saved is not null,error);
+        var reloaded=MapGeoDecoder.Decode(saved!);
+        for(int i=0;i<vertices.Length;i++)
+        {
+            uint v=vertices[i];
+            Assert.True(Vector3.Distance(before[i]+delta,new Vector3(reloaded.Positions[v*3],reloaded.Positions[v*3+1],reloaded.Positions[v*3+2]))<.05f);
+        }
+    }
+
+    [Fact]
+    public void AuthoritativeGeometrySurvivesRepeatedSavesAndTransformRebakes()
+    {
+        if (Shipped() is not { } bytes) return;
+        var map = MapGeoDecoder.Decode(bytes);
+        int face = FirstRealTriangle(map);
+        var vertices = map.Indices.Skip(face * 3).Take(3).Distinct().ToArray();
+        var initial = vertices.Select(v => new Vector3(map.Positions[v * 3], map.Positions[v * 3 + 1], map.Positions[v * 3 + 2])).ToArray();
+        var delta = new Vector3(15, 40, -20);
+        map.MoveVertices(vertices, delta);
+        map.MoveVertices(vertices, delta);
+        foreach (var mesh in map.Meshes) map.ApplyMeshTransform(mesh);
+        var saved = MapGeoFaceWriter.TryWriteCurrentFaces(bytes, map, new[] { face }, out var error);
+        Assert.True(saved is not null, error);
+        var reloaded = MapGeoDecoder.Decode(saved!);
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            uint v = vertices[i];
+            var actual = new Vector3(reloaded.Positions[v * 3], reloaded.Positions[v * 3 + 1], reloaded.Positions[v * 3 + 2]);
+            Assert.True(Vector3.Distance(initial[i] + delta * 2, actual) < .02f);
+        }
+        map.MoveVertices(vertices, -delta);
+        var savedAgain = MapGeoFaceWriter.TryWriteCurrentFaces(bytes, map, new[] { face }, out error);
+        Assert.True(savedAgain is not null, error);
+        reloaded = MapGeoDecoder.Decode(savedAgain!);
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            uint v = vertices[i];
+            Assert.True(Vector3.Distance(initial[i] + delta, new Vector3(reloaded.Positions[v * 3], reloaded.Positions[v * 3 + 1], reloaded.Positions[v * 3 + 2])) < .02f);
+        }
+        (map.Indices[face * 3 + 1], map.Indices[face * 3 + 2]) = (map.Indices[face * 3 + 2], map.Indices[face * 3 + 1]);
+        var flipped = MapGeoFaceWriter.TryWriteCurrentFaces(bytes, map, new[] { face }, out error);
+        Assert.True(flipped is not null, error);
+        Assert.Equal(map.Indices, MapGeoDecoder.Decode(flipped!).Indices);
+        map.Indices[face * 3 + 1] = map.Indices[face * 3 + 2] = map.Indices[face * 3];
+        var deleted = MapGeoFaceWriter.TryWriteCurrentFaces(bytes, map, new[] { face }, out error);
+        Assert.True(deleted is not null, error);
+        Assert.Equal(map.Indices, MapGeoDecoder.Decode(deleted!).Indices);
+    }
+
+    [Fact]
     public void DeletingAFaceCollapsesItAndKeepsTheFileTheSameLength()
     {
         if (Shipped() is not { } bytes) return;

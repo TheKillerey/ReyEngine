@@ -29,13 +29,38 @@ public sealed class MapGeoAsset
     public required IReadOnlyList<MapGeoGroup> Groups { get; init; }
     public IReadOnlyList<MapGeoMesh> Meshes { get; init; } = Array.Empty<MapGeoMesh>();
 
-    // Pristine copies of the baked vertex buffers, cloned lazily on the first edit so repeated moves/
+    // Geometry basis of the baked vertex buffers, cloned lazily on the first edit so repeated moves/
     // rotations/scales recompute from the ORIGINAL geometry instead of compounding floating-point drift.
     private float[]? _originalPositions;
     private float[]? _originalNormals;
 
+    /// <summary>Edit the geometry beneath the mesh transform, retaining edits on every subsequent rebake.</summary>
+    public void MoveVertices(IEnumerable<uint> vertices, Vector3 worldOffset)
+    {
+        _originalPositions ??= (float[])Positions.Clone();
+        _originalNormals ??= (float[])Normals.Clone();
+        var touched = vertices.ToHashSet();
+        foreach (var mesh in Meshes)
+        {
+            if (!touched.Any(v => v >= mesh.VertexStart && v < mesh.VertexStart + mesh.VertexCount)) continue;
+            if (!Matrix4x4.Invert(mesh.ScaleRotationMatrix * mesh.GroupMatrix, out var inverse))
+                throw new InvalidOperationException("Cannot edit a mesh with a singular transform.");
+            var delta = Vector3.TransformNormal(worldOffset, inverse);
+            bool changed = false;
+            foreach (uint v in touched)
+            {
+                if (v < mesh.VertexStart || v >= mesh.VertexStart + mesh.VertexCount) continue;
+                _originalPositions[v * 3] += delta.X;
+                _originalPositions[v * 3 + 1] += delta.Y;
+                _originalPositions[v * 3 + 2] += delta.Z;
+                changed = true;
+            }
+            if (changed) ApplyMeshTransform(mesh);
+        }
+    }
+
     /// <summary>
-    /// M580: a mesh's PRISTINE baked vertices — the geometry before any transform edit this session.
+    /// M580: a mesh's baked geometry basis, including face edits but excluding mesh transform edits.
     ///
     /// <para>What the Blender bridge has to send. <see cref="Positions"/> already has the mesh's own
     /// offset/rotation/scale baked in, so handing those to Blender alongside the same transform would

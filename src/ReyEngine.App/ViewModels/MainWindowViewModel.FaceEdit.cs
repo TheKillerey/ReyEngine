@@ -29,10 +29,44 @@ public sealed partial class MainWindowViewModel
     public int SelectedFaceCount => _selectedFaces.Count;
     public bool HasFaceSelection => _selectedFaces.Count > 0;
 
-    /// <summary>Face edits made since the map was loaded, replayed onto the file when the map is saved.</summary>
-    private readonly List<FaceEdit> _faceEdits = new();
+    /// <summary>Pending face operations; geometry itself lives in the decoded project map.</summary>
+    private sealed class FaceEditorState
+    {
+        public readonly List<FaceEdit> Edits = new();
+        public readonly HashSet<int> Faces = new();
+        public readonly List<FaceGrow> Grows = new();
+        public readonly List<FaceGrow> SavedGrows = new();
+        public readonly Dictionary<int, (uint, uint, uint)> UndoIndices = new();
+        public bool Dirty;
+    }
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<MapGeoAsset, FaceEditorState> _faceStates = new();
+    private readonly FaceEditorState _emptyFaceState = new();
+    private FaceEditorState FaceState => _currentMap is { } map ? _faceStates.GetOrCreateValue(map) : _emptyFaceState;
+    private List<FaceEdit> _faceEdits => FaceState.Edits;
+    private HashSet<int> _faceGeometryFaces => FaceState.Faces;
+    private bool _faceGeometryDirty { get => FaceState.Dirty; set => FaceState.Dirty = value; }
 
-    public bool HasFaceEdits => _faceEdits.Count > 0;
+    private bool EnsureFaceProjectAsset()
+    {
+        if (_currentMapEntry is not { } entry || !ProjectMode) return true;
+        if (RefusesGameDataWrite(entry)) return false;
+        if (entry.SourceKind != ReyEngine.Core.Assets.AssetSourceKind.RiotReference) return true;
+        if (Project.ProjectFilePath is null || _currentMapBytes is null) return false;
+        if (!TryPlaceInProjectFolder(entry, _currentMapBytes, out _))
+        {
+            var file = ReyEngine.Core.Projects.ProjectWorkspace.StoreOverrideBytes(Project, entry.PathHash, _currentMapBytes, ".mapgeo");
+            _overrides.Set(new ReyEngine.Core.Projects.ProjectAssetOverride
+            { PathHash = entry.PathHash, ResolvedPath = entry.IsResolved ? entry.Path : null,
+              OverrideFile = file, AddedUtc = DateTime.UtcNow.ToString("o") });
+        }
+        _overrides.SaveTo(Project);
+        RefreshOverrideMount();
+        BuildProjectTree();
+        if (TryResolveEntry(entry.PathHash, out var owned)) _currentMapEntry = owned;
+        return _currentMapEntry?.SourceKind != ReyEngine.Core.Assets.AssetSourceKind.RiotReference;
+    }
+
+    public bool HasFaceEdits => _faceGeometryDirty || _faceEdits.Count > 0;
 
     partial void OnFaceEditModeChanged(bool value)
     {
@@ -42,7 +76,7 @@ public sealed partial class MainWindowViewModel
         GizmoPivot = value ? FaceGizmoPivot : _selection.Primary is { } m ? m.Pivot + m.Offset : null;
         _log.Info("Faces", value
             ? "Face mode ON - click a face to select it, Ctrl+click to add or remove. Delete removes, "
-              + "F flips, and the gizmo moves the selection."
+              + "Shift+drag adds faces inside a box. F flips, and the gizmo moves the selection."
             : "Face mode off.");
         NotifyFaceState();
     }
@@ -221,7 +255,7 @@ public sealed partial class MainWindowViewModel
             : fallback;
 
     /// <summary>Pending extrudes and insets, replayed onto the file when the map is saved.</summary>
-    private readonly List<FaceGrow> _faceGrows = new();
+    private List<FaceGrow> _faceGrows => FaceState.Grows;
 
     public bool HasFaceGrows => _faceGrows.Count > 0;
 
@@ -243,9 +277,13 @@ public sealed partial class MainWindowViewModel
     /// </summary>
     private void Grow(FaceGrowOp op, float amount, string verb)
     {
+        if (!EnsureFaceProjectAsset()) return;
         if (_currentMap is null || _selectedFaces.Count == 0) return;
         var faces = _selectedFaces.ToList();
         foreach (int t in faces) _faceGrows.Add(new FaceGrow(t, op, amount));
+        Project.IsDirty = true;
+        UpdateTitle();
+        ScheduleAutoSave();
         OnPropertyChanged(nameof(HasFaceGrows));
         NotifyFaceState();
         _log.Info("Faces", $"{verb} {faces.Count} face(s) by {amount:0.###}. This one adds geometry, so the "
@@ -291,12 +329,59 @@ public sealed partial class MainWindowViewModel
 
     public bool HasFaceGizmoTarget => FaceGizmoPivot is not null;
 
+    public void SelectFacesInBox(Vector2 min, Vector2 max, Func<Vector3, Vector2?> project)
+    {
+        if (_currentMap is not { } map) return;
+        Span<Vector2> points = stackalloc Vector2[3];
+        for (int gi = 0; gi < map.Groups.Count; gi++)
+        {
+            if (CurrentModelSubmeshVisible is { } visible && gi < visible.Count && !visible[gi]) continue;
+            var g = map.Groups[gi];
+            for (int i = g.StartIndex; i + 2 < g.StartIndex + g.IndexCount; i += 3)
+            {
+                if (map.Indices[i] == map.Indices[i + 1] || map.Indices[i] == map.Indices[i + 2] || map.Indices[i + 1] == map.Indices[i + 2]) continue;
+                bool valid = true;
+                for (int k = 0; k < 3; k++)
+                {
+                    int v = checked((int)map.Indices[i + k] * 3);
+                    if (project(new Vector3(map.Positions[v], map.Positions[v + 1], map.Positions[v + 2])) is not { } p)
+                    { valid = false; break; }
+                    points[k] = p;
+                }
+                if (valid && FaceIntersectsBox(points, min, max)) _selectedFaces.Add(i / 3);
+            }
+        }
+        RebuildFaceSelectionLines();
+    }
+
+    private static bool FaceIntersectsBox(ReadOnlySpan<Vector2> triangle, Vector2 min, Vector2 max)
+    {
+        var centre = (min + max) * .5f;
+        var half = (max - min) * .5f;
+        for (int k = 0; k < 5; k++)
+        {
+            Vector2 axis;
+            if (k < 2) axis = k == 0 ? Vector2.UnitX : Vector2.UnitY;
+            else
+            {
+                var edge = triangle[(k - 1) % 3] - triangle[k - 2];
+                axis = new Vector2(-edge.Y, edge.X);
+            }
+            float a = Vector2.Dot(triangle[0], axis), b = Vector2.Dot(triangle[1], axis), c = Vector2.Dot(triangle[2], axis);
+            float radius = Math.Abs(axis.X) * half.X + Math.Abs(axis.Y) * half.Y;
+            float boxCentre = Vector2.Dot(centre, axis);
+            if (Math.Max(a, Math.Max(b, c)) < boxCentre - radius || Math.Min(a, Math.Min(b, c)) > boxCentre + radius) return false;
+        }
+        return true;
+    }
+
     /// <summary>
     /// Starts a face drag. Mirrors the mesh gizmo: the pointer-move frames mutate silently and the WHOLE
     /// drag becomes one undo step at the end, rather than one step per frame.
     /// </summary>
     public void BeginFaceDrag()
     {
+        if (!EnsureFaceProjectAsset()) return;
         _faceDragging = true;
         _faceDragApplied = Vector3.Zero;
     }
@@ -341,6 +426,7 @@ public sealed partial class MainWindowViewModel
     private void ApplyFaceOp(FaceOp op, Vector3 offset, string verb)
     {
         if (_currentMap is not { } map || _selectedFaces.Count == 0) return;
+        if (!EnsureFaceProjectAsset()) return;
         var faces = _selectedFaces.ToList();
         var command = new FaceEditCommand(this, faces, op, offset);
         command.Execute();
@@ -392,15 +478,14 @@ public sealed partial class MainWindowViewModel
                     for (int k = 0; k < 3; k++) touched.Add(map.Indices[t * 3 + k]);
                 }
                 var step = forward ? offset : -offset;
-                foreach (uint v in touched)
-                {
-                    if (v * 3 + 2 >= map.Positions.Length) continue;
-                    map.Positions[v * 3] += step.X;
-                    map.Positions[v * 3 + 1] += step.Y;
-                    map.Positions[v * 3 + 2] += step.Z;
-                }
+                map.MoveVertices(touched, step);
                 break;
         }
+        _faceGeometryFaces.UnionWith(faces);
+        _faceGeometryDirty = true;
+        Project.IsDirty = true;
+        UpdateTitle();
+        ScheduleAutoSave();
         RebuildFaceSelectionLines();
         // M571: MeshVerticesRevision, not a revision of our own.
         //
@@ -414,7 +499,7 @@ public sealed partial class MainWindowViewModel
     }
 
     /// <summary>What a deleted face looked like, so undo can put it back.</summary>
-    private readonly Dictionary<int, (uint, uint, uint)> _faceUndoIndices = new();
+    private Dictionary<int, (uint, uint, uint)> _faceUndoIndices => FaceState.UndoIndices;
 
     private sealed class FaceEditCommand : ReyEngine.Core.Undo.IEditorCommand
     {
@@ -428,7 +513,7 @@ public sealed partial class MainWindowViewModel
 
         public FaceEditCommand(MainWindowViewModel vm, List<int> faces, FaceOp op, Vector3 offset,
             bool alreadyApplied = false)
-        { _vm = vm; _faces = faces; _op = op; _offset = offset; _skipNextExecute = alreadyApplied; }
+        { _vm = vm; _map = vm._currentMap; _faces = faces; _op = op; _offset = offset; _skipNextExecute = alreadyApplied; }
 
         public string Name => _op switch
         {
@@ -436,12 +521,14 @@ public sealed partial class MainWindowViewModel
             FaceOp.Flip => "Flip Faces",
             _ => "Move Faces",
         };
-        public object? Context => null;
+        private readonly MapGeoAsset? _map;
+        public object? Context => _map;
 
         public void Execute()
         {
             // Redo after an undo must run in full; only the first call from a finished drag is skipped.
             if (_skipNextExecute) { _skipNextExecute = false; return; }
+            ActivateMap();
             _vm.ApplyFaceOpToAsset(_faces, _op, _offset, forward: true);
             foreach (int t in _faces) _vm._faceEdits.Add(new FaceEdit(t, _op, _offset));
             _vm.NotifyFaceState();
@@ -449,6 +536,8 @@ public sealed partial class MainWindowViewModel
 
         public void Undo()
         {
+            _skipNextExecute = false;
+            ActivateMap();
             _vm.ApplyFaceOpToAsset(_faces, _op, _offset, forward: false);
             // Drop exactly the entries this command added, from the end - the same face can be edited
             // more than once and only the last of them belongs to this step.
@@ -456,6 +545,14 @@ public sealed partial class MainWindowViewModel
                 if (_vm._faceEdits[i].Op == _op && _faces.Contains(_vm._faceEdits[i].Triangle))
                 { _vm._faceEdits.RemoveAt(i); removed++; }
             _vm.NotifyFaceState();
+        }
+
+        private void ActivateMap()
+        {
+            if (ReferenceEquals(_vm._currentMap, _map)) return;
+            var document = _vm.Documents.FirstOrDefault(d => d.Scene is MapScene s && ReferenceEquals(s.Map, _map));
+            if (document is null) throw new InvalidOperationException("The edited map is no longer open.");
+            _vm.ActivateDocument(document);
         }
 
         public bool CanMergeWith(ReyEngine.Core.Undo.IEditorCommand next) => false;

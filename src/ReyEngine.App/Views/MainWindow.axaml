@@ -488,9 +488,15 @@
                     PointerPressed="OnViewportPointerPressed"
                     PointerMoved="OnViewportPointerMoved"
                     PointerReleased="OnViewportPointerReleased"
+                    PointerCaptureLost="OnViewportPointerCaptureLost"
                     PointerWheelChanged="OnViewportPointerWheel"
                     KeyDown="OnViewportKeyDown"
                     KeyUp="OnViewportKeyUp" />
+
+            <Canvas IsHitTestVisible="False">
+              <Border x:Name="FaceSelectionBox" IsVisible="False" BorderThickness="1"
+                      BorderBrush="#619BEE" Background="#30619BEE" />
+            </Canvas>
 
             <!-- M172c: brush palette. Floats over the viewport bottom-left, out of the way of the
                  toolbars top-right, and only while paint mode is on. -->

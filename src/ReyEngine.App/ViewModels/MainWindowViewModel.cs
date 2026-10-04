@@ -6883,10 +6883,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<MapBannerProp>? Banners = null,   // M805: the esports banners (decoded again when shown)
         IReadOnlyList<MapLevelProp>? LevelProps = null,   // M806: the level props (decoded again when shown)
         MapOpenFrame? Frame = null,   // M808: the area Frame frames
-        ReyEngine.Rendering.OrbitCameraPose? Camera = null)   // M808: where the camera was when the tab was left
+        ReyEngine.Rendering.OrbitCameraPose? Camera = null,
+        FaceEditorState? Faces = null)   // M808: where the camera was when the tab was left
     {
         /// <summary>M819: the tab was left with edits nobody has saved - moved or deleted meshes. Dropping its snapshot would drop them.</summary>
-        public bool HasUnsavedWork => HasMoves || Pieces.Any(p => p.IsRemoved) || MapGeoWriter.HasMoves(Map.Meshes) || MapGeoLayerWriter.HasEdits(Map.Meshes);
+        public bool HasUnsavedWork => Faces is { Dirty: true } || Faces?.Grows.Count > 0 || HasMoves || Pieces.Any(p => p.IsRemoved) || MapGeoWriter.HasMoves(Map.Meshes) || MapGeoLayerWriter.HasEdits(Map.Meshes);
     }
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
@@ -6923,6 +6924,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (doc is null) return;
         if (ReferenceEquals(ActiveDocument, doc)) return;
 
+        EndFaceDrag();
         CaptureActiveScene(); // snapshot the outgoing map (if any) so it restores later
         foreach (var d in Documents) d.IsActive = ReferenceEquals(d, doc);
         ActiveDocument = doc;
@@ -7110,12 +7112,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList(),
             SnapshotBoardStage(), SnapshotMapEvents(), _mapBanners, _mapLevelProps,
-            CurrentMapFrame, CaptureCameraPose?.Invoke());
+            CurrentMapFrame, CaptureCameraPose?.Invoke(), FaceState);
     }
 
     private void RestoreMapScene(MapScene s)
     {
         CurrentSkeleton = null; ShowBones = false;
+        EndFaceDrag();
+        ClearFaceSelection();
         _currentMap = s.Map; _currentMapBytes = s.MapBytes; _currentMapEntry = s.Entry;
         MapGeneration++;
         InvalidateRayIndex();
@@ -8284,6 +8288,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         LayerControllerChoices.Clear();
         _layerControllerHashes.Clear();
         _currentMapBytes = null;
+        _faceGeometryFaces.Clear();
+        _faceEdits.Clear();
+        _faceGeometryDirty = false;
+        _faceDragging = false;
         _currentMapEntry = null;
         MapGeneration++;
         OnPropertyChanged(nameof(CanBakeLighting));   // M158
@@ -9306,7 +9314,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     public bool HasPendingMapGeoWork =>
         HasMapMoves
-        || _faceEdits.Count > 0
+        || HasFaceEdits
         || _faceGrows.Count > 0
         || _blenderReshapes.Count > 0
         || MapContent.AllMapPieces.Any(p => p.IsRemoved)
@@ -10960,8 +10968,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         // M566: face edits ride the same save. They are length-preserving patches into the index and
         // vertex buffers, so they compose with the transform moves below rather than fighting them.
-        bool hasFaces = _faceEdits.Count > 0;
-        bool hasGrows = _faceGrows.Count > 0;   // M570: extrude / inset, which ADD geometry
+        EndFaceDrag();
+        bool hasFaces = _faceGeometryFaces.Count > 0;
+        bool hasGrows = _faceGrows.Count > 0 || FaceState.SavedGrows.Count > 0;   // M570: extrude / inset, which ADD geometry
         // M583: reshapes from Blender. Absent from this gate until now, so a push with nothing else
         // pending fell straight out of the early return below with "No map edits to save" and the
         // reshape was silently dropped - the M572 bug again, in the one place that decides whether the
@@ -11023,7 +11032,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // them first keeps that rewriting away from freshly patched transforms.
             if (hasFaces)
             {
-                var withFaces = MapGeoFaceWriter.TryApply(bytes, map, _faceEdits, out string? faceError);
+                var withFaces = MapGeoFaceWriter.TryWriteCurrentFaces(bytes, map, _faceGeometryFaces, out string? faceError);
                 if (withFaces is null) { _log.Error("MapGeo", faceError ?? "Face edits could not be written."); return; }
                 bytes = withFaces;
                 _log.Success("MapGeo", $"Wrote {_faceEdits.Count:n0} face edit(s).");
@@ -11036,7 +11045,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // while nothing has been inserted yet.
             if (hasGrows)
             {
-                var withGrows = MapGeoFaceGrower.TryApply(bytes, map, _faceGrows, out string? growError);
+                var withGrows = MapGeoFaceGrower.TryApply(bytes, map, FaceState.SavedGrows.Concat(_faceGrows).ToList(), out string? growError);
                 if (withGrows is null) { _log.Error("MapGeo", growError ?? "Extrude/inset could not be written."); return; }
                 bytes = withGrows;
                 _log.Success("MapGeo", $"Wrote {_faceGrows.Count:n0} extrude/inset operation(s).");
@@ -11144,13 +11153,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // list is emptied exactly here, where the bytes are known to have been written.
             int faceEdits = _faceEdits.Count + _faceGrows.Count;
             _faceEdits.Clear();
+            _faceGeometryDirty = false;
+            FaceState.SavedGrows.AddRange(_faceGrows);
             _faceGrows.Clear();
             // M584: reshapes are cleared HERE too, not where they were applied. Clearing them earlier
             // would drop them if a later pass refused and returned, and the auto-apply reads this list
             // to tell "written" from "refused".
             ClearBlenderReshapes();
             OnPropertyChanged(nameof(HasFaceGrows));
-            _faceUndoIndices.Clear();
             NotifyFaceState();
             _log.Success("MapGeo", $"Saved {moves} mesh move(s) + {layers} layer edit(s) + {faceEdits} face edit(s) + {added.Count} added + {removedIndices.Count} deleted mesh(es) to {savedTo} ({bytes.Length:n0} bytes). Build Package will include it. Reload the map to edit the resulting native geometry.");
         }
@@ -12100,6 +12110,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task LoadMapGeoAsync(WadAssetEntry entry)
     {
         if (!ContentLoaded) return;
+        if (HasFaceEdits || HasFaceGrows || _faceDragging)
+        {
+            await SaveMeshMoves();
+            if (HasFaceEdits || HasFaceGrows) return; // A refused save must never discard the authoritative geometry.
+        }
         // M819: a map reads the bins as the mod's GameData makes them - when that is still being prepared it waits, without blocking, and what was asked for is looked at again afterwards (see EntryAfterGameDataAsync).
         // A map that does not wait - every map of a project with no GameData - is loaded exactly as before.
         if (_gameData is { IsPending: true })
@@ -12154,6 +12169,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 CurrentMesh = mesh;
                 if (_currentMap is { } replacedMap) UndoService.PurgeContext(replacedMap); // stale transform commands
                 _currentMap = map;
+                _faceGeometryFaces.Clear();
+                _faceEdits.Clear();
+                _faceGeometryDirty = false;
+                _faceUndoIndices.Clear();
+                _faceGrows.Clear();
+                ClearFaceSelection();
                 InvalidateRayIndex();
                 PrebuildRayIndex(map, MeshVerticesRevision);   // M172a: warm it so the first click is instant
                 _currentMapBytes = rawMapBytes;
@@ -15971,6 +15992,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Home = Project.ModHome,
         };
 
+        try { await SavePendingEditorEdits(); }
+        catch (Exception ex) { _log.Error("Export", ex.Message); return; }
+        _overrides.SaveTo(Project);
+        ReyProjectService.Save(Project, Project.ProjectFilePath!);
         IsBuilding = true; Status = "Exporting .fantome…";
         var progress = BuildProgressSink();
         try
@@ -17290,6 +17315,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (BuildSafety.IsInsideGameInstall(buildRoot))
         { _log.Error("Build", "Refusing to build into a Riot/League install folder. Change the output directory in Project Settings."); return; }
 
+        try { await SavePendingEditorEdits(); }
+        catch (Exception ex) { _log.Error("Build", ex.Message); return; }
         _overrides.SaveTo(Project);
         ReyProjectService.Save(Project, Project.ProjectFilePath!);
         Directory.CreateDirectory(buildRoot);
@@ -17660,6 +17687,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (ProjectMode) { await BuildProject(); return; }
         if (!await EnsureProjectSavedAsync()) return;
+        try { await SavePendingEditorEdits(); }
+        catch (Exception ex) { _log.Error("Build", ex.Message); return; }
         _overrides.SaveTo(Project);
         ReyProjectService.Save(Project, Project.ProjectFilePath!);
 

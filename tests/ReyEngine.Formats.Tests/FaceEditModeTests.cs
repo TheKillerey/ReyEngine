@@ -21,6 +21,40 @@ public sealed class FaceEditModeTests
     }
 
     [Fact]
+    public void BoxSelectionRespectsVisibilityAndDragUndoRedoKeepsTheGeometryBasis()
+    {
+        var map = new ReyEngine.Formats.MapGeo.MapGeoAsset
+        {
+            Positions = new float[] { 0,0,0, 10,0,0, 0,0,10, 100,0,100, 110,0,100, 100,0,110 },
+            Normals = new float[] { 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0 },
+            Uvs = new float[12], Indices = new uint[] { 0,1,2,3,4,5 },
+            Groups = new[] { new ReyEngine.Formats.MapGeo.MapGeoGroup("a",0,3,MeshIndex:0), new ReyEngine.Formats.MapGeo.MapGeoGroup("b",3,3,MeshIndex:1) },
+            Meshes = Enumerable.Range(0,2).Select(i => new ReyEngine.Formats.MapGeo.MapGeoMesh
+            { Index=i, Name="mesh"+i, VertexStart=i*3, VertexCount=3, Transform=System.Numerics.Matrix4x4.Identity, Pivot=System.Numerics.Vector3.Zero }).ToArray()
+        };
+        var vm = new MainWindowViewModel { FaceEditMode=true, CurrentModelSubmeshVisible=new[] { true,false } };
+        vm.StopEditorAutoSave();
+        typeof(MainWindowViewModel).GetField("_currentMap",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.SetValue(vm,map);
+        vm.SelectFacesInBox(new(-1,-1),new(120,120),p=>new(p.X,p.Z));
+        Assert.Equal(1,vm.SelectedFaceCount);
+        var before=(float[])map.Positions.Clone();
+        vm.BeginFaceDrag();vm.DragSelectedFacesTo(new(0,25,0));vm.EndFaceDrag();
+        Assert.True(vm.Project.IsDirty);
+        Assert.True(vm.HasFaceEdits);
+        Assert.True(vm.UndoService.Undo());
+        Assert.Equal(before,map.Positions);
+        Assert.True(vm.UndoService.Redo());
+        Assert.Equal(25,map.Positions[1]);
+        map.ApplyMeshTransform(map.Meshes[0]);
+        Assert.Equal(25,map.Positions[1]);
+        Assert.Equal(before.Skip(9),map.Positions.Skip(9));
+        vm.CurrentModelSubmeshVisible=new[] { true,true };
+        vm.SelectFacesInBox(new(102,102),new(103,103),p=>new(p.X,p.Z));
+        Assert.Equal(2,vm.SelectedFaceCount); // inside a triangle without enclosing any of its corners
+        vm.StopEditorAutoSave();
+    }
+
+    [Fact]
     public void TheModeIsOffAndEmptyToStartWith()
     {
         var vm = new MainWindowViewModel();
@@ -86,9 +120,9 @@ public sealed class FaceEditModeTests
         if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs") is not { } file) return;
         string source = File.ReadAllText(file);
 
-        int write = source.IndexOf("MapGeoFaceWriter.TryApply(bytes, map, _faceEdits", StringComparison.Ordinal);
+        int write = source.IndexOf("MapGeoFaceWriter.TryWriteCurrentFaces(bytes, map, _faceGeometryFaces", StringComparison.Ordinal);
         int layers = source.IndexOf("// 0) M105: layer/controller/backface edits FIRST", StringComparison.Ordinal);
-        int clear = source.IndexOf("_faceEdits.Clear();", StringComparison.Ordinal);
+        int clear = source.IndexOf("_faceEdits.Clear();", write, StringComparison.Ordinal);
         Assert.True(write > 0, "face edits are never written");
         Assert.True(write < layers, "face edits must be written before the offset-based passes");
         Assert.True(clear > write, "the pending list must be cleared after the bytes are written");
@@ -259,8 +293,8 @@ public sealed class FaceEditModeTests
         if (RepoFile("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs") is not { } file) return;
         string source = File.ReadAllText(file);
 
-        int faces = source.IndexOf("MapGeoFaceWriter.TryApply(bytes, map, _faceEdits", StringComparison.Ordinal);
-        int grows = source.IndexOf("MapGeoFaceGrower.TryApply(bytes, map, _faceGrows", StringComparison.Ordinal);
+        int faces = source.IndexOf("MapGeoFaceWriter.TryWriteCurrentFaces(bytes, map, _faceGeometryFaces", StringComparison.Ordinal);
+        int grows = source.IndexOf("MapGeoFaceGrower.TryApply(bytes, map, FaceState.SavedGrows.Concat(_faceGrows)", StringComparison.Ordinal);
         int layers = source.IndexOf("// 0) M105: layer/controller/backface edits FIRST", StringComparison.Ordinal);
         Assert.True(grows > 0, "extrude/inset are never written");
         Assert.True(faces < grows, "length-preserving edits must run before anything is inserted");

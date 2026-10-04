@@ -34,6 +34,79 @@ public readonly record struct FaceEdit(int Triangle, FaceOp Op, Vector3 Offset =
 /// </summary>
 public static class MapGeoFaceWriter
 {
+    /// <summary>Serialize the authoritative edited geometry, rather than replaying a lossy operation journal.</summary>
+    public static byte[]? TryWriteCurrentFaces(byte[] bytes, MapGeoAsset asset, IEnumerable<int> faces, out string? error)
+    {
+        error = null;
+        if (!MapGeoBinary.TryReadEditable(bytes, out var map))
+        { error = "The mapgeo is not byte-exact editable."; return null; }
+        try
+        {
+            var owners = new HashSet<int>();
+            foreach (int face in faces)
+            {
+                if (!TryLocate(asset, map, face, out _, out _, out int owner))
+                    throw new InvalidOperationException($"Cannot locate face {face}.");
+                owners.Add(owner);
+            }
+            foreach (int owner in owners)
+            {
+                var source = asset.Meshes[owner];
+                var target = map.Meshes[owner];
+                if (!Matrix4x4.Invert(source.Transform, out var inverse))
+                    throw new InvalidOperationException("Cannot serialize a singular mesh transform.");
+                // Combined editor arrays give each instance its own geometry. Preserve that ownership
+                // on disk when Riot meshes share streams, instead of editing every instance of a buffer.
+                int vertexId = target.VertexBufferIds[0];
+                if (map.Meshes.Any(m => !ReferenceEquals(m, target) && m.VertexBufferIds.Contains(vertexId)))
+                {
+                    var shared = map.VertexBuffers[vertexId];
+                    target.VertexBufferIds[0] = map.VertexBuffers.Count;
+                    map.VertexBuffers.Add(new MapGeoBinary.VertexBuffer
+                    { Visibility = shared.Visibility, HasVisibility = shared.HasVisibility, Data = (byte[])shared.Data.Clone() });
+                }
+                int indexId = target.IndexBufferId;
+                if (map.Meshes.Any(m => !ReferenceEquals(m, target) && m.IndexBufferId == indexId))
+                {
+                    var shared = map.IndexBuffers[indexId];
+                    target.IndexBufferId = map.IndexBuffers.Count;
+                    map.IndexBuffers.Add(new MapGeoBinary.IndexBuffer
+                    { Visibility = shared.Visibility, HasVisibility = shared.HasVisibility, Data = (byte[])shared.Data.Clone() });
+                }
+                var positions = asset.OriginalPositionsOf(source);
+                var declaration = map.Declarations[target.VertexDeclarationBase];
+                if (declaration.Elements[0].Name != MapGeoBinary.ElemPosition)
+                    throw new InvalidOperationException("Mesh does not lead with POSITION.");
+                var buffer = map.VertexBuffers[target.VertexBufferIds[0]].Data;
+                for (int v = 0; v < source.VertexCount; v++)
+                {
+                    var p = Vector3.Transform(new Vector3(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]), inverse);
+                    var world = new Vector3(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]);
+                    // Keep the native culling box conservative when faces leave the original bounds.
+                    target.BoundsMin = Vector3.Min(target.BoundsMin, world);
+                    target.BoundsMax = Vector3.Max(target.BoundsMax, world);
+                    int at = v * declaration.Stride;
+                    BitConverter.TryWriteBytes(buffer.AsSpan(at), p.X);
+                    BitConverter.TryWriteBytes(buffer.AsSpan(at + 4), p.Y);
+                    BitConverter.TryWriteBytes(buffer.AsSpan(at + 8), p.Z);
+                }
+                int ordinal = 0;
+                foreach (var group in asset.Groups.Where(g => g.MeshIndex == owner))
+                {
+                    var submesh = target.Submeshes[ordinal++];
+                    for (int i = group.StartIndex; i < group.StartIndex + group.IndexCount; i++)
+                    {
+                        int indexAt = submesh.StartIndex + i - group.StartIndex;
+                        BitConverter.TryWriteBytes(map.IndexBuffers[target.IndexBufferId].Data.AsSpan(indexAt * 2),
+                            checked((ushort)(asset.Indices[i] - source.VertexStart)));
+                    }
+                }
+            }
+            return map.Write();
+        }
+        catch (Exception ex) { error = ex.Message; return null; }
+    }
+
     /// <summary>
     /// Applies <paramref name="edits"/> to <paramref name="mapgeo"/>. Returns null with a reason rather
     /// than throwing, because this runs behind an interactive tool.
