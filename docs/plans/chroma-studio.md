@@ -2,7 +2,7 @@
 
 Recolour one champion skin or chroma, its body and its effects, in one place, and ship it as an ordinary
 project mod. Agreed 2026-10-02. M812 and M813 are done. The later steps are named C3-C7 and get their milestone
-number when they start (the LTK game-data work, docs/plans/ltk-game-data-mods.md, takes M814-M820 first).
+number when they start (the LTK game-data work, docs/plans/ltk-game-data-mods.md, takes M814-M819 and one more milestone first).
 
 **Ground rule.** A mod cannot add a new chroma to the client's skin list (the list is the client's), so the
 studio repaints an EXISTING skin or chroma; the user picks which one the mod replaces. Riot's files stay
