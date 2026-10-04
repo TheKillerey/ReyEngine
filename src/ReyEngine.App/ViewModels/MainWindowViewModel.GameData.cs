@@ -33,8 +33,8 @@ namespace ReyEngine.App.ViewModels;
 /// that writes a bin back into the project or the override store refuses a chunk the declarations name (<see cref="RefusesGameDataWrite"/>), with one message. Until the preview has bound its declarations to the game it cannot say which
 /// bins a module that edits ENTRIES names (the <c>target</c> modules are known at once), so until then ANY bin is refused, with another message (<see cref="GameDataPendingRefusal"/>) - unless the same documents over the same game
 /// were previewed before, whose answer the new preview inherits at once (<see cref="GameDataPreviewMemory"/>: the rebuild that follows each of the editor's own saves must not refuse the next one). A flow that can wait for the
-/// preview does (<see cref="SettleGameDataForWriteAsync"/>, with a limit) instead of failing; and a flow that stages files and writes a bin last asks first (<see cref="PlacementWriteRefusal"/>), so that a refusal at the end does not
-/// leave the project half done. When a preview that worked stops (it failed, or could not be started) the bins it named stay refused, with the reason: an editor that was opened while it worked may still hold the bytes it made.</para>
+/// preview does (<see cref="SettleGameDataForWriteAsync"/>, with a limit) instead of failing - and refuses, saying so, when the editor is not what it was asked in by the time it comes back (another project, File &gt; Open WAD, another
+/// map: <see cref="WriteContext"/>); and a flow that stages files and writes a bin last asks first (<see cref="PlacementWriteRefusal"/>), so that a refusal at the end does not leave the project half done. When a preview that worked stops (it failed, or could not be started) the bins it named stay refused, with the reason: an editor that was opened while it worked may still hold the bytes it made.</para>
 /// </summary>
 public sealed partial class MainWindowViewModel
 {
@@ -44,7 +44,7 @@ public sealed partial class MainWindowViewModel
     /// <summary>What a bin is told while the preview has not yet worked out which bins the declarations name: any bin of a project that stores GameData is refused until it has.</summary>
     public const string GameDataPendingRefusal = "the GameData preview is still being prepared; try again in a moment";
 
-    /// <summary>What a write that waited for the preview is told when the project it was asked for is gone by the time the preview is ready.</summary>
+    /// <summary>What a write that waited for the preview is told when the editor is no longer what it was asked in by the time the preview is ready: the project is another, File &gt; Open WAD replaced its content, or another map is open.</summary>
     public const string GameDataProjectChangedRefusal = "Nothing was written: the project changed while the GameData preview was being prepared.";
 
     private GameDataPreview? _gameData;
@@ -286,7 +286,7 @@ public sealed partial class MainWindowViewModel
         var summary = preview.Summary!;
         mounts.RefreshOverlay();
         _gameDataUnavailable = null;
-        _gameDataMemory?.RememberNamed(GameDataPreview.FingerprintOf(preview.Setup!.Layers), _gameDataGameKey, preview.NamedChunks());   // what the next preview of these documents over this game inherits
+        _gameDataMemory?.RememberNamed(GameDataPreview.FingerprintOf(preview.Setup!.Layers), _gameDataGameKey, preview.NamedChunks());   // what the next preview of these documents over this game inherits: it is added to, never cut down by a degraded preview
         string? key = GameDataKeyOf(preview);
         // a chunk the preview serves was read while it was still preparing: what read it has the unchanged bytes, whatever the key says
         var reads = TakeGameDataReads();
@@ -531,8 +531,8 @@ public sealed partial class MainWindowViewModel
     }
 
     /// <summary>
-    /// <see cref="RefusesGameDataWrite"/> for a flow that can wait: a bin refused only because the preview is still working is waited for (<see cref="SettleGameDataForWriteAsync"/>) and then asked again. A write the project
-    /// changed under while it waited is refused.
+    /// <see cref="RefusesGameDataWrite"/> for a flow that can wait: a bin refused only because the preview is still working is waited for (<see cref="SettleGameDataForWriteAsync"/>) and then asked again. A write the editor
+    /// changed under while it waited (another project, File &gt; Open WAD, another map) is refused.
     /// </summary>
     private async Task<bool> RefusesGameDataWriteAsync(WadAssetEntry? entry)
     {
@@ -546,19 +546,37 @@ public sealed partial class MainWindowViewModel
 
     /// <summary>
     /// A write is about to be decided: if the only thing against it is that the preview has not yet said which bins the declarations name (<see cref="GameDataWritePending"/>), waits for it - without blocking a thread, and for
-    /// at most <see cref="GameDataWriteWait"/> - so that the editor's own save is not refused for the half second after the previous one. Returns false when the project was changed while it waited: what the caller holds belongs
-    /// to another project, and nothing may be written for it.
+    /// at most <see cref="GameDataWriteWait"/> - so that the editor's own save is not refused for the half second after the previous one. Returns false when the editor was changed while it waited (<see cref="WriteContext"/>):
+    /// what the caller holds belongs to a project, a content or a map that is no longer the editor's, and nothing may be written for it.
     /// </summary>
     private async ValueTask<bool> SettleGameDataForWriteAsync(ulong hash, bool isBin)
     {
         if (!GameDataWritePending(hash, isBin)) return true;
-        var project = Project;
+        var asked = WriteContextNow();
         await WaitForGameDataToSettleAsync("the bin is written", GameDataWriteWait, holdsMapReload: false);
-        if (ContentLoaded && ReferenceEquals(Project, project)) return true;
+        if (IsStillTheContextOf(asked)) return true;
         _log.Warn("GameData", GameDataProjectChangedRefusal);
         Status = GameDataProjectChangedRefusal;
         return false;
     }
+
+    /// <summary>
+    /// What a write that waits for the preview was asked in, and must find again when it comes back. The flows that wait take an entry before the wait and read the editor's LIVE state after it - the open map's bytes, the
+    /// mounts - so what they write must still be what they took:
+    /// <list type="bullet">
+    /// <item><b>Project</b>: opening another project replaces the object (the quick project made of an open WAD does too).</item>
+    /// <item><b>ProjectMode</b> and the mounts: File &gt; Open WAD (<c>LoadWad</c>) keeps the project and the loaded content (the archive is content too) but drops the mounts and leaves project mode - a write after it would go into
+    /// the project's override store from an editor that now shows a WAD.</item>
+    /// <item><b>OpenMap</b>: a switch of map tab (<c>RestoreMapScene</c>) or the opening of another map swaps the map's entry, bytes and scene under a flow that took the first, and it would write one map's data into another map's
+    /// file. It is the map's identity that is compared, not <c>MapGeneration</c>: the reload that follows the preview itself bumps that, and it is the same map.</item>
+    /// </list>
+    /// </summary>
+    private readonly record struct WriteContext(ReyProject Project, bool ProjectMode, ulong? OpenMap);
+
+    private WriteContext WriteContextNow() => new(Project, ProjectMode, _currentMapEntry?.PathHash);
+
+    private bool IsStillTheContextOf(WriteContext asked) =>
+        ContentLoaded && _mounts is not null && ReferenceEquals(Project, asked.Project) && ProjectMode == asked.ProjectMode && _currentMapEntry?.PathHash == asked.OpenMap;
 
     /// <summary><see cref="GuardEditable"/> for a flow that can wait for the preview (see <see cref="SettleGameDataForWriteAsync"/>).</summary>
     private async ValueTask<bool> GuardEditableAsync(WadAssetEntry? entry)
@@ -572,7 +590,7 @@ public sealed partial class MainWindowViewModel
     }
 
     /// <summary><see cref="ThrowIfGameDataTarget"/> for a flow that can wait for the preview (see <see cref="SettleGameDataForWriteAsync"/>): the check a flow makes before it stages anything.</summary>
-    /// <exception cref="InvalidOperationException">The chunk is one the project's GameData changes, or the project was changed while the preview was being waited for.</exception>
+    /// <exception cref="InvalidOperationException">The chunk is one the project's GameData changes, or the editor was changed while the preview was being waited for.</exception>
     private async ValueTask ThrowIfGameDataTargetAsync(WadAssetEntry entry)
     {
         if (!await SettleGameDataForWriteAsync(entry.PathHash, IsBinEntry(entry)))

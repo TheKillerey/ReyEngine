@@ -696,4 +696,40 @@ public sealed class LtkPreviewCoreTests : IDisposable
         Assert.False(File.Exists(Path.Combine(location, "escaped-create.bin")));
         Assert.Equal(3, Directory.EnumerateFiles(result.RootPath, "*", SearchOption.AllDirectories).Count(f => !f.Contains(Path.DirectorySeparatorChar + ReyProjectService.FolderMetaDir + Path.DirectorySeparatorChar)));   // the three entries, and nothing else but the project file
     }
+
+    // ================================================================================================ what a preview remembers of the chunks the declarations named
+
+    [Fact]
+    public void What_a_preview_remembers_as_named_only_grows_while_the_documents_and_the_game_are_the_same()
+    {
+        var memory = new GameDataPreviewMemory();
+        var whole = new HashSet<ulong> { 1, 2, 3 };
+        memory.RememberNamed(7, "game|16.19.1", whole);
+        Assert.Same(whole, memory.InheritNamed(7, "game|16.19.1"));
+
+        // a preview made while the index was unsettled or the object index unreadable binds fewer entries and names fewer chunks: the next rebuild must not inherit the smaller set
+        var degraded = new HashSet<ulong> { 1 };
+        memory.RememberNamed(7, "game|16.19.1", degraded);
+        Assert.Equal(new ulong[] { 1, 2, 3 }, memory.LastNamed!.Order().ToArray());
+        Assert.Equal(new ulong[] { 1, 2, 3 }, memory.InheritNamed(7, "game|16.19.1")!.Order().ToArray());
+        memory.RememberNamed(7, "game|16.19.1", new HashSet<ulong>());                    // one that named nothing at all
+        Assert.Equal(new ulong[] { 1, 2, 3 }, memory.InheritNamed(7, "game|16.19.1")!.Order().ToArray());
+
+        // one that names more adds to it, and what the caller handed over is not touched
+        var more = new HashSet<ulong> { 3, 4 };
+        memory.RememberNamed(7, "game|16.19.1", more);
+        Assert.Equal(new ulong[] { 1, 2, 3, 4 }, memory.InheritNamed(7, "game|16.19.1")!.Order().ToArray());
+        Assert.Equal(new ulong[] { 3, 4 }, more.Order().ToArray());
+        Assert.Equal(new ulong[] { 1, 2, 3 }, whole.Order().ToArray());
+        Assert.Equal(new ulong[] { 1 }, degraded.ToArray());
+
+        // other documents: what the old ones named says nothing of them, so it starts again - and so does a game that was patched
+        memory.RememberNamed(8, "game|16.19.1", new HashSet<ulong> { 9 });
+        Assert.Equal(new ulong[] { 9 }, memory.LastNamed!.ToArray());
+        Assert.Null(memory.InheritNamed(7, "game|16.19.1"));
+        memory.RememberNamed(8, "game|16.19.2", new HashSet<ulong> { 5 });
+        Assert.Equal(new ulong[] { 5 }, memory.LastNamed!.ToArray());
+        Assert.Null(memory.InheritNamed(8, "game|16.19.1"));
+        Assert.Equal(new ulong[] { 5 }, memory.InheritNamed(8, "game|16.19.2")!.ToArray());
+    }
 }

@@ -240,7 +240,8 @@ public sealed record GameDataSummary(
 /// <para><b>The chunks the declarations name.</b> A new preview cannot say which bins its declarations name until it has bound them to the game - 0.1 s with the game's index cached, 13 s the first time - and until then a
 /// write guard must refuse every bin. A rebuild after the editor's own save changes neither the documents nor the game, though: the new preview inherits what the last one that was Ready named
 /// (<see cref="InheritNamed"/>) and answers at once, so the bins that are no targets keep saving and the targets stay refused. It is taken only when the documents (<see cref="GameDataPreview.FingerprintOf"/>) and the game
-/// (its folder and build) are exactly those it was learned from.</para>
+/// (its folder and build) are exactly those it was learned from - and what it holds only grows while they are: a preview that was degraded (the index unsettled, the table or the object index unreadable) names fewer chunks than a
+/// whole one did, and must not make the next one forget them (<see cref="RememberNamed"/>).</para>
 ///
 /// <para>The same chunks are what the editor keeps refusing when a preview that was working stops (it failed, or could not be started): an editor that was opened while it worked may still hold the bytes it made
 /// (<see cref="LastNamed"/>).</para>
@@ -269,15 +270,30 @@ public sealed class GameDataPreviewMemory
         get { lock (_gate) return _named?.Chunks; }
     }
 
-    /// <summary>Remembers what a preview that is Ready named.</summary>
+    /// <summary>
+    /// Remembers what a preview that is Ready named. For the same documents over the same game it ADDS to what was remembered instead of replacing it: a preview made while the index was unsettled, or while the table or the
+    /// object index could not be read, binds fewer entries and so names fewer chunks than a whole one did, and the rebuild after it would inherit the smaller set and let a target be written. Over-naming is the safe direction - it
+    /// keeps refusing a bin that a whole preview would have named, until the documents or the game change - and never lets a target through. Other documents, or another game (a Riot patch), start again: what the old ones named
+    /// says nothing of them.
+    /// </summary>
     /// <param name="documents">The identity of its documents (<see cref="GameDataPreview.FingerprintOf"/>).</param>
     /// <param name="game">The game it was made over, as the caller keys it (folder and build).</param>
-    /// <param name="chunks">The chunks its declarations name (<see cref="GameDataPreview.NamedChunks"/>).</param>
+    /// <param name="chunks">The chunks its declarations name (<see cref="GameDataPreview.NamedChunks"/>). Not changed.</param>
     public void RememberNamed(ulong documents, string game, IReadOnlySet<ulong> chunks)
     {
         ArgumentNullException.ThrowIfNull(game);
         ArgumentNullException.ThrowIfNull(chunks);
-        lock (_gate) _named = (documents, game, chunks);
+        lock (_gate)
+        {
+            if (_named is { } known && known.Documents == documents && string.Equals(known.Game, game, StringComparison.Ordinal))
+            {
+                if (chunks.IsSubsetOf(known.Chunks)) return;   // nothing new: what was remembered stands
+                var all = new HashSet<ulong>(known.Chunks);
+                all.UnionWith(chunks);
+                _named = (documents, game, all);
+            }
+            else _named = (documents, game, chunks);
+        }
     }
 
     /// <summary>The chunks the last preview that was Ready named, when it was made from exactly these documents over exactly this game; else null.</summary>

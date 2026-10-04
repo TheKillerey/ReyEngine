@@ -1831,4 +1831,241 @@ public sealed class LtkPreviewAppTests : IAsyncLifetime, IDisposable
         Assert.False(File.Exists(stale));
         Assert.True(File.Exists(written));
     }
+
+    // ================================================================================================ a write that waited finds the editor as it asked
+
+    private const string OtherMap = "data/maps/mapgeometry/map11/other_srs.mapgeo";
+
+    private sealed record PendingEditor(MainWindowViewModel Vm, GatedGame Game, ReyProject Project, List<LogEntry> Log, List<ulong> Reloads);
+
+    /// <summary>
+    /// The editor as it is with a project open and a map in it, and the first preview of its session held at the game's table: nothing is inherited, so every bin has to wait for the plan. The mod ships the target of its one
+    /// entries module (m.bin), a bin nothing names (q.bin), a map with a materials.bin beside it and another map. The reload the settle asks for is noted and not made (a test has no dispatcher to finish it).
+    /// </summary>
+    private PendingEditor EditorWithAPendingPreview(string tag)
+    {
+        string game = Game("g-ctx-" + tag);
+        var project = Import("ctx-" + tag, Layers(Doc(Entries("\"Test/Obj/M\":{\"+tags\":[\"e\"]}"))), game,
+            ("WAD/Map11.wad.client", ModWad("ctx" + tag, (M, Bin(Obj("Test/Obj/M", new[] { "mod" }))), (Q, QBytes("q")), (MapGeo, new byte[] { 1, 2, 3 }),
+                (MapMaterials, Bin(Obj("Test/Obj/MM", new[] { "mm" }))), (OtherMap, new byte[] { 4, 5, 6 }))),
+            Table(M, Q, MapGeo, MapMaterials, OtherMap));
+        var gated = Gated(new InstalledGame(game, _temp.Combine("c-ctx-" + tag, "i.idx")));
+        var vm = NewVm(project);
+        SetField(vm, "GameDataGameFactory", new Func<string, IGameDataGame>(_ => gated));
+        SetField(vm, "GameDataWriteWait", TimeSpan.FromSeconds(120));            // a save that waits for the gate waits for the test, not for the limit
+        var reloads = new List<ulong>();
+        SetField(vm, "GameDataMapReload", new Func<WadAssetEntry, Task>(e => { lock (reloads) reloads.Add(e.PathHash); return Task.CompletedTask; }));
+        var log = CaptureLog(vm);
+        Call(vm, "BuildMounts");
+        Assert.False(Preview(vm)!.TargetsKnown);
+        vm.ProjectMode = true;                                                   // a project is open...
+        SetField(vm, "_currentMapEntry", EntryOf(vm, MapGeo));                   // ...with a map in it
+        return new PendingEditor(vm, gated, project, log, reloads);
+    }
+
+    /// <summary>Asks <paramref name="ask"/> (true: it was allowed) while the preview is pending, lets <paramref name="change"/> do something to the editor meanwhile, opens the gate and says what became of it.</summary>
+    private async Task<(bool Allowed, PendingEditor Editor)> AskWhileTheEditorChanges(string tag, Func<MainWindowViewModel, Task<bool>> ask, Action<PendingEditor> change)
+    {
+        var editor = EditorWithAPendingPreview(tag);
+        var asked = ask(editor.Vm);
+        await Task.Delay(150);
+        Assert.False(asked.IsCompleted);                                         // it waits for the preview, and nobody is blocked
+        change(editor);
+        editor.Game.Gate.Set();
+        bool allowed = await asked.WaitAsync(TimeSpan.FromSeconds(60));
+        await Applied(editor.Vm);
+        return (allowed, editor);
+    }
+
+    private static string QFile(ReyProject project) => Path.Combine(project.RootPath!, "Map11", "data", "t", "q.bin");
+
+    private static bool OverridesWritten(ReyProject project)
+    {
+        string overrides = Path.Combine(project.RootPath!, ".reyengine", "overrides");
+        return Directory.Exists(overrides) && Directory.EnumerateFiles(overrides).Any();
+    }
+
+    [Fact]
+    public async Task A_save_that_waited_for_the_preview_is_refused_when_another_map_is_open_by_the_time_it_is_ready_and_nothing_is_written()
+    {
+        var editor = EditorWithAPendingPreview("swap");
+        var vm = editor.Vm;
+        byte[] before = File.ReadAllBytes(QFile(editor.Project));
+        var save = Save(vm, EntryOf(vm, Q), QBytes("meant for the map that was open"));
+        await Task.Delay(150);
+        Assert.False(save.IsCompleted);                                          // it waits for the preview
+
+        // the user switches to another map's tab (RestoreMapScene swaps the entry, the bytes and the scene) while it waits: what a flow reads of the open map after the wait is the other map's
+        SetField(vm, "_currentMapEntry", EntryOf(vm, OtherMap));
+        editor.Game.Gate.Set();
+
+        Assert.False(await save.WaitAsync(TimeSpan.FromSeconds(60)));
+        await Applied(vm);
+        Assert.Equal(before, File.ReadAllBytes(QFile(editor.Project)));          // nothing was written...
+        Assert.False(OverridesWritten(editor.Project));                          // ...in the project's file or in its override store
+        Assert.Contains(Lines(editor.Log, "GameData"), l => l.Message == MainWindowViewModel.GameDataProjectChangedRefusal);
+        Assert.DoesNotContain(Lines(editor.Log, "GameData"), l => l.Message.Contains(MainWindowViewModel.GameDataPendingRefusal, StringComparison.Ordinal));
+        Assert.Equal(MainWindowViewModel.GameDataProjectChangedRefusal, vm.Status);
+    }
+
+    [Fact]
+    public async Task A_save_that_waited_for_the_preview_is_refused_when_File_Open_WAD_replaced_the_content_meanwhile_and_nothing_is_written()
+    {
+        string wad = _temp.Combine("inspect-me.wad.client");
+        PackWad(_temp.Combine("pack-inspect"), wad, ("data/inspected.bin", Bin(Obj("Test/Obj/I", new[] { "i" }))));
+        var editor = EditorWithAPendingPreview("openwad");
+        var vm = editor.Vm;
+        byte[] before = File.ReadAllBytes(QFile(editor.Project));
+        var save = Save(vm, EntryOf(vm, Q), QBytes("saved into the project of the editor that now shows a WAD"));
+        await Task.Delay(150);
+        Assert.False(save.IsCompleted);
+
+        try
+        {
+            vm.LoadWad(wad);                                                     // File > Open WAD, for real: the preview is cancelled, the mounts are dropped, the project is kept
+            // what it leaves behind is what let the old check pass: the project, and loaded content (the archive is content too)
+            Assert.Null(Field<AssetMountService?>(vm, "_mounts"));
+            Assert.False(vm.ProjectMode);
+            Assert.True(Prop<bool>(vm, "ContentLoaded"));
+            Assert.Same(editor.Project, vm.Project);
+            editor.Game.Gate.Set();
+
+            Assert.False(await save.WaitAsync(TimeSpan.FromSeconds(60)));
+            await Applied(vm);
+            Assert.Equal(before, File.ReadAllBytes(QFile(editor.Project)));
+            Assert.False(OverridesWritten(editor.Project));                      // not even the override store: there are no mounts to place it in
+            Assert.Contains(Lines(editor.Log, "GameData"), l => l.Message == MainWindowViewModel.GameDataProjectChangedRefusal);
+        }
+        finally { Field<ReyEngine.Core.Wad.WadArchive?>(vm, "_archive")?.Dispose(); }
+    }
+
+    [Fact]
+    public async Task Every_way_of_asking_the_guard_refuses_when_the_open_map_changed_while_it_waited_and_none_refuses_when_nothing_did()
+    {
+        var asks = new (string Name, Func<MainWindowViewModel, Task<bool>> Allowed)[]
+        {
+            ("SaveMapBinBytesAsync", vm => Save(vm, EntryOf(vm, Q), QBytes("x"))),
+            ("GuardEditableAsync", async vm => await (ValueTask<bool>)Call(vm, "GuardEditableAsync", EntryOf(vm, Q))!),
+            ("RefusesGameDataWriteAsync", async vm => !await (Task<bool>)Call(vm, "RefusesGameDataWriteAsync", EntryOf(vm, Q))!),
+            ("ThrowIfGameDataTargetAsync", async vm =>
+            {
+                try { await (ValueTask)Call(vm, "ThrowIfGameDataTargetAsync", EntryOf(vm, Q))!; return true; }
+                catch (InvalidOperationException) { return false; }
+            }),
+            ("PlacementWriteRefusalAsync", async vm => await (Task<string?>)Call(vm, "PlacementWriteRefusalAsync", EntryOf(vm, MapGeo))! is null),
+        };
+
+        foreach (var (name, allowed) in asks)
+        {
+            var kept = await AskWhileTheEditorChanges("keep-" + name, allowed, _ => { });
+            Assert.True(kept.Allowed, name + " refused though nothing changed");
+            var swapped = await AskWhileTheEditorChanges("swap-" + name, allowed, e => SetField(e.Vm, "_currentMapEntry", EntryOf(e.Vm, OtherMap)));
+            Assert.False(swapped.Allowed, name + " went through though another map is open");
+            Assert.Contains(Lines(swapped.Editor.Log, "GameData"), l => l.Message == MainWindowViewModel.GameDataProjectChangedRefusal);
+        }
+    }
+
+    [Fact]
+    public async Task Each_change_of_the_editor_during_the_wait_is_enough_to_refuse_and_a_reload_of_the_same_map_is_none()
+    {
+        string wad = _temp.Combine("inspect-each.wad.client");
+        PackWad(_temp.Combine("pack-each"), wad, ("data/inspected.bin", Bin(Obj("Test/Obj/I", new[] { "i" }))));
+        ReyEngine.Core.Wad.WadArchive? archive = null;
+        int generationBefore = 0;
+        var cases = new (string What, Action<PendingEditor> Change, bool Refused)[]
+        {
+            ("nothing", _ => { }, false),
+            // the reload that follows the preview itself: the same map again - a new entry, a new generation - which must not be taken for a change
+            ("the settle reloads the same map", e =>
+            {
+                generationBefore = e.Vm.MapGeneration;
+                SetField(e.Vm, "GameDataMapReload", new Func<WadAssetEntry, Task>(entry =>
+                {
+                    SetField(e.Vm, "_currentMapEntry", entry);
+                    e.Vm.MapGeneration++;
+                    lock (e.Reloads) e.Reloads.Add(entry.PathHash);
+                    return Task.CompletedTask;
+                }));
+            }, false),
+            ("another map is open", e => SetField(e.Vm, "_currentMapEntry", EntryOf(e.Vm, OtherMap)), true),
+            ("no map is open", e => SetField(e.Vm, "_currentMapEntry", null), true),
+            ("project mode is left", e => e.Vm.ProjectMode = false, true),
+            // File > Open WAD without the rest of what it does: the project stays, the archive is content, the mounts go
+            ("the mounts are dropped for a WAD", e =>
+            {
+                archive = ReyEngine.Core.Wad.WadArchive.Open(wad, Field<WadPathResolver>(e.Vm, "_resolver"));
+                SetField(e.Vm, "_archive", archive);
+                SetField(e.Vm, "_mounts", null);
+            }, true),
+            ("another project is opened", e => e.Vm.Project = new ReyProject { Name = "another", RootPath = _temp.Combine("another-each") }, true),
+        };
+
+        try
+        {
+            foreach (var (what, change, refused) in cases)
+            {
+                var run = await AskWhileTheEditorChanges("each-" + _n++, vm => Save(vm, EntryOf(vm, Q), QBytes(what)), change);
+                string qFile = QFile(run.Editor.Project);
+                var gameDataLog = Lines(run.Editor.Log, "GameData");
+                if (refused)
+                {
+                    Assert.False(run.Allowed, what);
+                    Assert.Equal(QBytes("q"), File.ReadAllBytes(qFile));
+                    Assert.False(OverridesWritten(run.Editor.Project), what);
+                    Assert.Contains(gameDataLog, l => l.Message == MainWindowViewModel.GameDataProjectChangedRefusal);
+                }
+                else
+                {
+                    Assert.True(run.Allowed, what);
+                    Assert.Equal(QBytes(what), File.ReadAllBytes(qFile));
+                    Assert.DoesNotContain(gameDataLog, l => l.Message == MainWindowViewModel.GameDataProjectChangedRefusal);
+                }
+                if (what.StartsWith("the settle reloads", StringComparison.Ordinal))
+                {
+                    lock (run.Editor.Reloads) Assert.Equal(new[] { Hash(MapGeo) }, run.Editor.Reloads.ToArray());   // the reload did happen, as the settle asks for it...
+                    Assert.Equal(generationBefore + 1, run.Editor.Vm.MapGeneration);                                // ...and bumped the generation, which is not compared
+                }
+            }
+        }
+        finally { archive?.Dispose(); }
+    }
+
+    [Fact]
+    public async Task A_preview_made_while_the_game_could_not_be_read_does_not_make_the_next_one_forget_what_the_declarations_named()
+    {
+        string game = Game("g-degraded");
+        // an ENTRIES module: only the game's index says that a.bin is a target
+        var project = Import("degraded", Layers(Doc(Entries("\"Test/Obj/A\":{\"+tags\":[\"e\"]}"))), game, Table(A));
+        var vm = await Open(project);                                            // a whole preview: it binds the entry to a.bin
+        var log = CaptureLog(vm);
+        Assert.True(Mounts(vm).IsOverlayTarget(Hash(A)));
+
+        // the next preview is made over a game that cannot be read (as with an index left unsettled, or a table or object index that failed): it binds nothing, and names nothing
+        SetField(vm, "GameDataGameFactory", new Func<string, IGameDataGame>(_ => new UnavailableGame("the game cannot be read just now")));
+        Call(vm, "BuildMounts");
+        await Applied(vm);
+        var degraded = Preview(vm)!;
+        Assert.Equal(GameDataPreviewState.Ready, degraded.State);
+        Assert.DoesNotContain(Hash(A), degraded.NamedChunks());
+        Assert.False(Mounts(vm).IsOverlayTarget(Hash(A)));                       // so this one cannot say it
+
+        // the rebuild after it inherits what the whole preview named, not what the degraded one could: a.bin is a target from the first moment, while the next preview is still working
+        var gated = Gated(new InstalledGame(game, _temp.Combine("c-degraded-3", "i.idx")));
+        SetField(vm, "GameDataGameFactory", new Func<string, IGameDataGame>(_ => gated));
+        Call(vm, "BuildMounts");
+        var next = Preview(vm)!;
+        Assert.True(next.IsPending);
+        Assert.True(next.TargetsKnown);
+        Assert.True(Mounts(vm).IsOverlayTarget(Hash(A)));
+        var entryA = new WadAssetEntry { PathHash = Hash(A), Path = A, IsResolved = true, Type = AssetType.Bin };
+        Assert.False(await Save(vm, entryA, Bin(Obj("Test/Obj/A", new[] { "edited" }))));
+        Assert.False(OverridesWritten(project));                                 // nothing was written for a target the degraded preview forgot
+        Assert.Contains(Lines(log, "GameData"), l => l.Message.Contains($"is {MainWindowViewModel.GameDataEditRefusal}", StringComparison.Ordinal));
+        Assert.DoesNotContain(Lines(log, "GameData"), l => l.Message.Contains(MainWindowViewModel.GameDataPendingRefusal, StringComparison.Ordinal));
+
+        gated.Gate.Set();
+        await Applied(vm);
+        Assert.Equal(GameDataPreviewState.Ready, next.State);
+        Assert.True(Mounts(vm).IsOverlayTarget(Hash(A)));                        // and the whole one names it again
+    }
 }
