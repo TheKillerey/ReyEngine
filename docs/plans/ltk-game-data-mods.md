@@ -16,7 +16,8 @@ modules in `META/info.json`, across the layers `base`, `snowdown-baron` and `sno
 | 3 = M816 | **Import the layered format.** Layers (Name, DisplayName, Priority), `WAD_<layer>/` folders, `META/hashes/*.txt` (names for the packed chunks, kept with the project), License/Tags/Maps/Champions/Generator, and each layer's GameData stored VERBATIM in the project (number tokens and key order kept). The same WAD name may appear in several layers. Export writes imported GameData first, then ReyEngine's own declarations for the same layer. | Crauzer's file imports with its 3 layers and 347 named chunks; re-export reproduces each layer's GameData text exactly and the WADs chunk for chunk; a synthetic project with the same WAD in two layers round-trips. |
 | 4 = M817 | **Apply engine (C#).** One `apply` call of ltk_game_data v1 in Formats, per `ltk-apply-engine-spec.md`: the PROP and PTCH paths, objects (class / clone / remove), links / -links / +links, signed paths with selectors, struct and type pins, refs through a supplied entry reader, override files, typing from LTK Manager's PatchSchema rules over meta.db.json, and LTK's diagnostics (skip, never abort). | Byte-equal to the Rust engine (ltk_game_data 0.8.0), bytes and diagnostics, with both sides fed the same entries: on Crauzer's 13 modules, M814/M815's corpus and switches, and a crafted document that reaches every diagnostic kind. |
 | 5 = M818 | **Game object index and layered overlay.** The first-declaring-chunk index over the installed game (built lazily, cached per game fingerprint), and the overlay stage over it: several layers and modules on one chunk, entries fan-out, refs read once from the unmodified game, NoEffect / TargetSkipped / EntryUnresolved / EntryFanOut / ObjectShadowsGame / IndexUnavailable. | Crauzer's file over the installed game equals ltk_overlay's game-data output chunk for chunk, diagnostics included; a second run is served from the cache. |
-| 6 = M819 | **Preview and edit.** A project's GameData is applied when the editor reads a declared bin, so the viewport, the material/particle editors and the Character window show the mod as LTK installs it (Crauzer's Winter Rift on the map). Editing such a bin materialises it in the project; export and Send to LTK then emit the imported modules followed by a literal module diffed against "game + imported GameData" (the M815 pattern), so the original refs and clones survive. Diagnostics are shown, not hidden. | The imported sample previews as the Snowdown map (render check) and its stats match LTK's apply; an edit on top round-trips through export and LTK's apply; the user's in-game check. |
+| 6 = M819 | **Preview (read-only).** A project's GameData is applied when the editor reads a declared bin, so the viewport, the material/particle editors and the Character window show the mod as LTK installs it (Crauzer's Winter Rift on the map). Layers follow LTK's file precedence. Diagnostics are shown, not hidden. Until M820 every path that would write a target bin back is refused, because saving overlaid bytes makes LTK apply the modules twice. | The imported sample previews as the Snowdown map (render check) and reads byte-equal to the overlay; legacy projects read byte-identical before and after. |
+| 7 = M820 | **Edit and export.** Editing a target materialises it in the project (with a marker so the overlay never re-applies over it); Copy To Project copies game + GameData; export and Send emit the imported modules followed by a literal module diffed against "game + imported GameData" (the M815 pattern), so the original refs and clones survive; a whole-shipped bin that GameData also targets is not applied twice. | An edit on top round-trips through export and LTK's apply; the user's in-game check. |
 
 ## Done
 
@@ -92,6 +93,26 @@ modules in `META/info.json`, across the layers `base`, `snowdown-baron` and `sno
   - The caller caps what it reads from a package (the document and the override files, about 16-32 MiB).
   - A tree costs about 8x its file size in memory.
 - **MetaClassDatabase's `to` is now inclusive.** The latest build is unchanged.
+
+**Milestone 5 = M818.** The game object index and the layered overlay (`GameObjectIndex`, `GameDataOverlay`).
+- **The index equals ltk_game_index** over the installed game: 393 archives, 808,646 chunk holders and
+  440,618 declarations, with zero differences.
+  - It builds in 4-13 s cold. The cache is 17 MB under `%LocalAppData%\ReyEngine\cache`, and a warm load takes
+    0.1 s.
+- **The overlay equals ltk_overlay's game-data stage**, chunk for chunk and diagnostic for diagnostic, on:
+  - Crauzer's file (11 chunks; the routing too);
+  - M815's s1-s7;
+  - 24 synthetic layered scenarios.
+- **The schema on this machine.** LTK Manager's cached schema
+  (`%LocalAppData%\LeagueToolkit\meta\meta-schema.json`) is byte-identical to ReyEngine's
+  `data/meta/meta.db.json`; both have latest 8217343.
+  - The installed game is 8230722. The manager's `load` falls back to its shipped snapshot only when that one
+    describes the build, and it does not (8175716). So today the manager types nothing from the schema.
+  - At the installed build, Crauzer's file therefore yields 1,641 skipped edits. At a described build it yields
+    none.
+  - The preview uses the same data and rule, so it shows what LTK Manager installs today.
+- **Two LTK indexes.** LTK Manager's browsing index numbers archives in natural order. The overlay, which
+  installs mods, uses byte order. ReyEngine follows the overlay.
 
 ## The format (league-mod @219d84a: ltk_mod_project 0.16.2, ltk_game_data 0.8.0, ltk_fantome 0.15.1)
 
