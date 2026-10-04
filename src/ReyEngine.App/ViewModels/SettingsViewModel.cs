@@ -269,7 +269,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public bool HasBackgroundImage => !string.IsNullOrWhiteSpace(BackgroundImagePath);
     public string BackgroundImageHint => HasBackgroundImage
         ? (System.IO.File.Exists(BackgroundImagePath) ? "png, jpg, bmp, webp - and an animated gif plays." : "That file does not exist.")
-        : "No picture. Pick one to see the editor through it.";
+        : "Using the theme background. Choose your own picture to keep it across theme changes.";
 
     partial void OnAccentColorChanged(Avalonia.Media.Color value)
     {

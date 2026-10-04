@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
@@ -69,9 +70,21 @@ public static class ThemeService
     public static void Apply(EditorSettings s)
     {
         Apply(s.Theme);
-        bool picture = !string.IsNullOrWhiteSpace(s.BackgroundImagePath);
-        ApplyOverrides(s.ThemeAccent, picture ? Math.Clamp(s.BackgroundGlass, 0, 1) : 0);
-        SetBackdrop(picture ? new BackdropSpec(s.BackgroundImagePath, Math.Clamp(s.BackgroundImageOpacity, 0, 1), s.BackgroundImageStretch) : null);
+        ApplyOverrides(s.ThemeAccent, Math.Clamp(s.BackgroundGlass, 0, 1));
+        SetBackdrop(ResolveBackdrop(s));
+    }
+
+    /// <summary>A custom picture wins over the theme's bundled wallpaper. The bundled path is resolved
+    /// at runtime, never written into settings, so switching themes and clearing a custom picture both
+    /// return to the current theme. Missing custom files keep their selection, as before.</summary>
+    public static BackdropSpec ResolveBackdrop(EditorSettings s)
+    {
+        var preset = Presets.FirstOrDefault(p => string.Equals(p.Name, s.Theme, StringComparison.OrdinalIgnoreCase))
+                     ?? Presets.First(p => p.Name == DefaultTheme);
+        string path = !string.IsNullOrWhiteSpace(s.BackgroundImagePath)
+            ? s.BackgroundImagePath.Trim()
+            : Path.Combine(AppContext.BaseDirectory, "Assets", "Backgrounds", $"ReyEngine-{preset.Name}.png");
+        return new BackdropSpec(path, Math.Clamp(s.BackgroundImageOpacity, 0, 1), s.BackgroundImageStretch);
     }
 
     public static void SetBackdrop(BackdropSpec? spec)

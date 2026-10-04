@@ -13,6 +13,51 @@ namespace ReyEngine.Formats.Tests;
 public sealed class ThemeLookTests
 {
     [Fact]
+    public void EveryThemeShipsItsDefaultBackgroundWithoutStoringItsPathInSettings()
+    {
+        var settings = new EditorSettings();
+        foreach (var preset in ThemeService.Presets)
+        {
+            settings.Theme = preset.Name.ToLowerInvariant();
+            var backdrop = ThemeService.ResolveBackdrop(settings);
+            Assert.Equal($"ReyEngine-{preset.Name}.png", Path.GetFileName(backdrop.Path));
+            Assert.True(File.Exists(backdrop.Path), $"Missing packaged wallpaper: {backdrop.Path}");
+            Assert.Equal("", settings.BackgroundImagePath);
+        }
+        settings.Theme = "unknown";
+        Assert.Equal("ReyEngine-Crimson.png", Path.GetFileName(ThemeService.ResolveBackdrop(settings).Path));
+    }
+
+    [Fact]
+    public void CustomBackgroundSurvivesThemeChangesAndClearReturnsToCurrentTheme()
+    {
+        var vm = new ReyEngine.App.ViewModels.SettingsViewModel(new EditorSettings
+        {
+            BackgroundImagePath = @"C:\pictures\custom.gif",
+            BackgroundImageOpacity = 0.72,
+            BackgroundGlass = 0.64,
+            BackgroundImageStretch = 3,
+        });
+        foreach (var theme in vm.Themes)
+        {
+            vm.SelectThemeCommand.Execute(theme);
+            var settings = vm.LookSettings();
+            var backdrop = ThemeService.ResolveBackdrop(settings);
+            Assert.Equal(@"C:\pictures\custom.gif", backdrop.Path);
+            Assert.Equal(0.72, backdrop.Opacity);
+            Assert.Equal(3, backdrop.Stretch);
+            Assert.Equal(0.64, settings.BackgroundGlass);
+        }
+        vm.ClearBackgroundImageCommand.Execute(null);
+        Assert.False(vm.HasBackgroundImage);
+        Assert.Equal("", vm.LookSettings().BackgroundImagePath);
+        Assert.Equal($"ReyEngine-{vm.Themes.Last().Name}.png",
+            Path.GetFileName(ThemeService.ResolveBackdrop(vm.LookSettings()).Path));
+        vm.SelectThemeCommand.Execute(vm.Themes.First(t => t.Name == "Forest"));
+        Assert.Equal("ReyEngine-Forest.png", Path.GetFileName(ThemeService.ResolveBackdrop(vm.LookSettings()).Path));
+    }
+
+    [Fact]
     public void EveryPresetHasAPaletteFileWithCrimsonsWholeKeySet()
     {
         var dir = Source("src", "ReyEngine.App", "Themes", "Palettes");

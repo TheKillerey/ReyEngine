@@ -294,15 +294,15 @@
             <StackPanel Spacing="10">
               <TextBlock Classes="settingsTitle" Text="BACKGROUND PICTURE" />
               <TextBlock Classes="settingsDesc"
-                         Text="A picture of your own behind the whole editor - the panels turn see-through so it shows a little. Applied live; Save keeps it." />
+                         Text="Each theme has its own background. Choose a custom picture to keep it across theme changes; Clear returns to the theme background. Applied live; Save keeps it." />
               <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,0">
-                <TextBox Grid.Column="0" Text="{Binding BackgroundImagePath}" PlaceholderText="No picture" FontSize="11.5" />
+                <TextBox Grid.Column="0" Text="{Binding BackgroundImagePath}" PlaceholderText="Theme background" FontSize="11.5" />
                 <Button Grid.Column="1" Classes="tool" Content="Browse…" Click="OnPickBackgroundImage" Margin="6,0,0,0" />
                 <Button Grid.Column="2" Classes="tool" Content="Clear" Command="{Binding ClearBackgroundImageCommand}"
                         IsEnabled="{Binding HasBackgroundImage}" Margin="6,0,0,0" />
               </Grid>
               <TextBlock Classes="settingsDesc" Text="{Binding BackgroundImageHint}" />
-              <Grid ColumnDefinitions="120,*,52" RowDefinitions="Auto,Auto,Auto" IsEnabled="{Binding HasBackgroundImage}">
+              <Grid ColumnDefinitions="120,*,52" RowDefinitions="Auto,Auto,Auto">
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Picture opacity" FontSize="12" VerticalAlignment="Center" />
                 <Slider Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="100" Value="{Binding BackgroundOpacityPercent}" TickFrequency="5" />
                 <TextBlock Grid.Row="0" Grid.Column="2" Classes="mono" Text="{Binding BackgroundOpacityPercent, StringFormat={}{0:0}%}" VerticalAlignment="Center" TextAlignment="Right" />
