@@ -70,6 +70,18 @@ internal static class RustLowercase
         return scalar + delta;
     }
 
+    /// <summary>M818: <c>str::to_lowercase</c>: every scalar value of <paramref name="text"/> lowercased the way <see cref="Single"/> and <see cref="TryMultiple"/> say.</summary>
+    public static string Of(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (TryMultiple(rune.Value, out int first, out int second)) sb.Append(new System.Text.Rune(first).ToString()).Append(new System.Text.Rune(second).ToString());
+            else sb.Append(new System.Text.Rune(Single(rune.Value)).ToString());
+        }
+        return sb.ToString();
+    }
+
     /// <summary>U+0130 (I with dot above) lowercases to <c>i</c> and U+0307; no other scalar value lowercases to more than one.</summary>
     public static bool TryMultiple(int scalar, out int first, out int second)
     {

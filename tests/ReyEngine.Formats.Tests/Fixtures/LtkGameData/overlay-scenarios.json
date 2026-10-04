@@ -1,0 +1,1541 @@
+{
+ "absent-and-blocked-targets": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 60,
+    "h": "69e11d37ef5339ff62d7f62c11fc6dc5",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "targetSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/final/champions/aatrox.wad.subchunktoc",
+    "chunk": "2985839a5e9401ea",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "target is a blocked game chunk"
+   },
+   {
+    "kind": "targetSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/missing.bin",
+    "chunk": "68bdc63029a5c1d7",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "target is absent from enabled content and the game index"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 2
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "base-and-layer-copy": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 64,
+    "h": "17b0c38cd3c13b276be470ab7235f3e7",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "x",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "base-and-layer-copy-x-active": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 64,
+    "h": "17b0c38cd3c13b276be470ab7235f3e7",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "x",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "base-and-layer-copy-x-inactive": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 64,
+    "h": "85607d89f723e2321b30ce98398fe63c",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "corrupt-archive": {
+  "chunks": [
+   {
+    "chunk": "17d9341bf4342a82",
+    "len": 60,
+    "h": "3e7f176ce66ebd2c4e0723788d925d83",
+    "dependencies": []
+   },
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 60,
+    "h": "7512fb54734856a3c1247cf29f11c45b",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/Z",
+    "chunk": "17d9341bf4342a82",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "duplicate-object-and-shared-chunk": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 64,
+    "h": "4bd81e1f155abcf1601e5685a4a5bc2d",
+    "dependencies": []
+   },
+   {
+    "chunk": "ca74484f2934eef8",
+    "len": 66,
+    "h": "77cd579625bb5d205c095756d7663401",
+    "dependencies": []
+   },
+   {
+    "chunk": "d6085c49cadc88ff",
+    "len": 62,
+    "h": "e9cbc05ea2140a3f32c9b0e5686a96ec",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/A",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 2
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/w.bin",
+    "chunk": "ca74484f2934eef8",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/X",
+    "chunk": "ca74484f2934eef8",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 2
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/d.bin",
+    "chunk": "d6085c49cadc88ff",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "entries-and-targets-interleaved": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 65,
+    "h": "4a5b8b175054be07e9eee0d50e605fab",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/A",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "0xfea429c7",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 2
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "z",
+    "target": "Test/Obj/A",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "entries-fanout": {
+  "chunks": [
+   {
+    "chunk": "a8682b4407627f22",
+    "len": 79,
+    "h": "7854f1189cbd3c85beefc7b3a016661c",
+    "dependencies": [
+     "data/dep.bin"
+    ]
+   },
+   {
+    "chunk": "e7fbc6a79342b51c",
+    "len": 69,
+    "h": "ef08b1e4b5c45b33f47ddbdb119ac8e1",
+    "dependencies": []
+   },
+   {
+    "chunk": "ef54e0d69483646a",
+    "len": 109,
+    "h": "53ef35ea33084712da6f238cc55817b1",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "entryFanOut",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/E",
+    "chunk": null,
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Entry is declared in 2 chunks, each edited: ef54e0d69483646a (B.wad.client), e7fbc6a79342b51c (C.wad.client)"
+   },
+   {
+    "kind": "entryUnresolved",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/F",
+    "chunk": null,
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "No game bin declares the entry; edits are skipped"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/G",
+    "chunk": "a8682b4407627f22",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/E",
+    "chunk": "e7fbc6a79342b51c",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/E",
+    "chunk": "ef54e0d69483646a",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "inactive-layer": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 79,
+    "h": "3564c898cf85d3f9a85a9169871cce01",
+    "dependencies": [
+     "data/other.bin"
+    ]
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "propertyEditSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": {
+     "entry": "Test/Obj/A",
+     "reason": "untypable"
+    },
+    "object": null,
+    "message": "Property edit is skipped: nope"
+   },
+   {
+    "kind": "noEffect",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "every edit was skipped, so the target is unchanged"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 2
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "layer-order": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 102,
+    "h": "05191bb42a095677adb444fbed69a5b8",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "Layer2",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "layer09",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "layer9",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "layer10",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "late",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "mod-copy-identical-to-game": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 62,
+    "h": "0d891fc639acbf8af6dad37f0404bd11",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "mod-copy-not-a-bin": {
+  "chunks": [],
+  "diagnostics": [
+   {
+    "kind": "targetSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Invalid file signature"
+   }
+  ]
+ },
+ "object-shadows-game": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 142,
+    "h": "e8f49f8bc10713c55dbdd6630e191094",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "objectShadowsGame",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/Shadowed",
+    "chunk": null,
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Game bins declare the created object: e412ab09dc2524b6 (S.wad.client); the object is created"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "override-files": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 105,
+    "h": "8dfa6e32e2a9ce83e88cb4087d99153a",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "overrideUnreadable",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Override file cannot be read: nofile.ptch (nofile.ptch: input is missing)"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "ptch-target": {
+  "chunks": [
+   {
+    "chunk": "3a9108224e2f9f93",
+    "len": 124,
+    "h": "1acc22ad752c81e57a78762a68b4ec20",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/p.bin",
+    "chunk": "3a9108224e2f9f93",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/p.bin",
+    "chunk": "3a9108224e2f9f93",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "Test/Obj/P1",
+    "chunk": "3a9108224e2f9f93",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "ptch-target-no-index-needed": {
+  "chunks": [
+   {
+    "chunk": "3a9108224e2f9f93",
+    "len": 80,
+    "h": "08c59982a02d995d7a10b24167afe220",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/p.bin",
+    "chunk": "3a9108224e2f9f93",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "raw-wins-over-layers": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 66,
+    "h": "66b70868aa22694edc6a43feca1224df",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "x",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "ref-first-chunk-hash": {
+  "chunks": [
+   {
+    "chunk": "d6085c49cadc88ff",
+    "len": 66,
+    "h": "8e85c4ab7d3ea2ad311e38e290fbdf62",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/d.bin",
+    "chunk": "d6085c49cadc88ff",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "ref-first-holder-byte-order": {
+  "chunks": [
+   {
+    "chunk": "d6085c49cadc88ff",
+    "len": 64,
+    "h": "0845b97ead2a902c03f4ac78ace396df",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/d.bin",
+    "chunk": "d6085c49cadc88ff",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "ref-first-holder-is-ptch": {
+  "chunks": [],
+  "diagnostics": [
+   {
+    "kind": "referenceUnreadable",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Referenced entry cannot be read: Test/Obj/P1:tags (Test/Obj/P1: 3a9108224e2f9f93 of DATA/FINAL/P.wad.client: Expected a PROP bin, found a PTCH bin)"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "propertyEditSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": {
+     "entry": "Test/Obj/A",
+     "reason": "referenceMissingEntry"
+    },
+    "object": null,
+    "message": "Property edit is skipped: +tags"
+   },
+   {
+    "kind": "noEffect",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "every edit was skipped, so the target is unchanged"
+   }
+  ]
+ },
+ "refs-clone-missing-unresolved": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 118,
+    "h": "5a00eb14eb9b9adc294a43a4714b0a07",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: count"
+   },
+   {
+    "kind": "propertyEditSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": {
+     "entry": "Test/Obj/A",
+     "reason": "untypable"
+    },
+    "object": null,
+    "message": "Property edit is skipped: name"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "propertyEditSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": {
+     "entry": "Test/Obj/A",
+     "reason": "referenceMissingEntry"
+    },
+    "object": null,
+    "message": "Property edit is skipped: +tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: count"
+   },
+   {
+    "kind": "propertyEditSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": {
+     "entry": "Test/Obj/A",
+     "reason": "referenceUnresolved"
+    },
+    "object": null,
+    "message": "Property edit is skipped: count"
+   },
+   {
+    "kind": "noEffect",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "every edit was skipped, so the target is unchanged"
+   }
+  ]
+ },
+ "rejected-layer": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 61,
+    "h": "55c43a0d035c0da823fa4b984901d465",
+    "dependencies": []
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "declarationsRejected",
+    "modId": "project",
+    "layer": "bad",
+    "target": null,
+    "chunk": null,
+    "origin": null,
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Layer declarations refused: unsupported: unsupported binding `unsupported`; update the consumer for unsupported bindings"
+   },
+   {
+    "kind": "declarationsRejected",
+    "modId": "project",
+    "layer": "worse",
+    "target": null,
+    "chunk": null,
+    "origin": null,
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Layer declarations refused: unsupported declaration version; update the consumer for unsupported bindings"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "two-modules-one-target": {
+  "chunks": [
+   {
+    "chunk": "3edd32fae7204b8e",
+    "len": 60,
+    "h": "9a7050b252dfffa74f1ab08e57edef31",
+    "dependencies": []
+   },
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 79,
+    "h": "3564c898cf85d3f9a85a9169871cce01",
+    "dependencies": [
+     "data/other.bin"
+    ]
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "y",
+    "target": "data/t/b.bin",
+    "chunk": "3edd32fae7204b8e",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   },
+   {
+    "kind": "propertyEditSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": {
+     "entry": "Test/Obj/A",
+     "reason": "untypable"
+    },
+    "object": null,
+    "message": "Property edit is skipped: nope"
+   },
+   {
+    "kind": "noEffect",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "every edit was skipped, so the target is unchanged"
+   },
+   {
+    "kind": "schemaFallback",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 2
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Property is typed without the schema: tags"
+   }
+  ]
+ },
+ "v2-header-rewrite": {
+  "chunks": [
+   {
+    "chunk": "96a3b3046481c1f6",
+    "len": 85,
+    "h": "f36de068d5c0b48e642032f2184b68c6",
+    "dependencies": [
+     "data/one.bin",
+     "data/two.bin"
+    ]
+   }
+  ],
+  "diagnostics": [
+   {
+    "kind": "linkRemovalUnmatched",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 0
+    },
+    "edit": 0,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "Link removal is absent: data/absent.bin"
+   },
+   {
+    "kind": "propertyEditSkipped",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": 0,
+    "record": null,
+    "property": {
+     "entry": "Test/Obj/A",
+     "reason": "untypable"
+    },
+    "object": null,
+    "message": "Property edit is skipped: nope"
+   },
+   {
+    "kind": "noEffect",
+    "modId": "project",
+    "layer": "base",
+    "target": "data/t/a.bin",
+    "chunk": "96a3b3046481c1f6",
+    "origin": {
+     "manifest": "game_data.yaml",
+     "source": null,
+     "module": 1
+    },
+    "edit": null,
+    "record": null,
+    "property": null,
+    "object": null,
+    "message": "every edit was skipped, so the target is unchanged"
+   }
+  ]
+ }
+}

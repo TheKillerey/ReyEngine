@@ -142,6 +142,11 @@ public static class LtkProjectStore
         return System.IO.Path.Combine(RootOf(projectRoot), GameDataDirectory, key);
     }
 
+    /// <summary>M818: the folder a layer's override files are stored in (<c>&lt;layer folder&gt;/files</c>), at their layer-relative paths. The overlay lists it and reads what a document names from it.</summary>
+    /// <exception cref="ArgumentException"><paramref name="key"/> is not a folder name <see cref="KeyFor"/> could have made.</exception>
+    public static string FilesDirectoryOf(string projectRoot, string key) =>
+        System.IO.Path.Combine(DirectoryOf(projectRoot, key), FilesDirectory);
+
     /// <summary>
     /// M816 review: whether <paramref name="key"/> is a name <see cref="KeyFor"/> could have made: one or more ASCII letters, digits, '-' and
     /// '_', which no Windows device name is. A key is a single folder name, so it holds no separator, no drive and no <c>..</c>.
