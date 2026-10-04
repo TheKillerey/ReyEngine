@@ -1,3 +1,4 @@
+using ReyEngine.Core.Assets;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
 
@@ -53,8 +54,9 @@ public static class ProjectCreator
                 if (!wanted.Contains(category)) continue;
                 try
                 {
-                    string target = entry.IsResolved
-                        ? Path.Combine(outDir, entry.Path.Replace('/', Path.DirectorySeparatorChar))
+                    // the name of an entry can come from a package's hashtables: it is a path below the folder only once proven, and a chunk whose name is not is written under its hash like one with no name at all
+                    string target = entry.IsResolved && AssetPathSafety.TryCombineUnder(outDir, entry.Path, out string named)
+                        ? named
                         : Path.Combine(outDir, $"{entry.PathHash:x16}.bin");   // loose chunk — FolderMount resolves it
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     wad.ExtractToFile(entry, target);

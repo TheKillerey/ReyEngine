@@ -83,6 +83,8 @@ public sealed partial class MainWindowViewModel
             throw new InvalidOperationException("Open the map the character belongs to first - its files are staged into that map's package.");
         if (!await EnsureProjectSavedAsync())
             throw new InvalidOperationException("Save the project before creating a character.");
+        // M819: the placement ends in the map's bins; if the mod's GameData refuses them, nothing is staged for it
+        if (place && await PlacementWriteRefusalAsync(mapEntry) is { } refusal) throw new InvalidOperationException(refusal);
 
         var package = result.Package;
         foreach (var upgrade in result.Upgrades)
@@ -91,6 +93,7 @@ public sealed partial class MainWindowViewModel
 
         var sources = result.Files.Select(f => (f.Path, f.Bytes)).ToList();
         var staged = WriteStagedAssets(sources, mapEntry, new List<string>(), overwrite: true);
+        if (staged.Refusal is { } stagedRefusal) throw new InvalidOperationException(stagedRefusal);   // M819: the real reason
         if (staged.Missing.Count > 0)
             throw new InvalidOperationException("These files could not be staged: " + string.Join(", ", staged.Missing.Take(4)));
 
@@ -128,6 +131,7 @@ public sealed partial class MainWindowViewModel
         if (_currentMap is not { } map) throw new InvalidOperationException("No map is open.");
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
             throw new InvalidOperationException("The open map has no companion materials .bin, so it cannot hold placements.");
+        if (await PlacementWriteRefusalAsync(mapEntry) is { } refusal) throw new InvalidOperationException(refusal);   // M819: both bins the placement ends in, before the first is written
 
         byte[] target = GetAssetBytes(binEntry);
         int existing = MapContent.AllProps.Count(p => p.Prop.CharacterName.Equals(character, StringComparison.OrdinalIgnoreCase));
@@ -213,7 +217,7 @@ public sealed partial class MainWindowViewModel
         }
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Error("Props", "The open map has no materials .bin."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         var id = node.Prop.Id;

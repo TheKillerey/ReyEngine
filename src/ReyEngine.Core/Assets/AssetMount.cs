@@ -11,6 +11,12 @@ public enum AssetSourceKind
     ProjectFolder = 1,   // editable unpacked-WAD folder (loose/decompressed files override its packed WAD)
     ProjectWad = 2,      // editable mod .wad.client
     RiotReference = 3,   // read-only Riot source/reference WAD (lowest priority)
+
+    /// <summary>
+    /// M819: what an imported mod's LTK GameData makes of a game bin (<see cref="OverlayMount"/>) - read-only, and above every other source of the chunk: it is the bytes LTK Manager would
+    /// install. Not part of the mount order below (<see cref="AssetMountService.Rebuild"/> merges it last, over the winner), so its value is not a priority.
+    /// </summary>
+    LtkGameData = 4,
 }
 
 /// <summary>A source of assets that can be mounted into the virtual file system.</summary>
@@ -43,7 +49,8 @@ public sealed class MountedAsset
 
     public AssetSourceKind SourceKind => Source.Kind;
     public bool IsEditable => Source.IsEditable;
-    public bool HasConflict => AllSources.Count > 1;
+    /// <summary>More than one MOUNT holds the asset. M819: the overlay that serves a chunk shadows the copy underneath it by design, which is not a conflict between mounts.</summary>
+    public bool HasConflict => AllSources.Count(s => s is not OverlayMount) > 1;
 
     public WadAssetEntry ToEntry() => new()
     {

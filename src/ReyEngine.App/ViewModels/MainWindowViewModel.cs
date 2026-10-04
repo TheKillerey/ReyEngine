@@ -693,7 +693,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (targetId == 0) { AudioStatus = "This event has no editable embedded wem in the loaded banks."; return; }
         if (_mapAudioBanks.SourceOf(targetId) is not { } src) return;
         if (!TryResolveEntry(src.PathHash, out var bankEntry)) { AudioStatus = "Bank asset not resolvable for override."; return; }
-        if (!GuardEditable(bankEntry)) return;
+        if (!await GuardEditableAsync(bankEntry)) return;
 
         var file = await Dialogs.OpenFileAsync($"Replace wem {targetId} (.wem)",
             new Avalonia.Platform.Storage.FilePickerFileType("Wwise wem") { Patterns = new[] { "*.wem" } }, DialogService.All);
@@ -2080,6 +2080,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             throw new InvalidOperationException("Open the destination map before adding a material.");
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
             throw new InvalidOperationException("The open map has no companion materials .bin.");
+        await ThrowIfGameDataTargetAsync(binEntry);   // M819: before the textures are staged, not after
         if (!await EnsureProjectSavedAsync())
             throw new InvalidOperationException("Save the project before adding Workshop content.");
 
@@ -2091,6 +2092,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (imported is null) throw new InvalidOperationException(error ?? "The material could not be imported.");
 
         var staged = StageWorkshopAssets(template.TexturePaths, mapEntry);
+        if (staged.Refusal is { } stagedRefusal) throw new InvalidOperationException(stagedRefusal);   // M819: the real reason
         if (staged.Missing.Count > 0)
             throw new InvalidOperationException("Required texture(s) were not found in the installed patch: "
                 + string.Join(", ", staged.Missing.Take(4)) + (staged.Missing.Count > 4 ? "..." : ""));
@@ -2184,6 +2186,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             throw new InvalidOperationException("Open the destination map before adding a particle.");
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
             throw new InvalidOperationException("The open map has no companion materials .bin.");
+        await ThrowIfGameDataTargetAsync(binEntry);   // M819: before the particle's assets are staged, not after
         if (!await EnsureProjectSavedAsync())
             throw new InvalidOperationException("Save the project before adding Workshop content.");
 
@@ -2234,6 +2237,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var staged = legacy is not null
             ? StageLegacyTroyAssets(legacy.Assets, mapEntry)
             : StageWorkshopAssets(graph.AssetPaths, mapEntry, assetsMayBeTheProjectsOwn: template.IsUser);
+        if (staged.Refusal is { } stagedRefusal) throw new InvalidOperationException(stagedRefusal);   // M819: the real reason
         if (staged.Missing.Count > 0)
             throw new InvalidOperationException("Required particle asset(s) were not found"
                 + (template.IsUser ? " in this project or in the installed patch: " : " in the installed patch: ")
@@ -2268,10 +2272,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// bins, an asset that already resolves in this project is already there - it is a project file, and
     /// no game wad will ever hold it. Off for a shipped template, where a path can resolve only because a
     /// game wad is MOUNTED for reference, and skipping it would leave the mod without the asset.</param>
-    private (int Written, IReadOnlyList<string> Missing) StageWorkshopAssets(
+    private StagedAssets StageWorkshopAssets(
         IEnumerable<string> paths, WadAssetEntry destinationMap, bool assetsMayBeTheProjectsOwn = false)
     {
-        if (_workshopCatalog is null) return (0, paths.ToArray());
+        if (_workshopCatalog is null) return new StagedAssets(0, paths.ToArray());
         var missing = new List<string>();
         var sources = new List<(string Path, byte[] Bytes)>();
         foreach (string raw in paths.Where(p => !string.IsNullOrWhiteSpace(p))
@@ -2286,7 +2290,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         // Preflight the complete dependency set before touching the project. A failed import should not
         // leave half of a particle's textures behind as unexplained dead files.
-        if (missing.Count > 0) return (0, missing);
+        if (missing.Count > 0) return new StagedAssets(0, missing);
         return WriteStagedAssets(sources, destinationMap, missing);
     }
 
@@ -2381,7 +2385,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!string.IsNullOrWhiteSpace(placeError)) _log.Warn("Legacy Port", placeError);
 
         var staged = StageLegacyParticleAssets(plan.Assets, folders, destinationMap);
-        if (staged.Missing.Count > 0)
+        if (staged.Refusal is { } stagedRefusal)
+            _log.Warn("Legacy Port", "The particle assets were not staged: " + stagedRefusal);   // M819: the real reason
+        else if (staged.Missing.Count > 0)
             _log.Warn("Legacy Port", $"{staged.Missing.Count:n0} particle asset(s) were not found and will render "
                 + "untextured: " + string.Join(", ", staged.Missing.Take(4))
                 + (staged.Missing.Count > 4 ? "..." : ""));
@@ -2571,7 +2577,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>Stage particle art out of the LEGACY folder tree. The Workshop path cannot serve this -
     /// it resolves by WAD path-hash into the installed patch, where none of these assets exist.</summary>
-    private (int Written, IReadOnlyList<string> Missing) StageLegacyParticleAssets(
+    private StagedAssets StageLegacyParticleAssets(
         IReadOnlyList<Formats.Particles.TroyAssetMapping> assets, string[] folders, WadAssetEntry destinationMap)
     {
         var index = new Formats.MapGeo.LegacyAssetIndex(folders, Formats.MapGeo.LegacyAssetIndex.ParticleExtensions);
@@ -2604,7 +2610,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Unlike the Workshop path this writes what it HAS: a missing texture makes one emitter render
         // untextured, where refusing the whole batch would lose the entire particle set.
         var written = WriteStagedAssets(sources, destinationMap, new List<string>());
-        return (written.Written, missing.Concat(written.Missing).ToArray());
+        return new StagedAssets(written.Written, missing.Concat(written.Missing).ToArray(), written.Refusal);
     }
 
     /// <summary>
@@ -2637,10 +2643,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private (int Written, IReadOnlyList<string> Missing) StageLegacyTroyAssets(
+    private StagedAssets StageLegacyTroyAssets(
         IReadOnlyList<Formats.Particles.TroyAssetMapping> assets, WadAssetEntry destinationMap)
     {
-        if (_workshopCatalog is null) return (0, assets.Select(a => a.SourcePath).ToArray());
+        if (_workshopCatalog is null) return new StagedAssets(0, assets.Select(a => a.SourcePath).ToArray());
         var missing = new List<string>();
         var sources = new List<(string Path, byte[] Bytes)>();
         foreach (var asset in assets)
@@ -2665,19 +2671,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
             sources.Add((target, bytes));
         }
-        if (missing.Count > 0) return (0, missing);
+        if (missing.Count > 0) return new StagedAssets(0, missing);
         return WriteStagedAssets(sources, destinationMap, missing);
     }
+
+    /// <summary>What staging a set of assets came to: the files written, the ones that could not be had, and - when the mod's GameData refused the whole set - why. The refused paths are in <see cref="Missing"/> too, so that
+    /// a caller that does not look at <see cref="Refusal"/> still fails; one that does says the real reason (a refusal is not "not found in the installed patch").</summary>
+    private readonly record struct StagedAssets(int Written, IReadOnlyList<string> Missing, string? Refusal = null);
 
     /// <summary>The write half of asset staging, shared by the modern and legacy paths.</summary>
     /// <param name="overwrite">M697: replace a file the project already has at that path. Off for every
     /// Workshop import - an imported texture must never clobber the user's own edit of it - and on for
     /// the Character Creator, which authored every path it writes and would otherwise report success
     /// while leaving the previous attempt's bins in place.</param>
-    private (int Written, IReadOnlyList<string> Missing) WriteStagedAssets(
+    private StagedAssets WriteStagedAssets(
         IReadOnlyList<(string Path, byte[] Bytes)> sources, WadAssetEntry destinationMap, List<string> missing,
         bool overwrite = false)
     {
+        // M819: all or nothing as far as the GameData goes. If any file is one the mod's GameData changes - or a bin, while the preview cannot yet say which are - nothing is written and the import fails as a whole
+        var refused = new List<string>();
+        var reasons = new List<string>();
+        foreach (var (path, _) in sources)
+            if (GameDataWriteRefusal(HashAlgorithms.WadPath(path), path, path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) is { } why)
+            {
+                _log.Warn("GameData", why + " Nothing was written.");
+                refused.Add(path);
+                reasons.Add(why);
+            }
+        if (refused.Count > 0)
+        {
+            missing.AddRange(refused);
+            return new StagedAssets(0, missing, string.Join(" ", reasons.Take(3)) + (reasons.Count > 3 ? $" ({reasons.Count - 3:n0} more)" : "") + " Nothing was written.");
+        }
+
         int written = 0;
         foreach (var (path, bytes) in sources)
         {
@@ -2710,7 +2736,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             });
             written++;
         }
-        return (written, missing);
+        return new StagedAssets(written, missing);
     }
 
     private void FinishWorkshopMutation()
@@ -2727,6 +2753,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task ExecuteAddMeshPlanAsync(AddMeshPlan plan)
     {
         if (_currentMap is not { } map || _currentMapEntry is not { } mapEntry) return;
+        // M819: the plan ends by writing the map's materials.bin, after the textures it stages: refused before anything is written
+        if (plan.Materials.Any(m => m.CopyFromBin is { Length: > 0 } || m.CreateNew)
+            && TryResolveMaterialsBin(mapEntry.Path, out var planBin) && await RefusesGameDataWriteAsync(planBin)) return;
         try
         {
             // M512: 0) materials copied verbatim out of the source map's own bin. Done first and as its
@@ -2901,12 +2930,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         int written = 0;
         var missing = new List<string>();
+        string? refusal = null;
         foreach (string path in wanted)
         {
             var staged = StageWorkshopAssets(new[] { path }, mapEntry);
             written += staged.Written;
-            missing.AddRange(staged.Missing);
+            refusal ??= staged.Refusal;
+            if (staged.Refusal is null) missing.AddRange(staged.Missing);   // M819: a refusal is not "not in the installed patch": it is said as it is, below
         }
+        if (refusal is not null)
+            _log.Warn("AddMesh", "Texture(s) of the copied material(s) were not brought across: " + refusal);
         if (written > 0)
             _log.Success("AddMesh", $"Brought {written:n0} texture(s) across with the copied material(s).");
         if (missing.Count > 0)
@@ -3750,7 +3783,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (MapGeoWriter.HasMoves(_currentMap.Meshes) || MapGeoLayerWriter.HasEdits(_currentMap.Meshes)
             || MapContent.AddedMeshes.Count > 0)
         { _log.Warn("Bake", "Save your pending mesh edits first — this rewrites the mapgeo from the saved bytes."); return; }
-        if (!GuardEditable(entry)) return;
+        if (!await GuardEditableAsync(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -3885,7 +3918,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Materials", "No map is open."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
         { _log.Error("Materials", "No materials.bin was found alongside this mapgeo."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -4062,7 +4095,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Lighting", "The light list is empty — import a Light.dat or add lights first."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
         { _log.Error("Lighting", "No materials.bin was found alongside this mapgeo."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -4292,6 +4325,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_currentMap is null || _currentMapEntry is not { } entry || _currentMapBytes is null)
         { _log.Warn("Layout", "No map open."); return null; }
+        // M819: the layout ends by clearing NO_BAKED_LIGHTING in the map's materials.bin and stamping its lightgrid there - a write of that bin, refused before the mapgeo is rewritten if the mod's GameData changes it
+        if (TryResolveMaterialsBin(entry.Path, out var gameDataBin) && await RefusesGameDataWriteAsync(gameDataBin)) return null;
 
         var sourceBytes = _currentMapBytes;
         // M164: exclude VertexDeform foliage only. NO_BAKED_LIGHTING must NOT exclude a mesh here: on a
@@ -4461,6 +4496,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return "Experimental shader-cache patches require a saved folder project.";
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
             return "No materials.bin was found alongside this mapgeo.";
+        if (await RefusesGameDataWriteAsync(binEntry))   // M819: it ends by writing the materials.bin back, and stages the shader companion before that
+            return GameDataWriteRefusal(binEntry.PathHash, binEntry.DisplayName, isBin: true) ?? GameDataProjectChangedRefusal;
 
         string? finalDir = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
         if (finalDir is null)
@@ -4865,15 +4902,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private string WriteBakedAsset(string assetPath, byte[] bytes, string ext)
     {
         ulong hash = HashAlgorithms.WadPath(assetPath);
-        // M590: teach the dictionary this path as it is written. Riot's dictionary only knows Riot's
-        // files, and since 16.17 a material stores a texture as the HASH of its path - so an asset this
-        // editor invents (a legacy port's textures land under assets/maps/legacyimport/…) would show the
-        // author a bare 0x… with an unresolved warning, for a file the project itself just created.
-        // Registering here rather than at project open also covers assets made DURING a session, which
-        // is exactly when a port runs.
-        NoteMapThumbnailInputsChanged();   // M807: a thumbnail draw reads the dictionary this changes
-        _resolver.Database.AddWad(hash, assetPath);
-        NoteMapThumbnailInputsChanged();
+        // M819: the callers refuse first; this one must fail rather than write
+        if (GameDataWriteRefusal(hash, assetPath, ext.Equals(".bin", StringComparison.OrdinalIgnoreCase)) is { } refusal)
+            throw new InvalidOperationException(refusal);
         if (Project.IsFolderProject && Project.RootPath is { } root && _currentMapEntry is { } mapEntry)
         {
             // Stage under the SAME WAD folder the map itself lives in (Map12.wad.client → "Map12"): the
@@ -4885,15 +4916,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // land in Map11. The map path is authoritative about its home shipping WAD.
             if (folderName == "Overrides" && MapNameFromAssetPath(mapEntry.Path) is { } mapName)
                 folderName = mapName;
-            string dest = Path.Combine(root, folderName, assetPath.Replace('/', Path.DirectorySeparatorChar));
+            // M819: below the project folder, proven - the path can come from a package's tables. A name that fails the proof is neither written nor taught to the dictionary
+            if (!AssetPathSafety.TryCombineUnder(Path.Combine(root, folderName), assetPath, out string dest))
+                throw new InvalidDataException($"'{assetPath}' is not a path a project file can have.");
+            TeachDictionary(hash, assetPath);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.WriteAllBytes(dest, bytes);
             if (folderName != "Overrides")
             {
                 // Repair output created by the old fallback above. The correct copy is durable before
                 // the stale loose fallback is removed, so an interrupted bake never loses the atlas.
-                string stale = Path.Combine(root, "Overrides", assetPath.Replace('/', Path.DirectorySeparatorChar));
-                if (!string.Equals(stale, dest, StringComparison.OrdinalIgnoreCase) && File.Exists(stale))
+                // M819: both are full paths below their folders, and compared as such: "../Map11/q.tex" under Overrides IS the file just written, and a name that does not lie below Overrides has no stale copy there
+                if (AssetPathSafety.TryCombineUnder(Path.Combine(root, "Overrides"), assetPath, out string stale)
+                    && !string.Equals(stale, dest, StringComparison.OrdinalIgnoreCase) && File.Exists(stale))
                     File.Delete(stale);
             }
             if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
@@ -4906,6 +4941,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return dest;
         }
 
+        TeachDictionary(hash, assetPath);
         var overrideFile = ProjectWorkspace.StoreOverrideBytes(Project, hash, bytes, ext);
         _overrides.Set(new ProjectAssetOverride
         {
@@ -4915,6 +4951,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             AddedUtc = DateTime.UtcNow.ToString("o"),
         });
         return overrideFile;
+    }
+
+    /// <summary>
+    /// M590: teach the dictionary this path as it is written. Riot's dictionary only knows Riot's files, and since 16.17 a material stores a texture as the HASH of its path - so an asset this editor invents (a legacy port's
+    /// textures land under assets/maps/legacyimport/) would show the author a bare 0x... with an unresolved warning, for a file the project itself just created. Registering here rather than at project open also covers assets
+    /// made DURING a session, which is exactly when a port runs. M819: only a spelling that is a plain relative path is taught - the dictionary's names reach the places that make file names of them.
+    /// </summary>
+    private void TeachDictionary(ulong hash, string assetPath)
+    {
+        if (!AssetPathSafety.IsSafeRelativePath(assetPath)) return;
+        NoteMapThumbnailInputsChanged();   // M807: a thumbnail draw reads the dictionary this changes
+        _resolver.Database.AddWad(hash, assetPath);
+        NoteMapThumbnailInputsChanged();
     }
 
     /// <summary>Delete a hashed override that would shadow a folder-placed baked file (and its record),
@@ -5529,7 +5578,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task<bool> RemoveUnusedMaterialsAsync(WadAssetEntry binEntry, IEnumerable<string> usedMaterials,
         IReadOnlyList<string> candidates)
     {
-        if (!GuardEditable(binEntry)) return false;
+        if (!await GuardEditableAsync(binEntry)) return false;
         if (Project.ProjectFilePath is null && Project.SourceWadPath is null)
         { _log.Warn("Materials", "Create or open a project before removing materials."); return false; }
 
@@ -5924,7 +5973,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     public async Task SaveUvEditorResultAsync(byte[] bytes, Formats.MapGeo.UvEditResult result)
     {
         if (_currentMapEntry is not { } entry) throw new InvalidOperationException("No map is open.");
-        if (!GuardEditable(entry)) throw new InvalidOperationException("This map is a read-only Riot asset.");
+        if (!await GuardEditableAsync(entry)) throw new InvalidOperationException("This map is a read-only Riot asset.");
         if (!await EnsureProjectSavedAsync()) throw new InvalidOperationException("The project was not saved.");
 
         int meshesBefore = _currentMap?.Meshes.Count ?? -1;
@@ -6158,7 +6207,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (Project.IsFolderProject && Project.RootPath is { } root)
         {
             string folderName = RiotWadFolderNameForHash(hash);
-            string dest = Path.Combine(root, folderName, assetPath.Replace('/', Path.DirectorySeparatorChar));
+            // M819: below the project folder, proven - the name of a texture can come from a package's tables
+            if (!AssetPathSafety.TryCombineUnder(Path.Combine(root, folderName), assetPath, out string dest))
+                throw new InvalidDataException($"'{assetPath}' is not a path a project file can have.");
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.WriteAllBytes(dest, bytes);
             if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
@@ -6241,9 +6292,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 if (Project.IsFolderProject && Project.RootPath is { } root)
                 {
-                    string dest = Path.Combine(root, RiotWadFolderNameForHash(t.PathHash),
-                        t.AssetPath.Replace('/', Path.DirectorySeparatorChar));
-                    if (File.Exists(dest)) { File.Delete(dest); n++; }
+                    // M819: below the project folder, proven - it is the path WriteRecoloredAsset wrote, and a record of a project somebody shared may say anything
+                    if (AssetPathSafety.TryCombineUnder(Path.Combine(root, RiotWadFolderNameForHash(t.PathHash)), t.AssetPath, out string dest) && File.Exists(dest))
+                    { File.Delete(dest); n++; }
                 }
                 ClearShadowOverride(t.PathHash, ".tex");
                 if (record?.BaseSnapshot is { } snap && ResolveSnapshotPath(snap) is { } p && File.Exists(p))
@@ -6829,7 +6880,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<MapBannerProp>? Banners = null,   // M805: the esports banners (decoded again when shown)
         IReadOnlyList<MapLevelProp>? LevelProps = null,   // M806: the level props (decoded again when shown)
         MapOpenFrame? Frame = null,   // M808: the area Frame frames
-        ReyEngine.Rendering.OrbitCameraPose? Camera = null);   // M808: where the camera was when the tab was left
+        ReyEngine.Rendering.OrbitCameraPose? Camera = null)   // M808: where the camera was when the tab was left
+    {
+        /// <summary>M819: the tab was left with edits nobody has saved - moved or deleted meshes. Dropping its snapshot would drop them.</summary>
+        public bool HasUnsavedWork => HasMoves || Pieces.Any(p => p.IsRemoved) || MapGeoWriter.HasMoves(Map.Meshes) || MapGeoLayerWriter.HasEdits(Map.Meshes);
+    }
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
     private void OpenAssetDocument(AssetNodeViewModel? node)
@@ -6931,7 +6986,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveParticleOverride()
     {
         if (ParticleEditor.Entry is not { } entry) { _log.Warn("Particle", "No particle .bin open."); return; }
-        if (!GuardEditable(entry)) return;
+        if (!await GuardEditableAsync(entry)) return;
         if (ParticleEditor.Document is not { } pdoc) return;
         if (!pdoc.IsDirty) { _log.Info("Particle", "No particle edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
@@ -7019,6 +7074,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // to write, and EnsureProjectSavedAsync would pop a dialog the user did not ask for.
             if (Project.ProjectFilePath is null) return;
 
+            int refusedBefore = _gameDataRefusals;   // M819
             bool savedAnything = false;
             if (HasPendingMapGeoWork)
             {
@@ -7029,7 +7085,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (MaterialEditor.IsDirty && MaterialEditor.BinEntry is not null)
             { await SaveMaterialOverride(); savedAnything = true; }
 
-            if (savedAnything) _log.Info("Auto-save", "Saved pending edits.");
+            // M819: a save the mod's GameData refused (the log above says which) saved nothing: it is not reported as saved, and the edit stays pending
+            if (savedAnything && _gameDataRefusals != refusedBefore)
+                _log.Warn("Auto-save", "Some pending edits were not saved: the mod's GameData refuses a bin they change (see above). They stay pending.");
+            else if (savedAnything) _log.Info("Auto-save", "Saved pending edits.");
         }
         catch (Exception ex) { _log.Warn("Auto-save", "Skipped: " + ex.Message); }
         finally { _autoSaving = false; }
@@ -7235,7 +7294,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         ContentBrowser.SetRoots(RootNodes);
         var maps = _nodesByHash.Values
             .Where(n => n.Entry is { Type: AssetType.MapGeometry })
-            .Where(n => !ProjectMode || n.Entry!.SourceKind != AssetSourceKind.RiotReference)
+            .Where(n => !ProjectMode || n.Entry!.SourceKind != AssetSourceKind.RiotReference || _gameDataContainerMaps.Contains(n.Entry.PathHash))   // M819: and the map the game loads for the Default skin, when the mod's GameData routes it
             .OrderBy(n => n.Entry!.Path, StringComparer.OrdinalIgnoreCase)
             .DistinctBy(n => n.Entry!.PathHash)
             .ToList();
@@ -7497,6 +7556,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Inspector.Clear();
             UndoService.Clear(); // new inspection context = fresh history
 
+            CancelGameData(); ForgetGameDataShown();   // M819: a single WAD has no GameData; the preview of the project it replaces stops
             RetireMapThumbnailReader(_mounts); _mounts = null;   // M807
             ProjectMode = false; InspectionMode = true;
             _openChampionWad = null;   // M812: it was mounted on the service just retired; a project opened later must not bring it back
@@ -7566,7 +7626,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var entry = ContextNode?.Entry;
         if (entry is null || !ContentLoaded) { _log.Warn("Export", "Select a file first."); return; }
-        var outPath = await Dialogs.SaveFileAsync("Export asset", entry.DisplayName);
+        var outPath = await Dialogs.SaveFileAsync("Export asset", Path.GetFileName(SafeFileIn(Path.GetTempPath(), entry)));   // M819: the suggestion is a plain file name
         if (outPath is null) return;
         try
         {
@@ -7712,6 +7772,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 : $"Meta classes synced — {db.ClassCount:n0} classes, build {db.ResolvedBuild}";
             if (db.IsEmpty) _log.Warn("Meta", "The download parsed to zero classes - format may have changed.");
             else _log.Success("Meta", $"{db.ClassCount:n0} class(es) available for name and schema lookup.");
+            // M819: the class schema types a GameData edit the bin does not hold; a new one can change what the preview shows, so the project's GameData is read again
+            if (!db.IsEmpty && _gameData is not null && ProjectMode) RetryGameData();
         }
         catch (Exception ex)
         {
@@ -7847,6 +7909,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             : entry.SourceKind switch
             {
                 AssetSourceKind.RiotReference => "Read-only Riot asset",
+                AssetSourceKind.LtkGameData => "Read-only - changed by the mod's LTK GameData",   // M819
                 AssetSourceKind.ProjectOverride => "Project override (editable)",
                 _ => "Project asset (editable)",
             };
@@ -8136,7 +8199,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveMaterialOverrideFor(MaterialEditorViewModel editor, Action applyToViewport)
     {
         if (editor.BinEntry is not { } binEntry) { _log.Warn("Material", "No material .bin open."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!editor.IsDirty) { _log.Info("Material", "No material edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
 
@@ -10195,7 +10258,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // Rewriting from _currentMapBytes would drop anything not yet saved, so say so instead.
         if (MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes) || MapContent.AddedMeshes.Count > 0)
         { _log.Warn("MapGeo", "Save your pending mesh edits first — this rewrites the mapgeo from the saved bytes."); return; }
-        if (!GuardEditable(entry)) return;
+        if (!await GuardEditableAsync(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10284,7 +10347,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                               + "nothing to sync. (Only the Mantis shader family selects it.)");
             return;
         }
-        if (!GuardEditable(entry)) return;
+        if (!await GuardEditableAsync(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         // sampler name -> texture, per extended material, straight off the material itself
@@ -10401,7 +10464,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         if (MapGeoWriter.HasMoves(map.Meshes) || MapGeoLayerWriter.HasEdits(map.Meshes) || MapContent.AddedMeshes.Count > 0)
         { _log.Warn("MapGeo", "Save your pending mesh edits first — this rewrites the mapgeo from the saved bytes."); return; }
-        if (!GuardEditable(entry)) return;
+        if (!await GuardEditableAsync(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10501,7 +10564,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (row is null) return;
         if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Map", "No map materials.bin is open."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10564,7 +10627,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Map", $"{row.Name} is a {row.TypeName} field — it needs structured content this editor will not invent."); return; }
         if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Map", "No map materials.bin is open."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10617,7 +10680,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Map", $"{row.Name} appears in no shipped map, so there is no configuration to copy."); return; }
         if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Map", "No map materials.bin is open."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10725,7 +10788,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Map", "No map materials.bin is open."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -10803,7 +10866,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Bake", "No map is open."); return; }
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry))
         { _log.Warn("Bake", "No map materials.bin was found, so the grid could not be linked."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         if (_currentMap is not { } map) { _log.Warn("Bake", "No map geometry is loaded."); return; }
@@ -10910,7 +10973,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!hasFaces && !hasGrows && !hasReshapes && !hasMoves && !hasLayers && !hasMaterials
             && added.Count == 0 && removedIndices.Count == 0)
         { _log.Info("MapGeo", "No map edits to save."); return; }
-        if (!GuardEditable(entry)) return;
+        if (!await GuardEditableAsync(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -11137,7 +11200,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
         }
         if (!TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) { _log.Error("Particles", "No materials .bin to save into."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         // M199 (5.2): edits are addressed by tree identity, not by a 64-byte transform signature. 1,450 of
@@ -11277,7 +11340,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task SaveBinToOverride()
     {
         if (BinEditor.Entry is not { } entry) { _log.Warn("Bin", "No .bin open."); return; }
-        if (!GuardEditable(entry)) return;
+        if (!await GuardEditableAsync(entry)) return;
         if (!BinEditor.IsDirty) { _log.Info("Bin", "No applied edits to save."); return; }
         if (!await EnsureProjectSavedAsync()) return;
 
@@ -11368,6 +11431,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!await EnsureProjectSavedAsync()) return;
         if (!TryResolveMaterialsBin(initialMap.Path, out var initialBin))
         { _log.Error("Legacy Port", "The open map has no companion materials .bin."); return; }
+        if (await RefusesGameDataWriteAsync(initialBin)) return;   // M819: the port ends by writing this bin, after the textures and sounds it brings in
 
         WadAssetEntry mapEntry = initialMap, binEntry = initialBin;
 
@@ -12032,6 +12096,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task LoadMapGeoAsync(WadAssetEntry entry)
     {
         if (!ContentLoaded) return;
+        // M819: a map reads the bins as the mod's GameData makes them - when that is still being prepared it waits, without blocking, and what was asked for is looked at again afterwards (see EntryAfterGameDataAsync).
+        // A map that does not wait - every map of a project with no GameData - is loaded exactly as before.
+        if (_gameData is { IsPending: true })
+        {
+            if (await EntryAfterGameDataAsync(entry) is not { } current) return;
+            entry = current;
+        }
         // M515: suppress lighting capture across the WHOLE open, not just across ApplySunProperties.
         //
         // M287 guarded the reset itself, but the load publishes the map's point lights on the way in, and
@@ -12145,6 +12216,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (openFrame is not null && (previousEntry is null || previousEntry.PathHash != entry.PathHash)) MapFrameRequest++;
                 _log.Success("MapGeo", $"{entry.DisplayName}: v{map.Version}, {map.MeshCount:n0} meshes, {map.VertexCount:n0} verts, {map.TriangleCount:n0} tris, {map.MaterialCount} materials" +
                                        (map.Warnings.Count > 0 ? $", {map.Warnings.Count} warnings" : ""));
+                LogGameDataContainerHint(entry);   // M819
             });
         }
         catch (Exception ex)
@@ -12248,7 +12320,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         catch (Exception ex) { _log.Warn("MapGeo", $"project materials.bin parse failed: {ex.Message}"); }
 
-        var fb = _mounts?.ReadFallback(binEntry.PathHash);
+        // M819: the game's own copy is the fallback for a project copy that is broken - never for a bin the mod's GameData changes: what resolved nothing is the OVERLAID bin, and the unchanged one would be shown as if it were final
+        var fb = _mounts is not null && _mounts.IsOverlaid(binEntry.PathHash) ? null : _mounts?.ReadFallback(binEntry.PathHash);
+        if (_mounts is not null && _mounts.IsOverlaid(binEntry.PathHash))
+            _log.Warn("GameData", $"{binEntry.DisplayName}, as the mod's GameData changes it, resolved no textures - the game's unchanged copy is not used in its place.");
         if (fb is not null)
         {
             try
@@ -12572,7 +12647,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         { _log.Warn("Lighting", "No map is open, so there is nowhere to save the sun."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
         { _log.Error("Lighting", "No materials.bin was found alongside this mapgeo."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try
@@ -13438,7 +13513,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var entry = ContextNode?.Entry;
         if (entry is null) { _log.Warn("Project", "Select an asset to replace."); return; }
-        if (!GuardEditable(entry)) return;
+        if (!await GuardEditableAsync(entry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         var file = await Dialogs.OpenFileAsync($"Replace {entry.DisplayName}", DialogService.All);
@@ -13806,6 +13881,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private async Task<bool> SaveMapBinBytesAsync(WadAssetEntry entry, byte[] bytes)
     {
+        if (await RefusesGameDataWriteAsync(entry)) return false;   // M819: the one choke point every editor, repair, import and patch update saves a bin through; it waits for a preview that is still working
         try { _ = Formats.Meta.SafeBinTree.Parse(bytes); }
         catch (Exception ex) { _log.Error("MapBin", $"Edited .bin failed to re-parse — NOT saved: {ex.Message}"); return false; }
         if (!await EnsureProjectSavedAsync()) return false;
@@ -14570,6 +14646,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             throw new InvalidOperationException("The project was closed while the map-skin tool was open.");
         if (!TryResolveEntry(request.Map.ShippingBinEntry.PathHash, out var shippingEntry))
             throw new FileNotFoundException("The shipping map bin is no longer mounted.");
+        await ThrowIfGameDataTargetAsync(shippingEntry);   // M819: the switch would write the overlaid map bin back (and a second bin) as whole files
         if (!await EnsureProjectSavedAsync()) throw new InvalidOperationException("Save the project before creating the override.");
 
         byte[] original = ReadAsset(shippingEntry.PathHash);
@@ -14581,6 +14658,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ?? throw new InvalidDataException("The selected source skin has no materials container.");
         if (!TryResolveEntry(HashAlgorithms.WadPath(sourceContainerPath), out var sourceContainerEntry))
             throw new FileNotFoundException($"The source skin's map-container bin is missing: {sourceContainerPath}");
+        await ThrowIfGameDataTargetAsync(sourceContainerEntry);   // M819
         byte[] sourceContainerOriginal = ReadAsset(sourceContainerEntry.PathHash);
 
         MapSkinContainerCompatibilityResult compatibility;
@@ -14759,6 +14837,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void OpenPatchUpdateWizard()
     {
         if (!ContentLoaded) { _log.Warn("PatchUpdate", "Open a project first."); return; }
+        if (_gameData is { IsPending: true })
+        {
+            // M819: the wizard chooses its rows by what the mod's GameData names, which the preview is still working out
+            _log.Info("PatchUpdate", "The LTK GameData preview is still being prepared; open the Patch Update wizard again in a moment.");
+            Status = "LTK GameData: still preparing...";
+            return;
+        }
         if (Project.RootPath is null || Project.ProjectFolders.Count + Project.ProjectWads.Count == 0)
         { _log.Warn("PatchUpdate", "The wizard needs an editable folder project or project WAD."); return; }
 
@@ -14783,7 +14868,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             DownloadOld = (patch, rel) => Services.CommunityDragonClient.DownloadBinAsync(
                 patch, rel, Services.CommunityDragonClient.DefaultCacheDir),
             ReadCurrentOriginal = entry => Active() ? ReadRiotOriginalBytes(entry) : null,
-            ReadProjectBytes = hash => Active() ? ReadAsset(hash)
+            // M819: the project's OWN bytes, never the overlay's: a rebase merges the mod's edits onto the new original and writes the result back, and the GameData result is not an edit of the mod's
+            ReadProjectBytes = hash => Active() ? ReadAssetRaw(hash)
                 : throw new InvalidOperationException("A different project was opened while the patch update was running."),
             SaveBytes = (entry, bytes) => Active() ? SaveMapBinBytesAsync(entry, bytes) : Task.FromResult(false),
             RunValidate = () => Active() ? ValidateProjectBins() : Task.CompletedTask,
@@ -14842,7 +14928,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 string rel = Path.GetRelativePath(root, file).Replace('\\', '/');
                 if (!rel.Contains('/')) continue;
                 ulong hash = HashAlgorithms.WadPath(rel);
-                if (binHashes.Add(hash) && TryResolveEntry(hash, out var entry))
+                if (binHashes.Add(hash) && TryResolveEntry(hash, out var entry) && !SkipsGameDataBin(entry))   // M819
                     vm.Bins.Add(new PatchUpdateBinRowViewModel
                     { Rel = rel, ProjectRel = $"{folder}/{rel}", Entry = entry });
             }
@@ -14859,7 +14945,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (!sourceEntry.IsResolved || !sourceEntry.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)
                         || !sourceEntry.Path.Contains('/') || !binHashes.Add(sourceEntry.PathHash))
                         continue;
-                    if (TryResolveEntry(sourceEntry.PathHash, out var entry))
+                    if (TryResolveEntry(sourceEntry.PathHash, out var entry) && !SkipsGameDataBin(entry))   // M819
                         vm.Bins.Add(new PatchUpdateBinRowViewModel
                         {
                             Rel = sourceEntry.Path,
@@ -15176,6 +15262,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Info("PatchUpdate", $"Riot {installed.Patch} is installed; this project still targets {baseline}. Automatic updating is disabled in Project Settings.");
             return;
         }
+        await WaitForGameDataToSettleAsync("the patch update runs");   // M819: which bins the mod's GameData names is known (and the bins it changes are left out) before the rebase picks its rows
         if (!ReferenceEquals(Project, openedProject)) return;
 
         _log.Info("PatchUpdate", $"Riot patch changed {baseline} -> {installed.Patch}; preparing an automatic transactional rebase.");
@@ -15268,6 +15355,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // changes the dictionary the thumbnail thread reads through (review)
             LoadProjectHashtables(announce: true);
             Documents.Clear(); ActiveDocument = null; // same path hash in another project is different content
+            ForgetGameDataShown();   // M819: another project's GameData is not what the editor was last showing
             BuildMounts();
             BuildProjectTree();
             ClearViewport(); Inspector.Clear(); BinEditor.Clear(); MaterialEditor.Clear();
@@ -15326,21 +15414,51 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private void BuildMounts()
     {
+        CancelGameData();   // M819: the GameData preview made for the mounts this replaces stops working, and serves nothing from now on
         InvalidateMapThumbnails();   // M807: what is queued was described against the old mounts; the tile in hand finishes on them
         RetireMapThumbnailReader(_mounts);   // M807: and they are disposed the moment it has
         _mounts = new AssetMountService();
-        if (Project.OverridesDirectory is { } ov) _mounts.Add(new OverrideMount(ov, _resolver));
-        foreach (var f in Project.ProjectFolders)
-            try { _mounts.Add(new FolderMount(Project.ResolveProjectPath(f), _resolver, f == "." ? Project.Name : f)); }
+        // M819: the project's own mounts by the layer they ship in, in the order they win in - where the base of a GameData target is read from
+        var layerMounts = new Dictionary<string, List<IAssetMount>>(StringComparer.Ordinal);
+        var rawMounts = new List<IAssetMount>();
+        void Track(string layer, IAssetMount mount)
+        {
+            if (!layerMounts.TryGetValue(layer, out var list)) layerMounts[layer] = list = new List<IAssetMount>();
+            list.Add(mount);
+        }
+        if (Project.OverridesDirectory is { } ov)
+        {
+            var overrideMount = new OverrideMount(ov, _resolver);
+            _mounts.Add(overrideMount);
+            Track(ProjectLayer.BaseLayer, overrideMount);
+        }
+        // M819: a project of layers shadows its folders as LTK installs them (layer applied last first, RAW over all); a project with none mounts them as they are listed, as ever
+        foreach (var rank in ProjectMountOrder.Rank(Project))
+        {
+            string f = rank.Entry;
+            try
+            {
+                var folder = new FolderMount(Project.ResolveProjectPath(f), _resolver, f == "." ? Project.Name : f);
+                _mounts.Add(folder, rank.Precedence);
+                if (rank.IsRaw) rawMounts.Add(folder); else Track(rank.Layer, folder);
+            }
             catch (Exception ex) { _log.Warn("Project", $"folder {f}: {ex.Message}"); }
+        }
         foreach (var w in Project.ProjectWads)
-            try { _mounts.Add(new WadMount(WadArchive.Open(Project.ResolveProjectPath(w), _resolver), AssetSourceKind.ProjectWad, editable: true)); }
+            try
+            {
+                var wad = new WadMount(WadArchive.Open(Project.ResolveProjectPath(w), _resolver), AssetSourceKind.ProjectWad, editable: true);
+                _mounts.Add(wad);
+                Track(Project.LayerOf(Path.GetFileName(w)), wad);
+            }
             catch (Exception ex) { _log.Warn("Project", $"WAD {w}: {ex.Message}"); }
         foreach (var r in Project.ReferenceWads) MountReference(r);
 
         AddGameFallback();
         RemountCharacterWads();   // M812: the champion WADs the Character window opened were mounted on the service this replaced
         _mounts.Rebuild();
+        try { AttachGameData(layerMounts, rawMounts); }   // M819: a project that stores GameData gets its preview; one that does not, nothing
+        catch (Exception ex) { NoteGameDataStartFailed(ex); }   // never a project that will not open
     }
 
     /// <summary>
@@ -15469,6 +15587,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void BuildProjectTree()
     {
         if (_mounts is null) return;
+        using var quietReads = AssetMountService.QuietReads();   // M819: what the tree reads while a preview is pending is read again when it is ready (BuildProjectTree runs then): it does not count as a stale read
         RootNodes.Clear();
         _nodesByHash.Clear();
         _thumbnails.Clear();
@@ -15477,7 +15596,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var projectGroup = new AssetTreeNode { Name = "Project", IsFolder = true };
         foreach (var mount in _mounts.Mounts.Where(m => m.Kind != AssetSourceKind.RiotReference))
         {
-            var entries = mount.Enumerate().Select(a => a.ToEntry()).ToList();
+            var entries = mount.Enumerate().Select(EntryOf).ToList();   // M819: a chunk the GameData serves is listed as what is read
             // M110: a folder mount stays listed even with no files — it may hold only empty folders.
             var dirs = mount is FolderMount fm ? fm.Directories : (IReadOnlyList<string>)Array.Empty<string>();
             if (entries.Count == 0 && dirs.Count == 0) continue;
@@ -15488,7 +15607,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var riotGroup = new AssetTreeNode { Name = "Riot References", IsFolder = true };
         foreach (var mount in _mounts.Mounts.Where(m => m.Kind == AssetSourceKind.RiotReference))
-            riotGroup.Children.Add(AssetTree.Build(mount.Enumerate().Select(a => a.ToEntry()).ToList(), mount.Name));
+            riotGroup.Children.Add(AssetTree.Build(mount.Enumerate().Select(EntryOf).ToList(), mount.Name));   // M819: a reference bin the GameData changes is listed as what is read
 
         var projectVm = new AssetNodeViewModel(projectGroup);
         var riotVm = new AssetNodeViewModel(riotGroup);
@@ -15500,14 +15619,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var mountVm = projectVm.Children.FirstOrDefault(c => c.Name == mount.Name);
             if (mountVm is null) continue;
-            InjectMaterialAssets(mountVm, mount.Enumerate().Select(a => a.ToEntry()).ToList(), readOnly: false);
+            InjectMaterialAssets(mountVm, mount.Enumerate().Select(EntryOf).ToList(), readOnly: false);
         }
 
+        // M819: what the project's GameData serves that no mount holds - a bin only the game has - is its own read-only group
+        var gameDataVm = GameDataTreeGroup() is { } gameDataGroup ? new AssetNodeViewModel(gameDataGroup) : null;
+
         RootNodes.Add(projectVm);
+        if (gameDataVm is not null) RootNodes.Add(gameDataVm);
         if (riotGroup.Children.Count > 0) RootNodes.Add(riotVm);
 
         // Index Riot first, then Project, so a conflicted asset's *project* node wins status updates.
         IndexNodes(riotVm);
+        if (gameDataVm is not null) IndexNodes(gameDataVm);
         IndexNodes(projectVm);
         RefreshAllStatuses();
         RefreshContentPanels();
@@ -15528,7 +15652,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             assetsRoot ??= GetOrAddChildFolder(mountVm, "ASSETS");
             foreach (var m in mats)
             {
-                var matVm = new MaterialAssetViewModel(m, e, readOnly);
+                var matVm = new MaterialAssetViewModel(m, e, readOnly || e.SourceKind == AssetSourceKind.LtkGameData);   // M819: a bin the GameData changes is read-only
                 var parts = m.Name.Split('/', StringSplitOptions.RemoveEmptyEntries);
                 var folder = assetsRoot;
                 for (int i = 0; i < parts.Length - 1; i++) folder = GetOrAddChildFolder(folder, parts[i]);
@@ -16327,6 +16451,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var entry = srcNode?.Entry;
         if (entry is null) return false;
+        if (RefusesGameDataWrite(entry)) return false;   // M819: Copy To Project of a bin the declarations name stays refused: a whole copy of it would be a base the declarations apply to again
 
         // M98b: don't trust the node's SourceKind — deleting the project copy from the browser leaves the
         // mount index stale. Check whether the project copy actually EXISTS on disk; if it does, offer to
@@ -16450,10 +16575,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool TryPlaceInProjectFolder(WadAssetEntry entry, byte[] bytes, out string placedRelative)
     {
         placedRelative = "";
+        ThrowIfGameDataTarget(entry);   // M819
         if (!Project.IsFolderProject || !entry.IsResolved || Project.RootPath is null || _mounts is null) return false;
 
         string folderName = RiotWadFolderName(entry);
-        string destFile = Path.Combine(Project.RootPath, folderName, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+        // M819: below the project folder, proven: a name from a package's tables can say "..\..\x", and then there is no placement - the caller stores the hash-named override instead
+        if (!AssetPathSafety.TryCombineUnder(Path.Combine(Project.RootPath, folderName), entry.Path, out string destFile)) return false;
         Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
         File.WriteAllBytes(destFile, bytes);
         if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase))
@@ -16482,6 +16609,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool TryWriteToProjectFile(WadAssetEntry entry, byte[] bytes, out string file)
     {
         file = "";
+        ThrowIfGameDataTarget(entry);   // M819: no write to the project - a file or the override store behind it - reaches a chunk the GameData changes
         if (_mounts is null || !_mounts.TryGet(entry.PathHash, out var a)) return false;
         // M126: prefer the real project FILE over a shadow override. Overrides outrank folder files in
         // the mount order, so writing "the first editable source" kept updating the shadow while the
@@ -16529,6 +16657,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Block editing read-only Riot assets; suggest Copy to Project.</summary>
     private bool GuardEditable(WadAssetEntry? entry)
     {
+        if (RefusesGameDataWrite(entry)) return false;   // M819: a chunk the mod's GameData changes is read-only: what the editor shows of it is the declarations' result, which cannot be written back
         if (ProjectMode && entry is { SourceKind: AssetSourceKind.RiotReference })
         {
             _log.Warn("Project", $"'{entry.DisplayName}' is a read-only Riot asset. Right-click ▸ Copy Asset To Project to edit it.");
@@ -16770,7 +16899,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (bytes is null) { _log.Warn("Files", "Asset bytes not available."); return; }
                 var dir = Path.Combine(Path.GetTempPath(), "ReyEngine", "TextView");
                 Directory.CreateDirectory(dir);
-                file = Path.Combine(dir, entry.DisplayName);
+                file = SafeFileIn(dir, entry);   // M819: the name may come from a package
                 File.WriteAllBytes(file, bytes);
                 _log.Info("Files", $"'{entry.DisplayName}' is read-only — opened a temporary copy.");
             }
@@ -17069,7 +17198,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                File.WriteAllBytes(Path.Combine(dir, n.Entry!.DisplayName), GetAssetBytes(n.Entry));
+                File.WriteAllBytes(SafeFileIn(dir, n.Entry!), GetAssetBytes(n.Entry));   // M819: the name may come from a package
                 done++;
             }
             catch (Exception ex) { _log.Warn("Files", $"{n.Name}: {ex.Message}"); }

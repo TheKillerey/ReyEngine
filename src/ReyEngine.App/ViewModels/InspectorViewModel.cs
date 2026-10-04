@@ -52,6 +52,7 @@ public sealed partial class InspectorViewModel : ViewModelBase
         AssetSourceKind.ProjectFolder => "Project Folder",
         AssetSourceKind.ProjectWad => "Project WAD",
         AssetSourceKind.RiotReference => "Riot Reference",
+        AssetSourceKind.LtkGameData => "LTK GameData",   // M819
         _ => "Unknown",
     };
 

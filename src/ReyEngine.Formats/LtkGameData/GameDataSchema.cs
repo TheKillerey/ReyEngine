@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Hashing;
 using System.Text.Json;
 
 namespace ReyEngine.Formats.LtkGameData;
@@ -144,10 +145,13 @@ public sealed class LtkMetaSchema
 
     private readonly Dictionary<uint, ParsedClass> _classes = KeyHash.Map<ParsedClass>();
 
-    private LtkMetaSchema(uint latest) { Latest = latest; }
+    private LtkMetaSchema(uint latest, string identity) { Latest = latest; Identity = identity; }
 
     /// <summary>The newest build any revision names.</summary>
     public uint Latest { get; }
+
+    /// <summary>A fingerprint of the bytes the database was read from: two databases with the same identity type every property alike. A cache of what was worked out with a schema is keyed by it.</summary>
+    public string Identity { get; }
 
     public int ClassCount => _classes.Count;
 
@@ -162,9 +166,17 @@ public sealed class LtkMetaSchema
 
     public IGameDataSchema At(GameBuild? build) => At(build?.Content);
 
-    /// <summary>Reads the database at <paramref name="path"/>.</summary>
+    /// <summary>The most a database file may hold, 64 MiB: about seventeen times the one LTK Manager keeps today (3.8 MB).</summary>
+    public const long MaxFileBytes = 64L << 20;
+
+    /// <summary>
+    /// Reads the database at <paramref name="path"/>. The read is bounded (<see cref="MaxFileBytes"/>: a file that is not a database cannot take the memory of the editor), and the file is opened so that its owner can go on
+    /// replacing it - LTK Manager updates its cache by renaming a new file over the old one, which fails while a reader holds the file without allowing it to be deleted.
+    /// </summary>
     /// <exception cref="FormatException">The file is not a database this reader knows.</exception>
-    public static LtkMetaSchema Load(string path) => Parse(File.ReadAllBytes(path));
+    /// <exception cref="IOException">The file is larger than <see cref="MaxFileBytes"/> or cannot be read.</exception>
+    public static LtkMetaSchema Load(string path) =>
+        Parse(BoundedFile.Read(path, MaxFileBytes, FileShare.ReadWrite | FileShare.Delete, "schema reader"));
 
     /// <summary>Reads a database from its JSON.</summary>
     /// <exception cref="FormatException">The bytes are not a database this reader knows: JSON that is malformed or nested too deeply, or whose shape
@@ -178,7 +190,7 @@ public sealed class LtkMetaSchema
             if (root.ValueKind != JsonValueKind.Object) throw new FormatException("meta schema database: expected an object");
             uint format = ReadUInt(root, "formatVersion");
             if (format != 1) throw new FormatException($"meta schema database is format version {format}, and this build reads 1");
-            var schema = new LtkMetaSchema(ReadUInt(root, "latest"));
+            var schema = new LtkMetaSchema(ReadUInt(root, "latest"), $"{XxHash64.HashToUInt64(json):x16}:{json.Length}");
             if (!root.TryGetProperty("classes", out var classes) || classes.ValueKind != JsonValueKind.Object)
                 throw new FormatException("meta schema database: missing `classes`");
             foreach (var cls in classes.EnumerateObject())

@@ -340,6 +340,26 @@ public static class LtkProjectStore
         return System.IO.File.Exists(document) ? Utf8.GetString(System.IO.File.ReadAllBytes(document)) : null;
     }
 
+    /// <summary>
+    /// M819: whether the project stores a GameData document for any layer - a file exists where a layer's <see cref="ProjectLayer.DeclarationsKey"/> says. The cheap question the editor asks before it builds anything for GameData:
+    /// a project with no layers (every project that never imported a layered .fantome) answers without touching the disk, and gets no preview, no overlay and no change. Nothing is read or parsed.
+    /// </summary>
+    public static bool HasGameData(ReyProject project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        if (project.RootPath is null || project.Layers.Count == 0) return false;
+        foreach (var layer in project.Layers)
+        {
+            if (!IsSafeKey(layer.DeclarationsKey)) continue;
+            try
+            {
+                if (System.IO.File.Exists(System.IO.Path.Combine(DirectoryOf(project.RootPath, layer.DeclarationsKey!), DeclarationsFileName))) return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+        }
+        return false;
+    }
+
     /// <summary>One layer's imported declarations, by the layer's name (without regard to case); null when it imported none.</summary>
     public static ImportedLayerData? ReadLayer(ReyProject project, string layerName)
     {

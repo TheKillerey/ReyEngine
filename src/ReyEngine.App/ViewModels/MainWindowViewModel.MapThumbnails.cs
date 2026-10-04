@@ -5,6 +5,7 @@ using ReyEngine.App.Services;
 using ReyEngine.Core.Assets;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
+using ReyEngine.Formats.LtkGameData;
 using ReyEngine.Formats.MapGeo;
 
 namespace ReyEngine.App.ViewModels;
@@ -248,6 +249,8 @@ public sealed partial class MainWindowViewModel
         if (node.Entry is not { Type: AssetType.MapGeometry, IsResolved: true } entry) return null;
         string? final = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
         if (final is null) return null;
+        // M819: while the mod's GameData is being prepared the bins a tile reads are the unchanged ones - no picture is better than a stale one, and the tree is rebuilt when it is ready
+        if (_gameData is { IsPending: true }) return null;
         if (!TryResolveMaterialsBin(entry.Path, out var materials)) return null;
 
         string? shippingPath = MapThumbnailRenderer.ShippingBinPathFor(entry.Path);
@@ -263,8 +266,10 @@ public sealed partial class MainWindowViewModel
         // cannot file a picture under a key it was not drawn for. The thumbnail reads the flag and never writes it.
         bool clientDepth = Dx11SceneBuilder.EmulateClientDepthRules;
         string state = clientDepth ? MapThumbnailKey.StartState + "+clientdepth" : MapThumbnailKey.StartState;
+        // M819: what the mod's GameData makes of the bins (the siblings and the props' skins too, which no identity above sees) is in the key when there is any, and only then: a project without it keeps every key it had
+        string? gameDataIdentity = _gameData is { State: GameDataPreviewState.Ready, DocumentsFingerprint: { } documents } ? documents.ToString("x16") : null;
         string key = MapThumbnailKey.Compute(AppInfo.Version, state,
-            entry.Path, mapIdentity, materials.Path, materialsIdentity, shippingIdentity.Length == 0 ? "missing" : shippingIdentity, cacheIdentity);
+            entry.Path, mapIdentity, materials.Path, materialsIdentity, shippingIdentity.Length == 0 ? "missing" : shippingIdentity, cacheIdentity, gameDataIdentity);
 
         string dir = entry.Path[..(entry.Path.LastIndexOf('/') + 1)];
         // The readers THIS tile is drawn through: the mounts or the archive as they are now, kept alive for the job by
@@ -356,6 +361,7 @@ public sealed partial class MainWindowViewModel
             if (_mounts is not null)
             {
                 if (!_mounts.TryGet(hash, out var asset)) return "";
+                if (_mounts.OverlayIdentityOf(hash) is { } served) return served;   // M819: the bytes the GameData serves, by what they were made from
                 if (asset.Source.TryGetFilePath(hash, out var file)) return FileIdentityOrEmpty(file);
                 if (asset.Source is WadMount mount && mount.Archive.TryGetEntry(hash, out var chunk))
                     return WadChunkIdentity(mount.Archive.FilePath, chunk);

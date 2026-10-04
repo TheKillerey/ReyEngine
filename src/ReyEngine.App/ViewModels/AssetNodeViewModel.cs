@@ -91,9 +91,16 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
             AssetSourceKind.ProjectOverride => "OVR",
             AssetSourceKind.ProjectFolder or AssetSourceKind.ProjectWad => "PRJ",
             AssetSourceKind.RiotReference => "RIOT",
+            AssetSourceKind.LtkGameData => "LTK",   // M819
             _ => "",
         };
     public bool HasSourceTag => SourceTag.Length > 0;
+
+    /// <summary>M819: the bytes the editor reads for this asset are the mod's LTK GameData applied over the game's - read-only.</summary>
+    public bool IsGameData => !IsMaterial && Entry is { SourceKind: AssetSourceKind.LtkGameData };
+
+    /// <summary>M819: why the lock is on: a Riot reference, or a bin the mod's GameData changes.</summary>
+    public string ReadOnlyTip => IsGameData ? "Read-only: changed by the mod's LTK GameData" : "Read-only Riot reference";
 
     public string Kind => IsFolder ? "DIR" : IsMaterial ? "MAT"
         : Entry?.Type switch

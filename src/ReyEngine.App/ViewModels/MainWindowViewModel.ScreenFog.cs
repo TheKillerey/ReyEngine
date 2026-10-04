@@ -126,7 +126,7 @@ public sealed partial class MainWindowViewModel
         { _log.Warn("Lighting", "No map is open, so there is nowhere to save the screen fog."); return; }
         if (!TryResolveMaterialsBin(entry.Path, out var binEntry))
         { _log.Error("Lighting", "No materials.bin was found alongside this mapgeo."); return; }
-        if (!GuardEditable(binEntry)) return;
+        if (!await GuardEditableAsync(binEntry)) return;
         if (!await EnsureProjectSavedAsync()) return;
 
         try

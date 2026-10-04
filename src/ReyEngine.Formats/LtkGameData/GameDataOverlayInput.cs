@@ -328,12 +328,15 @@ public sealed class GameDataOverlayOptions
 /// <summary>Reads a whole file without trusting its length: the bytes are taken as far as the limit and one more, so a file that grew past what was asked is refused, not read.</summary>
 internal static class BoundedFile
 {
+    /// <param name="share">What other processes may do to the file while it is read. A file whose owner replaces it by renaming a new one over it (LTK Manager's schema cache) is read with
+    /// <c>ReadWrite | Delete</c>, so that the read never makes the owner's replace fail.</param>
+    /// <param name="reader">Who reads, for the message of a file that is too large.</param>
     /// <exception cref="IOException">The file holds more than <paramref name="maxBytes"/> or cannot be read.</exception>
-    public static byte[] Read(string path, long maxBytes)
+    public static byte[] Read(string path, long maxBytes, FileShare share = FileShare.Read, string reader = "the overlay")
     {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.SequentialScan);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, share, 1, FileOptions.SequentialScan);
         long length = stream.Length;
-        if (length > maxBytes) throw TooLarge(length, maxBytes);
+        if (length > maxBytes) throw TooLarge(length, maxBytes, reader);
         var buffer = new byte[length];
         int total = 0;
         while (total < buffer.Length)
@@ -343,11 +346,11 @@ internal static class BoundedFile
             total += read;
         }
         // a file that grew after its length was read holds more than it said
-        if (total == buffer.Length && stream.ReadByte() >= 0) throw TooLarge(length + 1, maxBytes);
+        if (total == buffer.Length && stream.ReadByte() >= 0) throw TooLarge(length + 1, maxBytes, reader);
         if (total < buffer.Length) Array.Resize(ref buffer, total);
         return buffer;
     }
 
-    private static IOException TooLarge(long length, long maxBytes) =>
-        new($"the file is {GameDataOverlayDiagnostics.Count(length)} bytes, more than the {GameDataOverlayDiagnostics.Count(maxBytes)} the overlay reads");
+    private static IOException TooLarge(long length, long maxBytes, string reader) =>
+        new($"the file is {GameDataOverlayDiagnostics.Count(length)} bytes, more than the {GameDataOverlayDiagnostics.Count(maxBytes)} {reader} reads");
 }

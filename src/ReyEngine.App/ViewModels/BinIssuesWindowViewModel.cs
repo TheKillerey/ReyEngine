@@ -26,6 +26,8 @@ public sealed partial class BinIssueRowViewModel : ObservableObject
     // ---- M127: per-row one-click fix (e.g. repoint a dead skin-variant ref to its base file) ----
     public string? FixLabel { get; init; }
     public Func<Task<bool>>? FixAsync { get; init; }
+    /// <summary>M819: what the row says once its action succeeded; the repair rows say they saved to the project, a Retry says it re-reads the game.</summary>
+    public string FixDoneText { get; init; } = "Fixed — saved to the project.";
     public bool HasFix => FixAsync is not null;
     [ObservableProperty] private bool _fixApplied;
     public bool FixEnabled => !FixApplied;
@@ -41,7 +43,7 @@ public sealed partial class BinIssueRowViewModel : ObservableObject
         try { ok = await FixAsync(); }
         catch (Exception ex) { FixStatus = $"Fix failed: {ex.Message}"; return; }
         FixApplied = ok;
-        FixStatus = ok ? "Fixed — saved to the project." : "Fix failed — see the console log.";
+        FixStatus = ok ? FixDoneText : "Fix failed — see the console log.";
     }
 }
 

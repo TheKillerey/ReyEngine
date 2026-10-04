@@ -31,8 +31,10 @@ public static class MapThumbnailKey
         $"wad:{wadLength}:{wadWriteUtcTicks}:{compressedSize}:{uncompressedSize}";
 
     /// <summary>The key: 32 lower-case hex digits. The same inputs always give the same key; changing any one changes it.</summary>
+    /// <param name="gameDataIdentity">M819: the identity of the LTK GameData applied over the bins the picture reads (<c>GameDataOverlay.DocumentsFingerprint</c>), or null for a project that has none. It adds a line to the
+    /// key's text ONLY when given, so a project without GameData keeps every key - and every cached picture - it had.</param>
     public static string Compute(string appVersion, string state, string mapPath, string mapIdentity,
-        string materialsPath, string materialsIdentity, string shippingIdentity, string shaderCacheIdentity)
+        string materialsPath, string materialsIdentity, string shippingIdentity, string shaderCacheIdentity, string? gameDataIdentity = null)
     {
         var text = new StringBuilder()
             .Append("renderer:").Append(RendererVersion).Append('\n')
@@ -43,9 +45,10 @@ public static class MapThumbnailKey
             .Append("map:").Append(mapPath.ToLowerInvariant()).Append('|').Append(mapIdentity).Append('\n')
             .Append("materials:").Append(materialsPath.ToLowerInvariant()).Append('|').Append(materialsIdentity).Append('\n')
             .Append("shipping:").Append(shippingIdentity).Append('\n')
-            .Append("shadercache:").Append(shaderCacheIdentity)
-            .ToString();
-        var hash = XxHash128.Hash(Encoding.UTF8.GetBytes(text));
+            .Append("shadercache:").Append(shaderCacheIdentity);
+        if (gameDataIdentity is not null) text.Append('\n').Append("gamedata:").Append(gameDataIdentity);
+        var textual = text.ToString();
+        var hash = XxHash128.Hash(Encoding.UTF8.GetBytes(textual));
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }
