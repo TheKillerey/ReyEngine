@@ -7,10 +7,13 @@ namespace ReyEngine.Core.Meta;
 /// <summary>One property of a meta class, resolved to a single point in history.</summary>
 /// <param name="Hash">FNV-1a-32 of the property name.</param>
 /// <param name="Name">Empty when the hash is still uncracked upstream.</param>
-/// <param name="FieldType">The <c>ft</c> of the type tuple, e.g. "f32", "string", "struct", "container".</param>
-/// <param name="KeyType">The <c>kt</c>: element type of a container/option, or map key type. Empty if unused.</param>
-/// <param name="ValueType">The <c>vt</c>: map value type. Empty if unused.</param>
-/// <param name="KeyHash">The <c>kh</c>: for struct/embed/link, the hash of the referenced class. Empty if unused.</param>
+/// <param name="FieldType">Slot 0 of the dump's type tuple: the type's name, in PascalCase as the dump writes it ("F32", "Vec2", "String",
+/// "File", "List", "List2", "Map", "Option", "Pointer", "Embed", "Link", "Flag").</param>
+/// <param name="KeyType">Slot 1: a map's key kind, or a list's fixed size as a hex number ("0x7"). "0x0" when the type has neither; the dump's
+/// marker for an empty slot is the text "0x0", never an empty string.</param>
+/// <param name="ValueType">Slot 2: the kind of a list's or an option's items, or of a map's values. "0x0" when the type has none.</param>
+/// <param name="KeyHash">Slot 3: the hash of the class of an embed, a pointer or a link, or of the items of a container of them. "0x0" when the type has
+/// none, which <see cref="TryGetReferencedClass"/> reads as class 0.</param>
 /// <param name="Default">The authored default as raw JSON text, or null when the dump recorded none.</param>
 public readonly record struct MetaProperty(
     uint Hash, string Name, string FieldType, string KeyType, string ValueType, string KeyHash, string? Default)
@@ -55,7 +58,8 @@ public sealed class MetaClass
 /// The recurring "absence != zero" problem in the VFX work is exactly what the defaults answer.</para>
 ///
 /// <para><b>Everything is versioned by BUILD.</b> Each class and property carries a list of revisions with
-/// a <c>from</c> (inclusive) and optional <c>to</c> (exclusive; absent means "still current"). A query
+/// a <c>from</c> and optional <c>to</c>, both inclusive (<c>to</c> is the last build the revision describes;
+/// absent means "still current"). A query
 /// therefore has to name the build it is asking about, or accept <see cref="Latest"/>. Answering for the
 /// wrong build is how a tool ends up showing a field that the user's patch does not have.</para>
 ///
@@ -287,21 +291,20 @@ public sealed class MetaClassDatabase
             _classes.Count, props, ResolvedBuild, Latest));
     }
 
-    /// <summary>The revision covering <paramref name="build"/>: from &lt;= build &lt; to, with an absent
-    /// 'to' meaning still current. Null when the entity did not exist at that build.</summary>
+    /// <summary>The revision covering <paramref name="build"/>: from &lt;= build &lt;= to, with an absent
+    /// 'to' meaning still current. M817: 'to' is INCLUSIVE - the last build the revision describes, which is why a
+    /// revision with from == to covers exactly one build - and the first covering revision in file order wins, the
+    /// way LTK Manager reads the same file. The dump never overlaps a revision with its siblings, so the order only
+    /// matters for malformed input. Null when the entity did not exist at that build.</summary>
     private static JsonElement? PickRevision(JsonElement revisions, int build)
     {
-        JsonElement? best = null;
-        int bestFrom = int.MinValue;
         foreach (var rev in revisions.EnumerateArray())
         {
             int from = rev.TryGetProperty("from", out var f) && f.TryGetInt32(out int fi) ? fi : 0;
-            bool hasTo = rev.TryGetProperty("to", out var t) && t.TryGetInt32(out int ti);
-            int to = hasTo ? t.GetInt32() : int.MaxValue;
-            if (build < from || build >= to) continue;
-            if (from >= bestFrom) { bestFrom = from; best = rev; }
+            int to = rev.TryGetProperty("to", out var t) && t.TryGetInt32(out int ti) ? ti : int.MaxValue;
+            if (build >= from && build <= to) return rev;
         }
-        return best;
+        return null;
     }
 
     /// <summary>Parse the dump's hex hash strings ("0x1003c990"). Tolerates a missing 0x prefix.</summary>

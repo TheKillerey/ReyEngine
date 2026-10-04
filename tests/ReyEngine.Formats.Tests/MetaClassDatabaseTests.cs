@@ -44,12 +44,12 @@ public class MetaClassDatabaseTests
             },
             "0x000000dd": {
               "name": "removedField",
-              "revisions": [ { "from": 100, "to": 200, "type": ["u32", "", "", ""], "default": 7 } ]
+              "revisions": [ { "from": 100, "to": 100, "type": ["u32", "", "", ""], "default": 7 } ]
             },
             "0x000000ee": {
               "name": "retypedField",
               "revisions": [
-                { "from": 100, "to": 200, "type": ["u32", "", "", ""] },
+                { "from": 100, "to": 100, "type": ["u32", "", "", ""] },
                 { "from": 200, "type": ["f32", "", "", ""] }
               ]
             }
@@ -63,10 +63,50 @@ public class MetaClassDatabaseTests
     }
     """;
 
-    private static MetaClassDatabase Load(int? build = null)
+    /// <summary>The build ranges of the real dump, in miniature: 'to' is the LAST build a revision describes, so
+    /// one that stops before build 200 reads "to": 100, and a revision of one build has from == to.</summary>
+    private const string RangeFixture = """
+    {
+      "formatVersion": 1,
+      "latest": 300,
+      "versions": [ { "patch": "1", "build": 100 }, { "patch": "2", "build": 200 }, { "patch": "3", "build": 300 } ],
+      "classes": {
+        "0x00000010": {
+          "name": "Ranged",
+          "revisions": [ { "from": 100, "bases": [], "interface": false, "value": false } ],
+          "properties": {
+            "0x00000001": { "name": "toIsInclusive", "revisions": [ { "from": 100, "to": 200, "type": ["u32", "", "", ""] } ] },
+            "0x00000002": { "name": "oneBuildOnly", "revisions": [ { "from": 200, "to": 200, "type": ["u32", "", "", ""] } ] },
+            "0x00000003": { "name": "stillCurrent", "revisions": [ { "from": 200, "type": ["string", "", "", ""] } ] },
+            "0x00000004": {
+              "name": "overlapping",
+              "revisions": [
+                { "from": 100, "to": 300, "type": ["u32", "", "", ""] },
+                { "from": 150, "type": ["f32", "", "", ""] }
+              ]
+            }
+          }
+        },
+        "0x00000011": {
+          "name": "RetiredClass",
+          "revisions": [ { "from": 100, "to": 200, "bases": [], "interface": false, "value": false } ],
+          "properties": {}
+        },
+        "0x00000012": {
+          "name": "OneBuildClass",
+          "revisions": [ { "from": 200, "to": 200, "bases": [], "interface": false, "value": false } ],
+          "properties": {}
+        }
+      }
+    }
+    """;
+
+    private static MetaClassDatabase Load(int? build = null) => LoadJson(Fixture, build);
+
+    private static MetaClassDatabase LoadJson(string json, int? build)
     {
         string path = Path.Combine(Path.GetTempPath(), $"rey_meta_{System.Guid.NewGuid():N}.json");
-        File.WriteAllText(path, Fixture);
+        File.WriteAllText(path, json);
         try { return MetaClassDatabase.Load(path, build); }
         finally { File.Delete(path); }
     }
@@ -141,10 +181,68 @@ public class MetaClassDatabaseTests
     [Fact]
     public void RemovedPropertyIsAbsentAtLaterBuild()
     {
-        // 'to' is EXCLUSIVE: present at 100, gone at 200. Getting this backwards would show users fields
-        // their patch does not have.
+        // 'to' is INCLUSIVE, the last build the revision describes: the field read "to": 100 because the patch at
+        // 200 no longer has it. Getting this wrong either way shows users fields their patch does not have, or
+        // hides fields it does.
         Assert.True(Load(build: 100).TryGetProperty(0x00000002, 0x000000dd, out _));
         Assert.False(Load(build: 200).TryGetProperty(0x00000002, 0x000000dd, out _));
+    }
+
+    [Fact]
+    public void RevisionToIsInclusive()
+    {
+        var at200 = LoadJson(RangeFixture, 200);
+        var at201 = LoadJson(RangeFixture, 201);
+        Assert.False(LoadJson(RangeFixture, 99).TryGetProperty(0x00000010, 0x00000001, out _));
+        Assert.True(LoadJson(RangeFixture, 100).TryGetProperty(0x00000010, 0x00000001, out _));
+        Assert.True(at200.TryGetProperty(0x00000010, 0x00000001, out var last));   // the build the range ends on
+        Assert.Equal("u32", last.FieldType);
+        Assert.False(at201.TryGetProperty(0x00000010, 0x00000001, out _));
+    }
+
+    [Fact]
+    public void ClassRevisionToIsInclusive()
+    {
+        Assert.True(LoadJson(RangeFixture, 200).TryGetClass(0x00000011, out _));
+        Assert.False(LoadJson(RangeFixture, 201).TryGetClass(0x00000011, out _));
+        Assert.False(LoadJson(RangeFixture, 99).TryGetClass(0x00000011, out _));
+    }
+
+    [Fact]
+    public void RevisionOfOneBuildCoversExactlyThatBuild()
+    {
+        // The real dump holds 785 property and 234 class revisions with from == to; read as 'to' exclusive they
+        // are empty ranges and never match.
+        foreach (int build in new[] { 100, 199, 201, 300 })
+        {
+            Assert.False(LoadJson(RangeFixture, build).TryGetProperty(0x00000010, 0x00000002, out _), $"property at {build}");
+            Assert.False(LoadJson(RangeFixture, build).TryGetClass(0x00000012, out _), $"class at {build}");
+        }
+        var db = LoadJson(RangeFixture, 200);
+        Assert.True(db.TryGetProperty(0x00000010, 0x00000002, out _));
+        Assert.True(db.TryGetClass(0x00000012, out _));
+    }
+
+    [Fact]
+    public void RevisionWithoutToStaysCurrent()
+    {
+        foreach (int build in new[] { 200, 300, 9999999 })
+            Assert.True(LoadJson(RangeFixture, build).TryGetProperty(0x00000010, 0x00000003, out var p) && p.FieldType == "string", $"build {build}");
+        Assert.False(LoadJson(RangeFixture, 199).TryGetProperty(0x00000010, 0x00000003, out _));
+    }
+
+    [Fact]
+    public void FirstCoveringRevisionInFileOrderWins()
+    {
+        // The dump never overlaps its own revisions (checked across all 255 builds), so this pins how a
+        // malformed file reads: the first revision in the file that covers the build, not the one with the
+        // highest 'from'. LTK Manager reads it the same way.
+        Assert.True(LoadJson(RangeFixture, 120).TryGetProperty(0x00000010, 0x00000004, out var early));
+        Assert.Equal("u32", early.FieldType);
+        Assert.True(LoadJson(RangeFixture, 160).TryGetProperty(0x00000010, 0x00000004, out var overlap));
+        Assert.Equal("u32", overlap.FieldType);   // covered by both; the first one is u32
+        Assert.True(LoadJson(RangeFixture, 400).TryGetProperty(0x00000010, 0x00000004, out var late));
+        Assert.Equal("f32", late.FieldType);      // only the open-ended second revision reaches it
     }
 
     [Fact]
