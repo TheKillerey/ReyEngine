@@ -308,7 +308,7 @@ public sealed class D3D11MapParticles
             if (item.AttachBone is { Length: > 0 } bone
                 && _boneGlobals is { } bones && bones.TryGetValue(bone, out var bm))
             {
-                sim.SetWorldTransform(_boneModelWorld.IsIdentity ? bm : bm * _boneModelWorld);
+                sim.SetWorldTransform(VfxPlaybackSim.AttachmentTransform(item, bm, _boneModelWorld));
                 continue;
             }
 

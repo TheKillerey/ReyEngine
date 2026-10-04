@@ -304,14 +304,14 @@ public sealed class FocusSelectionTests(ITestOutputHelper output)
     [Fact]
     public void The_mesh_preview_window_moves_the_shared_camera_for_its_arena_focus_when_direct3d_11_is_drawing()
     {
-        // The arena puts the camera on the champion at the spawn and keeps it there while he walks, through MeshPreviewViewModel.FocusPoint.
+        // FocusPoint handles editor focus; Drive mode owns its gameplay camera follow.
         // The GL control applies that on its next render; with the window's Direct3D 11 toggle on it is hidden and never renders (measured in
         // the real window: the camera stayed at the origin for every FocusPoint). GL keeps the binding it has always had.
         string? dx11 = Source("src", "ReyEngine.App", "Views", "MeshPreviewWindow.Dx11.cs");
         string? xaml = Source("src", "ReyEngine.App", "Views", "MeshPreviewWindow.axaml");
         if (dx11 is null || xaml is null) { output.WriteLine("SKIPPED: sources not found"); return; }
 
-        Assert.Contains("else if (e.PropertyName is nameof(MeshPreviewViewModel.FocusPoint) && vm.UseDx11Preview && vm.FocusPoint is { } focus)\n                PreviewViewport.FocusOnPoint(focus);", dx11);
+        Assert.Contains("else if (e.PropertyName is nameof(MeshPreviewViewModel.FocusPoint) && !vm.ControlMode && vm.UseDx11Preview && vm.FocusPoint is { } focus)\n                PreviewViewport.FocusOnPoint(focus);", dx11);
         Assert.Contains("FocusPoint=\"{Binding FocusPoint}\"", xaml);      // the GL path is untouched
     }
 

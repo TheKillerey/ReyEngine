@@ -626,7 +626,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private System.Numerics.Vector3 AnchorFor(VfxSystemDefinition def, bool forceDummy = false) =>
         TargetDummyPosition is { } dummy && (forceDummy || IsTargetVfxName(def.Name))
             ? dummy
-            : System.Numerics.Vector3.Zero;
+            : CharacterPosition;
 
     private void ReplaySelectedOrClip()
     {
@@ -749,7 +749,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private List<VfxPlaybackItem> BuildEventBundle(Formats.Vfx.ChampionEvent ev)
     {
         var items = new List<VfxPlaybackItem>();
-        var dummy = TargetDummyPosition ?? new System.Numerics.Vector3(350, 0, 0);
+        var dummy = TargetDummyPosition ?? CharacterPosition + Forward() * 350f;
         var ability = SlotFor(ev);
         // The authored cast, in seconds. castFrame is in ANIMATION frames, so the clip's own rate decides
         // what it means; 0.15 s was a constant that matched no champion in particular.
@@ -780,6 +780,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 // M663: only the caster side. A missile is not bone-bound in game either - it leaves the
                 // hand and flies - and a target-side system belongs to whatever it hit.
                 AttachBone = bone,
+                PreserveCastDirection = bone is not null,
             };
         }
 
@@ -1260,8 +1261,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // M634: every stage, through the one builder.
         // M635: and aimed - at the dummy it faces the caster, at the caster it faces the dummy.
         var anchor = AnchorFor(def, PlaySelectedAtDummy);
-        var target = TargetDummyPosition ?? new System.Numerics.Vector3(350, 0, 0);
-        var placement = anchor != System.Numerics.Vector3.Zero
+        var target = TargetDummyPosition ?? CharacterPosition + Forward() * 350f;
+        var placement = TargetDummyPosition is not null && (PlaySelectedAtDummy || IsTargetVfxName(def.Name))
             ? VfxCastFrame.Toward(anchor, CharacterPosition, anchor)
             : VfxCastFrame.Toward(anchor, target, anchor);
 

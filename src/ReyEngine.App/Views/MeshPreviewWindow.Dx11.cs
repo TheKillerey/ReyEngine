@@ -127,6 +127,7 @@ public partial class MeshPreviewWindow
         int h = (int)(surface.Height * scale);
         if (w <= 0 || h <= 0) return;
         if (!EnsureArenaDx11Scene(vm)) return;
+        if (vm.ArenaViewport is null) _dx11.ApplySkybox(vm.Skybox);
 
         if (vm.Dx11SceneRevision != _dx11CommittedRevision)
         {

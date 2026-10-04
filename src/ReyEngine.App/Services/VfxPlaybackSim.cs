@@ -22,6 +22,20 @@ namespace ReyEngine.App.Services;
 /// </summary>
 public static class VfxPlaybackSim
 {
+    public static Matrix4x4 AttachmentTransform(VfxPlaybackItem item, Matrix4x4 bone, Matrix4x4 model)
+    {
+        var anchor = bone * model;
+        return item.PreserveCastDirection
+            ? VfxCastFrame.RotationOf(item.Transform) * Matrix4x4.CreateTranslation(anchor.Translation)
+            : anchor;
+    }
+
+    public static VfxPlayback Combine(VfxPlayback? map, VfxPlayback? character) => new(
+        (map?.Items ?? Array.Empty<VfxPlaybackItem>()).Select(item =>
+            map?.CullByCamera == false ? item with { SkipCameraCulling = true } : item).Concat(
+            (character?.Items ?? Array.Empty<VfxPlaybackItem>()).Select(item =>
+                character?.CullByCamera == false ? item with { SkipCameraCulling = true } : item)).ToArray(),
+        CullByCamera: true);
     /// <summary>Build the simulator for one placement, complete. Null when the system has no emitters at
     /// all, which the callers skip.</summary>
     public static VfxParticleSimulator? Create(VfxPlaybackItem item)
@@ -60,7 +74,7 @@ public static class VfxPlaybackSim
     /// </summary>
     public static bool IsActive(VfxPlaybackItem item, Vector3 mirroredCamPos, float maxDistanceSq,
         in Matrix4x4 viewProj) =>
-        IsActive(item.WorldPos, VfxCullBounds.Radius(item), mirroredCamPos, maxDistanceSq, viewProj);
+        item.SkipCameraCulling || IsActive(item.WorldPos, VfxCullBounds.Radius(item), mirroredCamPos, maxDistanceSq, viewProj);
 
     /// <summary>M787: the same gate for a SPHERE of <paramref name="radius"/> around the placement origin
     /// (<see cref="VfxCullBounds"/>), so a large system stays on while any of it can be on screen. Radius 0 is

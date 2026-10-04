@@ -57,6 +57,11 @@ public sealed record VfxPlaybackItem(
     /// <summary>M86: when set, the viewport re-anchors this system to the named skeleton bone every
     /// skinned frame — clip particle events ride their bone like in-game.</summary>
     public string? AttachBone { get; init; }
+    /// <summary>Cast systems follow their anchor's position while retaining the aimed world rotation.
+    /// Authored bone effects retain the bone's complete transform.</summary>
+    public bool PreserveCastDirection { get; init; }
+    /// <summary>Retain a character preview's playback without culling when combined with a culled map.</summary>
+    public bool SkipCameraCulling { get; init; }
 
     /// <summary>M712: the random stream this playing of the system runs on, or null for the one derived
     /// from where it stands.

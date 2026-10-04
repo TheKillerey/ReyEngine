@@ -600,17 +600,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
     /// set, and a spec that somehow carries none clears the sky rather than leaving the previous one up.</summary>
     private void ApplyDx11Skybox(Services.SkyboxSpec? spec)
     {
-        if (_dx11 is null) return;
-        var r = _dx11.Renderer;
-        if (spec is null) { r.ClearSky(); return; }
-        // Faces are +X -X +Y -Y +Z -Z: the order the GL path binds them in (TextureCubeMapPositiveX + f)
-        // and the order D3D11 numbers its cube slices, so no remapping is needed or wanted.
-        if (spec.Cubemap is { } cm) r.SetSkyCubemap(cm.Faces, cm.FaceSize);
-        else if (spec.Equirect is { } eq) r.SetSkyEquirect(eq.Rgba, eq.Width, eq.Height);
-        else if (spec.MeshPositions is { } mp && spec.MeshIndices is { } mi)
-            r.SetSkyMesh(mp, spec.MeshUvs ?? Array.Empty<float>(), mi,
-                spec.MeshTexture?.Rgba, spec.MeshTexture?.Width ?? 0, spec.MeshTexture?.Height ?? 0);
-        else r.ClearSky();
+        _dx11?.ApplySkybox(spec);
     }
 
     // ---- M81: About + updates ----

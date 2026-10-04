@@ -114,6 +114,7 @@ public partial class MeshPreviewWindow
         surface.CullBackFaces = map.CullBackfaces;
         surface.AnimateTime = map.AnimationsPlaying;
         surface.Backdrop = null;
+        surface.ApplySkybox(map.CurrentSkybox);
         surface.ShaderCache = map.Dx11ShaderCache;
         surface.PreparePropScene = map.PreparePropDx11Scene;
         surface.PropLightingAt = map.PropLightingAt;
@@ -134,11 +135,12 @@ public partial class MeshPreviewWindow
         if (!ReferenceEquals(_arenaVfxSource, map.CurrentParticlePlayback) || !ReferenceEquals(_arenaSpellSource, vm.Playback))
         {
             _arenaVfxSource = map.CurrentParticlePlayback; _arenaSpellSource = vm.Playback;
-            _arenaCombinedVfx = new VfxPlayback((map.CurrentParticlePlayback?.Items ?? Array.Empty<VfxPlaybackItem>())
-                .Concat(vm.Playback?.Items ?? Array.Empty<VfxPlaybackItem>()).ToArray(), CullByCamera: true);
+            _arenaCombinedVfx = VfxPlaybackSim.Combine(map.CurrentParticlePlayback, vm.Playback);
         }
         if (!vm.UseDx11Preview)
         {
+            map.TickGrassTransition();
+            PreviewViewport.Skybox = map.CurrentSkybox;
             PreviewViewport.PropMeshes = _arenaCombinedProps;
             PreviewViewport.ParticlePlayback = _arenaCombinedVfx;
             PreviewViewport.PlayPropAnimations = map.PlayPropAnimations;

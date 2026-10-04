@@ -73,6 +73,38 @@ public sealed class SpellVariantPreviewTests
     }
 
     [Fact]
+    public void AatroxQVariantsKeepTheirAimWhenFollowingACasterBone()
+    {
+        if (Read("Aatrox") is not { } skin) return;
+        var vm = new MeshPreviewViewModel
+        { CharacterPosition = new Vector3(7500, 80, 7500), CharacterYaw = MathF.PI / 2 };
+        vm.SetVfx(skin.Systems, skin.Resources);
+        vm.SetActions(CharacterActions.Build(Array.Empty<string>(), skin.Clips));
+        vm.SetAbilities(skin.Abilities);
+        vm.SelectedCasterBone = "root";
+        vm.ControlMode = true;
+        try
+        {
+            for (int cast = 1; cast <= 3; cast++)
+            {
+                vm.CastAbility(0, vm.CharacterPosition + Vector3.UnitX * 250);
+                Assert.Equal("Q" + cast, vm.SelectedEvent?.Name);
+                var indicator = Assert.Single(vm.Playback!.Items,
+                    i => i.System.Name == $"Aatrox_Base_Q_Indicator_0{cast}");
+                Assert.Equal("root", indicator.AttachBone);
+                Assert.True(indicator.PreserveCastDirection);
+                Assert.Equal(vm.CharacterPosition, indicator.WorldPos);
+                var attached = ReyEngine.App.Services.VfxPlaybackSim.AttachmentTransform(
+                    indicator, Matrix4x4.CreateRotationY(0.8f), vm.ModelWorld);
+                Assert.True(Vector3.Distance(Vector3.UnitX, VfxCastFrame.WorldForward(attached)) < 0.0001f);
+                Assert.True(Vector3.Distance(Vector3.TransformNormal(Vector3.UnitZ, vm.ModelWorld),
+                    VfxCastFrame.WorldForward(attached)) < 0.0001f);
+            }
+        }
+        finally { vm.StopControl(); }
+    }
+
+    [Fact]
     public void BlitzcrankSpellRecordSelectsOneOutboundMissile()
     {
         if (Read("Blitzcrank") is not { } skin) return;

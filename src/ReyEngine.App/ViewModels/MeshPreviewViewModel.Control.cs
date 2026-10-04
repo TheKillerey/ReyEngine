@@ -35,7 +35,7 @@ public sealed partial class MeshPreviewViewModel
     [ObservableProperty] private bool _controlMode;
     [ObservableProperty] private Vector3 _characterPosition;
     [ObservableProperty] private double _characterYaw;
-    public double RenderedCharacterYaw => CharacterYaw + (ControlMode ? Math.PI : 0);
+    public double RenderedCharacterYaw => CharacterYaw;
     partial void OnCharacterYawChanged(double value) => OnPropertyChanged(nameof(RenderedCharacterYaw));
     [ObservableProperty] private string _controlStatus = "";
 

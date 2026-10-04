@@ -36,6 +36,7 @@ public sealed partial class MeshPreviewViewModel
         Dx11Scene = scene;
         Dx11SceneRevision++;
         Dx11Status = status;
+        if (UseDx11Preview) EnsureDx11Status();
         // M647: the state switch is built from the skin's own driver conditions, which the scene reports.
         SetConditions(scene?.Conditions ?? Array.Empty<ReyEngine.Formats.Materials.MaterialDriverCondition>(),
             scene?.LongestTransitionSeconds ?? 0f, scene?.TransitionByCondition);
@@ -135,6 +136,11 @@ public sealed partial class MeshPreviewViewModel
         // M620: only when nothing more specific has been said. This used to overwrite unconditionally,
         // so the real reason - which the host had already put here - was replaced by a guess at it, and
         // "the shader cache never opened" read as "this is not a character".
+        EnsureDx11Status();
+    }
+
+    private void EnsureDx11Status()
+    {
         if (Dx11Scene is null && string.IsNullOrWhiteSpace(Dx11Status))
             Dx11Status = "No D3D11 scene for this subject - it resolved no materials, or it is not a character.";
     }

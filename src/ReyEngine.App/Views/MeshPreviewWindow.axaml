@@ -539,6 +539,12 @@
                       </StackPanel>
                       <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
                       <StackPanel DataContext="{Binding ArenaViewport}" Spacing="4">
+                        <CheckBox Content="Props" IsChecked="{Binding ShowPropMeshes}" />
+                        <CheckBox Content="Prop animations" IsChecked="{Binding PlayPropAnimations}" />
+                        <CheckBox Content="Map particles" IsChecked="{Binding PlayAllParticles}" />
+                        <CheckBox Content="Fog" IsChecked="{Binding ShowFog}" />
+                        <CheckBox Content="Render-region meshes" IsChecked="{Binding RenderRegionsEnabled}" />
+                        <ComboBox ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}" />
                         <TextBlock Classes="cardTitle" Text="VISIBILITY LAYERS" IsVisible="{Binding HasVisibilityAxes}" />
                         <ItemsControl ItemsSource="{Binding VisibilityAxes}">
                           <ItemsControl.ItemTemplate>

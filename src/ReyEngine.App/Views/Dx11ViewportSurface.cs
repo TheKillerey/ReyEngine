@@ -91,6 +91,19 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// expected to SHOW this - a silent failed frame leaves a stale image on screen that looks live.</summary>
     public string? LastError { get; private set; }
 
+    private SkyboxSpec? _skybox;
+    public void ApplySkybox(SkyboxSpec? spec)
+    {
+        if (ReferenceEquals(spec, _skybox)) return;
+        _skybox = spec;
+        if (spec?.Cubemap is { } cm) _renderer.SetSkyCubemap(cm.Faces, cm.FaceSize);
+        else if (spec?.Equirect is { } eq) _renderer.SetSkyEquirect(eq.Rgba, eq.Width, eq.Height);
+        else if (spec?.MeshPositions is { } mp && spec.MeshIndices is { } mi)
+            _renderer.SetSkyMesh(mp, spec.MeshUvs ?? Array.Empty<float>(), mi,
+                spec.MeshTexture?.Rgba, spec.MeshTexture?.Width ?? 0, spec.MeshTexture?.Height ?? 0);
+        else _renderer.ClearSky();
+    }
+
     /// <summary>M249: what happened the last time a scene was built, and whether one is loaded at all.</summary>
     public string SceneReport { get; set; } = "";
     public bool HasScene { get; set; }

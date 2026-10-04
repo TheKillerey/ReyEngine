@@ -2242,7 +2242,7 @@ public sealed class ViewportControl : OpenGlControlBase
                     _lastBoneGlobals = bones;   // M726: the beam loop reads these too
                     foreach (var (item, sim) in _particleSimCache)
                         if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
-                            sim.SetWorldTransform(modelM.IsIdentity ? bm : bm * modelM);
+                            sim.SetWorldTransform(Services.VfxPlaybackSim.AttachmentTransform(item, bm, modelM));
                 }
                 _wasAnimating = true;
             }
@@ -2323,7 +2323,7 @@ public sealed class ViewportControl : OpenGlControlBase
         var modelM = ModelWorldTransform;
         foreach (var (item, sim) in _particleSimCache)
             if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
-                sim.SetWorldTransform(modelM.IsIdentity ? bm : bm * modelM);
+                sim.SetWorldTransform(Services.VfxPlaybackSim.AttachmentTransform(item, bm, modelM));
     }
 
     /// <summary>M726: this frame's bone transforms - animated while a clip plays, bind pose otherwise.

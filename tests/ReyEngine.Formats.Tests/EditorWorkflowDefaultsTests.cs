@@ -62,9 +62,9 @@ public sealed class EditorWorkflowDefaultsTests
         preview.ControlMode = true;
         try
         {
-            Assert.Equal(Math.PI, preview.RenderedCharacterYaw);
+            Assert.Equal(0, preview.RenderedCharacterYaw);
             Assert.Equal(preview.CharacterPosition, preview.ModelWorld.Translation);
-            Assert.True(Vector3.TransformNormal(Vector3.UnitZ, preview.ModelWorld).Z < 0);
+            Assert.True(Vector3.TransformNormal(Vector3.UnitZ, preview.ModelWorld).Z > 0);
             preview.OrderMove(new Vector3(500, 10, 500));
             preview.StopMovement();
             Assert.Equal(new Vector3(30, 10, 50), preview.CharacterPosition);
