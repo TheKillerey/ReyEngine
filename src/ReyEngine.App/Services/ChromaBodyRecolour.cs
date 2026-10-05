@@ -13,7 +13,7 @@ public sealed record ChromaTarget(ulong Hash, string Path);
 /// M825 adds, optionally, the colour parameters the recolour owns and the transform they were written with (null and empty for a
 /// recipe saved before, which therefore loads exactly as it did).</summary>
 public sealed record ChromaSavedRecipe(ColorTransform Transform, IReadOnlyList<ChromaTarget> Targets,
-    IReadOnlyList<ChromaParameterRef>? Parameters = null, ColorTransform? ParameterTransform = null)
+    IReadOnlyList<ChromaParameterRef>? Parameters = null, ColorTransform? ParameterTransform = null, ChromaSavedEffects? Effects = null)
 {
     public IReadOnlyList<ChromaParameterRef> SavedParameters => Parameters ?? Array.Empty<ChromaParameterRef>();
 }

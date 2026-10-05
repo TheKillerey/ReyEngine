@@ -258,7 +258,21 @@ public sealed partial class MainWindowViewModel
         if (_mounts is null || !Project.IsFolderProject) return null;
         if (_mounts.TryGet(entry.PathHash, out var served) && served.Source.Kind != AssetSourceKind.RiotReference) return null;   // the project has its own copy
         if (_overrides.Has(entry.PathHash)) return null;
-        if (!TryPlaceInProjectFolder(entry, riot, out string placed)) return null;   // not placeable (an unnamed chunk): the override store takes it
+        string placed;
+        try
+        {
+            // M826: a dependency bin can carry a name no file can have - Ahri's Multi_Skins bin is 430 characters, past the 255 a file name may hold. It is placed as the
+            // loose <hash>.bin at the WAD folder's root, which the packer reads as that chunk (the form an unnamed texture takes), and which the mounts serve like any project file.
+            // (An override would not do: Build Package and .fantome pack a folder project's FILES, and an override is not one.)
+            bool fileCannotHaveThatName = entry.Path.Replace('\\', '/').Split('/').Any(segment => segment.Length > 250);
+            if (fileCannotHaveThatName || !TryPlaceInProjectFolder(entry, riot, out placed))
+                if (!TryPlaceByHash(entry, riot, out placed)) return null;
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            _log.Info("Chroma", $"{entry.DisplayName} could not be copied into the project under its name ({ex.Message.TrimEnd('.')}): it is placed under its hash.");
+            if (!TryPlaceByHash(entry, riot, out placed)) return null;
+        }
         Project.IsDirty = true;
         _overrides.SaveTo(Project);
         if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
@@ -266,6 +280,22 @@ public sealed partial class MainWindowViewModel
         BuildProjectTree();
         _log.Info("Chroma", $"Copied {entry.DisplayName} into the project ({placed}) before changing its colour parameters.");
         return placed;
+    }
+
+    /// <summary>The loose <c>&lt;hash&gt;.bin</c> form of Copy To Project at the champion's WAD folder: for a chunk whose path cannot be a file name.</summary>
+    private bool TryPlaceByHash(WadAssetEntry entry, byte[] bytes, out string placedRelative)
+    {
+        placedRelative = "";
+        if (!Project.IsFolderProject || Project.RootPath is null) return false;
+        string folderName = RiotWadFolderName(entry);
+        if (!AssetPathSafety.IsSafeFileName(folderName)) return false;
+        string fileName = $"{entry.PathHash:x16}.bin";
+        if (!AssetPathSafety.TryCombineUnder(Path.Combine(Project.RootPath, folderName), fileName, out string dest)) return false;
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+        File.WriteAllBytes(dest, bytes);
+        if (!Project.ProjectFolders.Contains(folderName, StringComparer.OrdinalIgnoreCase)) Project.ProjectFolders.Add(folderName);
+        placedRelative = $"{folderName}/{fileName}";
+        return true;
     }
 
     /// <summary>The recipe gave its last parameter back: the copy of the skin bin the recolour placed in the project is removed again - if it is still Riot's data

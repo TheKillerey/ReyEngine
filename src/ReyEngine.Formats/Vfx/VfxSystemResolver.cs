@@ -324,6 +324,16 @@ public static class VfxSystemResolver
         return map;
     }
 
+    /// <summary>M826: the playback model of ONE system object of a tree already in memory - what <see cref="ExtractAll"/> makes of it. The Chroma Studio's live
+    /// preview edits a working copy of the tree and re-reads just the systems it touched, so the preview is exactly what saving the tree would play. Null for an
+    /// object that is not a system or cannot be read.</summary>
+    public static VfxSystemDefinition? ParseSystemObject(BinTreeObject o)
+    {
+        if (o.ClassHash != SystemClass) return null;
+        try { return ParseSystem(o); }
+        catch { return null; }
+    }
+
     private static VfxSystemDefinition? ParseSystem(BinTreeObject o)
     {
         string name = GetString(o.Properties, F_particleName) ?? $"0x{o.PathHash:x8}";

@@ -6298,6 +6298,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             record.Strength = adjustment.Strength;
             record.Transform = null;      // M824: this record is the Recolor Textures tool's now, not the Chroma Studio's
             record.ChromaSkin = null;
+            record.ChromaPart = null;     // M826
             record.WadFolders = null;
         }
         _pendingSnapshots.Clear();

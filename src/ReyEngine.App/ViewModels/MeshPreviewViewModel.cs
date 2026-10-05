@@ -1233,7 +1233,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// the ground along the same world axis whatever he was aiming at. See <see cref="VfxCastFrame"/> for
     /// which local axis the data points at the target, and the evidence.</summary>
     private VfxPlaybackItem BuildItem(VfxSystemDefinition def, System.Numerics.Matrix4x4 placement, int depth = 0)
-        => new(def, placement,
+        => RecolourItem(new(def, placement,
             ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count],
             ResolveMeshes?.Invoke(def),
             EmitterMultTextures: ResolveMultTextures?.Invoke(def),
@@ -1243,12 +1243,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             EmitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
             EmitterChildren: ResolveChildren(def, depth),
             EmitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def))
-            { EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def) };   // M754
+            { EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def) });   // M754; M826: through the effects recolour the card shows, if any
 
     public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
         IReadOnlyDictionary<uint, uint>? resourceMap = null)
     {
         _vfxDefs = systems;
+        SetVfxBaseDefinitions(systems);   // M826: the effects recolour's preview starts from these
         _vfxResourceMap = resourceMap ?? new Dictionary<uint, uint>();
         VfxSystems.Clear();
         foreach (var s in System.Linq.Enumerable.OrderBy(systems.Values, x => x.Name, StringComparer.OrdinalIgnoreCase))

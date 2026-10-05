@@ -137,9 +137,11 @@ public sealed partial class MeshPreviewViewModel
     [ObservableProperty] private bool _hasChromaParameters;
 
     /// <summary>The sliders and the buttons are usable: the skin has a body texture or a colour parameter the recolour can act on.</summary>
-    public bool HasChromaRecolourControls => HasChromaTextures || HasChromaParameters;
+    public bool HasChromaRecolourControls => HasChromaTextures || HasChromaParameters || HasChromaEffects || HasChromaEffectTextures;
     partial void OnHasChromaParametersChanged(bool value) => OnPropertyChanged(nameof(HasChromaRecolourControls));
     partial void OnHasChromaTexturesChanged(bool value) => OnPropertyChanged(nameof(HasChromaRecolourControls));
+    partial void OnHasChromaEffectsChanged(bool value) => OnPropertyChanged(nameof(HasChromaRecolourControls));   // M826
+    partial void OnHasChromaEffectTexturesChanged(bool value) => OnPropertyChanged(nameof(HasChromaRecolourControls));
 
     /// <summary>Why the parameter list is empty or short, when the host said so ("Riot's original skin bin cannot be read..."). Empty otherwise.</summary>
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasChromaParameterProblem))] private string _chromaParameterProblem = "";
@@ -209,7 +211,7 @@ public sealed partial class MeshPreviewViewModel
             if (snapshot is null) return;
 
             // a recipe is saved for this skin (textures or parameters): its parameters are the ones on; otherwise every colour the recolour may act on
-            bool recipe = _chromaSavedHashes.Count > 0 || _chromaSavedParamKeys.Count > 0;
+            bool recipe = HasRecipeAnywhere;   // M826: an effects recipe is a recipe too
             // a row is made with its switch already set (no change event), so the textures' restoring guard is not needed - and it is shared with the
             // texture classification, which may be finishing on another thread when nothing marshals the continuations (a test)
             foreach (var info in snapshot.Parameters)

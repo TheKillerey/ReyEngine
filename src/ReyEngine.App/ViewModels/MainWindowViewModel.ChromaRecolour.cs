@@ -36,6 +36,8 @@ public sealed partial class MainWindowViewModel
         MeshPreview.AcquireChromaReaders = () => AcquireReaderLease(_mounts, _archive);
         MeshPreview.IsChromaProjectEdited = IsChromaProjectEdited;
         WireChromaParameters();   // M825: the skin bin's colour parameters, saved through the bin save path
+        WireChromaEffects();      // M826: the colour values and textures of the skin's effects
+        MeshPreview.ReadChromaBin = path => { try { return ReadAsset(HashAlgorithms.WadPath(path)); } catch { return null; } };
     }
 
     /// <summary>The pristine original of a body texture, read on a worker. The caller holds the readers' lease
@@ -73,13 +75,14 @@ public sealed partial class MainWindowViewModel
     private ChromaSavedRecipe? ReadChromaSavedRecipe(string skinBin)
     {
         var mine = Project.TextureRecolors
-            .Where(r => r.Transform is not null && string.Equals(r.ChromaSkin, skinBin, StringComparison.OrdinalIgnoreCase))
+            .Where(r => r.Transform is not null && r.ChromaPart is null && string.Equals(r.ChromaSkin, skinBin, StringComparison.OrdinalIgnoreCase))   // M826: the body's textures; the effects' carry a part
             .ToList();
         var parameters = ChromaParameterRecordOf(skinBin);   // M825
-        if (mine.Count == 0 && parameters is null) return null;
-        return new ChromaSavedRecipe(mine.Count > 0 ? mine[0].Transform! : parameters!.Transform,
+        var effects = ReadChromaSavedEffects(skinBin);        // M826
+        if (mine.Count == 0 && parameters is null && effects is null) return null;
+        return new ChromaSavedRecipe(mine.Count > 0 ? mine[0].Transform! : parameters?.Transform ?? effects!.Transform,
             mine.Select(r => new ChromaTarget(r.PathHash, r.AssetPath)).ToList(),
-            parameters?.Parameters.ToList(), parameters?.Transform);
+            parameters?.Parameters.ToList(), parameters?.Transform, effects);
     }
 
     /// <summary>
@@ -87,15 +90,21 @@ public sealed partial class MainWindowViewModel
     /// project; the textures of this skin's earlier recipe that are not in it any more put back to Riot's; the records; then the
     /// project file and the mounts, so the next read - the preview's scene, an export - sees the files.
     /// </summary>
-    private async Task<ChromaSaveResult> SaveChromaRecolourAsync(string skinBin, ColorTransform transform,
-        IReadOnlyList<ChromaTarget> targets, IReadOnlyList<ChromaTarget> stale)
+    private Task<ChromaSaveResult> SaveChromaRecolourAsync(string skinBin, ColorTransform transform,
+        IReadOnlyList<ChromaTarget> targets, IReadOnlyList<ChromaTarget> stale) =>
+        SaveChromaTexturesCoreAsync(skinBin, transform, targets, stale, part: null);
+
+    /// <param name="part">null for the body's textures; <see cref="TextureRecolorRecord.EffectsPart"/> (M826) for the textures the skin's particle systems draw with: the same
+    /// pipeline, the same files and records, told apart by the record's part.</param>
+    private async Task<ChromaSaveResult> SaveChromaTexturesCoreAsync(string skinBin, ColorTransform transform,
+        IReadOnlyList<ChromaTarget> targets, IReadOnlyList<ChromaTarget> stale, string? part)
     {
         if (!await EnsureProjectSavedAsync())
             throw new InvalidOperationException("The project has to be saved before a recolour can be written into it.");
         var service = MakeChromaRecolorService()
             ?? throw new InvalidOperationException("This project has nowhere to write a recoloured texture (no project folder and no overrides folder).");
 
-        int reverted = stale.Count > 0 ? RevertChromaCore(skinBin, stale) : 0;
+        int reverted = stale.Count > 0 ? RevertChromaPartCore(skinBin, stale, part) : 0;
 
         RecolorRunResult run;
         if (targets.Count == 0 || transform.IsIdentity)
@@ -109,17 +118,18 @@ public sealed partial class MainWindowViewModel
 
         // back on the UI thread: the records, then the project
         var written = run.WrittenTargets;
-        PersistChromaRecords(skinBin, transform, written);
+        if (part is null) PersistChromaRecords(skinBin, transform, written);
+        else PersistChromaRecordsCore(skinBin, transform, written, part);
 
         // a texture this transform leaves exactly as it was needs no file: one an earlier recipe wrote goes back to Riot's
         var skipped = run.SkippedTargets ?? Array.Empty<RecolorTarget>();
-        reverted += RevertChromaCore(skinBin, skipped.Select(t => new ChromaTarget(t.PathHash, t.AssetPath)).ToList());
+        reverted += RevertChromaPartCore(skinBin, skipped.Select(t => new ChromaTarget(t.PathHash, t.AssetPath)).ToList(), part);
 
         if (written.Count > 0 || reverted > 0) FinishChromaProject();   // nothing written and nothing put back: nothing for the project file or the mounts to learn
 
         var result = new ChromaSaveResult(run.Written, run.Skipped, run.Failed, reverted,
             written.Select(t => t.PathHash).ToList(), written.Concat(skipped).Select(t => t.PathHash).Distinct().ToList(), run.Notes);
-        var line = $"Body recolour of {skinBin}: {result.Summary} ({run.BytesWritten / 1048576.0:F1} MB).";
+        var line = $"{(part is null ? "Body" : "Effect texture")} recolour of {skinBin}: {result.Summary} ({run.BytesWritten / 1048576.0:F1} MB).";
         if (run.Failed > 0 || run.MissingSources > 0) _log.Error("Chroma", line + (run.Notes.Count > 0 ? " " + run.Notes[0] : ""));
         else _log.Success("Chroma", line);
         return result;
@@ -222,7 +232,10 @@ public sealed partial class MainWindowViewModel
 
     /// <summary>One record per recoloured chunk, carrying the transform and the skin. A record the Recolor Textures tool made for
     /// the same chunk is taken over (its M171 fields go back to neutral: they describe an edit that no longer stands).</summary>
-    private void PersistChromaRecords(string skinBin, ColorTransform transform, IReadOnlyList<RecolorTarget> written)
+    private void PersistChromaRecords(string skinBin, ColorTransform transform, IReadOnlyList<RecolorTarget> written) =>
+        PersistChromaRecordsCore(skinBin, transform, written, null);
+
+    private void PersistChromaRecordsCore(string skinBin, ColorTransform transform, IReadOnlyList<RecolorTarget> written, string? part)
     {
         foreach (var t in written)
         {
@@ -244,6 +257,7 @@ public sealed partial class MainWindowViewModel
             record.TintR = 1f; record.TintG = 1f; record.TintB = 1f; record.Strength = 1f;
             record.Transform = transform;
             record.ChromaSkin = skinBin;
+            record.ChromaPart = part;
             record.WadFolders = _pendingChromaFolders.TryGetValue(t.PathHash, out var wrote) && wrote.Count > 1 ? wrote : null;
         }
         _pendingChromaFolders.Clear();
@@ -270,13 +284,15 @@ public sealed partial class MainWindowViewModel
 
     /// <summary>Put textures back to Riot's - the ones this skin's recipe wrote, and only those: a chunk another skin's recipe (or the
     /// Recolor Textures tool) has taken over since is not this skin's to undo. Returns how many records went.</summary>
-    private int RevertChromaCore(string skinBin, IReadOnlyList<ChromaTarget> targets)
+    private int RevertChromaCore(string skinBin, IReadOnlyList<ChromaTarget> targets) => RevertChromaPartCore(skinBin, targets, null);
+
+    private int RevertChromaPartCore(string skinBin, IReadOnlyList<ChromaTarget> targets, string? part)
     {
         var mine = new List<RecolorTarget>();
         foreach (var t in targets)
         {
             var record = Project.TextureRecolors.FirstOrDefault(r => r.PathHash == t.Hash);
-            if (record?.Transform is null || !string.Equals(record.ChromaSkin, skinBin, StringComparison.OrdinalIgnoreCase)) continue;
+            if (record?.Transform is null || !string.Equals(record.ChromaSkin, skinBin, StringComparison.OrdinalIgnoreCase) || record.ChromaPart != part) continue;
             string assetPath = record.AssetPath.Length > 0 ? record.AssetPath : t.Path;
             mine.Add(new RecolorTarget(t.Hash, assetPath));
             // the copies in the other WADs that hold the chunk (the core removes the one in the folder it works out from the mounts)

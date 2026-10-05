@@ -136,6 +136,11 @@ public sealed class ReyProject
     /// recoloured a parameter writes no new key and an older build reads the file as it always did.</summary>
     public List<ChromaParameterRecord>? ChromaParameterRecolors { get; set; }
 
+    /// <summary>M826: the Chroma Studio's recolour of a skin's EFFECTS - the colour values of its particle systems (birthColor, colour over life, linger and
+    /// fresnel colours), one record per skin bin. Null until a skin has one and back to null with the last revert, so an older file has no new key. The effect
+    /// textures of the same recipe are ordinary <see cref="TextureRecolors"/> records marked <see cref="TextureRecolorRecord.ChromaPart"/> = "effects".</summary>
+    public List<ChromaEffectRecord>? ChromaEffectRecolors { get; set; }
+
     /// <summary>M287: per-map lighting the USER authored - sun/sky, the baked-light scale, the Light.dat
     /// fit sliders, and the point-light table itself. Keyed by mapgeo, because two maps in one project
     /// have nothing to say to each other about lighting.
@@ -317,6 +322,13 @@ public sealed class TextureRecolorRecord
     /// holder's folder, because the game reads whichever copy it mounts first; Revert needs the list to take them all out. Null for a
     /// record the Recolor Textures tool made, and for a Chroma Studio record that wrote one folder.</summary>
     public List<string>? WadFolders { get; set; }
+
+    /// <summary>M826: which half of a skin's recolour made this record - "effects" for a texture one of the skin's particle systems draws with. Null (and not
+    /// written) for the body's textures and for every record made before M826, which therefore read exactly as they did.</summary>
+    public string? ChromaPart { get; set; }
+
+    /// <summary>The value of <see cref="ChromaPart"/> for an effect texture.</summary>
+    public const string EffectsPart = "effects";
 }
 
 /// <summary>M825: which colour parameters of one skin bin the Chroma Studio recoloured, and with what. The VALUES are not stored: each is
@@ -347,6 +359,113 @@ public sealed class ChromaParameterRef
     public string MaterialName { get; set; } = "";
     public string Name { get; set; } = "";
     public int Occurrence { get; set; }
+}
+
+/// <summary>M826: which effect colour fields of one skin the Chroma Studio recoloured, and with what. The VALUES are not stored: each is re-derived from Riot's
+/// untouched bin on every save, so this is only the recipe - the transform the sliders made and the fields it owns (by system, emitter and field, never by value).
+/// A field in the list is the recolour's to rewrite and to put back to Riot's on Revert; one that is not is never touched.
+///
+/// <para>Stored grouped by system, a field as <c>"emitter:birthColor"</c>: a skin's effects own over a thousand colour fields and a flat list of structs would make project.json
+/// half a megabyte. <see cref="Colors"/> is the flat view the editor works with.</para></summary>
+public sealed class ChromaEffectRecord
+{
+    /// <summary>The skin bin (<c>data/characters/lillia/skins/skin49.bin</c>) the recolour belongs to.</summary>
+    public string ChromaSkin { get; set; } = "";
+
+    /// <summary>The M813 colour transform the sliders made (the full one: the hue-only form the textures and the non-carrier factors take is derived from it).</summary>
+    public ColorTransform Transform { get; set; } = new();
+
+    /// <summary>The systems whose colour fields the recolour owns.</summary>
+    public List<ChromaEffectSystemRef> Systems { get; set; } = new();
+
+    /// <summary>The same fields as a flat list (not stored). Setting it regroups them by system.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<ChromaEffectColorRef> Colors
+    {
+        get => Systems.SelectMany(s => s.Fields.Select(f => ChromaEffectColorRef.From(s, f))).ToList();
+        set
+        {
+            var grouped = new List<ChromaEffectSystemRef>();
+            foreach (var group in value.GroupBy(c => (c.System, c.Bin)))
+            {
+                var names = new Dictionary<int, string>();
+                foreach (var c in group) if (c.EmitterName.Length > 0) names.TryAdd(c.Emitter, c.EmitterName);
+                grouped.Add(new ChromaEffectSystemRef
+                {
+                    System = group.Key.System, Bin = group.Key.Bin, Name = group.First().SystemName,
+                    Fields = group.Select(c => $"{c.Emitter}:{c.Field}").ToList(),
+                    EmitterNames = names.Count > 0 ? names : null,
+                });
+            }
+            Systems = grouped;
+        }
+    }
+
+    /// <summary>The project files (relative to the project folder) the recolour COPIED into the project because it did not hold the bin yet, with the WAD path of the
+    /// bin each is a copy of. Removed again when the last field of that bin is given back, but only while the file is still Riot's data.</summary>
+    public List<ChromaPlacedBin>? PlacedBins { get; set; }
+
+    /// <summary>Only while a save that spans several bins was interrupted: the transform a bin's colours were last written with, for a bin that is already at the new transform while
+    /// <see cref="Transform"/> is still the old one. Absent (the normal state) means every bin is at <see cref="Transform"/>. Cleared by the save that completes.</summary>
+    public Dictionary<string, ColorTransform>? BinTransforms { get; set; }
+
+    /// <summary>The transform the colours of <paramref name="bin"/> were written with.</summary>
+    public ColorTransform TransformOf(string bin)
+    {
+        if (BinTransforms is not null)
+            foreach (var (key, value) in BinTransforms)
+                if (string.Equals(key, bin, StringComparison.OrdinalIgnoreCase)) return value;
+        return Transform;
+    }
+}
+
+/// <summary>M826: the fields of one system a <see cref="ChromaEffectRecord"/> owns: the system's path hash, the WAD path of the bin it lives in, its name (for people reading
+/// project.json) and each field as <c>emitter:field</c> - the emitter's ordinal (emitter containers in ascending field-hash order) and the bin field as the colour reader spells it.</summary>
+public sealed class ChromaEffectSystemRef
+{
+    public uint System { get; set; }
+    public string Bin { get; set; } = "";
+    public string Name { get; set; } = "";
+    public List<string> Fields { get; set; } = new();
+
+    /// <summary>The names of the emitters the fields belong to, by ordinal, as Riot's bin had them at the recolour: a field is addressed by the ordinal, so a patch that inserts or removes
+    /// an emitter would silently point it at another one. The name is the cheap check that it still is the same emitter.</summary>
+    public Dictionary<int, string>? EmitterNames { get; set; }
+}
+
+/// <summary>M826: one effect colour field as the editor handles it (the flat view of <see cref="ChromaEffectRecord.Colors"/>). Not stored on its own.</summary>
+public sealed class ChromaEffectColorRef
+{
+    public uint System { get; set; }
+    public int Emitter { get; set; }
+    public string Field { get; set; } = "";
+    public string Bin { get; set; } = "";
+    public string SystemName { get; set; } = "";
+    public string EmitterName { get; set; } = "";
+
+    internal static ChromaEffectColorRef From(ChromaEffectSystemRef system, string field)
+    {
+        int cut = field.IndexOf(':');
+        return new ChromaEffectColorRef
+        {
+            System = system.System, Bin = system.Bin, SystemName = system.Name,
+            Emitter = cut > 0 && int.TryParse(field.AsSpan(0, cut), out int e) ? e : 0,
+            Field = cut >= 0 ? field[(cut + 1)..] : field,
+        }.WithEmitterName(system);
+    }
+
+    private ChromaEffectColorRef WithEmitterName(ChromaEffectSystemRef system)
+    {
+        if (system.EmitterNames is { } names && names.TryGetValue(Emitter, out var name)) EmitterName = name;
+        return this;
+    }
+}
+
+/// <summary>M826: a bin the Chroma Studio copied into the project (Copy To Project of that one asset) so it could change it.</summary>
+public sealed class ChromaPlacedBin
+{
+    public string Bin { get; set; } = "";
+    public string File { get; set; } = "";
 }
 
 /// <summary>M287: one map's authored lighting. Defaults match the view-model's own initial values, so a

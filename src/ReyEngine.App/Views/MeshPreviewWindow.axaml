@@ -932,6 +932,106 @@
                       </ItemsControl>
                     </ScrollViewer>
 
+                    <!-- M826: EFFECTS RECOLOUR. The same sliders recolour the colour values (birth colour, colour over life, linger and fresnel colours) and the
+                         colour textures of the effects this skin plays. One switch a system, one a field, one a texture file; what is left alone is listed with the
+                         reason. The effects restart with the new colours while a slider moves. -->
+                    <TextBlock Text="EFFECTS RECOLOUR" FontSize="10" Margin="0,8,0,0" Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding HasChromaEffects}"
+                               ToolTip.Tip="The colours and colour textures of the effects this skin plays. Brightness and saturation act once per particle (on the emitter's most colourful value, never on a texture); hue, colourise, the hue range and the grey guard act on every colour and texture. Apply and Save writes the bins and textures from Riot's originals. Masks, data maps and cubemaps are listed below and left alone." />
+                    <TextBlock Text="{Binding ChromaEffectSummary}" FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding HasChromaEffects}" />
+                    <TextBlock Text="{Binding ChromaEffectProblem}" FontSize="10" TextWrapping="Wrap" IsVisible="{Binding HasChromaEffectProblem}"
+                               Foreground="{DynamicResource ReyWarningBrush}" />
+                    <TextBlock Text="{Binding ChromaEffectShareWarning}" FontSize="10" TextWrapping="Wrap" IsVisible="{Binding HasChromaEffectShareWarning}"
+                               Foreground="{DynamicResource ReyWarningBrush}" />
+                    <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding HasChromaEffects}">
+                      <Button Classes="tool" Content="All colours" FontSize="10" Padding="6,1" Command="{Binding SelectAllEffectColorsCommand}" />
+                      <Button Classes="tool" Content="No colours" FontSize="10" Padding="6,1" Command="{Binding SelectNoEffectColorsCommand}" />
+                      <Button Classes="tool" Content="All textures" FontSize="10" Padding="6,1" Command="{Binding SelectAllEffectTexturesCommand}"
+                              ToolTip.Tip="Switch on every effect texture of this character's own folder that can be written back. Shared sprites outside it (other characters use them) are switched on one by one." />
+                      <Button Classes="tool" Content="No textures" FontSize="10" Padding="6,1" Command="{Binding SelectNoEffectTexturesCommand}" />
+                    </StackPanel>
+                    <ScrollViewer MaxHeight="230" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasChromaEffects}">
+                      <ItemsControl ItemsSource="{Binding ChromaEffectSystems}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:ChromaEffectSystemRowViewModel">
+                            <StackPanel Margin="0,1">
+                              <Grid ColumnDefinitions="Auto,*,Auto,Auto" ToolTip.Tip="{Binding Tip}">
+                                <CheckBox Grid.Column="0" IsChecked="{Binding IsIncluded, Mode=TwoWay}" IsEnabled="{Binding CanInclude}" MinWidth="0" Margin="0,0,4,0" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                  <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Border Grid.Column="2" Classes="badge warn" IsVisible="{Binding IsShared}" ToolTip.Tip="{Binding SharedTip}" Margin="6,0,0,0" VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding SharedBadge}" />
+                                </Border>
+                                <ToggleButton Grid.Column="3" Classes="tool" Content="Fields" FontSize="9" Padding="6,0" Margin="6,0,0,0" VerticalAlignment="Center"
+                                              IsChecked="{Binding IsExpanded, Mode=TwoWay}" ToolTip.Tip="List this system's colour fields, each with its own switch." />
+                              </Grid>
+                              <ItemsControl ItemsSource="{Binding Fields}" IsVisible="{Binding IsExpanded}" Margin="18,0,0,2">
+                                <ItemsControl.ItemTemplate>
+                                  <DataTemplate x:DataType="vm:ChromaEffectFieldRowViewModel">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ToolTip.Tip="{Binding Tip}" Margin="0,1">
+                                      <CheckBox Grid.Column="0" IsChecked="{Binding IsIncluded, Mode=TwoWay}" IsEnabled="{Binding CanInclude}" MinWidth="0" Margin="0,0,4,0" />
+                                      <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Name}" FontSize="10" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Note}" FontSize="9" IsVisible="{Binding HasNote}" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ReyWarningBrush}" />
+                                      </StackPanel>
+                                      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" Margin="6,0,0,0" VerticalAlignment="Center" IsVisible="{Binding CanInclude}">
+                                        <Border Width="16" Height="16" CornerRadius="2" BorderThickness="1" BorderBrush="{DynamicResource ReyBorderBrush}"
+                                                Background="{Binding OriginalBrush}" />
+                                        <Border Width="16" Height="16" CornerRadius="2" BorderThickness="1" BorderBrush="{DynamicResource ReyBorderBrush}"
+                                                Background="{Binding ResultBrush}" />
+                                      </StackPanel>
+                                    </Grid>
+                                  </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+                            </StackPanel>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+                    <TextBlock Text="EFFECT TEXTURES" FontSize="10" Margin="0,4,0,0" Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding HasChromaEffectTextures}"
+                               ToolTip.Tip="The colour textures the effects draw with: sprites, multiplier maps, colour lookups and palettes. They take the hue-only form of the transform (a texture multiplies the colour values, so brightness and saturation would count twice). Files outside this character's folder are shared with other characters and start off." />
+                    <ScrollViewer MaxHeight="150" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasChromaEffectTextures}">
+                      <ItemsControl ItemsSource="{Binding ChromaEffectTextures}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:ChromaEffectTextureRowViewModel">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ToolTip.Tip="{Binding Tip}" Margin="0,1">
+                              <CheckBox Grid.Column="0" IsChecked="{Binding IsIncluded, Mode=TwoWay}" IsEnabled="{Binding CanInclude}" MinWidth="0" Margin="0,0,4,0" />
+                              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Note}" FontSize="9" IsVisible="{Binding HasNote}" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource ReyWarningBrush}" />
+                              </StackPanel>
+                              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" Margin="6,0,0,0" VerticalAlignment="Center">
+                                <Border Classes="badge outline" IsVisible="{Binding IsOutside}">
+                                  <TextBlock Text="{Binding OutsideBadge}" />
+                                </Border>
+                                <Border Classes="badge warn" IsVisible="{Binding IsShared}" ToolTip.Tip="{Binding SharedTip}">
+                                  <TextBlock Text="{Binding SharedBadge}" />
+                                </Border>
+                              </StackPanel>
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+                    <TextBlock Text="LEFT ALONE" FontSize="10" Margin="0,4,0,0" Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding HasChromaEffects}"
+                               ToolTip.Tip="What the effects recolour never touches, and why: channel mixers typed as colours, data maps and reflection cubemaps." />
+                    <ItemsControl ItemsSource="{Binding ChromaEffectExcluded}" IsVisible="{Binding HasChromaEffects}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ChromaRowViewModel">
+                          <StackPanel Margin="0,1" ToolTip.Tip="{Binding Tip}">
+                            <TextBlock Text="{Binding Title}" FontSize="10" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
                   </StackPanel>
                 </StackPanel>
               </Border>

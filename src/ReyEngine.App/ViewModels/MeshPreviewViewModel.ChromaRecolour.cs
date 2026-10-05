@@ -255,6 +255,7 @@ public sealed partial class MeshPreviewViewModel
     {
         await _chromaPrepare;
         await _chromaParamPrepare;
+        await _chromaEffectPrepare;   // M826
         for (int i = 0; i < 2000; i++)
         {
             await _chromaLoop;
@@ -291,6 +292,7 @@ public sealed partial class MeshPreviewViewModel
 
         var saved = skinBin is null ? null : ReadChromaSaved?.Invoke(skinBin);
         ResetChromaParameters(saved);   // M825
+        ResetChromaEffects(saved);      // M826
         if (saved is null) return;
         if (saved.Targets.Count > 0)
         {
@@ -299,8 +301,10 @@ public sealed partial class MeshPreviewViewModel
             _chromaSavedHashes = saved.Targets.Select(t => t.Hash).ToHashSet();
         }
         ChromaSettings = ChromaRecolourSettings.From(saved.Transform);
-        HasSavedChromaRecolour = saved.Targets.Count > 0 || saved.SavedParameters.Count > 0;
-        ChromaRecolourStatus = $"Saved in the project: {saved.Targets.Count} texture(s) and {saved.SavedParameters.Count} colour parameter(s) recoloured. Press Scan colours to see and change them.";
+        HasSavedChromaRecolour = saved.Targets.Count > 0 || saved.SavedParameters.Count > 0 || HasEffectRecipe;
+        ChromaRecolourStatus = $"Saved in the project: {saved.Targets.Count} texture(s) and {saved.SavedParameters.Count} colour parameter(s) recoloured"
+                               + (HasEffectRecipe ? $", {_chromaSavedEffectKeys.Count} effect colour(s) and {_chromaSavedEffectHashes.Count} effect texture(s)" : "")
+                               + ". Press Scan colours to see and change them.";
     }
 
     /// <summary>The inventory arrived: list its body textures (and, hidden, the maps it left out), switch on the ones the recolour
@@ -315,7 +319,7 @@ public sealed partial class MeshPreviewViewModel
         _chromaRows.Clear();
 
         var seen = new HashSet<ulong>();
-        bool recipe = _chromaSavedHashes.Count > 0 || _chromaSavedParamKeys.Count > 0;   // M825: a recipe of parameters alone is a recipe too
+        bool recipe = HasRecipeAnywhere;   // M825: a recipe of parameters alone is a recipe too; M826: so is one of effects
         foreach (var t in inventory.BodyTextures)
         {
             if (!seen.Add(t.Hash)) continue;
@@ -343,6 +347,7 @@ public sealed partial class MeshPreviewViewModel
         UpdateChromaDirty();
         _chromaPrepare = PrepareChromaTexturesAsync(generation);
         _chromaParamPrepare = PrepareChromaParametersAsync(generation);   // M825: the skin bin's colour parameters, beside the textures
+        _chromaEffectPrepare = PrepareChromaEffectsAsync(generation, inventory);   // M826: the effects' colour values and textures
     }
 
     private void RefreshChromaVisibleRows()
@@ -515,12 +520,12 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>What a save would write, in two parts that are saved (and compared with what is saved) on their own: the textures - the
     /// transform and the included ones plus the carried ones - and the colour parameters (M825) the same way. A part with nothing to write
     /// is (identity, none), so "no recolour" is one state however the switches stand.</summary>
-    private readonly record struct ChromaState(ColorTransform Transform, HashSet<ulong> Hashes, ColorTransform ParamTransform, HashSet<SkinColorParamKey> Params)
+    private readonly record struct ChromaState(ColorTransform Transform, HashSet<ulong> Hashes, ColorTransform ParamTransform, HashSet<SkinColorParamKey> Params, ChromaEffectState Effects)
     {
         public bool TexturesDiffer(ColorTransform savedTransform, HashSet<ulong> savedHashes) => !(Transform.Equals(savedTransform) && Hashes.SetEquals(savedHashes));
         public bool ParamsDiffer(ColorTransform savedTransform, HashSet<SkinColorParamKey> savedKeys) => !(ParamTransform.Equals(savedTransform) && Params.SetEquals(savedKeys));
         public bool SameAs(ChromaState other) =>
-            Transform.Equals(other.Transform) && Hashes.SetEquals(other.Hashes) && ParamTransform.Equals(other.ParamTransform) && Params.SetEquals(other.Params);
+            Transform.Equals(other.Transform) && Hashes.SetEquals(other.Hashes) && ParamTransform.Equals(other.ParamTransform) && Params.SetEquals(other.Params) && Effects.SameAs(other.Effects);
     }
 
     private ChromaState ChromaStateNow()
@@ -532,37 +537,42 @@ public sealed partial class MeshPreviewViewModel
         if (!transform.IsIdentity) foreach (var carried in CarriedChromaParams()) keys.Add(KeyOf(carried));
         bool noTextures = transform.IsIdentity || hashes.Count == 0, noParams = transform.IsIdentity || keys.Count == 0;
         return new ChromaState(noTextures ? ColorTransform.Identity : transform, noTextures ? new HashSet<ulong>() : hashes,
-            noParams ? ColorTransform.Identity : transform, noParams ? new HashSet<SkinColorParamKey>() : keys);
+            noParams ? ColorTransform.Identity : transform, noParams ? new HashSet<SkinColorParamKey>() : keys, ChromaEffectStateNow(transform));
     }
 
     private void UpdateChromaDirty()
     {
         // nothing listed (the skin was not scanned yet): there is nothing to recolour, so nothing is pending
         bool dirty = false;
-        if (_chromaRows.Count > 0 || _chromaParamRows.Count > 0)
+        if (_chromaRows.Count > 0 || _chromaParamRows.Count > 0 || _effectFields.Count > 0 || _effectTextureRows.Count > 0)
         {
             var state = ChromaStateNow();
-            dirty = state.TexturesDiffer(_chromaSavedTransform, _chromaSavedHashes) || state.ParamsDiffer(_chromaSavedParamTransform, _chromaSavedParamKeys);
+            dirty = state.TexturesDiffer(_chromaSavedTransform, _chromaSavedHashes) || state.ParamsDiffer(_chromaSavedParamTransform, _chromaSavedParamKeys)
+                    || state.Effects.Differs(_chromaSavedEffectTransform, _chromaSavedEffectKeys, _chromaSavedEffectHashes);
         }
         ChromaRecolourDirty = dirty;
         if (dirty) ChromaEdited?.Invoke();
         ChromaShareWarning = BuildChromaShareWarning(IncludedChromaRows.ToArray());
+        RefreshChromaEffectShareWarning();   // M826
         ChromaRecolourStatus = DescribeChromaState();
     }
 
     private string DescribeChromaState()
     {
-        if (!HasChromaTextures && !HasChromaParameters) return ChromaRecolourStatus;
+        if (!HasChromaTextures && !HasChromaParameters && !HasChromaEffects && !HasChromaEffectTextures) return ChromaRecolourStatus;
         int included = IncludedChromaRows.Count(), includedParams = IncludedChromaParamRows.Count();
+        int includedEffects = _effectIncluded.Count, includedEffectTextures = IncludedEffectTextureRows.Count();
         bool identity = ChromaSettings.ToTransform().IsIdentity;
-        string what = $"{included} texture(s)" + (_chromaParamRows.Count > 0 ? $" and {includedParams} colour parameter(s)" : "");
+        string what = $"{included} texture(s)" + (_chromaParamRows.Count > 0 ? $" and {includedParams} colour parameter(s)" : "")
+                      + (_effectFields.Count > 0 || _effectTextureRows.Count > 0 ? $", {includedEffects} effect colour(s) and {includedEffectTextures} effect texture(s)" : "");
         if (ChromaRecolourDirty)
-            return identity || (included == 0 && includedParams == 0)
+            return identity || (included == 0 && includedParams == 0 && includedEffects == 0 && includedEffectTextures == 0)
                 ? (HasSavedChromaRecolour ? "Pending: put the saved recolour back to Riot's textures and colours. Press Apply & Save, or Ctrl+S." : "")
                 : $"Pending: {what} will be recoloured. Press Apply & Save, or Ctrl+S.";
-        int carried = CarriedChromaTargets().Count + CarriedChromaParams().Count;
+        int carried = CarriedChromaTargets().Count + CarriedChromaParams().Count + CarriedChromaEffects().Count + CarriedChromaEffectTextures().Count;
         if (HasSavedChromaRecolour)
-            return $"Saved in the project: {_chromaSavedTargets.Count} texture(s)" + (_chromaSavedParamRefs.Count > 0 ? $" and {_chromaSavedParamRefs.Count} colour parameter(s)" : "") + " recoloured."
+            return $"Saved in the project: {_chromaSavedTargets.Count} texture(s)" + (_chromaSavedParamRefs.Count > 0 ? $" and {_chromaSavedParamRefs.Count} colour parameter(s)" : "")
+                   + (HasEffectRecipe ? $", {_chromaSavedEffectKeys.Count} effect colour(s) and {_chromaSavedEffectHashes.Count} effect texture(s)" : "") + " recoloured."
                    + (carried > 0 ? $" {carried} of them are not listed here or cannot be read now; they are kept as they are." : "");
         return identity ? "" : $"{what} selected.";
     }
@@ -602,9 +612,12 @@ public sealed partial class MeshPreviewViewModel
         var included = IncludedChromaRows.Select(r => r.Hash).ToArray();
         RefreshChromaParamSwatches(transform);   // M825: the swatches follow the sliders at once
         var paramPreview = CurrentChromaParamPreview();
+        RefreshChromaEffectSwatches(transform);   // M826
+        var effectPreview = CurrentChromaEffectPreview(transform);
         lock (_chromaGate)
         {
             _chromaRequest = (transform, included, _chromaSavedHashes, Volatile.Read(ref _chromaGeneration), paramPreview);
+            _effectRequest = effectPreview;
             _chromaSerial++;
         }
         if (Interlocked.CompareExchange(ref _chromaRunning, 1, 0) != 0) return;   // the running loop will see the new serial
@@ -616,12 +629,17 @@ public sealed partial class MeshPreviewViewModel
         while (true)
         {
             (ColorTransform Transform, ulong[] Included, HashSet<ulong> Saved, int Generation, ChromaParamPreview Params) request;
-            HashSet<ulong> shown, restore;
+            HashSet<ulong> shown, restore, effectShown, effectRestore;
             HashSet<SkinColorParamKey> paramShown, paramRestore;
+            ChromaEffectRequest effectRequest;
             int serial;
             lock (_chromaGate)
             {
                 request = _chromaRequest;
+                effectRequest = _effectRequest;
+                effectShown = _effectTexShown;
+                effectRestore = _effectTexRestore;
+                _effectTexRestore = new HashSet<ulong>();
                 serial = _chromaSerial;
                 shown = _chromaShown;
                 restore = _chromaRestore;
@@ -637,10 +655,16 @@ public sealed partial class MeshPreviewViewModel
                 {
                     var batch = RenderChromaBatch(request.Transform, request.Included, request.Saved, shown, restore, out var nowShown, _chromaCts.Token);
                     var paramBatch = RenderChromaParams(request.Transform, request.Params, paramShown, paramRestore, out var paramNowShown);   // M825: four floats each - no work
+                    var effectBatch = RenderChromaEffects(effectRequest, effectShown, effectRestore, out var effectNowShown, _chromaCts.Token);   // M826: the definitions are re-read from a working copy, the textures re-derived
                     lock (_chromaGate)
-                        if (request.Generation == Volatile.Read(ref _chromaGeneration)) { _chromaShown = nowShown; _chromaParamShown = paramNowShown; }
-                    if (batch.Count > 0 || paramBatch.Count > 0)
-                        await ChromaUiPost(() => { if (batch.Count > 0) PushChromaBatch(batch, request.Generation); PushChromaParamBatch(paramBatch, request.Generation); });
+                        if (request.Generation == Volatile.Read(ref _chromaGeneration)) { _chromaShown = nowShown; _chromaParamShown = paramNowShown; _effectTexShown = effectNowShown; }
+                    if (batch.Count > 0 || paramBatch.Count > 0 || !effectBatch.IsEmpty)
+                        await ChromaUiPost(() =>
+                        {
+                            if (batch.Count > 0) PushChromaBatch(batch, request.Generation);
+                            PushChromaParamBatch(paramBatch, request.Generation);
+                            PushChromaEffectBatch(effectBatch, request.Generation);
+                        });
                 }
             }
             catch (OperationCanceledException) { }
@@ -730,7 +754,7 @@ public sealed partial class MeshPreviewViewModel
     internal void ReapplyChromaPreview()
     {
         if (!ChromaRecolourDirty) return;
-        lock (_chromaGate) { _chromaShown = new HashSet<ulong>(); _chromaParamShown = new HashSet<SkinColorParamKey>(); }
+        lock (_chromaGate) { _chromaShown = new HashSet<ulong>(); _chromaParamShown = new HashSet<SkinColorParamKey>(); _effectTexShown = new HashSet<ulong>(); }
         RequestChromaPreview();
     }
 
@@ -757,7 +781,8 @@ public sealed partial class MeshPreviewViewModel
         }
     }
 
-    private bool CanApplyChroma() => ChromaRecolourDirty && !ChromaSaving && _chromaSkinBin is not null && (SaveChromaRecolour is not null || SaveChromaParameters is not null);
+    private bool CanApplyChroma() => ChromaRecolourDirty && !ChromaSaving && _chromaSkinBin is not null
+                                     && (SaveChromaRecolour is not null || SaveChromaParameters is not null || SaveChromaEffectColors is not null || SaveChromaEffectTextures is not null);
 
     [RelayCommand(CanExecute = nameof(CanApplyChroma))]
     private async Task ApplyChromaRecolour()
@@ -772,13 +797,14 @@ public sealed partial class MeshPreviewViewModel
     public async Task SaveChromaRecolourNowAsync()
     {
         if (!ChromaRecolourDirty || _chromaSkinBin is not { } skinBin) return;
-        if (SaveChromaRecolour is null && SaveChromaParameters is null) return;
+        if (SaveChromaRecolour is null && SaveChromaParameters is null && SaveChromaEffectColors is null && SaveChromaEffectTextures is null) return;
         if (ChromaSaveBlocker?.Invoke() is { } blocked) throw new InvalidOperationException(blocked);
 
         var state = ChromaStateNow();
         bool texturesDirty = state.TexturesDiffer(_chromaSavedTransform, _chromaSavedHashes) && SaveChromaRecolour is not null;
         bool paramsDirty = state.ParamsDiffer(_chromaSavedParamTransform, _chromaSavedParamKeys) && SaveChromaParameters is not null;
-        if (!texturesDirty && !paramsDirty) return;
+        bool effectsDirty = state.Effects.Differs(_chromaSavedEffectTransform, _chromaSavedEffectKeys, _chromaSavedEffectHashes) && (SaveChromaEffectColors is not null || SaveChromaEffectTextures is not null);
+        if (!texturesDirty && !paramsDirty && !effectsDirty) return;
 
         ChromaSaving = true;
         var notes = new List<string>();
@@ -788,6 +814,7 @@ public sealed partial class MeshPreviewViewModel
             {
                 if (texturesDirty) notes.Add(await SaveChromaTexturesAsync(skinBin, state, SaveChromaRecolour!));
                 if (paramsDirty) notes.Add(await SaveChromaParametersPartAsync(skinBin, state, SaveChromaParameters!));
+                if (effectsDirty) notes.Add(await SaveChromaEffectsPartAsync(skinBin, state.Effects));   // M826
             }
             catch
             {
@@ -824,7 +851,7 @@ public sealed partial class MeshPreviewViewModel
         _chromaSavedTransform = settled.Count == 0 ? ColorTransform.Identity : transform;
         _chromaSavedTargets = targets.Where(t => written.Contains(t.Hash)).Concat(carried).ToList();
         _chromaSavedHashes = settled;
-        HasSavedChromaRecolour = _chromaSavedTargets.Count > 0 || _chromaSavedParamRefs.Count > 0;
+        HasSavedChromaRecolour = HasAnySavedRecolour;
         foreach (var row in _chromaRows)
             row.Note = written.Contains(row.Hash) ? "recoloured in the project" : (row.CanInclude ? "" : row.Note);
         return result.Summary + "." + (result.Notes.Count > 0 ? " " + result.Notes[0] : "");
@@ -852,7 +879,7 @@ public sealed partial class MeshPreviewViewModel
         _chromaSavedParamTransform = settled.Count == 0 ? ColorTransform.Identity : transform;
         _chromaSavedParamRefs = targets.Where(t => settled.Contains(KeyOf(t))).Concat(carried).ToList();
         _chromaSavedParamKeys = settled;
-        HasSavedChromaRecolour = _chromaSavedTargets.Count > 0 || _chromaSavedParamRefs.Count > 0;
+        HasSavedChromaRecolour = HasAnySavedRecolour;
         foreach (var row in _chromaParamRows)
         {
             bool owned = _chromaSavedParamKeys.Contains(row.Key);
@@ -869,7 +896,8 @@ public sealed partial class MeshPreviewViewModel
         return result.Summary + "." + (result.Notes.Count > 0 ? " " + result.Notes[0] : "");
     }
 
-    private bool CanRevertChroma() => HasSavedChromaRecolour && !ChromaSaving && (RevertChromaRecolour is not null || RevertChromaParameters is not null);
+    private bool CanRevertChroma() => HasSavedChromaRecolour && !ChromaSaving
+                                     && (RevertChromaRecolour is not null || RevertChromaParameters is not null || RevertChromaEffectColors is not null || RevertChromaEffectTextures is not null);
 
     /// <summary>Put every texture and colour parameter of this skin's saved recolour back to Riot's, forget the record and reset the sliders. The two
     /// halves are separate: a half that cannot be put back (the bin is refused, say) keeps its saved state and is reported, while the other is done.</summary>
@@ -879,6 +907,8 @@ public sealed partial class MeshPreviewViewModel
         if (_chromaSkinBin is not { } skinBin) return;
         var targets = _chromaSavedTargets.ToList();
         var paramRefs = _chromaSavedParamRefs.ToList();
+        var effectTargets = _chromaSavedEffectTargets.ToList();   // M826
+        var effectRefs = _chromaSavedEffectRefs.ToList();
         ChromaSaving = true;
         try
         {
@@ -892,9 +922,14 @@ public sealed partial class MeshPreviewViewModel
                 catch (Exception ex) { paramFailure = ex.Message; }
             }
             bool paramsDone = paramFailure is null;
+            var (restoredEffectColors, restoredEffectTextures, effectFailure) = effectRefs.Count > 0 || effectTargets.Count > 0
+                ? await RevertChromaEffectsAsync(skinBin)   // M826: the effects' colours and textures, each half reported on its own
+                : (0, 0, (string?)null);
+            bool effectsDone = effectFailure is null;
 
             // the renderers still show the recolour: draw the originals, then forget the state
             await EnsureChromaOriginalsAsync(targets);
+            await EnsureEffectOriginalsAsync(effectTargets);
             _chromaSavedTransform = ColorTransform.Identity;
             _chromaSavedTargets = Array.Empty<ChromaTarget>();
             _chromaSavedHashes = new HashSet<ulong>();
@@ -910,8 +945,8 @@ public sealed partial class MeshPreviewViewModel
                     row.Note = row.CanInclude ? "" : row.Info.Reason;
                 }
             }
-            HasSavedChromaRecolour = _chromaSavedTargets.Count > 0 || _chromaSavedParamRefs.Count > 0;
-            if (paramsDone) ChromaSettings = ChromaRecolourSettings.Default;
+            HasSavedChromaRecolour = HasAnySavedRecolour;
+            if (paramsDone && effectsDone) ChromaSettings = ChromaRecolourSettings.Default;
             lock (_chromaGate)
             {
                 _chromaRestore = new HashSet<ulong>(_chromaRestore.Concat(targets.Select(t => t.Hash)));
@@ -919,9 +954,10 @@ public sealed partial class MeshPreviewViewModel
             }
             UpdateChromaDirty();
             RequestChromaPreview();
-            ChromaRecolourStatus = paramsDone
-                ? $"Reverted: {restored} texture(s)" + (paramRefs.Count > 0 ? $" and {restoredParams} colour parameter(s)" : "") + " put back to the original."
-                : $"Reverted {restored} texture(s), but the colour parameters were not put back: {paramFailure}";
+            string effectLine = effectRefs.Count > 0 || effectTargets.Count > 0 ? $", {restoredEffectColors} effect colour(s) and {restoredEffectTextures} effect texture(s)" : "";
+            ChromaRecolourStatus = paramsDone && effectsDone
+                ? $"Reverted: {restored} texture(s)" + (paramRefs.Count > 0 ? $" and {restoredParams} colour parameter(s)" : "") + effectLine + " put back to the original."
+                : $"Reverted {restored} texture(s){effectLine}, but " + (paramsDone ? "" : $"the colour parameters were not put back: {paramFailure}. ") + (effectsDone ? "" : $"the effect colours were not put back: {effectFailure}");
         }
         finally { ChromaSaving = false; }
     }
@@ -945,6 +981,27 @@ public sealed partial class MeshPreviewViewModel
             return list;
         });
         foreach (var (hash, image) in decoded) _chromaBuffers.Set(hash, image);
+    }
+
+    /// <summary>M826: the same for the effect textures.</summary>
+    private async Task EnsureEffectOriginalsAsync(IReadOnlyList<ChromaTarget> targets)
+    {
+        var read = ReadChromaOriginal;
+        if (read is null) return;
+        var missing = targets.Where(t => !_effectBuffers.Has(t.Hash)).ToList();
+        if (missing.Count == 0) return;
+        using var readers = AcquireChromaReaders?.Invoke();
+        var decoded = await Task.Run(() =>
+        {
+            var list = new List<(ulong, TextureImage)>();
+            foreach (var t in missing)
+            {
+                try { if (read(t) is { } bytes && TextureRecolor.Classify(bytes).Ok) list.Add((t.Hash, TextureDecoder.Decode(bytes))); }
+                catch { /* a texture that cannot be read keeps what it shows until the scene is reloaded */ }
+            }
+            return list;
+        });
+        foreach (var (hash, image) in decoded) _effectBuffers.Set(hash, image);
     }
 
     /// <summary>Sliders back to "no change". The renderers draw the originals; nothing is written until Apply &amp; Save, which then

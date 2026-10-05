@@ -19,7 +19,7 @@ shaders and plays its effects). The studio grows there as a card, starting with 
 | M812 | **Inventory (read-only).** Everything colour-bearing a skin or chroma draws: Body (material samplers, the skin's default texture fields, materialOverride textures, colour parameters) and Effects (the systems the skin uses, with colour fields and colour textures; masks excluded). Each item marked shared/unshared, naming the other skins and chromas of the champion that use it. Texture-format census. | Real-data tests on a base skin, a paid skin and a chroma (Lillia 49 over 46): structural assertions and known items, masks never listed, a known shared item detected. UiProbe card binds. |
 | M813 | **One colour transform.** Hue rotate, saturation, brightness, colourise, a hue-range selection and grey protection, in one tested function for 8-bit texels and float colours. Colours above 1.0 keep their intensity; alpha is never touched; white stays white. | Unit tests, and Recolor Textures' existing output byte-identical. |
 | C3 | **Body recolour, live.** Sliders recolour the body textures and colour parameters on the character while dragging (wire the existing pixel-swap hooks). Save re-derives from originals into the project; the Character window gets the Copy To Project route it lacks. In place, with "this also changes ..." warnings on shared textures. | Device A/B render, round trip into the project, Build Package ships it. |
-| C4 | **Effects recolour.** birthColor, colour over life, linger and fresnel colours (constants, keys) and the colour / multiplier / gradient / palette textures of the skin's systems, through the Particle Editor's own edit path. | A real champion's systems round-trip with every colour key transformed exactly, masks byte-identical, device render. |
+| C4 | **Effects recolour.** birthColor, colour over life, linger and fresnel colours (constants, keys) and the colour / multiplier / gradient / palette textures of the skin's systems, through the Particle Editor's own edit path. | A real champion's systems round-trip with every colour key transformed exactly, masks byte-identical, device render. **Done: M826**, see "C4 effects recolour" below. |
 | C5 | **"This skin only".** Shared textures copied to skin-specific paths and this skin's references repointed; shared effects cloned into the skin's own bin and its ResourceResolver repointed. Research first: does every effect use (clips, spells, idle) go through the skin's resolver? | Every other skin byte-identical in a built package; user's in-game check. |
 | C6 | **Studio UX and recipes.** Skin picker with chromas grouped under their skin, Body / Effects groups with per-material and per-system switches, hue-range eyedropper on the preview, before/after, a shipped chroma as reference. The recipe is saved in the project and re-applied from Riot's new files after a patch. What's New entry, wiki tutorial. | UiProbe, recipe re-application test. |
 | C7 | **Ship.** Three skins end to end through Send to LTK Manager, in-game check, full suite, release. | |
@@ -176,7 +176,7 @@ project holds is refused with a reason (an override beside it would be shadowed)
 folder name and the file is proven below the project root. A pending recolour is saved before the window loads another model (a failed save
 keeps the model), and the auto-save does not retry a state that already failed.
 
-**Remaining.** C4 effects; C5 "this skin only" (the warning says the recolour is in place); a texture shared by two skins' recipes belongs to the one
+**Remaining.** C4 effects (done in M826, below); C5 "this skin only" (the warning says the recolour is in place); a texture shared by two skins' recipes belongs to the one
 saved last. (The material colour parameters, left out of M824, are M825 below.)
 
 ## C3 colour parameters (M825)
@@ -231,3 +231,94 @@ The OpenGL viewport shows a champion's diffuse textures (which M824 pushes) and 
 
 **Remaining.** A recolour of a driver's own literal outputs (`dynamicMaterial`); linked-bin materials (C5); the GL viewport; an owned parameter edited in the Material tab
 afterwards is overwritten by the next recolour save; the bin's property order after the first parameter write.
+
+## C4 effects recolour (M826)
+
+**What it does.** The Character window's Chroma tab has an EFFECTS RECOLOUR group under the colour parameters. The same sliders recolour the colour VALUES and the colour TEXTURES of the effects the skin
+plays (the systems M812's scan lists). It is a third part of the one pending state: Apply & Save, Ctrl+S, the auto-save, Export and Build Package flush it with the body textures and parameters
+(`SavePendingEditorEdits` is unchanged), and a part is saved only when it differs from what the project holds. Nothing is switched on by default: see "Defaults".
+
+**Which fields.** Per emitter, the five `VfxColorReader.ColorFields`: `birthColor`, `color` (colour over life), `Linger.SeparateLingerColor`, `reflectionDefinition.fresnelColor` and
+`reflectionDefinition.reflectionFresnelColor` - the constant AND every key of the curve (`SkinEffectColors`). A field the emitter does not author is not read, not listed and never written; a struct that
+authors no `constantValue` gets none (the value's keys are rewritten in place: the key count, times and probability tables are untouched); a `ValueColor` that holds only a probability table has no colour of its
+own and is not a field. `ColorTransform.CanTransform` decides per value: a negative colour stays as authored (12 values in the 16-champion census), an HDR colour keeps its intensity (36), alpha is
+never changed, a `Color`-typed value (bytes) is clamped to 0..1 and rounded to its byte. `paletteDefinition.palleteSrcMixColor` and `alphaErosionDefinition.erosionMapChannelMixer` are never read as
+colours.
+
+**Left alone, and said so** (the card's LEFT ALONE list, with the count and the reason): the two mixers; the data textures `erosionMapName`, the distortion `normalMapTexture`, `falloffTexture`,
+`glossTexture`, `transitionTexture`; the `reflectionMapTexture` cubemap (DDS, six faces: the project writer handles TEX BC1/BC3 only). A texture file the body also draws is not switched on here (one
+file never has two recipes): its row says so. DDS, BC5 and BGRA8 are listed with the reason, as the body's are.
+
+**Census first** (opt-in `REYENGINE_CENSUS=1`, `EffectColourCensus`: Lillia, Ahri, Aatrox, Lux, Jinx, Kalista, Yone, Seraphine, Ezreal, Jhin, Syndra, Zed, Yasuo, Sona, Karma, Katarina; 1,129 skins with
+effects, 23,581 distinct systems REACHED by them, 177,844 emitters with a colour value, 296,220 colour fields: birthColor 124,166, color 161,440, linger 1,381, fresnel 6,943 + 2,290; 117,579 constants
+and 178,641 curves with 625,121 keys):
+
+- **Probability tables**: none on 280,141 fields (94.6%), alpha only 12,344 (4.2%), ONE table on red, green and blue 757 (0.26%), tables that differ per colour channel or sit on some channels only 2,978
+  (1.0%: birthColor 2,705, color 273). The sampler applies them to the birth colour only (`SampleBirth`).
+- **Coloured multipliers**: 108,835 emitters (61%) author two or more colour values; 19,720 (11.1%) multiply two COLOURED ones (saturation above 0.1), 19,614 of them birth x colour over life;
+  23,187 (13%) have only neutral (white / grey) colour values, and 645 have no colour value at all (their colour is a texture or the default).
+- **Keys**: of 446,480 adjacent key pairs, a hue shift of +-60 or 180 degrees bends the midpoint colour by more than 0.1 in 14,634 (3.3%) and by more than 0.25 in 2,723 (0.6%); +120 turns every channel
+  into the next one, which is linear, so it bends none.
+- **Hue on every factor**: for an emitter with two coloured factors, the hue of the product of the two shifted factors against the hue of the shifted product: mean error 8.7 degrees at +-60 and 180,
+  more than 15 degrees in 21% of the samples and more than 30 in 6%; exactly 0 at +120.
+
+**The product rule (decided).** A particle's colour is birthColor x (colour over life, or the linger colour) x texture. Brightness and saturation applied to every factor compound (a white multiplier
+becomes (B, B, B), the result B squared), so ONE factor carries them: per emitter, of the colour values being recoloured, the slot that holds the most colour (the highest HSV saturation of its values; the colour
+over life and the linger colour are one slot, because the linger colour replaces the colour over life; a tie goes to the colour over life; a lone factor carries). Every other factor and EVERY colour
+texture takes the hue-only form of the transform (`SkinEffectColors.HueOnly`: hue, colourise, hue range, grey guard and strength; saturation and brightness at 1), which is a no-op on white and grey, so a
+white multiplier stays white and the product is the transform once - proved by a test (a (0.8, 0.2, 0.1) birth colour under a white colour over life comes out exactly 1.5 times as bright at brightness 1.5, not 2.25). The two fresnel colours are not factors of that
+product (a separate shader stage), so each takes the full transform. Textures never carry brightness or saturation: they multiply the colour values (compounding), and an 8-bit texel cannot exceed 1. The
+cost of this choice: an effect whose colour is ONLY a texture (645 of 177,844 emitters have no colour value at all) answers hue, colourise and the hue range, but not saturation or brightness.
+Hue-on-every-factor is the approximation measured above: it keeps the product's hue to within 9 degrees on average where two coloured factors multiply.
+
+**Keys (decided).** Each key is transformed on its own, in place. Between keys the sampler interpolates linearly in RGB, so after a hue shift of 60 or 180 degrees the path between two coloured keys is the
+straight line between the new colours, not the shifted old path: 3.3% of key pairs bend by more than 0.1 (0.6% by more than 0.25). Inserting keys would change a curve's structure (and the acceptance is
+"every key transformed exactly"), so the choice is to accept it and document it. A shift of +120 or -120 bends nothing.
+
+**Randomised colours.** A per-channel probability table multiplies the key's channel by a per-particle roll. After a hue shift the same tables land on the same RGB channels, so a scatter that was in
+red and green is now in the new red and green. 1.0% of fields have such tables: they are recoloured like any other and the row says "randomised per channel: the scatter stays on the same RGB
+channels". One table shared by the three colour channels (a brightness scatter) commutes with a hue shift and is not flagged.
+
+**Never compounding.** `SkinEffectColors.Apply` derives every value from RIOT's bin (the bin LTK makes of the package's modules for a bin the imported GameData changes: `ReadChromaBaseBytes`, M825's) and writes it
+into the bin the project serves now, so the result is a function of Riot's value, the transform and the set of fields - however often it is run (tests: a second transform equals the first run directly;
+a third save; a bin whose fields are already as wanted writes nothing).
+
+**Where the systems live and how a bin is saved.** The scan says which bin each system lives in (the skin bin, a Multi_Skins dependency bin, the champion's root bin...). Each touched bin goes through M825's write
+(`WriteChromaSkinBinAsync`): the Material tab's and the Particle Editor's unsaved edits of that bin are saved first, the bin is read and re-derived again when it moved, `SaveEditorBinBytesAsync`
+with the bytes it read (the M819 guards and M823's declarations), a Riot bin the project does not hold is first copied into the champion's WAD folder and remembered (`ChromaEffectRecord.PlacedBins`) so a
+revert takes it out again while it is still Riot's data, and the project file is written bin by bin (a later bin that fails does not leave an earlier bin without an owner). A bin the GameData changes cannot
+express a colour inside a list of embedded structs without LTK's class schema (the synthetic-game test is refused with that reason): those fields are listed recolourable but start off with the reason. The
+Particle Editor's document of a bin is saved first when it holds unsaved edits and READ AGAIN from the recoloured bin afterwards (the selected system kept), so its next save starts from the recolour; a field
+the Particle Editor changed since (an owned field that no longer holds what the recipe wrote) is flagged, kept as it is and carried until it is switched on again, which replaces the edit.
+**A name no file can have**: Ahri's Multi_Skins bin is named by 430 characters (a file name holds 255); M825's copy-into-the-project threw, which would have failed the whole Apply. It is now placed as the loose
+`<hash>.bin` at the WAD folder's root, which the packer and the mounts read as that chunk (the form an unnamed texture takes). An override would not ship in a folder project's build.
+
+**Effect textures.** Through M824's pipeline unchanged: re-derived from Riot's pristine bytes (`CheckOutRecolorBase`), TEX BC1/BC3 by `TexWriter`, every WAD folder that holds the chunk, `TextureRecolors` records
+told apart from the body's by a new optional `ChromaPart = "effects"` (null, and not written, for the body and for every older record). They take the hue-only transform.
+
+**The record.** `Project.ChromaEffectRecolors` (null until a skin has one, null again after the last revert, no new key in an older file): per skin bin, the sliders' transform and the fields it owns - by
+system hash, emitter ordinal (emitter containers walked in ascending field-hash order, so a re-serialised copy of the bin finds the same emitter) and field name, never by value - stored grouped by system
+(`"3:birthColor"`), because a skin owns up to 3,905 fields (Lux skin 7) and a flat list of structs made project.json half a megabyte. Lillia 49 with everything on: 1,496 fields, 104 systems, project.json 171 KB
+(the 142 texture records are most of it). The sliders restore from the first recipe found (textures, then parameters, then effects).
+
+**Defaults (decided).** The effects start switched OFF (`MeshPreviewViewModel.EffectsStartOn`, one constant): over 85% of the systems a skin plays are shared with the champion's other skins (M812), the
+recolour is in place until C5, and switching them on puts whole shared bins into the project. A saved recipe restores exactly its switches. All colours / No colours / All textures / No textures set them in
+bulk; All textures covers this character's own folder only (a shared sprite outside it is switched on one by one, with its OUTSIDE badge). A system's switch sets all its fields and a field's switch
+moves the system's, whether or not the system was expanded (the state lives in the card, rows are made when a system is opened).
+
+**Preview.** The live preview is the save, not a second implementation: a working copy of each bin that holds a playing system (`EffectColorWorkingSet`) is recoloured with the same
+`SkinEffectColors.Apply` and the systems it touched are read back through `VfxSystemResolver.ParseSystemObject`, so the definitions the viewport plays are bit-exact those the save writes (device test:
+96 emitters compared). The card publishes them by rebuilding the playing items (idle effects, event composite, manual pick, children included) with the new definitions and recoloured COPIES of
+the textures they draw with, so both viewports rebuild their simulators and the effects RESTART with the new colours on every slider position (a field switched off or a slider back at no change returns to what the
+project holds; a save or a revert rebases the working copy). A D3D11 pool texture is also overwritten in place through `UpdatePooledTexture` + `RegeneratePooledMips` under the lower-cased
+path the particle pipeline binds it with (the particle colour gradient is CPU-sampled and takes the copy). Throttle: the body's loop, newest request wins; measured in a Debug build, one slider position
+of Lillia 49 with everything on (104 systems, 222 textures) is 78 ms from the slider to the republished playback. Not done: an in-place swap of the live simulators' definitions (the restart is the price of
+keeping `AuthoredIndex`, child spawns and the D3D11 slices consistent, which all key on the definition instance); the OpenGL viewport republishes the same way and was not run (no GL context here).
+
+**Cost.** Lux skin 7 (431 systems, 3,905 fields, 3 bins): scan and effect lists 0.7 s, Apply & Save 0.9 s, 210 MB more managed memory while the card holds the working copies; Ahri skin 0: 0.5 s, 1.7 s, 141 MB.
+
+**Remaining.** C5 ("this skin only": the warning says the recolour is in place and names the other skins); a texture used by two skins' recipes belongs to the one saved last; beams'
+`mAnimatedColorWithDistance` and `modulationFactor` are not recoloured (not listed by M812); Shimmer component emitters; the live preview restarts the effect; a baseline moved by an edit outside the card
+(the Particle Editor saving the same bin) is read again only by the next scan; the working copy holds two parsed trees per bin.
+
+**Review round (M826).** The preview remembers the originals of its recoloured textures weakly (a copy per slider position used to stay in a map until the next scan), and it only copies and pushes a texture an item that plays draws - an item built later asks for the rest once it is published; the D3D11 push uses the spelling the particle pipeline binds. A move of brightness or saturation alone leaves the effect TEXTURE part empty (they take the hue only), so textures saved under a hue are given back instead of orphaned and the card settles. A save spanning several bins judges every bin against the recipe as it stood before the save; the record's transform moves only after the last bin, a bin written at another transform in between is kept in `BinTransforms`, and the record keeps the emitter names beside the ordinals, so a field whose emitter Riot's bin now calls something else is listed as unchangeable and left alone. All colours and a system switch turn on only fields nobody changed (an edited or default-off field is switched on by hand; the share warning counts the edits it replaces). The live preview of a saved recipe judges "kept" by what the project holds, as saving does. A colour texture that is also read as a mask or data map by a system of the skin is listed as unchangeable: 25 of 232 files on Lillia 49, 5/71 Yone, 3/106 Ahri, 2/254 Lux 7, 10/94 Aatrox.

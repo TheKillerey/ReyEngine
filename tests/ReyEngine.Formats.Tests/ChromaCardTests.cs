@@ -454,9 +454,9 @@ public sealed class ChromaCardTests
                      "IsVisible=\"{Binding IsOutside}\"", "ToolTip.Tip=\"{Binding OutsideTip}\"", "Text=\"{Binding OutsideBadge}\"", "Classes=\"badge outline\"",
                  })
             Assert.Contains(needle, card);
-        // in both inventory lists (M812) and in the BODY RECOLOUR texture list above them (M824)
-        Assert.Equal(3, Regex.Matches(card, "Text=\"\\{Binding OutsideBadge\\}\"").Count);
-        Assert.Equal(3, Regex.Matches(card, "Text=\"\\{Binding SharedBadge\\}\"").Count);
+        // in both inventory lists (M812), in the BODY RECOLOUR texture list above them (M824), and in the EFFECTS RECOLOUR's texture list (OUTSIDE) and system and texture lists (SHARED) (M826)
+        Assert.Equal(4, Regex.Matches(card, "Text=\"\\{Binding OutsideBadge\\}\"").Count);
+        Assert.Equal(5, Regex.Matches(card, "Text=\"\\{Binding SharedBadge\\}\"").Count);
 
         // theme brushes only - no literal colour anywhere in the card
         Assert.DoesNotMatch("=\"#[0-9A-Fa-f]{3,8}\"", card);
@@ -466,7 +466,10 @@ public sealed class ChromaCardTests
         var members = typeof(MeshPreviewViewModel).GetProperties().Select(p => p.Name)
             .Concat(typeof(ChromaRowViewModel).GetProperties().Select(p => p.Name))
             .Concat(typeof(ChromaTextureRowViewModel).GetProperties().Select(p => p.Name))   // M824: the recolour's texture rows
-            .Concat(typeof(ChromaParameterRowViewModel).GetProperties().Select(p => p.Name)).ToHashSet();   // M825: and its colour parameter rows
+            .Concat(typeof(ChromaParameterRowViewModel).GetProperties().Select(p => p.Name))   // M825: and its colour parameter rows
+            .Concat(typeof(ChromaEffectSystemRowViewModel).GetProperties().Select(p => p.Name))   // M826: and the effects' system, field and texture rows
+            .Concat(typeof(ChromaEffectFieldRowViewModel).GetProperties().Select(p => p.Name))
+            .Concat(typeof(ChromaEffectTextureRowViewModel).GetProperties().Select(p => p.Name)).ToHashSet();
         foreach (Match m in Regex.Matches(card, @"\{Binding (\w+)\}"))
             Assert.True(members.Contains(m.Groups[1].Value), $"{{Binding {m.Groups[1].Value}}} is not a property of the view model or the row");
         Assert.NotNull(typeof(MeshPreviewViewModel).GetProperty("ScanColoursCommand"));
