@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ReyEngine.App.Services;
 using ReyEngine.App.ViewModels;
 
 namespace ReyEngine.App.Views;
@@ -26,6 +27,11 @@ public partial class MeshPreviewWindow
                 if (_dx11.Renderer.UpdatePooledTexture(key, rgba, width, height)) touched.Add(key);
             foreach (string key in touched) _dx11.Renderer.RegeneratePooledMips(key);
             if (touched.Count > 0) QueueDx11Frame();
+        };
+        vm.PushChromaParamsDx11 = items =>
+        {
+            if (_dx11Closed || _dx11?.IsReady != true) return;
+            if (ChromaDx11Parameters.Apply(_dx11.Renderer, vm.Dx11Scene, items) > 0) QueueDx11Frame();   // M825: a parameter is four floats the next draw reads
         };
         vm.QueueGlTextureUpdate = PreviewViewport.QueueTextureUpdate;
         vm.RebuildGlTextureMips = PreviewViewport.RequestMipRebuild;

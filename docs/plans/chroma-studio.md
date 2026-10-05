@@ -176,5 +176,58 @@ project holds is refused with a reason (an override beside it would be shadowed)
 folder name and the file is proven below the project root. A pending recolour is saved before the window loads another model (a failed save
 keeps the model), and the auto-save does not retry a state that already failed.
 
-**Remaining.** The material colour parameters (see the note in `MeshPreviewViewModel.ChromaRecolour.cs`); C4 effects; C5 "this skin only"
-(the warning says the recolour is in place); a texture shared by two skins' recipes belongs to the one saved last.
+**Remaining.** C4 effects; C5 "this skin only" (the warning says the recolour is in place); a texture shared by two skins' recipes belongs to the one
+saved last. (The material colour parameters, left out of M824, are M825 below.)
+
+## C3 colour parameters (M825)
+
+**What it does.** The same sliders recolour the skin bin's colour PARAMETERS (`TintColor`, `OutlineColor`, `Bloom_TintColor`, the skin block's
+`fresnelColor` / `reflectionFresnelColor`...) with the same `ColorTransform`; they are a COLOUR PARAMETERS list under the TEXTURES list of the card, each
+with a switch, Riot's colour and the colour the sliders make of it (two swatches). One pending state: Apply & Save, Ctrl+S, the auto-save, Export,
+Build Package and loading another model flush textures and parameters together (`SavePendingEditorEdits` is unchanged), and a part is saved only when it
+differs from what the project holds.
+
+**Which parameters.** The ones M812's inventory lists (`SkinColorScanner.IsColorName` + a Vector4 / Color / Vector3 value) in the skin bin's own
+materials and default block - but that heuristic is a NAME test and measured over the 14,937 shipped skin bins it also lists numbers (`VColor_G_Mask_Discard_Size`
+= (100,0,0,0) on 1,920 materials, `ColorFresnelSize`, `Fresnel_Color_Intensity`, `FresnelColor_Bias`, `Rim_Color_Strength`...), a hue shift of which would turn a size
+into another channel. `SkinColorParameters.Classify` is the narrower test a write needs: no mask/size/intensity/strength/bias/range/... word in the name, not a lone
+number in the first channel, not a negative colour (`CanTransform`), not a value the entry leaves out (an authored zero), not defined in a linked bin (shared with
+other skins: C5). The word test applies to every type (Color, Vector3, Vector4); the lone-number shape only to a Vector4. Everything left alone is listed with the reason. Census (24 champions,
+2,280 skin bins): 13,197 parameters recolourable, 3,221 left alone; over all 14,937 bins a recolourable Vector4 of shape (x, y, 0, 0) with both non-zero is 23 names and about 840
+values, all orange or brown colours with alpha 0 (`Fresnel_Color (1, 0.5, 0, 0)`), so that shape is NOT excluded, and no recolourable name has params or mix in it (blend / scroll
+names such as `Blend1_Color`, `AdditiveScroll_ColorTint_G` are saturated colours). A Color-typed value is clamped to 0..1 on write and in the preview (its bytes cannot hold more).
+
+**Never compounding.** `SkinColorParameters.Rewrite(current, riot, transform, recolour, restore)` computes every value from RIOT's untouched bin
+(`ReadRiotOriginalBytes`; for a bin the imported GameData changes, the bin LTK makes of the package's modules, `TryReadImportedOnly`) and writes it into the
+bin the project serves NOW; alpha is the current bin's own, HDR keeps its intensity, negative colours stay as authored, and nothing else in the bin is touched.
+The writer is `MaterialDocument.Serialize` - the Material tab's own - which writes properties in its own order: 85% of Riot's skin bins are not byte-identical
+to their own re-serialisation (same length, same data; `BinTreeEquivalence` agrees), and a recolour that changes no value writes nothing.
+
+**Through the bin save path.** `SaveEditorBinBytesAsync(entry, bytes, openedFrom: the bytes it read)`: the M819 guards, M823's declarations (a bin the GameData
+changes is kept as a module on top of it and a revert takes it away; an edit the declarations cannot express - a material's `paramValues` needs LTK's class
+schema - is refused with the reason), and M823's merge when a GameData bin moved meanwhile. Any other bin is NOT merged by that path, so the save reads the bin again
+right before it writes and derives the values again when it moved (three tries). Because a refusal would otherwise make every Build and Export flush throw once a slider
+moved, a material's parameters on a GameData-target bin start switched OFF with the reason on the row (the skin block's colours, which a declaration can express, stay on);
+switching one on is the person's choice, and the auto-save does not retry a state that was refused. A Riot bin the project does not hold is first copied into
+the champion's WAD folder (Copy To Project of that one asset, as the textures are placed), then edited in place; the record remembers that copy (`PlacedFile`) and,
+when the last parameter is given back and the file is still Riot's data, removes it again - a file somebody edited since stays. The Material tab: unsaved edits of the same bin are
+saved FIRST through its own save (`IsDirty` means "differs from what was opened", which stays true after a save, so unsaved is decided by comparing the document
+with the served bin), the recolour is written on top, and the tab's document is read again - selection and search kept, and not at all when the tab changed meanwhile (its
+next save merges) - so it shows the new colours and its next save starts from them; the preview is then built again from that document, so a scene the editor's own save
+started cannot land after the recolour. The undo history of the tab's document does not survive that reload.
+
+**The record.** `Project.ChromaParameterRecolors` (null until a skin has one, null again after the last revert, so an older file has no new key): per skin bin, the
+transform and the parameters the recipe owns (material path hash - 0 for the skin block -, name, occurrence); never the values. A save keeps the refs it neither recoloured nor gave
+back (a parameter the scan does not list stays owned and keeps its Revert); the card's Settled is only what the save recoloured. A parameter the recipe owns that the project no longer
+holds as the recipe wrote it (edited in the Material tab since) is flagged on the row, starts off and is kept as it is - a give-back (untick, Reset) releases it from the record without
+overwriting it; only the explicit Revert restores it, and switching it on again recolours it from Riot's value. The texture records and
+`ChromaSavedRecipe` are unchanged for an M824 recipe: it loads, shows no pending state, and its parameters start switched off.
+
+**Preview (D3D11).** The scene reads a material's parameters from `PreviewMaterial.Params` on every draw, so a recolour is four floats written into the material that
+holds the parameter (`ChromaDx11Parameters.Apply`; the skin block's `fresnelColor` goes into the arrays `PreparedCharacterScene.SkinBoundParameters` lists): no rebuild, no
+texture work, one frame later. Not drawn, and said so on the row: a parameter a material DRIVER sets (the game overrides the authored value the same way - Lillia's gear
+tints), the second copy of a repeated name (the scene reads the first, M790), and `reflectionFresnelColor` (no shader of the scene reads it). They are written all the same.
+The OpenGL viewport shows a champion's diffuse textures (which M824 pushes) and none of its material parameters, so the parameters have no live preview there; they save the same.
+
+**Remaining.** A recolour of a driver's own literal outputs (`dynamicMaterial`); linked-bin materials (C5); the GL viewport; an owned parameter edited in the Material tab
+afterwards is overwritten by the next recolour save; the bin's property order after the first parameter write.

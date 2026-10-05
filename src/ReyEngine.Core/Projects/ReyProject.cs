@@ -131,6 +131,11 @@ public sealed class ReyProject
     /// slider costs exactly one BC generation instead of one more each time.</summary>
     public List<TextureRecolorRecord> TextureRecolors { get; set; } = new();
 
+    /// <summary>M825: the Chroma Studio's recolour of a skin's colour PARAMETERS (TintColor and its like, in the skin bin), one record per
+    /// skin bin. Null - not an empty list - until a skin has one, and put back to null when the last is reverted, so a project that never
+    /// recoloured a parameter writes no new key and an older build reads the file as it always did.</summary>
+    public List<ChromaParameterRecord>? ChromaParameterRecolors { get; set; }
+
     /// <summary>M287: per-map lighting the USER authored - sun/sky, the baked-light scale, the Light.dat
     /// fit sliders, and the point-light table itself. Keyed by mapgeo, because two maps in one project
     /// have nothing to say to each other about lighting.
@@ -312,6 +317,36 @@ public sealed class TextureRecolorRecord
     /// holder's folder, because the game reads whichever copy it mounts first; Revert needs the list to take them all out. Null for a
     /// record the Recolor Textures tool made, and for a Chroma Studio record that wrote one folder.</summary>
     public List<string>? WadFolders { get; set; }
+}
+
+/// <summary>M825: which colour parameters of one skin bin the Chroma Studio recoloured, and with what. The VALUES are not stored: each is
+/// re-derived from Riot's untouched skin bin on every save, so this is only the recipe - the transform and the parameters it owns. A
+/// parameter in the list is the recolour's to rewrite (and to put back to Riot's on Revert); one that is not is never touched.</summary>
+public sealed class ChromaParameterRecord
+{
+    /// <summary>The skin bin (<c>data/characters/lillia/skins/skin49.bin</c>) the recolour belongs to.</summary>
+    public string ChromaSkin { get; set; } = "";
+
+    /// <summary>The M813 colour transform the sliders made.</summary>
+    public ColorTransform Transform { get; set; } = new();
+
+    public List<ChromaParameterRef> Parameters { get; set; } = new();
+
+    /// <summary>The project file (relative to the project folder, <c>Lillia/data/characters/lillia/skins/skin49.bin</c>) the recolour COPIED into the project because
+    /// the project did not hold the skin bin yet; null when the recolour did not place one. When the last parameter is given back, that copy is removed again - but
+    /// only if it is still the same data as Riot's bin, so a bin somebody edited since stays.</summary>
+    public string? PlacedFile { get; set; }
+}
+
+/// <summary>M825: one parameter a <see cref="ChromaParameterRecord"/> owns. Material is the path hash of the StaticMaterialDef (0 for the
+/// skin's own default block), Name the parameter as the bin spells it, Occurrence its place among the material's parameters of that name.
+/// MaterialName is for people reading project.json.</summary>
+public sealed class ChromaParameterRef
+{
+    public uint Material { get; set; }
+    public string MaterialName { get; set; } = "";
+    public string Name { get; set; } = "";
+    public int Occurrence { get; set; }
 }
 
 /// <summary>M287: one map's authored lighting. Defaults match the view-model's own initial values, so a

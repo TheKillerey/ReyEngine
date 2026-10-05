@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReyEngine.App.Services;
 using ReyEngine.Core.Decoding;
+using ReyEngine.Core.Projects;
 using ReyEngine.Formats.Characters;
 using ReyEngine.Formats.Meta;
 
@@ -83,11 +84,9 @@ public sealed partial class ChromaTextureRowViewModel : ObservableObject
 /// - reading the pristine bytes, writing the files, the records, the mounts - is the host's, behind the hooks below
 /// (<c>MainWindowViewModel.ChromaRecolour.cs</c>), the way <see cref="ScanSkinColours"/> is.</para>
 ///
-/// <para><b>Not here: the material colour PARAMETERS</b> (<c>TintColor</c> and its like) the inventory lists. They live in the skin bin's
-/// material records, which the Material tab's editor owns while it is open (its dirty state, undo, the GameData guards and the rebase on
-/// save), and a recolour of them would need Riot's untouched value to re-derive from - the saved bin holds only the recoloured one - plus
-/// a D3D11 scene rebuild per slider position (they are not pool textures). That is a second pipeline, not a reuse of this one, so the
-/// card recolours textures only and says so.</para>
+/// <para><b>The material colour PARAMETERS</b> (<c>TintColor</c> and its like) are the second half of the same recolour (M825,
+/// <c>MeshPreviewViewModel.ChromaParameters.cs</c>): the same sliders, the same pending state, saved by the same Apply &amp; Save / Ctrl+S,
+/// but into the skin bin through the bin save path rather than into texture files.</para>
 ///
 /// <para><b>Preview rate.</b> One request at a time is rendered and only the NEWEST is kept: a 2048 x 2048 texture takes ~130 ms
 /// in Release (M813), so a slider drag updates the picture a few times a second on the biggest textures and at full rate on
@@ -241,7 +240,7 @@ public sealed partial class MeshPreviewViewModel
     private HashSet<ulong> _chromaSavedHashes = new();
 
     // the newest preview request and the loop that serves it (see RequestChromaPreview). All of it under _chromaGate.
-    private (ColorTransform Transform, ulong[] Included, HashSet<ulong> Saved, int Generation) _chromaRequest;
+    private (ColorTransform Transform, ulong[] Included, HashSet<ulong> Saved, int Generation, ChromaParamPreview Params) _chromaRequest;
     private int _chromaSerial;
     private int _chromaRunning;
     private HashSet<ulong> _chromaShown = new();       // chunks the renderers draw as a recolour right now
@@ -255,6 +254,7 @@ public sealed partial class MeshPreviewViewModel
     public async Task ChromaIdleAsync()
     {
         await _chromaPrepare;
+        await _chromaParamPrepare;
         for (int i = 0; i < 2000; i++)
         {
             await _chromaLoop;
@@ -289,13 +289,18 @@ public sealed partial class MeshPreviewViewModel
         ChromaRecolourStatus = "";
         ChromaGlImageMap = null;
 
-        if (skinBin is null || ReadChromaSaved?.Invoke(skinBin) is not { } saved) return;
-        _chromaSavedTransform = saved.Transform;
-        _chromaSavedTargets = saved.Targets;
-        _chromaSavedHashes = saved.Targets.Select(t => t.Hash).ToHashSet();
+        var saved = skinBin is null ? null : ReadChromaSaved?.Invoke(skinBin);
+        ResetChromaParameters(saved);   // M825
+        if (saved is null) return;
+        if (saved.Targets.Count > 0)
+        {
+            _chromaSavedTransform = saved.Transform;
+            _chromaSavedTargets = saved.Targets;
+            _chromaSavedHashes = saved.Targets.Select(t => t.Hash).ToHashSet();
+        }
         ChromaSettings = ChromaRecolourSettings.From(saved.Transform);
-        HasSavedChromaRecolour = true;
-        ChromaRecolourStatus = $"Saved in the project: {saved.Targets.Count} texture(s) recoloured. Press Scan colours to see and change them.";
+        HasSavedChromaRecolour = saved.Targets.Count > 0 || saved.SavedParameters.Count > 0;
+        ChromaRecolourStatus = $"Saved in the project: {saved.Targets.Count} texture(s) and {saved.SavedParameters.Count} colour parameter(s) recoloured. Press Scan colours to see and change them.";
     }
 
     /// <summary>The inventory arrived: list its body textures (and, hidden, the maps it left out), switch on the ones the recolour
@@ -310,12 +315,13 @@ public sealed partial class MeshPreviewViewModel
         _chromaRows.Clear();
 
         var seen = new HashSet<ulong>();
+        bool recipe = _chromaSavedHashes.Count > 0 || _chromaSavedParamKeys.Count > 0;   // M825: a recipe of parameters alone is a recipe too
         foreach (var t in inventory.BodyTextures)
         {
             if (!seen.Add(t.Hash)) continue;
             bool outside = SkinColorInventory.IsOutsideCharacter(t.Path, inventory.CharacterFolder);
             // the textures of a saved recipe, else the body's own: what lies outside the character is also used by others and is opt-in
-            bool include = _chromaSavedHashes.Count > 0 ? _chromaSavedHashes.Contains(t.Hash) : !outside;
+            bool include = recipe ? _chromaSavedHashes.Contains(t.Hash) : !outside;
             string role = t.Role.ToString().ToLowerInvariant();
             _chromaRows.Add(new ChromaTextureRowViewModel(this, new ChromaTarget(t.Hash, t.Path), FileName(t.Path),
                 $"{role} · {t.Source}" + (outside ? " · outside this character" : ""), role, outside, isOptIn: false, t.SharedWith, include,
@@ -336,6 +342,7 @@ public sealed partial class MeshPreviewViewModel
         HasChromaTextures = _chromaRows.Count > 0;
         UpdateChromaDirty();
         _chromaPrepare = PrepareChromaTexturesAsync(generation);
+        _chromaParamPrepare = PrepareChromaParametersAsync(generation);   // M825: the skin bin's colour parameters, beside the textures
     }
 
     private void RefreshChromaVisibleRows()
@@ -505,24 +512,37 @@ public sealed partial class MeshPreviewViewModel
     private List<ChromaTarget> CarriedChromaTargets() =>
         _chromaSavedTargets.Where(t => !_chromaRows.Any(r => r.Hash == t.Hash && r.CanInclude)).ToList();
 
-    /// <summary>What a save would write: the transform and the included textures (plus the carried ones) - or (identity, none) when there
-    /// is nothing to write, so that "no recolour" is one state however the switches stand.</summary>
-    private (ColorTransform Transform, HashSet<ulong> Hashes) ChromaStateNow()
+    /// <summary>What a save would write, in two parts that are saved (and compared with what is saved) on their own: the textures - the
+    /// transform and the included ones plus the carried ones - and the colour parameters (M825) the same way. A part with nothing to write
+    /// is (identity, none), so "no recolour" is one state however the switches stand.</summary>
+    private readonly record struct ChromaState(ColorTransform Transform, HashSet<ulong> Hashes, ColorTransform ParamTransform, HashSet<SkinColorParamKey> Params)
+    {
+        public bool TexturesDiffer(ColorTransform savedTransform, HashSet<ulong> savedHashes) => !(Transform.Equals(savedTransform) && Hashes.SetEquals(savedHashes));
+        public bool ParamsDiffer(ColorTransform savedTransform, HashSet<SkinColorParamKey> savedKeys) => !(ParamTransform.Equals(savedTransform) && Params.SetEquals(savedKeys));
+        public bool SameAs(ChromaState other) =>
+            Transform.Equals(other.Transform) && Hashes.SetEquals(other.Hashes) && ParamTransform.Equals(other.ParamTransform) && Params.SetEquals(other.Params);
+    }
+
+    private ChromaState ChromaStateNow()
     {
         var transform = ChromaSettings.ToTransform();
         var hashes = IncludedChromaRows.Select(r => r.Hash).ToHashSet();
         if (!transform.IsIdentity) foreach (var carried in CarriedChromaTargets()) hashes.Add(carried.Hash);
-        return transform.IsIdentity || hashes.Count == 0 ? (ColorTransform.Identity, new HashSet<ulong>()) : (transform, hashes);
+        var keys = IncludedChromaParamRows.Select(r => r.Key).ToHashSet();
+        if (!transform.IsIdentity) foreach (var carried in CarriedChromaParams()) keys.Add(KeyOf(carried));
+        bool noTextures = transform.IsIdentity || hashes.Count == 0, noParams = transform.IsIdentity || keys.Count == 0;
+        return new ChromaState(noTextures ? ColorTransform.Identity : transform, noTextures ? new HashSet<ulong>() : hashes,
+            noParams ? ColorTransform.Identity : transform, noParams ? new HashSet<SkinColorParamKey>() : keys);
     }
 
     private void UpdateChromaDirty()
     {
-        // nothing listed (the skin was not scanned yet): there are no textures to recolour, so nothing is pending
+        // nothing listed (the skin was not scanned yet): there is nothing to recolour, so nothing is pending
         bool dirty = false;
-        if (_chromaRows.Count > 0)
+        if (_chromaRows.Count > 0 || _chromaParamRows.Count > 0)
         {
-            var (t, hashes) = ChromaStateNow();
-            dirty = !(t.Equals(_chromaSavedTransform) && hashes.SetEquals(_chromaSavedHashes));
+            var state = ChromaStateNow();
+            dirty = state.TexturesDiffer(_chromaSavedTransform, _chromaSavedHashes) || state.ParamsDiffer(_chromaSavedParamTransform, _chromaSavedParamKeys);
         }
         ChromaRecolourDirty = dirty;
         if (dirty) ChromaEdited?.Invoke();
@@ -532,18 +552,19 @@ public sealed partial class MeshPreviewViewModel
 
     private string DescribeChromaState()
     {
-        if (!HasChromaTextures) return ChromaRecolourStatus;
-        int included = IncludedChromaRows.Count();
+        if (!HasChromaTextures && !HasChromaParameters) return ChromaRecolourStatus;
+        int included = IncludedChromaRows.Count(), includedParams = IncludedChromaParamRows.Count();
         bool identity = ChromaSettings.ToTransform().IsIdentity;
+        string what = $"{included} texture(s)" + (_chromaParamRows.Count > 0 ? $" and {includedParams} colour parameter(s)" : "");
         if (ChromaRecolourDirty)
-            return identity || included == 0
-                ? (HasSavedChromaRecolour ? "Pending: put the saved recolour back to the original textures. Press Apply & Save, or Ctrl+S." : "")
-                : $"Pending: {included} texture(s) will be recoloured. Press Apply & Save, or Ctrl+S.";
-        int carried = CarriedChromaTargets().Count;
+            return identity || (included == 0 && includedParams == 0)
+                ? (HasSavedChromaRecolour ? "Pending: put the saved recolour back to Riot's textures and colours. Press Apply & Save, or Ctrl+S." : "")
+                : $"Pending: {what} will be recoloured. Press Apply & Save, or Ctrl+S.";
+        int carried = CarriedChromaTargets().Count + CarriedChromaParams().Count;
         if (HasSavedChromaRecolour)
-            return $"Saved in the project: {_chromaSavedTargets.Count} texture(s) recoloured."
+            return $"Saved in the project: {_chromaSavedTargets.Count} texture(s)" + (_chromaSavedParamRefs.Count > 0 ? $" and {_chromaSavedParamRefs.Count} colour parameter(s)" : "") + " recoloured."
                    + (carried > 0 ? $" {carried} of them are not listed here or cannot be read now; they are kept as they are." : "");
-        return identity ? "" : $"{included} texture(s) selected.";
+        return identity ? "" : $"{what} selected.";
     }
 
     /// <summary>The "this also changes N other skins" text: the union of the other skins of this character that use an included
@@ -579,9 +600,11 @@ public sealed partial class MeshPreviewViewModel
         if (_chromaRestoring) return;
         var transform = ChromaSettings.ToTransform();
         var included = IncludedChromaRows.Select(r => r.Hash).ToArray();
+        RefreshChromaParamSwatches(transform);   // M825: the swatches follow the sliders at once
+        var paramPreview = CurrentChromaParamPreview();
         lock (_chromaGate)
         {
-            _chromaRequest = (transform, included, _chromaSavedHashes, Volatile.Read(ref _chromaGeneration));
+            _chromaRequest = (transform, included, _chromaSavedHashes, Volatile.Read(ref _chromaGeneration), paramPreview);
             _chromaSerial++;
         }
         if (Interlocked.CompareExchange(ref _chromaRunning, 1, 0) != 0) return;   // the running loop will see the new serial
@@ -592,8 +615,9 @@ public sealed partial class MeshPreviewViewModel
     {
         while (true)
         {
-            (ColorTransform Transform, ulong[] Included, HashSet<ulong> Saved, int Generation) request;
+            (ColorTransform Transform, ulong[] Included, HashSet<ulong> Saved, int Generation, ChromaParamPreview Params) request;
             HashSet<ulong> shown, restore;
+            HashSet<SkinColorParamKey> paramShown, paramRestore;
             int serial;
             lock (_chromaGate)
             {
@@ -602,6 +626,9 @@ public sealed partial class MeshPreviewViewModel
                 shown = _chromaShown;
                 restore = _chromaRestore;
                 _chromaRestore = new HashSet<ulong>();
+                paramShown = _chromaParamShown;
+                paramRestore = _chromaParamRestore;
+                _chromaParamRestore = new HashSet<SkinColorParamKey>();
             }
 
             try
@@ -609,10 +636,11 @@ public sealed partial class MeshPreviewViewModel
                 if (request.Generation == Volatile.Read(ref _chromaGeneration))
                 {
                     var batch = RenderChromaBatch(request.Transform, request.Included, request.Saved, shown, restore, out var nowShown, _chromaCts.Token);
+                    var paramBatch = RenderChromaParams(request.Transform, request.Params, paramShown, paramRestore, out var paramNowShown);   // M825: four floats each - no work
                     lock (_chromaGate)
-                        if (request.Generation == Volatile.Read(ref _chromaGeneration)) _chromaShown = nowShown;
-                    if (batch.Count > 0)
-                        await ChromaUiPost(() => PushChromaBatch(batch, request.Generation));
+                        if (request.Generation == Volatile.Read(ref _chromaGeneration)) { _chromaShown = nowShown; _chromaParamShown = paramNowShown; }
+                    if (batch.Count > 0 || paramBatch.Count > 0)
+                        await ChromaUiPost(() => { if (batch.Count > 0) PushChromaBatch(batch, request.Generation); PushChromaParamBatch(paramBatch, request.Generation); });
                 }
             }
             catch (OperationCanceledException) { }
@@ -702,7 +730,7 @@ public sealed partial class MeshPreviewViewModel
     internal void ReapplyChromaPreview()
     {
         if (!ChromaRecolourDirty) return;
-        lock (_chromaGate) _chromaShown = new HashSet<ulong>();
+        lock (_chromaGate) { _chromaShown = new HashSet<ulong>(); _chromaParamShown = new HashSet<SkinColorParamKey>(); }
         RequestChromaPreview();
     }
 
@@ -716,7 +744,7 @@ public sealed partial class MeshPreviewViewModel
 
     /// <summary>The state a save last failed on (transform and textures), or null. The auto-save skips a pending recolour in exactly that
     /// state - it would fail the same way, and each try rebuilds the mounts - until something changes; a manual save always tries.</summary>
-    private (ColorTransform Transform, HashSet<ulong> Hashes)? _chromaFailedState;
+    private ChromaState? _chromaFailedState;
 
     /// <summary>A recolour is pending and the auto-save has not already failed on exactly this state.</summary>
     public bool ChromaAutoSaveDue
@@ -725,12 +753,11 @@ public sealed partial class MeshPreviewViewModel
         {
             if (!HasPendingChromaRecolour) return false;
             if (_chromaFailedState is not { } failed) return true;
-            var (transform, hashes) = ChromaStateNow();
-            return !(transform.Equals(failed.Transform) && hashes.SetEquals(failed.Hashes));
+            return !ChromaStateNow().SameAs(failed);
         }
     }
 
-    private bool CanApplyChroma() => ChromaRecolourDirty && !ChromaSaving && _chromaSkinBin is not null && SaveChromaRecolour is not null;
+    private bool CanApplyChroma() => ChromaRecolourDirty && !ChromaSaving && _chromaSkinBin is not null && (SaveChromaRecolour is not null || SaveChromaParameters is not null);
 
     [RelayCommand(CanExecute = nameof(CanApplyChroma))]
     private async Task ApplyChromaRecolour()
@@ -740,77 +767,161 @@ public sealed partial class MeshPreviewViewModel
     }
 
     /// <summary>Save what is pending through the host: the Apply button, Ctrl+S, the autosave and an export all come here. Throws
-    /// when the save failed, so the caller that flushes keeps the edit pending.</summary>
+    /// when the save failed, so the caller that flushes keeps the edit pending. The textures are saved first, then (M825) the colour
+    /// parameters; each part only when it differs from what the project holds, so toggling a parameter does not re-encode a texture.</summary>
     public async Task SaveChromaRecolourNowAsync()
     {
-        if (!ChromaRecolourDirty || _chromaSkinBin is not { } skinBin || SaveChromaRecolour is not { } save) return;
+        if (!ChromaRecolourDirty || _chromaSkinBin is not { } skinBin) return;
+        if (SaveChromaRecolour is null && SaveChromaParameters is null) return;
         if (ChromaSaveBlocker?.Invoke() is { } blocked) throw new InvalidOperationException(blocked);
 
-        var (transform, hashes) = ChromaStateNow();
+        var state = ChromaStateNow();
+        bool texturesDirty = state.TexturesDiffer(_chromaSavedTransform, _chromaSavedHashes) && SaveChromaRecolour is not null;
+        bool paramsDirty = state.ParamsDiffer(_chromaSavedParamTransform, _chromaSavedParamKeys) && SaveChromaParameters is not null;
+        if (!texturesDirty && !paramsDirty) return;
+
+        ChromaSaving = true;
+        var notes = new List<string>();
+        try
+        {
+            try
+            {
+                if (texturesDirty) notes.Add(await SaveChromaTexturesAsync(skinBin, state, SaveChromaRecolour!));
+                if (paramsDirty) notes.Add(await SaveChromaParametersPartAsync(skinBin, state, SaveChromaParameters!));
+            }
+            catch
+            {
+                _chromaFailedState = state;   // the auto-save does not try this same state again every tick
+                throw;
+            }
+            UpdateChromaDirty();
+            ChromaRecolourStatus = "Saved: " + string.Join(" ", notes.Where(n => n.Length > 0));
+        }
+        finally { ChromaSaving = false; }
+    }
+
+    /// <summary>The textures half of a save (M824, unchanged in what it does). Returns the line the status shows.</summary>
+    private async Task<string> SaveChromaTexturesAsync(string skinBin, ChromaState state,
+        Func<string, ColorTransform, IReadOnlyList<ChromaTarget>, IReadOnlyList<ChromaTarget>, Task<ChromaSaveResult>> save)
+    {
+        var transform = state.Transform;
+        var hashes = state.Hashes;
         var targets = IncludedChromaRows.Where(r => hashes.Contains(r.Hash)).Select(r => r.Target).ToList();
         // the saved textures this card has no switch for stay as they are (see CarriedChromaTargets)
         var carried = hashes.Count == 0 ? new List<ChromaTarget>() : CarriedChromaTargets();
         // the earlier recipe's textures that this one no longer covers go back to Riot's
         var stale = _chromaSavedTargets.Where(t => !hashes.Contains(t.Hash)).ToList();
 
-        ChromaSaving = true;
-        try
-        {
-            ChromaSaveResult result;
-            try
-            {
-                result = await save(skinBin, transform, targets, stale);
-                if (result.Failed > 0 && result.Written == 0 && targets.Count > 0)
-                    throw new InvalidOperationException(result.Summary + (result.Notes.Count > 0 ? ": " + result.Notes[0] : ""));
-            }
-            catch
-            {
-                _chromaFailedState = (transform, hashes);   // the auto-save does not try this same state again every tick
-                throw;
-            }
-            _chromaFailedState = result.Failed > 0 ? (transform, hashes) : null;   // a save that left a texture unwritten is not retried by every tick either
+        var result = await save(skinBin, transform, targets, stale);
+        if (result.Failed > 0 && result.Written == 0 && targets.Count > 0)
+            throw new InvalidOperationException(result.Summary + (result.Notes.Count > 0 ? ": " + result.Notes[0] : ""));
+        _chromaFailedState = result.Failed > 0 ? state : null;   // a save that left a texture unwritten is not retried by every tick either
 
-            // the settled textures are the saved recipe: a written one carries a record, an unchanged one needs none
-            var settled = new HashSet<ulong>(result.Settled);
-            var written = new HashSet<ulong>(result.WrittenHashes);
-            foreach (var keep in carried) settled.Add(keep.Hash);
-            _chromaSavedTransform = settled.Count == 0 ? ColorTransform.Identity : transform;
-            _chromaSavedTargets = targets.Where(t => written.Contains(t.Hash)).Concat(carried).ToList();
-            _chromaSavedHashes = settled;
-            HasSavedChromaRecolour = _chromaSavedTargets.Count > 0;
-            foreach (var row in _chromaRows)
-                row.Note = written.Contains(row.Hash) ? "recoloured in the project" : (row.CanInclude ? "" : row.Note);
-            UpdateChromaDirty();
-            ChromaRecolourStatus = "Saved: " + result.Summary + "." + (result.Notes.Count > 0 ? " " + result.Notes[0] : "");
-        }
-        finally { ChromaSaving = false; }
+        // the settled textures are the saved recipe: a written one carries a record, an unchanged one needs none
+        var settled = new HashSet<ulong>(result.Settled);
+        var written = new HashSet<ulong>(result.WrittenHashes);
+        foreach (var keep in carried) settled.Add(keep.Hash);
+        _chromaSavedTransform = settled.Count == 0 ? ColorTransform.Identity : transform;
+        _chromaSavedTargets = targets.Where(t => written.Contains(t.Hash)).Concat(carried).ToList();
+        _chromaSavedHashes = settled;
+        HasSavedChromaRecolour = _chromaSavedTargets.Count > 0 || _chromaSavedParamRefs.Count > 0;
+        foreach (var row in _chromaRows)
+            row.Note = written.Contains(row.Hash) ? "recoloured in the project" : (row.CanInclude ? "" : row.Note);
+        return result.Summary + "." + (result.Notes.Count > 0 ? " " + result.Notes[0] : "");
     }
 
-    private bool CanRevertChroma() => HasSavedChromaRecolour && !ChromaSaving && RevertChromaRecolour is not null;
+    /// <summary>The colour parameters half of a save (M825): the included parameters re-derived from Riot's value and written into the skin
+    /// bin, the earlier recipe's parameters that are no longer part of it put back to Riot's.</summary>
+    private async Task<string> SaveChromaParametersPartAsync(string skinBin, ChromaState state,
+        Func<string, ColorTransform, IReadOnlyList<ChromaParameterRef>, IReadOnlyList<ChromaParameterRef>, Task<ChromaParamSaveResult>> save)
+    {
+        var transform = state.ParamTransform;
+        var keys = state.Params;
+        var targets = IncludedChromaParamRows.Where(r => keys.Contains(r.Key)).Select(r => r.ToRef()).ToList();
+        // the saved parameters this card has no switch for stay as they are (see CarriedChromaParams)
+        var carried = keys.Count == 0 ? new List<ChromaParameterRef>() : CarriedChromaParams();
+        // the earlier recipe's parameters that this one no longer covers go back to Riot's
+        var stale = _chromaSavedParamRefs.Where(p => !keys.Contains(KeyOf(p))).ToList();
 
-    /// <summary>Put every texture of this skin's saved recolour back to Riot's, forget the record and reset the sliders.</summary>
+        var result = await save(skinBin, transform, targets, stale);
+
+        var settled = new HashSet<SkinColorParamKey>(result.Settled);
+        foreach (var keep in carried) settled.Add(KeyOf(keep));
+        bool complete = targets.All(t => settled.Contains(KeyOf(t)));
+        if (!complete) _chromaFailedState = state;   // a parameter the bin could not take is not retried by every tick
+        _chromaSavedParamTransform = settled.Count == 0 ? ColorTransform.Identity : transform;
+        _chromaSavedParamRefs = targets.Where(t => settled.Contains(KeyOf(t))).Concat(carried).ToList();
+        _chromaSavedParamKeys = settled;
+        HasSavedChromaRecolour = _chromaSavedTargets.Count > 0 || _chromaSavedParamRefs.Count > 0;
+        foreach (var row in _chromaParamRows)
+        {
+            bool owned = _chromaSavedParamKeys.Contains(row.Key);
+            bool handled = owned && !row.KeepsEdit || stale.Any(p => KeyOf(p) == row.Key);   // written, or given back to Riot's; a kept edit stays as it is
+            if (!handled) continue;
+            row.Note = owned ? "recoloured in the project" : (row.CanInclude ? "" : row.Info.Reason);
+            row.IsEditedOutside = false;
+            row.OwnedEditedNow = false;
+            // what the project holds now: the recoloured value of an owned parameter, Riot's value of one the recipe let go
+            if (owned) { var made = transform.Apply(row.Info.Riot); row.CurrentValue = new System.Numerics.Vector4(made.X, made.Y, made.Z, row.CurrentValue.W); }
+            else if (stale.Any(p => KeyOf(p) == row.Key)) row.CurrentValue = new System.Numerics.Vector4(row.Info.Riot.X, row.Info.Riot.Y, row.Info.Riot.Z, row.CurrentValue.W);
+        }
+        if (!complete && result.Notes.Count == 0) throw new InvalidOperationException(result.Summary);
+        return result.Summary + "." + (result.Notes.Count > 0 ? " " + result.Notes[0] : "");
+    }
+
+    private bool CanRevertChroma() => HasSavedChromaRecolour && !ChromaSaving && (RevertChromaRecolour is not null || RevertChromaParameters is not null);
+
+    /// <summary>Put every texture and colour parameter of this skin's saved recolour back to Riot's, forget the record and reset the sliders. The two
+    /// halves are separate: a half that cannot be put back (the bin is refused, say) keeps its saved state and is reported, while the other is done.</summary>
     [RelayCommand(CanExecute = nameof(CanRevertChroma))]
     private async Task RevertChromaRecolourAsync()
     {
-        if (_chromaSkinBin is not { } skinBin || RevertChromaRecolour is not { } revert) return;
+        if (_chromaSkinBin is not { } skinBin) return;
         var targets = _chromaSavedTargets.ToList();
+        var paramRefs = _chromaSavedParamRefs.ToList();
         ChromaSaving = true;
         try
         {
-            int restored = revert(skinBin, targets);   // synchronous and touches the project: on this thread
+            int restored = 0, restoredParams = 0;
+            string? paramFailure = null;
+            if (targets.Count > 0 && RevertChromaRecolour is { } revert)
+                restored = revert(skinBin, targets);   // synchronous and touches the project: on this thread
+            if (paramRefs.Count > 0 && RevertChromaParameters is { } revertParams)
+            {
+                try { restoredParams = await revertParams(skinBin, paramRefs); }
+                catch (Exception ex) { paramFailure = ex.Message; }
+            }
+            bool paramsDone = paramFailure is null;
 
             // the renderers still show the recolour: draw the originals, then forget the state
             await EnsureChromaOriginalsAsync(targets);
-            ChromaSettings = ChromaRecolourSettings.Default;
             _chromaSavedTransform = ColorTransform.Identity;
             _chromaSavedTargets = Array.Empty<ChromaTarget>();
             _chromaSavedHashes = new HashSet<ulong>();
-            HasSavedChromaRecolour = false;
             foreach (var row in _chromaRows) if (row.CanInclude) row.Note = "";
-            lock (_chromaGate) _chromaRestore = new HashSet<ulong>(_chromaRestore.Concat(targets.Select(t => t.Hash)));
+            if (paramsDone)
+            {
+                _chromaSavedParamTransform = ColorTransform.Identity;
+                _chromaSavedParamRefs = Array.Empty<ChromaParameterRef>();
+                _chromaSavedParamKeys = new HashSet<SkinColorParamKey>();
+                foreach (var row in _chromaParamRows)
+                {
+                    if (paramRefs.Any(p => KeyOf(p) == row.Key)) row.CurrentValue = new System.Numerics.Vector4(row.Info.Riot.X, row.Info.Riot.Y, row.Info.Riot.Z, row.CurrentValue.W);
+                    row.Note = row.CanInclude ? "" : row.Info.Reason;
+                }
+            }
+            HasSavedChromaRecolour = _chromaSavedTargets.Count > 0 || _chromaSavedParamRefs.Count > 0;
+            if (paramsDone) ChromaSettings = ChromaRecolourSettings.Default;
+            lock (_chromaGate)
+            {
+                _chromaRestore = new HashSet<ulong>(_chromaRestore.Concat(targets.Select(t => t.Hash)));
+                if (paramsDone) _chromaParamRestore = new HashSet<SkinColorParamKey>(_chromaParamRestore.Concat(paramRefs.Select(KeyOf)));
+            }
             UpdateChromaDirty();
             RequestChromaPreview();
-            ChromaRecolourStatus = $"Reverted: {restored} texture(s) put back to the original.";
+            ChromaRecolourStatus = paramsDone
+                ? $"Reverted: {restored} texture(s)" + (paramRefs.Count > 0 ? $" and {restoredParams} colour parameter(s)" : "") + " put back to the original."
+                : $"Reverted {restored} texture(s), but the colour parameters were not put back: {paramFailure}";
         }
         finally { ChromaSaving = false; }
     }

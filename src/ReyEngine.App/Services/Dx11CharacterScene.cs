@@ -62,6 +62,11 @@ public sealed class PreparedCharacterScene
     public List<string> Failures { get; } = new();
     public string Report { get; set; } = "";
 
+    /// <summary>M825: the parameter arrays that carry one of the SKIN BLOCK's own values (<c>fresnelColor</c> -> <c>Fresnel_Color</c>) into a
+    /// slice - the very arrays the committed materials read, one per slice that does not author the parameter itself. The Chroma Studio
+    /// rewrites them in place to preview a recolour of the skin block, which has no material to patch.</summary>
+    public List<(string Name, float[] Value)> SkinBoundParameters { get; } = new();
+
     /// <summary>M763: Riot's five bloom blobs, loaded here in the CPU half exactly as the map scene loads
     /// them (<see cref="Dx11SceneBuilder.LoadBloomShaders"/>). Until M763 the character window never set
     /// them, so its renderer had no chain and a champion's glow (diffuse_bloom tails, fresnel rims) was
@@ -620,7 +625,9 @@ public static class Dx11CharacterScene
             {
                 if (authored.Contains(name)) return;
                 parameters.RemoveAll(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-                parameters.Add((name, new[] { x, y, z, w }));
+                var bound = new[] { x, y, z, w };
+                parameters.Add((name, bound));
+                scene.SkinBoundParameters.Add((name, bound));   // M825
             }
             if (skin.SelfIllumination is { } si) Put("SELF_ILLUMINATION", si, si, si, si);
             if (skin.Fresnel is { } fr) Put("Fresnel_Size", fr, fr, fr, fr);

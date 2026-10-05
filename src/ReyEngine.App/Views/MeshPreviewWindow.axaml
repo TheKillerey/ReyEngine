@@ -798,12 +798,12 @@
                     </Style>
                   </StackPanel.Styles>
                   <TextBlock Classes="cardTitle" Text="BODY RECOLOUR"
-                             ToolTip.Tip="Recolour the body textures of this skin with one transform: hue, saturation, brightness, colourise, a hue range and grey protection. The character shows it live; Apply and Save (or Ctrl+S) writes the textures into the project from Riot's untouched originals, so Build Package and .fantome ship them." />
+                             ToolTip.Tip="Recolour the body textures and the colour parameters (TintColor and its like) of this skin with one transform: hue, saturation, brightness, colourise, a hue range and grey protection. The character shows it live; Apply and Save (or Ctrl+S) writes the textures and the skin bin into the project from Riot's untouched originals, so Build Package and .fantome ship them." />
                   <TextBlock Text="{Binding ChromaRecolourStatus}" FontSize="10" TextWrapping="Wrap"
                              Foreground="{DynamicResource ReyAccentBrush}" />
-                  <TextBlock Text="Press Scan colours to list the body textures this recolour can act on." FontSize="10" TextWrapping="Wrap"
-                             Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding !HasChromaTextures}" />
-                  <StackPanel Spacing="4" IsVisible="{Binding HasChromaTextures}">
+                  <TextBlock Text="Press Scan colours to list the body textures and colour parameters this recolour can act on." FontSize="10" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding !HasChromaRecolourControls}" />
+                  <StackPanel Spacing="4" IsVisible="{Binding HasChromaRecolourControls}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                       <Button Classes="tool" Content="Apply &amp; Save" FontSize="11" Padding="8,2" Command="{Binding ApplyChromaRecolourCommand}"
                               ToolTip.Tip="Write the recoloured textures into the project (re-derived from Riot's originals) and record the sliders in the project file. Ctrl+S does the same." />
@@ -815,7 +815,7 @@
                     <TextBlock Text="{Binding ChromaShareWarning}" FontSize="10" TextWrapping="Wrap" IsVisible="{Binding HasChromaShareWarning}"
                                Foreground="{DynamicResource ReyWarningBrush}" />
                   </StackPanel>
-                  <StackPanel Spacing="3" IsVisible="{Binding HasChromaTextures}">
+                  <StackPanel Spacing="3" IsVisible="{Binding HasChromaRecolourControls}">
                     <Grid ColumnDefinitions="86,*,40">
                       <TextBlock Text="Hue" FontSize="11" VerticalAlignment="Center" ToolTip.Tip="Turn every colour round the hue wheel. +120 turns red into green." />
                       <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding ChromaHue, Mode=TwoWay}" />
@@ -872,11 +872,11 @@
                       <TextBlock Grid.Column="2" Text="{Binding ChromaGreyFeather, StringFormat='{}{0:0.00}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
                     </Grid>
 
-                    <TextBlock Text="TEXTURES" FontSize="10" Margin="0,6,0,0" Foreground="{DynamicResource ReyTextDimBrush}"
+                    <TextBlock Text="TEXTURES" FontSize="10" Margin="0,6,0,0" Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding HasChromaTextures}"
                                ToolTip.Tip="The body textures the recolour acts on. A texture the project writer cannot write back (DDS, BC5, BGRA8) is listed with the reason and stays as it is." />
-                    <CheckBox Content="Show masks and data maps (left out by default)" IsChecked="{Binding ChromaShowExcluded}" FontSize="10"
+                    <CheckBox Content="Show masks and data maps (left out by default)" IsChecked="{Binding ChromaShowExcluded}" FontSize="10" IsVisible="{Binding HasChromaTextures}"
                               ToolTip.Tip="Masks, normal maps and channel-packed data maps hold lighting data, not colour: recolouring one corrupts the lighting it carries. They can be switched on here if you know what you are doing." />
-                    <ScrollViewer MaxHeight="150" HorizontalScrollBarVisibility="Disabled">
+                    <ScrollViewer MaxHeight="150" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasChromaTextures}">
                       <ItemsControl ItemsSource="{Binding ChromaTextures}">
                         <ItemsControl.ItemTemplate>
                           <DataTemplate x:DataType="vm:ChromaTextureRowViewModel">
@@ -895,6 +895,36 @@
                                 <Border Classes="badge warn" IsVisible="{Binding IsShared}" ToolTip.Tip="{Binding SharedTip}">
                                   <TextBlock Text="{Binding SharedBadge}" />
                                 </Border>
+                              </StackPanel>
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+
+                    <!-- M825: the skin bin's colour parameters (TintColor and its like), recoloured by the same sliders. The two swatches are
+                         Riot's colour and what the sliders make of it. -->
+                    <TextBlock Text="COLOUR PARAMETERS" FontSize="10" Margin="0,6,0,0" Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding HasChromaParameters}"
+                               ToolTip.Tip="The colour parameters of this skin's materials (TintColor, OutlineColor, the skin's fresnel colour...). Apply and Save writes them into the skin bin, derived from Riot's value, so Build Package and .fantome ship them. The Direct3D 11 viewport shows them live; a parameter that is a number named after a colour, a negative colour or one in a linked bin is listed with the reason and left alone." />
+                    <TextBlock Text="{Binding ChromaParameterProblem}" FontSize="10" TextWrapping="Wrap" IsVisible="{Binding HasChromaParameterProblem}"
+                               Foreground="{DynamicResource ReyWarningBrush}" />
+                    <ScrollViewer MaxHeight="150" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasChromaParameters}">
+                      <ItemsControl ItemsSource="{Binding ChromaParameters}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:ChromaParameterRowViewModel">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ToolTip.Tip="{Binding Tip}" Margin="0,1">
+                              <CheckBox Grid.Column="0" IsChecked="{Binding IsIncluded, Mode=TwoWay}" IsEnabled="{Binding CanInclude}" MinWidth="0" Margin="0,0,4,0" />
+                              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Note}" FontSize="9" IsVisible="{Binding HasNote}" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource ReyWarningBrush}" />
+                              </StackPanel>
+                              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" Margin="6,0,0,0" VerticalAlignment="Center" IsVisible="{Binding CanInclude}">
+                                <Border Width="16" Height="16" CornerRadius="2" BorderThickness="1" BorderBrush="{DynamicResource ReyBorderBrush}"
+                                        Background="{Binding OriginalBrush}" />
+                                <Border Width="16" Height="16" CornerRadius="2" BorderThickness="1" BorderBrush="{DynamicResource ReyBorderBrush}"
+                                        Background="{Binding ResultBrush}" />
                               </StackPanel>
                             </Grid>
                           </DataTemplate>

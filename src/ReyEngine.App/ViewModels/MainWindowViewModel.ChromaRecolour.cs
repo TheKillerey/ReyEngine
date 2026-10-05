@@ -35,6 +35,7 @@ public sealed partial class MainWindowViewModel
         MeshPreview.ChromaEdited = ScheduleAutoSave;   // arm the auto-save on the EDIT, as the material editor does
         MeshPreview.AcquireChromaReaders = () => AcquireReaderLease(_mounts, _archive);
         MeshPreview.IsChromaProjectEdited = IsChromaProjectEdited;
+        WireChromaParameters();   // M825: the skin bin's colour parameters, saved through the bin save path
     }
 
     /// <summary>The pristine original of a body texture, read on a worker. The caller holds the readers' lease
@@ -74,7 +75,11 @@ public sealed partial class MainWindowViewModel
         var mine = Project.TextureRecolors
             .Where(r => r.Transform is not null && string.Equals(r.ChromaSkin, skinBin, StringComparison.OrdinalIgnoreCase))
             .ToList();
-        return mine.Count == 0 ? null : new ChromaSavedRecipe(mine[0].Transform!, mine.Select(r => new ChromaTarget(r.PathHash, r.AssetPath)).ToList());
+        var parameters = ChromaParameterRecordOf(skinBin);   // M825
+        if (mine.Count == 0 && parameters is null) return null;
+        return new ChromaSavedRecipe(mine.Count > 0 ? mine[0].Transform! : parameters!.Transform,
+            mine.Select(r => new ChromaTarget(r.PathHash, r.AssetPath)).ToList(),
+            parameters?.Parameters.ToList(), parameters?.Transform);
     }
 
     /// <summary>

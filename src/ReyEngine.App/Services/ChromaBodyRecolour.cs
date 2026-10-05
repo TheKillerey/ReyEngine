@@ -1,4 +1,7 @@
+using System.Numerics;
 using ReyEngine.Core.Decoding;
+using ReyEngine.Core.Projects;
+using ReyEngine.Formats.Characters;
 
 namespace ReyEngine.App.Services;
 
@@ -6,8 +9,43 @@ namespace ReyEngine.App.Services;
 /// <c>0x...</c> link has no path to hash), the path is what the project folder file is named.</summary>
 public sealed record ChromaTarget(ulong Hash, string Path);
 
-/// <summary>M824: what project.json holds for one skin's body recolour - the transform and the textures it was applied to.</summary>
-public sealed record ChromaSavedRecipe(ColorTransform Transform, IReadOnlyList<ChromaTarget> Targets);
+/// <summary>M824: what project.json holds for one skin's body recolour - the transform and the textures it was applied to.
+/// M825 adds, optionally, the colour parameters the recolour owns and the transform they were written with (null and empty for a
+/// recipe saved before, which therefore loads exactly as it did).</summary>
+public sealed record ChromaSavedRecipe(ColorTransform Transform, IReadOnlyList<ChromaTarget> Targets,
+    IReadOnlyList<ChromaParameterRef>? Parameters = null, ColorTransform? ParameterTransform = null)
+{
+    public IReadOnlyList<ChromaParameterRef> SavedParameters => Parameters ?? Array.Empty<ChromaParameterRef>();
+}
+
+/// <summary>M825: one colour parameter of the skin bin as the card lists it - Riot's value (what every recolour is derived from), the
+/// value the project's bin holds now, and whether a recolour may act on it.</summary>
+/// <param name="EditedOutside">The project's value differs from Riot's and no recipe accounts for it: somebody edited it in the Material tab
+/// (or a mod's GameData did). Left off by default; switching it on means saving replaces that edit.</param>
+/// <param name="DrivenBy">A material driver sets this parameter at run time (see <see cref="SkinColorParam.DrivenBy"/>); the preview leaves it alone.</param>
+/// <param name="OwnedEdited">The recipe owns this parameter but the project's value is no longer what the recipe wrote: it was edited (in the Material tab) since.
+/// Left off, and kept as it is, unless the person switches it on again.</param>
+/// <param name="DefaultOffReason">Why the row starts switched off although a recolour may act on it (a save of it is likely to be refused), or null.</param>
+public sealed record ChromaParameterInfo(SkinColorParamKey Key, string MaterialName, string TypeName, Vector4 Riot, Vector4 Current,
+    bool Recolourable, string Reason, bool EditedOutside, string? DrivenBy = null, bool OwnedEdited = false, string? DefaultOffReason = null);
+
+/// <summary>M825: what the host read for the card's colour parameter list. <see cref="Problem"/> says why the list is empty or short
+/// ("Riot's original skin bin cannot be read..."), or is empty.</summary>
+public sealed record ChromaParameterSnapshot(IReadOnlyList<ChromaParameterInfo> Parameters, string Problem = "");
+
+/// <summary>M825: one recoloured colour parameter on its way to the D3D11 scene: which parameter, the material's name (what the renderer's
+/// materials are called) and the four floats the shader reads.</summary>
+public sealed record ChromaParamPush(SkinColorParamKey Key, string MaterialName, float[] Value);
+
+/// <summary>M825: what a save of the colour parameters did, for the card's status line and the log.</summary>
+/// <param name="Settled">The parameters the bin now holds as the recipe says (written, or already so): these are the saved recipe.</param>
+public sealed record ChromaParamSaveResult(int Written, int Unchanged, int Skipped, int Reverted,
+    IReadOnlyList<SkinColorParamKey> Settled, IReadOnlyList<string> Notes)
+{
+    public string Summary =>
+        $"{Written} colour parameter(s) written" + (Unchanged > 0 ? $", {Unchanged} already as wanted" : "")
+        + (Skipped > 0 ? $", {Skipped} left alone" : "") + (Reverted > 0 ? $", {Reverted} put back to Riot's" : "");
+}
 
 /// <summary>M824: one recoloured texture on its way to a renderer: the chunk, its RGBA8 texels and their size.</summary>
 public sealed record ChromaPushItem(ulong Hash, byte[] Rgba, int Width, int Height);
@@ -179,5 +217,43 @@ public sealed class ChromaPreviewBuffers
             transform.ApplyInPlace(result.AsSpan(start * 4, count * 4));
         });
         return result;
+    }
+}
+
+/// <summary>
+/// M825: where a recoloured colour parameter goes in the D3D11 character scene. The renderer fills each material's constant buffers on every
+/// draw from <c>PreviewMaterial.Params</c>, so a parameter's new colour is written into the material that holds it and the next frame shows it:
+/// no scene rebuild, no texture work. The window calls this with the view model's batch; a test calls the same code against a real device.
+/// </summary>
+public static class ChromaDx11Parameters
+{
+    /// <summary>Write the colours into the committed character materials (the ones whose <c>CharacterSubmeshIndex</c> says they are the
+    /// character's, not a particle's or a prop's) and into the arrays the skin block's own colour is carried in. Returns how many places were
+    /// written - 0 means nothing on screen holds any of these parameters.</summary>
+    public static int Apply(ReyEngine.Rendering.D3D11.ShaderPreviewRenderer renderer, PreparedCharacterScene? scene, IReadOnlyList<ChromaParamPush> items)
+    {
+        int touched = 0;
+        foreach (var item in items)
+        {
+            if (item.Value.Length < 4) continue;
+            if (item.Key.Material == 0)
+            {
+                // the skin block's own colour: the scene hands it to every slice that does not author the parameter itself, one array each
+                if (scene is null || !item.Key.Name.Equals("fresnelColor", StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (var (name, value) in scene.SkinBoundParameters)
+                    if (name.Equals("Fresnel_Color", StringComparison.OrdinalIgnoreCase) && value.Length >= 4) { Array.Copy(item.Value, value, 4); touched++; }
+                continue;
+            }
+            foreach (var material in renderer.Materials)
+            {
+                if (material.CharacterSubmeshIndex < 0 || !string.Equals(material.Name, item.MaterialName, StringComparison.OrdinalIgnoreCase)) continue;
+                // the array the scene's slice and this material share is rewritten in place. A material that does not hold the parameter is left
+                // alone: the scene feeds the shader what it was built with, and a value it never had is not what the game draws.
+                if (!material.Params.TryGetValue(item.Key.Name, out var held) || held.Length < 4) continue;
+                Array.Copy(item.Value, held, 4);
+                touched++;
+            }
+        }
+        return touched;
     }
 }

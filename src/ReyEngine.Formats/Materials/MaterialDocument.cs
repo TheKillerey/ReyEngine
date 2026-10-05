@@ -1684,6 +1684,26 @@ public sealed class MaterialParameter
         }
     }
 
+    /// <summary>M825: write a colour into the parameter, in the type the parameter already has (a Vector4, a Color or a Vector3 - a
+    /// Vector3 has no alpha, so W is dropped; a Color is clamped to 0..1, the range its bytes hold). False for any other type, and for a parameter whose entry writes no value
+    /// (<see cref="IsValueOmitted"/>): that sparse encoding means an authored zero, and giving it a value is an edit of its own that
+    /// the Chroma Studio never makes (a zero has no hue to move). The typed property is changed in place, like <see cref="Apply"/>.</summary>
+    public bool TrySetColor(System.Numerics.Vector4 v)
+    {
+        if (_omittedValue) return false;
+        switch (_prop)
+        {
+            case BinTreeVector4 p: p.Value = v; return true;
+            case BinTreeColor p:
+                // a Color is stored in bytes: a value above 1 (a brightness boost) would overflow them, a negative one wrap
+                static float Unit(float f) => float.IsNaN(f) ? 0f : Math.Clamp(f, 0f, 1f);
+                p.Value = new LeagueToolkit.Core.Primitives.Color(Unit(v.X), Unit(v.Y), Unit(v.Z), Unit(v.W));
+                return true;
+            case BinTreeVector3 p: p.Value = new System.Numerics.Vector3(v.X, v.Y, v.Z); return true;
+            default: return false;
+        }
+    }
+
     /// <summary>M812: the material names this parameter and writes no value for it - an authored zero (M673), which is
     /// not the same as a parameter the material does not name. Meaningful on a freshly parsed document; once the value
     /// has been edited the entry carries one.</summary>

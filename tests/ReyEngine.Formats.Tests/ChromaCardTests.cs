@@ -465,7 +465,8 @@ public sealed class ChromaCardTests
         // every {Binding X} names a real member of the view model or of the row
         var members = typeof(MeshPreviewViewModel).GetProperties().Select(p => p.Name)
             .Concat(typeof(ChromaRowViewModel).GetProperties().Select(p => p.Name))
-            .Concat(typeof(ChromaTextureRowViewModel).GetProperties().Select(p => p.Name)).ToHashSet();   // M824: the recolour's texture rows
+            .Concat(typeof(ChromaTextureRowViewModel).GetProperties().Select(p => p.Name))   // M824: the recolour's texture rows
+            .Concat(typeof(ChromaParameterRowViewModel).GetProperties().Select(p => p.Name)).ToHashSet();   // M825: and its colour parameter rows
         foreach (Match m in Regex.Matches(card, @"\{Binding (\w+)\}"))
             Assert.True(members.Contains(m.Groups[1].Value), $"{{Binding {m.Groups[1].Value}}} is not a property of the view model or the row");
         Assert.NotNull(typeof(MeshPreviewViewModel).GetProperty("ScanColoursCommand"));
