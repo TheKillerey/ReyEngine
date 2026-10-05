@@ -325,6 +325,9 @@ public sealed class LtkGameIndexHardeningTests : IDisposable
                 Thread.Sleep(20);   // by now the big archive is open on its own worker, with most of its chunks to go
                 lock (gate)
                 {
+                    // once: how many reports a build makes depends on how its workers are scheduled, which a loaded
+                    // machine changes, and only the first report is sure to come while the big archive is still open
+                    if (renames > 0) return;
                     // a handle opened without FileShare.Delete would refuse this; the file goes away and comes back, as a patcher replacing it would
                     foreach (string archive in archives)
                     {
@@ -338,7 +341,7 @@ public sealed class LtkGameIndexHardeningTests : IDisposable
 
         var index = GameObjectIndexBuilder.Build(Game, new GameObjectIndexOptions { Workers = 2 }, progress);
 
-        Assert.Equal(2 * archives.Length, renames);
+        Assert.Equal(archives.Length, renames);
         // the read went on through the handle of the file that was renamed under it
         Assert.Equal(bins + 1, index.DeclarationCount);
         Assert.True(index.IsSettled);
