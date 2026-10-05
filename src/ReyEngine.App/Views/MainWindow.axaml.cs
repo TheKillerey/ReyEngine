@@ -280,7 +280,10 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         vm.Dx11ViewportStatus = "D3D11  preparing scene…";
         QueueDx11Frame();
 
-        _dx11.SceneReport = await vm.BuildDx11SceneAsync(_dx11.Renderer);
+        var surface = _dx11;   // M827: the window can close during the await, which nulls _dx11 and disposes the surface
+        string report = await vm.BuildDx11SceneAsync(surface.Renderer);
+        if (_closed || !ReferenceEquals(surface, _dx11) || surface.Renderer.IsDisposed) return;
+        _dx11.SceneReport = report;
         _dx11.HasScene = _dx11.Renderer.MaterialCount > 0;
 
         // M266: the ordering is not negotiable. Dx11SceneBuilder.Commit calls ClearMaterials, which disposes

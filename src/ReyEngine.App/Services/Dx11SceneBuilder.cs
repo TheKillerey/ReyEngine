@@ -547,6 +547,10 @@ public static class Dx11SceneBuilder
     /// between the tile being described and the map being drawn cannot file a picture under the wrong key.</summary>
     public static Result Commit(ShaderPreviewRenderer renderer, PreparedScene scene, string gameVersion, bool emulateClientDepthRules)
     {
+        // M827: the window (and with it the device) can close while the CPU half runs. Nothing to build into.
+        if (renderer.IsDisposed)
+            return new Result(0, 0, 0, 0, "The D3D11 surface was closed before the scene was committed.", Array.Empty<string>());
+
         var sb = new StringBuilder();
         var t0 = DateTime.UtcNow;
 

@@ -6214,8 +6214,14 @@ float4 psmain(VOut i) : SV_Target
 
     // ---------------------------------------------------------------- teardown
 
+    /// <summary>M827: true once <see cref="Dispose"/> has run. A scene build that was in flight when its window closed checks
+    /// this before it commits: every D3D call on a disposed device is a native access violation, not an exception.</summary>
+    public bool IsDisposed { get; private set; }
+
     public void Dispose()
     {
+        if (IsDisposed) return;
+        IsDisposed = true;
         ClearMaterials();
         ClearTextures();
         _rasterCull.Dispose();

@@ -4783,6 +4783,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         });
 
         if (prepared is null) return error ?? "the scene could not be prepared";
+        if (renderer.IsDisposed) return "The D3D11 surface was closed while the scene was being prepared.";   // M827
 
         var result = Services.Dx11SceneBuilder.Commit(renderer, prepared, AppInfo.DisplayVersion);
         _log.Info("DX11", $"viewport scene: {result.Materials} material(s), {result.Failed} unresolved, "
