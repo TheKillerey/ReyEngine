@@ -6217,13 +6217,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// with no home of its own — a recoloured texture already exists in a Riot WAD, so it is staged under
     /// THAT wad's folder and replaces the chunk the game actually reads.</summary>
     private string WriteRecoloredAsset(string assetPath, byte[] bytes, string ext)
+        => WriteRecoloredAssetByHash(HashAlgorithms.WadPath(assetPath), assetPath, bytes, ext);
+
+    /// <summary>M824: the same write for a chunk whose HASH is known. A named texture goes to its path under the WAD's folder, as ever.
+    /// One the dictionary cannot name is the <c>0x...</c> form of a chunk link and has no path to place a file at: it goes to the WAD's
+    /// folder as a loose <c>&lt;hash&gt;.tex</c>, the form the mounts and the packer both read as that chunk (a hash-named file at the
+    /// folder's root). Outside a folder project it is the hash-named override, as ever.</summary>
+    private string WriteRecoloredAssetByHash(ulong hash, string assetPath, byte[] bytes, string ext)
     {
-        ulong hash = HashAlgorithms.WadPath(assetPath);
         if (Project.IsFolderProject && Project.RootPath is { } root)
         {
             string folderName = RiotWadFolderNameForHash(hash);
             // M819: below the project folder, proven - the name of a texture can come from a package's tables
-            if (!AssetPathSafety.TryCombineUnder(Path.Combine(root, folderName), assetPath, out string dest))
+            if (!TryRecolorFile(root, folderName, hash, assetPath, ext, out string dest))
                 throw new InvalidDataException($"'{assetPath}' is not a path a project file can have.");
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             File.WriteAllBytes(dest, bytes);
@@ -6237,12 +6243,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _overrides.Set(new ProjectAssetOverride
         {
             PathHash = hash,
-            ResolvedPath = assetPath,
+            ResolvedPath = assetPath.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? null : assetPath,
             OverrideFile = overrideFile,
             AddedUtc = DateTime.UtcNow.ToString("o"),
         });
         return overrideFile;
     }
+
+    /// <summary>M824: where a recoloured texture's file lives in a WAD folder of the project: its asset path, or - for a chunk with no
+    /// name - the loose <c>&lt;hash&gt;.ext</c> at the folder's root. False when the path is not one a project file can have.</summary>
+    private static bool TryRecolorFile(string root, string folderName, ulong hash, string assetPath, string ext, out string file)
+    {
+        file = "";
+        // the folder name is read back from project.json (a record of a project somebody shared may say anything): ONE plain segment, so
+        // "..\.." and "C:\x" never reach Path.Combine - and the file is proven below the project root, not only below that folder
+        if (!AssetPathSafety.IsSafeFileName(folderName)) return false;
+        string wadFolder = Path.Combine(root, folderName);
+        bool ok = assetPath.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? AssetPathSafety.TryCombineUnder(wadFolder, $"{hash:x16}{ext}", out file)
+            : AssetPathSafety.TryCombineUnder(wadFolder, assetPath, out file);
+        return ok && IsUnder(file, root);
+    }
+
+    /// <summary>M824: the file NAME a recoloured texture has in a WAD folder: its own, or the hash form of an unnamed chunk.</summary>
+    private static string RecolorFileName(ulong hash, string assetPath, string ext) =>
+        assetPath.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? $"{hash:x16}{ext}" : Path.GetFileName(assetPath);
 
     /// <summary>Remember the sliders (not the pixels) for each recoloured texture, so re-opening the tool
     /// shows what was done and a later edit re-derives from the original instead of stacking on top.</summary>
@@ -6271,6 +6296,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             record.TintG = adjustment.TintG;
             record.TintB = adjustment.TintB;
             record.Strength = adjustment.Strength;
+            record.Transform = null;      // M824: this record is the Recolor Textures tool's now, not the Chroma Studio's
+            record.ChromaSkin = null;
+            record.WadFolders = null;
         }
         _pendingSnapshots.Clear();
     }
@@ -6299,6 +6327,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// saved sliders. Returns how many were restored.</summary>
     public int RevertRecolors(IReadOnlyList<RecolorTarget> targets)
     {
+        int n = RevertRecolorsCore(targets);
+        OnRecolorFinished(null);
+        return n;
+    }
+
+    /// <summary>The undo of <see cref="RevertRecolors"/> without the finish (project save, mount rebuild and a map reload): the
+    /// Chroma Studio finishes in its own way, and must not reload a map it has nothing to do with.</summary>
+    private int RevertRecolorsCore(IReadOnlyList<RecolorTarget> targets)
+    {
         int n = 0;
         foreach (var t in targets)
         {
@@ -6308,8 +6345,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (Project.IsFolderProject && Project.RootPath is { } root)
                 {
                     // M819: below the project folder, proven - it is the path WriteRecoloredAsset wrote, and a record of a project somebody shared may say anything
-                    if (AssetPathSafety.TryCombineUnder(Path.Combine(root, RiotWadFolderNameForHash(t.PathHash)), t.AssetPath, out string dest) && File.Exists(dest))
+                    if (TryRecolorFile(root, RiotWadFolderNameForHash(t.PathHash), t.PathHash, t.AssetPath, ".tex", out string dest) && File.Exists(dest))
                     { File.Delete(dest); n++; }
+                    // M824: the folder is worked out from the mounts, which are not the same ones when the champion's WAD is no longer mounted -
+                    // so the file is also looked for where the project's own mounts say the chunk lives
+                    // - but only for a chunk that has a record (this tool or the Chroma Studio wrote it) and only the file that record names
+                    else if (record is not null && _mounts is not null && _mounts.TryGetFilePath(t.PathHash, out string held, out var holder)
+                             && holder.Kind == AssetSourceKind.ProjectFolder && IsUnder(held, root) && File.Exists(held)
+                             && string.Equals(Path.GetFileName(held), RecolorFileName(t.PathHash, t.AssetPath, ".tex"), StringComparison.OrdinalIgnoreCase))
+                    { File.Delete(held); n++; }
                 }
                 ClearShadowOverride(t.PathHash, ".tex");
                 if (record?.BaseSnapshot is { } snap && ResolveSnapshotPath(snap) is { } p && File.Exists(p))
@@ -6318,7 +6362,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             catch (Exception ex) { _log.Warn("Recolor", $"Could not restore {t.AssetPath}: {ex.Message}"); }
             if (record is not null) Project.TextureRecolors.Remove(record);
         }
-        OnRecolorFinished(null);
         return n;
     }
 
@@ -6759,6 +6802,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.ResolveEmissionSurfaces = ResolveSystemEmissionSurfaces;   // M754
         MeshPreview.BakeTangents = BakePreviewSkinTangentsAsync;               // M758
         MeshPreview.ScanSkinColours = ScanSkinColours;                         // M812: the CHROMA card's read-only inventory
+        WireChromaRecolour();                                                  // M824: and its BODY RECOLOUR
         MeshPreview.PlaySoundEvent = PlayPreviewSoundEvent;              // M90: clip SFX
         MeshPreview.StopSounds = () => Sound.StopTag("previewsfx");
 
@@ -7108,9 +7152,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             int refusedBefore = _gameDataRefusals;   // M819
             bool savedAnything = HasPendingMapGeoWork || HasParticleMoves || HasUnsavedPaint
                 || MaterialEditors.Any(e => e.IsDirty) || MapBinEditor.IsDirty || BinEditor.HasPendingChanges
-                || ParticleEditor.Document?.IsDirty == true || Project.IsDirty;
+                || ParticleEditor.Document?.IsDirty == true || Project.IsDirty || MeshPreview.ChromaAutoSaveDue;   // M824
             if (!savedAnything) return;
-            await SavePendingEditorEdits();
+            _autoSaveTickRunning = true;   // M824: SavePendingEditorEdits skips a body recolour whose save already failed (a manual save retries it)
+            try { await SavePendingEditorEdits(); }
+            finally { _autoSaveTickRunning = false; }
             _overrides.SaveTo(Project);
             ReyProjectService.Save(Project, Project.ProjectFilePath);
             UpdateTitle();
@@ -8040,6 +8086,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             });
             if (mesh is null) { _log.Warn("Mesh", $"{entry.DisplayName}: not a readable .scb/.sco static object."); return; }
 
+            if (!await FlushPendingChromaAsync()) return;   // M824
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 ForgetPreviewSkin();   // M642: a prop has no skin bin
@@ -11864,6 +11911,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var bg = await Task.Run(() => Services.MapPreviewLoader.Load(folder));
+            if (!await FlushPendingChromaAsync()) { Status = "Legacy map not opened: a body recolour could not be saved."; return; }   // M824
             ForgetPreviewSkin();   // M642: neither has a legacy map
             MeshPreview.Show($"{bg.MapName} (legacy NVR map)", bg.Mesh, skeleton: null, textures: bg.SubmeshTextures);
             // M142.8: a legacy map IS the subject — drop any character-preview backdrop still attached from
@@ -11911,6 +11959,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private async Task LoadMeshPreviewAsync(WadAssetEntry entry, string? skinBin = null)
     {
         if (!ContentLoaded) return;
+        if (!await FlushPendingChromaAsync()) return;   // M824: a pending body recolour is saved before the card is replaced
         _previewSkn = entry;   // M642: what a material edit rebuilds the D3D11 scene for
         // M728: and WHICH skin - every read below goes to this one bin
         string? binPath = _previewSkinBin = SkinPaths.PreviewBinPath(skinBin, entry.IsResolved ? entry.Path : null);
@@ -16641,6 +16690,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (wadName.Length > 0) return wadName;
             }
         }
+        // M824: a champion's WAD the Character window opened is a read-only FALLBACK mount, and a mount's AllSources never lists the
+        // fallbacks. The first copy written into the project made the chunk a ProjectFolder asset, and the second write then found no
+        // Riot source and filed it under "Overrides" - two copies of one texture in two folders. Ask the fallbacks too: they are the
+        // Riot WADs the game reads the chunk from.
+        if (_mounts is not null)
+            foreach (var fallback in _mounts.Fallback)
+            {
+                if (fallback.Kind != AssetSourceKind.RiotReference || !fallback.Contains(pathHash)) continue;
+                var wadName = Path.GetFileName(fallback.Location);
+                if (wadName.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase))
+                    wadName = wadName[..^".wad.client".Length];
+                foreach (var c in Path.GetInvalidFileNameChars()) wadName = wadName.Replace(c, '_');
+                if (wadName.Length > 0) return wadName;
+            }
         return "Overrides";
     }
 

@@ -13,7 +13,10 @@ public sealed record RecolorProgress(int Done, int Total, string Current);
 
 public sealed record RecolorRunResult(
     int Written, int Skipped, int Failed, int MissingSources, long BytesWritten,
-    IReadOnlyList<string> Notes, IReadOnlyList<RecolorTarget> WrittenTargets);
+    IReadOnlyList<string> Notes, IReadOnlyList<RecolorTarget> WrittenTargets,
+    /// <summary>M824: the targets left alone on purpose (the adjustment changed none of their texels, or the writer cannot write
+    /// their format) - neither written nor failed. Null from a result built before this field existed.</summary>
+    IReadOnlyList<RecolorTarget>? SkippedTargets = null);
 
 /// <summary>M171: applies one <see cref="TextureAdjustment"/> across a set of textures and writes each
 /// result where the host says it belongs.
@@ -26,15 +29,31 @@ public sealed record RecolorRunResult(
 public sealed class TextureRecolorService
 {
     private readonly Func<RecolorTarget, byte[]?> _readBase;
-    private readonly Func<string, byte[], string, string> _writeAsset;
+    private readonly Func<RecolorTarget, byte[], string, string> _writeAsset;
 
     public TextureRecolorService(
         Func<RecolorTarget, byte[]?> readBase,
         Func<string, byte[], string, string> writeAsset)
+        : this(readBase, (target, bytes, ext) => writeAsset(target.AssetPath, bytes, ext), perTarget: true)
+    {
+    }
+
+    /// <summary>The one real constructor: the writer takes the whole target. <paramref name="perTarget"/> only tells it apart from the
+    /// public one (two lambdas with the same shape would be ambiguous).</summary>
+    private TextureRecolorService(
+        Func<RecolorTarget, byte[]?> readBase,
+        Func<RecolorTarget, byte[], string, string> writeAsset, bool perTarget)
     {
         _readBase = readBase;
         _writeAsset = writeAsset;
     }
+
+    /// <summary>M824: a service whose writer is told the whole target - its chunk HASH as well as its path. The Chroma Studio
+    /// needs it: a body texture the dictionary cannot name is the <c>0x...</c> form of a chunk link, whose hash is the link and
+    /// not <c>WadPath(the text)</c>, and the writer must put the file where the game reads THAT chunk.</summary>
+    public static TextureRecolorService ForTargets(
+        Func<RecolorTarget, byte[]?> readBase,
+        Func<RecolorTarget, byte[], string, string> writeAsset) => new(readBase, writeAsset, perTarget: true);
 
     /// <summary>How many textures are decoded/encoded at once. The BC work is the whole cost of a run
     /// (measured: 451 ms for an average Map11 texture, against a few ms to read one), and it is perfectly
@@ -52,12 +71,25 @@ public sealed class TextureRecolorService
     public Task<RecolorRunResult> RunAsync(
         IReadOnlyList<RecolorTarget> targets, TextureAdjustment adjustment,
         IProgress<RecolorProgress>? progress = null, CancellationToken ct = default)
+        => RunAsync(targets, src => TextureRecolor.Apply(src, adjustment), progress, ct);
+
+    /// <summary>M824: the same run for the Chroma Studio's <see cref="ColorTransform"/> - the same batching, the same
+    /// pristine-source rule, the same serial reads and writes.</summary>
+    public Task<RecolorRunResult> RunAsync(
+        IReadOnlyList<RecolorTarget> targets, ColorTransform transform,
+        IProgress<RecolorProgress>? progress = null, CancellationToken ct = default)
+        => RunAsync(targets, src => TextureRecolor.Apply(src, transform), progress, ct);
+
+    private Task<RecolorRunResult> RunAsync(
+        IReadOnlyList<RecolorTarget> targets, Func<byte[], RecolorOutcome> apply,
+        IProgress<RecolorProgress>? progress, CancellationToken ct)
         => Task.Run(() =>
         {
             int written = 0, skipped = 0, failed = 0, missingSources = 0;
             long bytes = 0;
             var notes = new List<string>();
             var writtenTargets = new List<RecolorTarget>();
+            var skippedTargets = new List<RecolorTarget>();
 
             for (int start = 0; start < targets.Count; start += BatchSize)
             {
@@ -90,7 +122,7 @@ public sealed class TextureRecolorService
                 var outcomes = new RecolorOutcome?[count];
                 Parallel.For(0, count, new ParallelOptions { CancellationToken = ct }, i =>
                 {
-                    if (sources[i] is { } src) outcomes[i] = TextureRecolor.Apply(src, adjustment);
+                    if (sources[i] is { } src) outcomes[i] = apply(src);
                 });
 
                 // 3. write (serial — mutates project state)
@@ -102,14 +134,14 @@ public sealed class TextureRecolorService
                     {
                         // NoChange is not worth a note — it just means the sliders are neutral.
                         if (outcome.Skip is RecolorSkip.DecodeFailed or RecolorSkip.EncodeFailed) failed++;
-                        else skipped++;
+                        else { skipped++; skippedTargets.Add(t); }
                         if (outcome.Skip is not RecolorSkip.NoChange)
                             Note(notes, $"{t.AssetPath}: {Describe(outcome.Skip)} ({outcome.Detail})");
                         continue;
                     }
                     try
                     {
-                        _writeAsset(t.AssetPath, outcome.Bytes!, ".tex");
+                        _writeAsset(t, outcome.Bytes!, ".tex");
                         written++;
                         bytes += outcome.Bytes!.Length;
                         writtenTargets.Add(t);
@@ -119,7 +151,7 @@ public sealed class TextureRecolorService
             }
 
             progress?.Report(new RecolorProgress(targets.Count, targets.Count, ""));
-            return new RecolorRunResult(written, skipped, failed, missingSources, bytes, notes, writtenTargets);
+            return new RecolorRunResult(written, skipped, failed, missingSources, bytes, notes, writtenTargets, skippedTargets);
         }, ct);
 
     /// <summary>Keep the note list bounded — a whole-map run over a broken folder could otherwise produce

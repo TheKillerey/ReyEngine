@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ReyEngine.Core.Decoding;
 
 namespace ReyEngine.Core.Projects;
 
@@ -295,6 +296,22 @@ public sealed class TextureRecolorRecord
     public float TintG { get; set; } = 1f;
     public float TintB { get; set; } = 1f;
     public float Strength { get; set; } = 1f;
+
+    /// <summary>M824: set when the Chroma Studio's BODY RECOLOUR made this record - the colour transform it applied (the
+    /// M813 <see cref="ColorTransform"/>, in the schema that type pins). Null for a record the Recolor Textures tool made,
+    /// which is described by the M171 fields above and behaves exactly as before; a record with a transform ignores those
+    /// fields (they stay at their neutral defaults), and Recolor Textures clears it when it takes the record over.</summary>
+    public ColorTransform? Transform { get; set; }
+
+    /// <summary>M824: the skin bin (<c>data/characters/lillia/skins/skin49.bin</c>) the Chroma Studio recoloured this texture
+    /// for, so re-opening that skin restores the sliders and the set of textures. Null with <see cref="Transform"/>.</summary>
+    public string? ChromaSkin { get; set; }
+
+    /// <summary>M824: the WAD folders of the project the file was written to, when the Chroma Studio wrote it. A chunk some Riot WADs
+    /// hold more than once (Aatrox's base diffuse is in Aatrox.wad.client AND Shaders.wad.client, byte for byte) is written into every
+    /// holder's folder, because the game reads whichever copy it mounts first; Revert needs the list to take them all out. Null for a
+    /// record the Recolor Textures tool made, and for a Chroma Studio record that wrote one folder.</summary>
+    public List<string>? WadFolders { get; set; }
 }
 
 /// <summary>M287: one map's authored lighting. Defaults match the view-model's own initial values, so a

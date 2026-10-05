@@ -44,6 +44,7 @@ public partial class MeshPreviewWindow
         // fault during a backdrop upload leaves its last step behind in session.log.
         PreviewViewport.Log ??= (cat, msg) => vm.LogDx11?.Invoke(cat, msg);
         PreviewViewport.ArenaMapViewport = vm.ArenaViewport;
+        WireChromaRecolour(vm);   // M824
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MeshPreviewViewModel.ArenaViewport))
@@ -143,6 +144,7 @@ public partial class MeshPreviewWindow
                 // called this after every commit since M266; this one never did, so every champion load
                 // silently destroyed the particle driver's materials and nothing re-registered them.
                 _dx11.NotifySceneRebuilt();
+                vm.ReapplyChromaPreview();   // M824: the pool was rebuilt from the project's files; a recolour not saved yet is drawn again
 
                 // M625: what the renderer is actually holding, straight after the commit. Two turns were
                 // spent theorising about where the character materials went; this reads the list instead.

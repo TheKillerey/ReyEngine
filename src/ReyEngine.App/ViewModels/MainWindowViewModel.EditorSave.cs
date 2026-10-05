@@ -7,6 +7,7 @@ namespace ReyEngine.App.ViewModels;
 public sealed partial class MainWindowViewModel
 {
     private DispatcherTimer? _regularAutoSaveTimer;
+    private bool _autoSaveTickRunning;   // M824
     public void StopEditorAutoSave()
     {
         _regularAutoSaveTimer?.Stop();
@@ -34,6 +35,7 @@ public sealed partial class MainWindowViewModel
         if (MapBinEditor.IsDirty) await MapBinEditor.SaveCommand.ExecuteAsync(null);
         if (BinEditor.ApplyPendingEdits() && BinEditor.IsDirty) await SaveBinToOverride();
         if (ParticleEditor.Document?.IsDirty == true) await SaveParticleOverride();
+        if (MeshPreview.HasPendingChromaRecolour && (!_autoSaveTickRunning || MeshPreview.ChromaAutoSaveDue)) await MeshPreview.SaveChromaRecolourNowAsync();   // M824: the Character window's body recolour (a save that failed is not retried by every auto-save tick)
         // Map tabs keep their own authoritative geometry. Ctrl+S also flushes inactive face edits.
         var otherMaps = Documents.Select(d => d.Scene).OfType<MapScene>()
             .Where(s => !ReferenceEquals(s.Map, _currentMap) && (s.Faces is { Dirty: true } || s.Faces?.Grows.Count > 0)).ToArray();

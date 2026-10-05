@@ -781,7 +781,131 @@
           <TabItem FontSize="12" IsVisible="{Binding HasChromaCard}">
             <TabItem.Header><TextBlock Text="Chroma" FontSize="12" /></TabItem.Header>
             <Border Classes="card" Margin="10">
-              <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,2*" RowSpacing="5">
+              <!-- M824: the whole tab scrolls as one: the BODY RECOLOUR section and the M812 inventory below it each keep their own height
+                   (the two inventory lists have a fixed one and scroll inside it), so neither squeezes the other at any window height. -->
+              <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <Grid RowDefinitions="Auto,Auto" RowSpacing="8" Margin="0,0,6,0">
+              <!-- M824: BODY RECOLOUR. One colour transform over the body textures the list switches on, drawn live on the character
+                   while a slider moves (from the original texels, never compounding), written into the project by Apply & Save or
+                   Ctrl+S. -->
+              <Border Grid.Row="0">
+                <StackPanel Spacing="4">
+                  <StackPanel.Styles>
+                    <!-- the Fluent slider template is ~50 px tall (tick rows above and below the track); six of them plus the rest
+                         would push the texture list off the card. A negative margin takes the empty rows back without clipping the thumb. -->
+                    <Style Selector="Slider">
+                      <Setter Property="Margin" Value="0,-10" />
+                    </Style>
+                  </StackPanel.Styles>
+                  <TextBlock Classes="cardTitle" Text="BODY RECOLOUR"
+                             ToolTip.Tip="Recolour the body textures of this skin with one transform: hue, saturation, brightness, colourise, a hue range and grey protection. The character shows it live; Apply and Save (or Ctrl+S) writes the textures into the project from Riot's untouched originals, so Build Package and .fantome ship them." />
+                  <TextBlock Text="{Binding ChromaRecolourStatus}" FontSize="10" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyAccentBrush}" />
+                  <TextBlock Text="Press Scan colours to list the body textures this recolour can act on." FontSize="10" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding !HasChromaTextures}" />
+                  <StackPanel Spacing="4" IsVisible="{Binding HasChromaTextures}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <Button Classes="tool" Content="Apply &amp; Save" FontSize="11" Padding="8,2" Command="{Binding ApplyChromaRecolourCommand}"
+                              ToolTip.Tip="Write the recoloured textures into the project (re-derived from Riot's originals) and record the sliders in the project file. Ctrl+S does the same." />
+                      <Button Classes="tool" Content="Reset sliders" FontSize="11" Padding="8,2" Command="{Binding ResetChromaSlidersCommand}"
+                              ToolTip.Tip="Put every slider back to no change. Nothing is written until Apply and Save." />
+                      <Button Classes="tool" Content="Revert saved" FontSize="11" Padding="8,2" Command="{Binding RevertChromaRecolourCommand}"
+                              ToolTip.Tip="Put this skin's saved recolour back to Riot's original textures and forget it." />
+                    </StackPanel>
+                    <TextBlock Text="{Binding ChromaShareWarning}" FontSize="10" TextWrapping="Wrap" IsVisible="{Binding HasChromaShareWarning}"
+                               Foreground="{DynamicResource ReyWarningBrush}" />
+                  </StackPanel>
+                  <StackPanel Spacing="3" IsVisible="{Binding HasChromaTextures}">
+                    <Grid ColumnDefinitions="86,*,40">
+                      <TextBlock Text="Hue" FontSize="11" VerticalAlignment="Center" ToolTip.Tip="Turn every colour round the hue wheel. +120 turns red into green." />
+                      <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding ChromaHue, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaHue, StringFormat='{}{0:0}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="86,*,40">
+                      <TextBlock Text="Saturation" FontSize="11" VerticalAlignment="Center" ToolTip.Tip="1 leaves the colours as they are, 0 makes them grey." />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="2" Value="{Binding ChromaSaturation, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaSaturation, StringFormat='{}{0:0.00}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="86,*,40">
+                      <TextBlock Text="Brightness" FontSize="11" VerticalAlignment="Center" ToolTip.Tip="Multiplies the brightest channel of every colour. Greys that grey protection covers stay as they are." />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="2" Value="{Binding ChromaBrightness, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaBrightness, StringFormat='{}{0:0.00}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="86,*,40">
+                      <TextBlock Text="Strength" FontSize="11" VerticalAlignment="Center" ToolTip.Tip="How much of the change is kept: 0 is the original, 1 the full recolour." />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding ChromaStrength, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaStrength, StringFormat='{}{0:0.00}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <CheckBox Content="Colourise" IsChecked="{Binding ChromaColorize}" FontSize="11"
+                              ToolTip.Tip="Give every colour one chosen hue, keeping its own saturation and brightness. The Hue slider is ignored while this is on." />
+                    <Grid ColumnDefinitions="86,*,40" IsVisible="{Binding ChromaColorize}">
+                      <TextBlock Text="Colour hue" FontSize="11" VerticalAlignment="Center" />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="360" Value="{Binding ChromaColorizeHue, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaColorizeHue, StringFormat='{}{0:0}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <CheckBox Content="Only a hue range" IsChecked="{Binding ChromaRangeOn}" FontSize="11"
+                              ToolTip.Tip="Change only the colours whose hue lies in a range - the reds, the blues - and leave the rest. Red is 0, green 120, blue 240." />
+                    <Grid ColumnDefinitions="86,*,40" IsVisible="{Binding ChromaRangeOn}">
+                      <TextBlock Text="Range centre" FontSize="11" VerticalAlignment="Center" />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="360" Value="{Binding ChromaRangeCenter, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaRangeCenter, StringFormat='{}{0:0}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="86,*,40" IsVisible="{Binding ChromaRangeOn}">
+                      <TextBlock Text="Range width" FontSize="11" VerticalAlignment="Center" />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="360" Value="{Binding ChromaRangeWidth, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaRangeWidth, StringFormat='{}{0:0}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="86,*,40" IsVisible="{Binding ChromaRangeOn}">
+                      <TextBlock Text="Range feather" FontSize="11" VerticalAlignment="Center" ToolTip.Tip="How far outside the range the change fades out." />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="180" Value="{Binding ChromaRangeFeather, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaRangeFeather, StringFormat='{}{0:0}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="86,*,40">
+                      <TextBlock Text="Grey guard" FontSize="11" VerticalAlignment="Center"
+                                 ToolTip.Tip="Colours with less saturation than this are left alone, so steel, bone and cloth greys do not pick up a tint. Compressed textures store greys slightly off-grey, so 0.05 to 0.1 is right; 0 turns the guard off." />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="0.5" Value="{Binding ChromaGreyThreshold, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaGreyThreshold, StringFormat='{}{0:0.00}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="86,*,40">
+                      <TextBlock Text="Guard feather" FontSize="11" VerticalAlignment="Center" ToolTip.Tip="How softly the guard lets colour back in above its threshold." />
+                      <Slider Grid.Column="1" Minimum="0" Maximum="0.5" Value="{Binding ChromaGreyFeather, Mode=TwoWay}" />
+                      <TextBlock Grid.Column="2" Text="{Binding ChromaGreyFeather, StringFormat='{}{0:0.00}'}" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+
+                    <TextBlock Text="TEXTURES" FontSize="10" Margin="0,6,0,0" Foreground="{DynamicResource ReyTextDimBrush}"
+                               ToolTip.Tip="The body textures the recolour acts on. A texture the project writer cannot write back (DDS, BC5, BGRA8) is listed with the reason and stays as it is." />
+                    <CheckBox Content="Show masks and data maps (left out by default)" IsChecked="{Binding ChromaShowExcluded}" FontSize="10"
+                              ToolTip.Tip="Masks, normal maps and channel-packed data maps hold lighting data, not colour: recolouring one corrupts the lighting it carries. They can be switched on here if you know what you are doing." />
+                    <ScrollViewer MaxHeight="150" HorizontalScrollBarVisibility="Disabled">
+                      <ItemsControl ItemsSource="{Binding ChromaTextures}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:ChromaTextureRowViewModel">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ToolTip.Tip="{Binding Tip}" Margin="0,1">
+                              <CheckBox Grid.Column="0" IsChecked="{Binding IsIncluded, Mode=TwoWay}" IsEnabled="{Binding CanInclude}" MinWidth="0" Margin="0,0,4,0" />
+                              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Detail}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Note}" FontSize="9" IsVisible="{Binding HasNote}" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource ReyWarningBrush}" />
+                              </StackPanel>
+                              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" Margin="6,0,0,0" VerticalAlignment="Center">
+                                <Border Classes="badge outline" IsVisible="{Binding IsOutside}">
+                                  <TextBlock Text="{Binding OutsideBadge}" />
+                                </Border>
+                                <Border Classes="badge warn" IsVisible="{Binding IsShared}" ToolTip.Tip="{Binding SharedTip}">
+                                  <TextBlock Text="{Binding SharedBadge}" />
+                                </Border>
+                              </StackPanel>
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+              <Grid Grid.Row="1" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="5">
                 <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
                   <TextBlock Classes="cardTitle" Grid.Column="0" Text="CHROMA" VerticalAlignment="Center"
                              ToolTip.Tip="Everything colour-bearing this skin draws: the body's colour textures and colour parameters, and the colours and colour textures of the effects it uses. Read-only - nothing is written." />
@@ -805,7 +929,7 @@
                              Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
                 </ScrollViewer>
                 <TextBlock Grid.Row="5" Classes="cardTitle" Text="BODY" Margin="0,4,0,0" IsVisible="{Binding HasChromaResult}" />
-                <ListBox Grid.Row="6" ItemsSource="{Binding ChromaBodyRows}" Background="Transparent" BorderThickness="0"
+                <ListBox Grid.Row="6" Height="220" ItemsSource="{Binding ChromaBodyRows}" Background="Transparent" BorderThickness="0"
                          IsVisible="{Binding HasChromaResult}">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:ChromaRowViewModel">
@@ -829,7 +953,7 @@
                   </ListBox.ItemTemplate>
                 </ListBox>
                 <TextBlock Grid.Row="7" Classes="cardTitle" Text="EFFECTS" Margin="0,4,0,0" IsVisible="{Binding HasChromaResult}" />
-                <ListBox Grid.Row="8" ItemsSource="{Binding ChromaEffectRows}" Background="Transparent" BorderThickness="0"
+                <ListBox Grid.Row="8" Height="320" ItemsSource="{Binding ChromaEffectRows}" Background="Transparent" BorderThickness="0"
                          IsVisible="{Binding HasChromaResult}">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:ChromaRowViewModel">
@@ -853,6 +977,8 @@
                   </ListBox.ItemTemplate>
                 </ListBox>
               </Grid>
+              </Grid>
+              </ScrollViewer>
             </Border>
           </TabItem>
         </TabControl>

@@ -97,6 +97,43 @@ public static class TextureRecolor
         }
     }
 
+    /// <summary>M824: recolour one texture with the Chroma Studio's <see cref="ColorTransform"/> - the same triage, the same
+    /// "re-derive from the PRISTINE original", the same container, format and mip chain as the overload above.
+    ///
+    /// <para>Alpha is never touched (the transform does not read it). A transform that changes no texel - the identity, or a
+    /// hue range / grey protection that selects nothing in this texture - is a <see cref="RecolorSkip.NoChange"/> and writes
+    /// nothing: re-encoding would cost a generation of BC loss to produce the same picture.</para></summary>
+    public static RecolorOutcome Apply(byte[]? source, ColorTransform transform)
+    {
+        ArgumentNullException.ThrowIfNull(transform);
+
+        var triage = Classify(source);
+        if (!triage.Ok) return triage;
+        if (transform.IsIdentity)
+            return triage with { Ok = false, Skip = RecolorSkip.NoChange, Detail = "no adjustment set" };
+
+        TextureImage decoded;
+        try { decoded = TextureDecoder.Decode(source!); }
+        catch (Exception ex)
+        {
+            return triage with { Ok = false, Skip = RecolorSkip.DecodeFailed, Detail = ex.Message };
+        }
+
+        try
+        {
+            var pixels = (byte[])decoded.Rgba.Clone();
+            int changed = transform.ApplyInPlace(pixels);
+            if (changed == 0)
+                return triage with { Ok = false, Skip = RecolorSkip.NoChange, Detail = "the transform changes no texel of this texture" };
+            var bytes = TexWriter.Write(new TextureImage(decoded.Width, decoded.Height, pixels), triage.Format!.Value, HasMips(source!));
+            return triage with { Bytes = bytes, Detail = $"{triage.Width}x{triage.Height} {triage.Format}, {changed:n0} texel(s) changed" };
+        }
+        catch (Exception ex)
+        {
+            return triage with { Ok = false, Skip = RecolorSkip.EncodeFailed, Detail = ex.Message };
+        }
+    }
+
     /// <summary>Decode for on-screen preview, box-downscaled to at most <paramref name="maxDim"/> on its
     /// long edge. A map's textures are 2048^2, and a list of thumbnails at full size would be gigabytes
     /// of RGBA; the adjustment pass is also the expensive half of an edit (80 ms at 2048^2 versus 61 ms

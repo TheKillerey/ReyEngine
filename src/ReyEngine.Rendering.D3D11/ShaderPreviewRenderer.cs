@@ -2164,6 +2164,16 @@ float4 psmain_tex(VTexOut i) : SV_Target
         {
             srv.GetResource(ref res);
             if (res is null) return false;
+            // M824: the pool entry's REAL size, not the caller's belief about it. A caller that holds texels for a 1024 texture while the
+            // pool holds a 512 one (the scene decoded another file under the key) would otherwise write 1024-wide rows into a 512-wide
+            // resource - UpdateSubresource reads the pitch it is given, and the rest is whatever follows the buffer.
+            var asTexture = new ComPtr<ID3D11Resource>(res);
+            ComPtr<ID3D11Texture2D> texture = default;
+            if (asTexture.QueryInterface(out texture) < 0 || texture.Handle is null) return false;
+            Texture2DDesc description = default;
+            texture.GetDesc(ref description);
+            texture.Dispose();
+            if (description.Width != (uint)width || description.Height != (uint)height || description.ArraySize != 1) return false;
             // (Box*)null, not bare null: the Span overload is otherwise ambiguous. Null box = whole resource.
             fixed (byte* p = rgba)
                 _ctx.UpdateSubresource(res, 0, (Box*)null, p, (uint)(width * 4), 0);

@@ -156,6 +156,8 @@ public sealed partial class MeshPreviewViewModel
     /// moves on to something else. Cancels a scan in flight and empties the card.</summary>
     public void SetChromaSkin(string? skinBinPath)
     {
+        bool hadPending = HasPendingChromaRecolour;
+        string? previousBin = _chromaSkinBin;
         // The scan in flight is cancelled AND let go: its late result, or its late failure, belongs to a card that no longer
         // exists, and the token it holds is what tells it so (see ScanColours).
         _chromaScan?.Cancel();
@@ -170,6 +172,10 @@ public sealed partial class MeshPreviewViewModel
         ChromaWarnings = "";
         ChromaSummary = ChromaHint;
         ChromaSkinLabel = _chromaSkinBin is null ? "" : DescribeSkinBin(_chromaSkinBin);
+        // M824: the BODY RECOLOUR of the skin that was on screen goes with it (the project keeps what was saved); the one of the new skin is restored
+        if (hadPending && !string.Equals(previousBin, _chromaSkinBin, StringComparison.OrdinalIgnoreCase))
+            LogDx11?.Invoke("Chroma", $"The unsaved body recolour of {previousBin} was dropped when the window moved on. Ctrl+S or Apply & Save keeps one.");
+        ResetChromaRecolour(_chromaSkinBin);
         HasChromaCard = _chromaSkinBin is not null;
         ScanColoursCommand.NotifyCanExecuteChanged();   // the button follows the skin, not only the scan
     }
@@ -234,6 +240,7 @@ public sealed partial class MeshPreviewViewModel
         ChromaWarnings = BuildWarnings(inventory);
         ChromaNotes = string.Join("\n", BuildNotes(inventory));
         HasChromaResult = true;
+        SetChromaRecolourTextures(inventory);   // M824: the same textures, as the BODY RECOLOUR's list
     }
 
     /// <summary>The warning block: one line each, under a heading that says what a warning means for the lists below it.

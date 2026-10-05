@@ -143,3 +143,38 @@ particle textures); GL `ViewportControl.QueueTextureUpdate`. Pattern: `MainWindo
 may not show until `BuildMounts`); `BuildMounts` drops the champion fallback mount while `_characterWads`
 still marks it mounted; `ReplaceTextureForSlot` and `WriteRecoloredAsset` hash `0x...` references with
 `WadPath`.
+
+## C3 as built (M824)
+
+**What the Character window's Chroma tab does now.** A BODY RECOLOUR section above the M812 inventory. After Scan colours it lists the body
+textures with an include switch each, and one `ColorTransform` (hue, saturation, brightness, strength, colourise, a hue range with feather,
+grey guard with feather; the guard defaults to 0.08 with a 0.06 feather, the M813 review's figure) acts on the included ones.
+
+- **Defaults.** Included: the textures under the character's own folder (a shared one carries a SHARED badge). Off: textures outside the
+  character's folder (matcaps, shared gradients), which other characters and maps also use. The inventory's excluded samplers (masks, normal
+  and data maps) are listed only on request and off. DDS, BC5 and BGRA8 are listed with the reason and cannot be switched on.
+- **Live preview.** The included textures are recoloured from their ORIGINAL decoded texels (never compounding) on a worker, one request at
+  a time with only the newest kept, and pushed into the D3D11 texture pool at full size with the mips regenerated
+  (`UpdatePooledTexture` + `RegeneratePooledMips`, the key being the scene's lower-cased path found by chunk hash), or - on the GL viewport -
+  into the viewport's own decoded images through `QueueTextureUpdate`. Measured in a Debug build: 50-80 ms per slider position for a whole
+  skin (Lillia 49: 13 textures up to 1024x1024). A 2048x2048 texture is ~130 ms in Release per M813, so a drag on the biggest textures
+  updates a few times a second and always ends on the last position.
+- **Save.** Apply & Save, Ctrl+S, the auto-save and Export / Build Package (all through `SavePendingEditorEdits`) re-derive each texture from
+  Riot's pristine bytes (`CheckOutRecolorBase`), write TEX BC1/BC3 with `TexWriter` and record the transform in the same
+  `TextureRecolorRecord` list (`Transform`, `ChromaSkin`, `WadFolders` are new, optional fields; old records and files load unchanged and
+  write no new keys). A reload restores the sliders and the textures.
+- **Where the files go.** In the WAD folder of every Riot WAD that holds the chunk, the Character window's champion first. Usually that is
+  `<project>/<Champion>/...`; Aatrox's base diffuse is also in `Shaders.wad.client`, byte for byte, and the game reads whichever copy it
+  mounts first, so both folders carry the recolour. A chunk the dictionary cannot name goes in as a loose `<hash>.tex` at the folder's root.
+  The shared `RiotWadFolderNameForHash` now asks the read-only fallback mounts too: a second write of a texture used to find only the project
+  copy and file it under `Overrides`.
+
+**Guards (review round).** A saved texture the scan does not list, or whose original cannot be read, is carried unchanged: it stays in the
+saved state, is never a target or a revert, and only an explicit switch-off, a saved Reset or Revert removes it. A project texture that differs
+from Riot's with no record behind it (hand-edited) is left off, never drawn over by the preview, and warns when switched on; a texture only the
+project holds is refused with a reason (an override beside it would be shadowed). The record's `WadFolders` are read back as one plain
+folder name and the file is proven below the project root. A pending recolour is saved before the window loads another model (a failed save
+keeps the model), and the auto-save does not retry a state that already failed.
+
+**Remaining.** The material colour parameters (see the note in `MeshPreviewViewModel.ChromaRecolour.cs`); C4 effects; C5 "this skin only"
+(the warning says the recolour is in place); a texture shared by two skins' recipes belongs to the one saved last.
