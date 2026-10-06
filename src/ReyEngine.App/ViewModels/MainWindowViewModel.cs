@@ -1751,7 +1751,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         SelectedParticleNode is { } p ? (p.Offset, p.RotationDegrees, p.Scale)
         : SelectedAddedMesh is { } a ? (a.Offset, a.RotationDegrees, a.Scale)
         : SelectedPropNode is { } r ? (r.Offset, r.RotationDegrees, r.Scale)   // M699 (M766: after added meshes, as the write-back)
-        : SelectedLight is { } l ? (l.Position, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One)
+        : SelectedLight is { } l ? (LightWorldPosition(l), System.Numerics.Vector3.Zero, System.Numerics.Vector3.One)
         : (SelectedSound?.Offset ?? System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
 
     // M76: undo support — the whole drag is ONE step, captured at press, pushed at release.
@@ -1787,7 +1787,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 PublishAddedMeshPreview();
                 break;
             case PointLightViewModel l:   // M154
-                if (ReferenceEquals(l, SelectedLight)) GizmoPivot = l.Position;
+                if (ReferenceEquals(l, SelectedLight)) GizmoPivot = LightWorldPosition(l);
                 RepublishLights();
                 break;
             case AnimatedPropViewModel r:   // M699
@@ -1804,13 +1804,45 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         RefreshPlacementDirtyFlag();   // M700
     }
 
+    /// <summary>M828: where a light really shines and where its icon is drawn: the stored position through the
+    /// map's light-fit knobs (spread, per-axis scale, offset), the SAME BakeLighting.FitPosition the renderers use.
+    /// Icon, click-pick and gizmo all read this, so they cannot disagree.</summary>
+    public System.Numerics.Vector3 LightWorldPosition(PointLightViewModel light) =>
+        Formats.Baking.BakeLighting.FitPosition(light.Position, (float)DynamicLightPositionScale,
+            new System.Numerics.Vector2((float)DynamicLightScaleX, (float)DynamicLightScaleZ),
+            new System.Numerics.Vector2((float)DynamicLightOffsetX, (float)DynamicLightOffsetZ));
+
+    /// <summary>M828: inverse of <see cref="LightWorldPosition"/>: the stored position that lands at
+    /// <paramref name="world"/>, so a gizmo drag moves the light by exactly the drag. An axis whose fit factor
+    /// is zero cannot be inverted and keeps its stored value.</summary>
+    public System.Numerics.Vector3 LightBaseFromWorld(PointLightViewModel light, System.Numerics.Vector3 world)
+    {
+        float fx = (float)DynamicLightPositionScale * (float)DynamicLightScaleX;
+        float fz = (float)DynamicLightPositionScale * (float)DynamicLightScaleZ;
+        var p = light.Position;
+        return new System.Numerics.Vector3(
+            MathF.Abs(fx) > 1e-9f ? (world.X - (float)DynamicLightOffsetX) / fx : p.X,
+            world.Y,
+            MathF.Abs(fz) > 1e-9f ? (world.Z - (float)DynamicLightOffsetZ) / fz : p.Z);
+    }
+
+    private void RefreshLightGizmoPivot()
+    {
+        if (SelectedLight is { } l) GizmoPivot = LightWorldPosition(l);
+    }
+    partial void OnDynamicLightPositionScaleChanged(double value) => RefreshLightGizmoPivot();
+    partial void OnDynamicLightScaleXChanged(double value) => RefreshLightGizmoPivot();
+    partial void OnDynamicLightScaleZChanged(double value) => RefreshLightGizmoPivot();
+    partial void OnDynamicLightOffsetXChanged(double value) => RefreshLightGizmoPivot();
+    partial void OnDynamicLightOffsetZChanged(double value) => RefreshLightGizmoPivot();
+
     public void DragSelectedPlacementTo(System.Numerics.Vector3 absoluteOffset)
     {
         // M152: a selected point light is dragged like any other placement.
         if (SelectedLight is { } light)
         {
-            light.MoveTo(absoluteOffset);
-            GizmoPivot = light.Position;
+            light.MoveTo(LightBaseFromWorld(light, absoluteOffset));
+            GizmoPivot = LightWorldPosition(light);
             return;
         }
         if (SelectedParticleNode is { } p)
@@ -3398,7 +3430,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnSelectedLightChanged(PointLightViewModel? value)
     {
         OnPropertyChanged(nameof(HasSelectedLight));
-        GizmoPivot = value?.Position;   // M75 gizmo drives the selected light
+        GizmoPivot = value is null ? null : LightWorldPosition(value);   // M75 gizmo drives the selected light
     }
 
     /// <summary>
@@ -3636,6 +3668,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var at = GizmoPivot ?? SelectedParticleMarker ?? System.Numerics.Vector3.Zero;
         var vm = new PointLightViewModel(new PointLight(at, new System.Numerics.Vector3(1f, 0.85f, 0.6f), 600f), this)
         { Name = $"Light {EditableLights.Count + 1}" };
+        vm.MoveTo(LightBaseFromWorld(vm, at));   // M828: 'at' is a world position; store the base that fits to it
         EditableLights.Add(vm);
         SelectedLight = vm;
         ShowDynamicLights = true;
@@ -9568,6 +9601,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     && IsSoundVisible(v.Sound, v.EffectiveVisibilityFlags))) TestPx(s, s.Position);
             // M123e: staged (not yet saved) meshes are click-selectable at their world center
             foreach (var a in MapContent.AddedMeshes.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) TestPx(a, a.LocalCenter + a.Offset);
+            // M828: lights hit at the position their icon is DRAWN at (the fitted one).
+            if (CanPickLights)
+                foreach (var l in MapContent.Lights) TestPx(l, LightWorldPosition(l));
             if (bestPx is not null) { SelectedOutlinerItem = bestPx; return; }
         }
 
@@ -9607,7 +9643,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 && IsSoundVisible(v.Sound, v.EffectiveVisibilityFlags))) Test(s, s.Position);   // M55/M60
         // M153: point lights pick like any other placement, so you can click one in the viewport.
         if (CanPickLights && !additive)
-            foreach (var l in MapContent.Lights) Test(l, l.Position);
+            foreach (var l in MapContent.Lights) Test(l, LightWorldPosition(l));
 
         // nearest placeable beats a farther mesh face (icons draw on top, so this matches what you see)
         if (PickDiagnostics)

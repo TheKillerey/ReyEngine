@@ -33,7 +33,7 @@ public sealed partial class MainWindowViewModel
         if (SelectedParticleNode is { } particle) return particle.CurrentPosition;
         if (SelectedSound is { } sound) return sound.Position;
         if (SelectedAddedMesh is { } added) return added.PivotWorld;
-        if (SelectedLight is { } light) return light.Position;
+        if (SelectedLight is { } light) return LightWorldPosition(light);
         if (SelectedPropNode is { } prop) return prop.Position;
         if (SelectedProbe is { } probe) return probe.Position;
         if (!_selection.IsEmpty && GizmoPivot is { } pivot) return pivot;
