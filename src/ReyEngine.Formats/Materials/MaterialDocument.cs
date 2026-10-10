@@ -1261,6 +1261,7 @@ public sealed class MaterialBinding
     public TextureSlot? AddSampler(string samplerName, string path)
     {
         if (MaterialObject is null) return null;
+        AttachContainer(ref _samplerContainer, "samplerValues");   // M831
         if (_samplerContainer is null)
         {
             uint field = HashAlgorithms.Fnv1a("samplerValues");
@@ -1299,26 +1300,110 @@ public sealed class MaterialBinding
     public bool RemoveSampler(TextureSlot slot)
     {
         if (SamplerContainer is null || slot.Element is null) return false;
-        if (!SamplerContainer.Remove(slot.Element)) return false;
+        int at = IndexOfElement(SamplerContainer, slot.Element);
+        int listAt = _slots.IndexOf(slot);
+        if (!RemoveElement(SamplerContainer, slot.Element)) return false;
         _slots.Remove(slot);
+        slot.RemovedElementIndex = at;
+        slot.RemovedListIndex = listAt;
         _structurallyEdited = true;
         return true;
     }
 
     /// <summary>
-    /// Re-insert a previously removed sampler — the EXACT original element, kept alive by its
-    /// <see cref="TextureSlot"/> — for undo support. (Appended at the container end: BinTreeContainer
-    /// has no positional insert, so a mid-list remove + undo may reorder samplers; order is not
-    /// semantically meaningful for sampler lookup, which is by name.)
+    /// Re-insert a previously removed sampler - the EXACT original element, kept alive by its
+    /// <see cref="TextureSlot"/> - for undo support. M831: it goes back where it was (the container element index and the slot
+    /// list index are remembered by <see cref="RemoveSampler"/>), so an undo gives the same bytes and the same positional
+    /// node ids; BinTreeContainer has no positional insert, so the elements behind it are taken out and added again after it.
     /// </summary>
     public bool ReinsertSampler(TextureSlot slot)
     {
-        if (SamplerContainer is null || slot.Element is null) return false;
-        if (SamplerContainer.Elements.Contains(slot.Element)) return false; // already present
-        SamplerContainer.Add(slot.Element);
-        _slots.Add(slot);
+        if (slot.Element is null) return false;
+        AttachContainer(ref _samplerContainer, "samplerValues");
+        if (SamplerContainer is null) return false;
+        if (IndexOfElement(SamplerContainer, slot.Element) >= 0) return false; // already present
+        InsertElementAt(SamplerContainer, slot.Element, slot.RemovedElementIndex);
+        _slots.Insert(slot.RemovedListIndex >= 0 && slot.RemovedListIndex <= _slots.Count ? slot.RemovedListIndex : _slots.Count, slot);
         _structurallyEdited = true;
         return true;
+    }
+
+    private static int IndexOfElement(BinTreeContainer c, BinTreeProperty element)
+    {
+        for (int i = 0; i < c.Elements.Count; i++)
+            if (ReferenceEquals(c.Elements[i], element)) return i;
+        return -1;
+    }
+
+    /// <summary>Remove by REFERENCE: LeagueToolkit's Equals on properties is not a safe identity (two cloned entries compare alike).
+    /// Uses the element list directly when it is writable, else the container API after checking the reference is there.</summary>
+    private static bool RemoveElement(BinTreeContainer c, BinTreeProperty element)
+    {
+        int at = IndexOfElement(c, element);
+        if (at < 0) return false;
+        if (c.Elements is IList<BinTreeProperty> { IsReadOnly: false } list) { list.RemoveAt(at); return true; }
+        return c.Remove(element);
+    }
+
+    /// <summary>Add <paramref name="element"/> at <paramref name="index"/> (end when out of range). A writable element list is
+    /// inserted into directly; otherwise the container API only appends, so the elements from that index on are taken out and
+    /// appended again behind it, in their order.</summary>
+    private static void InsertElementAt(BinTreeContainer c, BinTreeProperty element, int index)
+    {
+        if (index < 0 || index >= c.Elements.Count) { c.Add(element); return; }
+        if (c.Elements is IList<BinTreeProperty> { IsReadOnly: false } list) { list.Insert(index, element); return; }
+        var tail = c.Elements.Skip(index).ToList();
+        foreach (var t in tail) RemoveElement(c, t);
+        c.Add(element);
+        foreach (var t in tail) c.Add(t);
+    }
+
+    /// <summary>M831: a save strips an empty container off its object (M414), so the one this binding still holds may no
+    /// longer be on it. Put it back before anything is added to it - an element added to a detached container is silently lost.</summary>
+    private void AttachContainer(ref BinTreeContainer? container, string field)
+    {
+        if (container is null || MaterialObject is null) return;
+        foreach (var kv in MaterialObject.Properties)
+            if (ReferenceEquals(kv.Value, container)) return;
+        MaterialObject.Properties[container.NameHash != 0 ? container.NameHash : HashAlgorithms.Fnv1a(field)] = container;
+    }
+
+    /// <summary>
+    /// M831: rename a sampler entry (the wire moved to another shader input: a material binds a texture by NAME). The name
+    /// string of the element is rewritten in place; nothing else about the entry changes. False when the entry has no name
+    /// field or the name is empty.
+    /// </summary>
+    public bool RenameSampler(TextureSlot slot, string newName)
+    {
+        if (string.IsNullOrWhiteSpace(newName) || slot.Element is not BinTreeStruct s) return false;
+        uint nameHash = NameFieldHash != 0 ? NameFieldHash : HashAlgorithms.Fnv1a("TextureName");
+        if (!s.Properties.TryGetValue(nameHash, out var p) || p is not BinTreeString str) return false;
+        str.Value = newName;
+        slot.SetSamplerName(newName);
+        _structurallyEdited = true;
+        return true;
+    }
+
+    /// <summary>
+    /// M831: a copy of <paramref name="source"/> under another name - the whole element is cloned (path in whatever form the bin
+    /// uses, address modes, any other field), so one texture can feed a second shader input. Null when the source has no
+    /// element to clone.
+    /// </summary>
+    public TextureSlot? DuplicateSampler(TextureSlot source, string newName)
+    {
+        if (MaterialObject is null || SamplerContainer is null || source.Element is not BinTreeStruct se) return null;
+        uint nameHash = NameFieldHash != 0 ? NameFieldHash : HashAlgorithms.Fnv1a("TextureName");
+        uint pathHash = PathFieldHash != 0 ? PathFieldHash : HashAlgorithms.Fnv1a("texturePath");
+        AttachContainer(ref _samplerContainer, "samplerValues");
+        var clone = (BinTreeStruct)BinTreeCloner.Clone(se, 0);
+        if (!clone.Properties.TryGetValue(nameHash, out var n) || n is not BinTreeString ns
+            || !clone.Properties.TryGetValue(pathHash, out var pp)) return null;
+        ns.Value = newName;
+        _samplerContainer!.Add(clone);
+        var slot = new TextureSlot(newName, pp, clone, ResolveWadPath);
+        _slots.Add(slot);
+        _structurallyEdited = true;
+        return slot;
     }
 
     public void Revert()
@@ -1337,9 +1422,15 @@ public sealed class MaterialBinding
 
     /// <summary>Add a parameter by cloning an existing one (keeps the value TYPE of the prototype — edit the
     /// value afterwards). Null when this material has no parameter to clone from.</summary>
-    public MaterialParameter? AddParameter(string name)
+    public MaterialParameter? AddParameter(string name) => AddParameter(name, null);
+
+    /// <summary>M831: as above, cloning - when there is one - a parameter of <paramref name="typeName"/> (a bin property type name:
+    /// "F32", "Vector2", "Vector3", "Vector4"), so the new entry has the type the shader input needs rather than the type of
+    /// whatever the material happens to author first. With no such parameter it falls back to the first one (null when none).</summary>
+    public MaterialParameter? AddParameter(string name, string? typeName)
     {
         if (MaterialObject is null) return null;
+        AttachContainer(ref _paramContainer, "paramValues");
         if (_paramContainer is null)
         {
             uint field = HashAlgorithms.Fnv1a("paramValues");
@@ -1349,17 +1440,24 @@ public sealed class MaterialBinding
         }
 
         BinTreeStruct clone;
-        if (_paramContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault() is { } proto)
-            clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);
+        var protoOfType = typeName is null ? null
+            : _params.FirstOrDefault(q => q.TypeName == typeName && !q.IsValueOmitted && q.Element is BinTreeStruct && IndexOfElement(_paramContainer, q.Element) >= 0)?.Element as BinTreeStruct;
+        var anyProto = _paramContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault();
+        if (protoOfType is not null || (typeName is null && anyProto is not null))
+            clone = (BinTreeStruct)BinTreeCloner.Clone((protoOfType ?? anyProto)!, 0);
         else
         {
+            // no entry of the wanted type to copy (or no entry at all): build one of that type, the way Riot writes it
             uint nameField = HashAlgorithms.Fnv1a("name"), valueField = HashAlgorithms.Fnv1a("value");
+            BinTreeProperty value = typeName switch
+            {
+                "F32" => new BinTreeF32(valueField, 0f),
+                "Vector2" => new BinTreeVector2(valueField, System.Numerics.Vector2.Zero),
+                "Vector3" => new BinTreeVector3(valueField, System.Numerics.Vector3.Zero),
+                _ => new BinTreeVector4(valueField, System.Numerics.Vector4.Zero),
+            };
             clone = NewElement(_paramContainer, HashAlgorithms.Fnv1a("StaticMaterialShaderParamDef"),
-                new BinTreeProperty[]
-                {
-                    new BinTreeString(nameField, name),
-                    new BinTreeVector4(valueField, System.Numerics.Vector4.Zero),
-                });
+                new BinTreeProperty[] { new BinTreeString(nameField, name), value });
         }
         static uint HashOf(IReadOnlyDictionary<uint, BinTreeProperty> props, string n)
         {
@@ -1396,10 +1494,70 @@ public sealed class MaterialBinding
     public bool RemoveParameter(MaterialParameter p)
     {
         if (_paramContainer is null || p.Element is null) return false;
-        if (!_paramContainer.Remove(p.Element)) return false;
+        int at = IndexOfElement(_paramContainer, p.Element);
+        int listAt = _params.IndexOf(p);
+        if (!RemoveElement(_paramContainer, p.Element)) return false;
         _params.Remove(p);
+        p.RemovedElementIndex = at;
+        p.RemovedListIndex = listAt;
         _structurallyEdited = true;
         return true;
+    }
+
+    /// <summary>M831: put a removed parameter back where it was (see <see cref="ReinsertSampler"/>), the exact element, for undo.</summary>
+    public bool ReinsertParameter(MaterialParameter p)
+    {
+        if (p.Element is null) return false;
+        AttachContainer(ref _paramContainer, "paramValues");
+        if (_paramContainer is null || IndexOfElement(_paramContainer, p.Element) >= 0) return false;
+        InsertElementAt(_paramContainer, p.Element, p.RemovedElementIndex);
+        _params.Insert(p.RemovedListIndex >= 0 && p.RemovedListIndex <= _params.Count ? p.RemovedListIndex : _params.Count, p);
+        _structurallyEdited = true;
+        return true;
+    }
+
+    private static uint ParamFieldHash(IReadOnlyDictionary<uint, BinTreeProperty> props, string n)
+    {
+        uint h = HashAlgorithms.Fnv1aRaw(n);
+        if (props.ContainsKey(h)) return h;
+        h = HashAlgorithms.Fnv1a(n);
+        return props.ContainsKey(h) ? h : 0u;
+    }
+
+    /// <summary>M831: rename a parameter entry (its wire moved to another shader constant: a material binds a constant by NAME).</summary>
+    public bool RenameParameter(MaterialParameter p, string newName)
+    {
+        if (string.IsNullOrWhiteSpace(newName) || p.Element is not BinTreeStruct s) return false;
+        uint h = ParamFieldHash(s.Properties, "name");
+        if (h == 0 || s.Properties[h] is not BinTreeString str) return false;
+        str.Value = newName;
+        p.SetName(newName);
+        _structurallyEdited = true;
+        return true;
+    }
+
+    /// <summary>M831: a copy of <paramref name="source"/> under another name, same type and value. A source whose entry wrote no
+    /// value (an authored zero) is copied as an explicit zero of its type. Null when the entry cannot be cloned.</summary>
+    public MaterialParameter? DuplicateParameter(MaterialParameter source, string newName)
+    {
+        if (MaterialObject is null || _paramContainer is null || source.Element is not BinTreeStruct se) return null;
+        if (source.IsValueOmitted)
+        {
+            var z = AddParameter(newName, source.TypeName);
+            if (z is null) return null;
+            try { z.Apply(string.Join(", ", Enumerable.Repeat("0", Math.Max(1, z.CurrentText.Split(',').Length)))); } catch { RemoveParameter(z); return null; }
+            return z;
+        }
+        AttachContainer(ref _paramContainer, "paramValues");
+        var clone = (BinTreeStruct)BinTreeCloner.Clone(se, 0);
+        uint nameHash = ParamFieldHash(clone.Properties, "name"), valueHash = ParamFieldHash(clone.Properties, "value");
+        if (nameHash == 0 || valueHash == 0 || clone.Properties[nameHash] is not BinTreeString ns) return null;
+        ns.Value = newName;
+        _paramContainer!.Add(clone);
+        var q = new MaterialParameter(newName, clone.Properties[valueHash], clone);
+        _params.Add(q);
+        _structurallyEdited = true;
+        return q;
     }
 }
 
@@ -1493,8 +1651,15 @@ public sealed class TextureSlot
     private readonly BinTreeProperty _prop;
     private readonly Func<ulong, string?>? _resolveWadPath;
 
-    public string SamplerName { get; }
+    public string SamplerName { get; private set; }
     public string OriginalPath { get; }
+
+    /// <summary>M831: where the slot sat (container element index, slot list index) when it was removed, so undo puts it back
+    /// in the same place and the file's bytes come back identical. -1 = never removed.</summary>
+    internal int RemovedElementIndex { get; set; } = -1;
+    internal int RemovedListIndex { get; set; } = -1;
+
+    internal void SetSamplerName(string name) => SamplerName = name;
 
     /// <summary>The underlying sampler element (struct), for removal. Null for inline/default slots.</summary>
     internal BinTreeProperty? Element { get; }
@@ -1639,9 +1804,14 @@ public sealed class MaterialParameter
     private readonly BinTreeProperty _prop;
     private readonly bool _omittedValue;
 
-    public string Name { get; }
+    public string Name { get; private set; }
     public string OriginalText { get; }
     public string TypeName { get; }
+
+    /// <summary>M831: see <see cref="TextureSlot.RemovedElementIndex"/>.</summary>
+    internal int RemovedElementIndex { get; set; } = -1;
+    internal int RemovedListIndex { get; set; } = -1;
+    internal void SetName(string name) => Name = name;
 
     /// <summary>The underlying paramValues element (struct), for removal. Null for non-removable params.</summary>
     internal BinTreeProperty? Element { get; }

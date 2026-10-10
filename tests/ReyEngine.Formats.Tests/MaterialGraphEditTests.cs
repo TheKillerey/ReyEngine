@@ -380,13 +380,33 @@ public sealed class MaterialGraphEditTests
         var tint = rig.ParamRow("param:0");                              // TintColor
         Assert.Equal("TintColor", tint.Parameter.Name);
 
-        // the Material tab removes TintColor: the positional id param:0 now names Scale
+        // the Material tab removes TintColor: the positional id param:0 now names Scale. M831: the SELECTION follows the entry, not the id,
+        // so the removed node's selection is cleared instead of silently moving to Scale
         rig.Material.RemoveParameterCommand.Execute(rig.Material.Parameters.First(p => p.Name == "TintColor"));
+        Assert.Null(rig.Graph.SelectedNodeId);
+        rig.Graph.SelectedNodeId = "param:0";
 
         var row = Assert.IsType<GraphParamEditRow>(Assert.Single(rig.Graph.EditRows));
         Assert.Equal("Scale", row.Parameter.Name);
         Assert.NotSame(tint, row);
         Assert.Contains(rig.Material.Parameters, p => ReferenceEquals(p, row.Parameter));   // wrapping a live row, not a detached one
+    }
+
+    [Fact]
+    public void RowsAreNotReusedWhenTheSelectedIdStaysValidButNowWrapsAnotherModel()
+    {
+        // a selection that has only an id (no entry behind it, as the shader-default nodes) hits the identity guard of the row refresh:
+        // the id param:0 stays valid, but the Material tab removing TintColor makes it Scale
+        using var rig = new Rig();
+        var tint = rig.ParamRow("param:0");
+        typeof(MaterialGraphViewModel).GetField("_selectedModel", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(rig.Graph, null);
+        rig.Material.RemoveParameterCommand.Execute(rig.Material.Parameters.First(p => p.Name == "TintColor"));
+        Assert.Equal("param:0", rig.Graph.SelectedNodeId);
+        var row = Assert.IsType<GraphParamEditRow>(Assert.Single(rig.Graph.EditRows));
+        Assert.Equal("Scale", row.Parameter.Name);
+        Assert.NotSame(tint, row);
+        Assert.Contains(rig.Material.Parameters, p => ReferenceEquals(p, row.Parameter));
     }
 
     [Fact]

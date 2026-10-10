@@ -132,6 +132,96 @@ public sealed class SamplerAddRemoveCommand : IEditorCommand
     public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
 }
 
+/// <summary>M831: reversible sampler rename - the wire moved to another shader input. The name is the whole binding (a material
+/// binds a texture to a shader input by NAME), so the entry, its path and its address modes are untouched.</summary>
+public sealed class SamplerRenameCommand : IEditorCommand
+{
+    private readonly MaterialBinding _binding;
+    private readonly TextureSlot _slot;
+    private readonly string _old, _new;
+    private readonly Action? _onApplied;
+
+    public SamplerRenameCommand(object? context, MaterialBinding binding, TextureSlot slot, string oldName, string newName, Action? onApplied)
+    {
+        Context = context; _binding = binding; _slot = slot; _old = oldName; _new = newName; _onApplied = onApplied;
+    }
+
+    public string Name => $"Connect {_new}";
+    public object? Context { get; }
+
+    public void Execute() => Set(_new);
+    public void Undo() => Set(_old);
+
+    private void Set(string name)
+    {
+        if (!_binding.RenameSampler(_slot, name)) throw new InvalidOperationException($"Sampler could not be renamed to '{name}'.");
+        _onApplied?.Invoke();
+    }
+
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
+/// <summary>M831: reversible parameter rename (see <see cref="SamplerRenameCommand"/>).</summary>
+public sealed class ParameterRenameCommand : IEditorCommand
+{
+    private readonly MaterialBinding _binding;
+    private readonly MaterialParameter _param;
+    private readonly string _old, _new;
+    private readonly Action? _onApplied;
+
+    public ParameterRenameCommand(object? context, MaterialBinding binding, MaterialParameter param, string oldName, string newName, Action? onApplied)
+    {
+        Context = context; _binding = binding; _param = param; _old = oldName; _new = newName; _onApplied = onApplied;
+    }
+
+    public string Name => $"Connect {_new}";
+    public object? Context { get; }
+
+    public void Execute() => Set(_new);
+    public void Undo() => Set(_old);
+
+    private void Set(string name)
+    {
+        if (!_binding.RenameParameter(_param, name)) throw new InvalidOperationException($"Parameter could not be renamed to '{name}'.");
+        _onApplied?.Invoke();
+    }
+
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
+/// <summary>M831: reversible parameter add/remove. The removed parameter keeps its bin element alive, so undo re-inserts the
+/// exact original element at its original position.</summary>
+public sealed class ParameterAddRemoveCommand : IEditorCommand
+{
+    private readonly MaterialBinding _binding;
+    private readonly MaterialParameter _param;
+    private readonly bool _isAdd;
+    private readonly Action? _onApplied;
+
+    public ParameterAddRemoveCommand(object? context, MaterialBinding binding, MaterialParameter param, bool isAdd, Action? onApplied)
+    {
+        Context = context; _binding = binding; _param = param; _isAdd = isAdd; _onApplied = onApplied;
+    }
+
+    public string Name => _isAdd ? $"Add Parameter {_param.Name}" : $"Remove Parameter {_param.Name}";
+    public object? Context { get; }
+
+    public void Execute() => SetPresent(_isAdd);
+    public void Undo() => SetPresent(!_isAdd);
+
+    private void SetPresent(bool present)
+    {
+        bool ok = present ? _binding.ReinsertParameter(_param) : _binding.RemoveParameter(_param);
+        if (!ok) throw new InvalidOperationException($"Parameter '{_param.Name}' could not be {(present ? "re-added" : "removed")}.");
+        _onApplied?.Invoke();
+    }
+
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
 /// <summary>M645: reversible feature-switch edit, for the bulk editor - the single row writes the model
 /// directly and records nothing.</summary>
 public sealed class SwitchEditCommand : IEditorCommand

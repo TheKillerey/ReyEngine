@@ -49,6 +49,9 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
 
     public GraphThumbnails Thumbnails { get; }
 
+    /// <summary>Supplies the shader's inputs when no shader cache can be read (a tool or a test without the game install). The cache wins when it resolves.</summary>
+    public Func<MaterialBinding, MaterialGraphShaderInfo?>? ShaderInfoSource { get; set; }
+
     public void Dispose()
     {
         DetachEditor();
@@ -143,6 +146,7 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
             try { info = MaterialGraphShaderResolver.Resolve(_cache, _perms, binding, out note, out vs, out ps, ShaderPreviewViewModel.ResolveTextureTarget); }
             catch (Exception ex) { note = "shader resolution failed: " + ex.Message; info = null; }
         }
+        if (info is null && ShaderInfoSource?.Invoke(binding) is { } supplied) { info = supplied; note = ""; }
         _info = info;
         _shaderSig = ShaderSignature(binding);
         return MaterialGraphBuilder.Build(binding, info);
@@ -192,10 +196,15 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
         Graph = graph;
         Breadcrumb = $"{LeafOf(graph.MaterialName)} > Material Graph";
         OnPropertyChanged(nameof(Summary));
+        ApplyUserLayout(graph);   // M831: nodes the person moved stay where they put them
         if (keepSelection)
         {
-            // an edit rebuilds the graph: node ids are positional and stable, so the selection stays unless its node is gone
-            if (kept is not null && graph.Find(kept) is null) SelectedNodeId = null;
+            // M831: node ids are POSITIONAL (tex:2 is the third sampler), so an entry removed or added above the selected one shifts them.
+            // The selection follows the entry itself (the model object the node stands for); only a node with no entry (the shader, the
+            // output, a shader default) keeps its id.
+            string? now = _selectedModel is not null && binding is not null ? IdOf(binding, _selectedModel) : kept;
+            if (now is not null && graph.Find(now) is null) now = null;
+            if (now != SelectedNodeId) SelectedNodeId = now;
             else RefreshDetails(keepRows: true);
         }
         else RefreshDetails();
@@ -208,9 +217,11 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
         MaterialStats.Clear();
         foreach (var (label, value) in MaterialGraphStats.Material(graph))
             MaterialStats.Add(new MaterialStatRow { Label = label, Value = value });
-        StatsNote = vs is null && ps is null
-            ? "No compiled permutation is resolved, so no shader figures can be shown" + (note.Length > 0 ? ": " + note : ".")
-            : "Figures come from the permutation this material resolves to (the same one the preview loads).";
+        // M831: only when the shader was resolved again - an edit that keeps the permutation passes no shader here, and its figures stay
+        if (shaderChanged)
+            StatsNote = vs is null && ps is null
+                ? "No compiled permutation is resolved, so no shader figures can be shown" + (note.Length > 0 ? ": " + note : ".")
+                : "Figures come from the permutation this material resolves to (the same one the preview loads).";
 
         if (shaderChanged) FillCode(vs, ps, note);
     }
@@ -295,7 +306,11 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
 
     // ============================================================================== selection / details
 
-    partial void OnSelectedNodeIdChanged(string? value) => RefreshDetails();
+    partial void OnSelectedNodeIdChanged(string? value)
+    {
+        _selectedModel = _binding is null ? null : ModelOf(_binding, value);   // M831: the selection's identity, see Apply
+        RefreshDetails();
+    }
 
     private void RefreshDetails(bool keepRows = false)
     {

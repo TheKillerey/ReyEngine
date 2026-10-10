@@ -40,6 +40,9 @@ public sealed partial class TextureSlotViewModel : ViewModelBase
     public string SamplerName => Model.SamplerName;
     public bool IsDiffuse => Model.IsDiffuse;
 
+    /// <summary>M831: the Material Graph renamed the sampler (a wire moved to another input).</summary>
+    public void RaiseNameChanged() { OnPropertyChanged(nameof(SamplerName)); OnPropertyChanged(nameof(IsDiffuse)); }
+
     /// <summary>M103: the selected shader declares no sampler by this name, so the shader will ignore
     /// whatever is bound here. False when the shader isn't in the catalogue (nothing to check against).</summary>
     [ObservableProperty] private bool _notInShader;
@@ -214,6 +217,9 @@ public sealed partial class MaterialParameterViewModel : ViewModelBase
     public bool IsEditable => Model.IsEditable;
     public bool IsDirty => Model.IsDirty;
     public bool IsRemovable => Model.IsRemovable;   // M55
+
+    /// <summary>M831: the Material Graph renamed the parameter (a wire moved to another input).</summary>
+    public void RaiseNameChanged() => OnPropertyChanged(nameof(Name));
 
     /// <summary>M50c: colour-ish params (TintColor, Color_Inside…) show a live swatch preview.</summary>
     public bool IsColorLike =>
@@ -1427,6 +1433,37 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         }
         RaiseDirty();
         Owner!.NotifyChanged();
+    }
+
+    /// <summary>M831: bring the sampler and parameter rows in line with the model after the Material Graph (or an undo of it) added,
+    /// removed, renamed or moved entries: rows whose model is still there are kept (and keep what is typed in them), the rest are
+    /// added or dropped, and the order is the model's.</summary>
+    public void ResyncRows()
+    {
+        var slots = Model.Slots;
+        for (int i = Slots.Count - 1; i >= 0; i--)
+            if (!slots.Any(m => ReferenceEquals(m, Slots[i].Model))) Slots.RemoveAt(i);
+        for (int i = 0; i < slots.Count; i++)
+        {
+            int at = -1;
+            for (int k = 0; k < Slots.Count; k++) if (ReferenceEquals(Slots[k].Model, slots[i])) { at = k; break; }
+            if (at < 0) Slots.Insert(Math.Min(i, Slots.Count), new TextureSlotViewModel(slots[i], Owner!) { Binding = this });
+            else if (at != i) Slots.Move(at, i);
+        }
+        foreach (var s in Slots) s.RaiseNameChanged();
+
+        var plain = Model.Parameters.Where(p => !MaterialEditorViewModel.IsSubmeshHideField(p.Name) && !MaterialEditorViewModel.IsSubmeshOrderField(p.Name)).ToList();
+        for (int i = Parameters.Count - 1; i >= 0; i--)
+            if (!Model.Parameters.Any(m => ReferenceEquals(m, Parameters[i].Model))) Parameters.RemoveAt(i);
+        for (int i = 0; i < plain.Count; i++)
+        {
+            int at = -1;
+            for (int k = 0; k < Parameters.Count; k++) if (ReferenceEquals(Parameters[k].Model, plain[i])) { at = k; break; }
+            if (at < 0) Parameters.Insert(Math.Min(i, Parameters.Count), Row(plain[i]));
+            else if (at != i) Parameters.Move(at, i);
+        }
+        foreach (var p in Parameters) p.RaiseNameChanged();
+        OnPropertyChanged(nameof(HasParameters));
     }
 
     public void RaiseDirty()

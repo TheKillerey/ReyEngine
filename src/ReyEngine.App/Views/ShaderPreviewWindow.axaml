@@ -652,7 +652,8 @@
                                    Thumbnails="{Binding MaterialGraph.Thumbnails}"
                                    Breadcrumb="{Binding MaterialGraph.Breadcrumb}"
                                    EmptyText="{Binding MaterialGraph.EmptyText}"
-                                   ModeText="{Binding MaterialGraph.ModeBadge}" />
+                                   ModeText="{Binding MaterialGraph.ModeBadge}"
+                                   Wiring="{Binding MaterialGraph}" />
       </Border>
     </Grid>
 

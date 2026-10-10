@@ -44,6 +44,20 @@ public sealed class GraphPin
     public bool Shaded { get; init; }
     /// <summary>A short value / explanation shown beside the pin name.</summary>
     public string Detail { get; init; } = "";
+
+    /// <summary>M831: shader input pins: the shader's own identity of the input ("tx:Name", "c:Name", "sw:Name", "mac:Name"). Empty elsewhere.</summary>
+    public string Key { get; init; } = "";
+
+    /// <summary>M831: shader input pins: the NAME a material entry must carry to bind this input (the sampler name for a texture,
+    /// the parameter name for a constant). A material binds by name, so wiring is writing this name.</summary>
+    public string Target { get; init; } = "";
+
+    /// <summary>M831: a texture pin's shape from the shader reflection ("tex2d", "texcube", ...). A texture node's output carries the shape of the
+    /// input it feeds, or "tex2d" while it feeds none. Empty for other pins.</summary>
+    public string Dimension { get; internal set; } = "";
+
+    /// <summary>M831: a constant pin's component count (1 float, 2, 3, 4) or a parameter output's; 0 = not a numeric vector (cannot be wired).</summary>
+    public int Components { get; init; }
 }
 
 public readonly record struct GraphDetail(string Category, string Label, string Value);
@@ -92,6 +106,9 @@ public sealed class GraphNode
         (pin.IsInput ? X : X + Width, Y + GraphMetrics.PinRowCentre(pin.Row));
 
     public bool Contains(double x, double y) => x >= X && x <= X + Width && y >= Y && y <= Y + Height;
+
+    /// <summary>M831: move the node (the person dragged it). Layout only - nothing about the material.</summary>
+    public void SetPosition(double x, double y) { X = x; Y = y; }
 }
 
 public sealed class GraphWire
@@ -154,6 +171,9 @@ public sealed class MaterialGraph
         foreach (var n in Nodes) if (n.Id == id) return n;
         return null;
     }
+
+    /// <summary>M831: recompute <see cref="Bounds"/> after nodes were moved.</summary>
+    public void UpdateBounds() => Bounds = MaterialGraphBuilder.BoundsOf(Nodes, Frames);
 
     public GraphNode? ShaderNode => Nodes.FirstOrDefault(n => n.Kind == GraphNodeKind.Shader);
     public GraphNode? OutputNode => Nodes.FirstOrDefault(n => n.Kind == GraphNodeKind.Output);

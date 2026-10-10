@@ -30,19 +30,26 @@ public static class MaterialGraphBuilder
         var shaderIn = new List<GraphPin>();
         var pinIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        int AddShaderPin(string key, string name, GraphPinKind kind, string detail)
+        int AddShaderPin(string key, string name, GraphPinKind kind, string detail, string dimension = "", int components = 0)
         {
             if (pinIndex.TryGetValue(key, out int at)) return at;
             pinIndex[key] = shaderIn.Count;
             // row 0 of the shader node belongs to its Result output (and the shader's path on the left)
-            shaderIn.Add(new GraphPin { Name = name, IsInput = true, Kind = kind, Row = shaderIn.Count + 1, Detail = detail });
+            // M831: the pin also says what a wire to it writes (Target) and what it accepts (Dimension / Components)
+            shaderIn.Add(new GraphPin
+            {
+                Name = name, IsInput = true, Kind = kind, Row = shaderIn.Count + 1, Detail = detail,
+                // an engine-fed texture (FOW_MAP_SharedTexture, the shadow maps...) is never a material's to set: no name binds it from here
+                Key = key, Target = key.Contains(':') && !name.EndsWith("_SharedTexture", StringComparison.OrdinalIgnoreCase) ? name : "",
+                Dimension = dimension, Components = components,
+            });
             return shaderIn.Count - 1;
         }
 
         // textures: everything the shader declares, in bind order, bound or not
         if (reflected)
             foreach (var t in info!.Textures)
-                AddShaderPin("tx:" + t.Name, t.DisplayName, GraphPinKind.Texture, $"t{t.BindPoint} {t.Dimension}");
+                AddShaderPin("tx:" + t.Name, t.DisplayName, GraphPinKind.Texture, $"t{t.BindPoint} {t.Dimension}", dimension: t.Dimension);
 
         // ------------------------------------------------------------- textures
         var texNodes = new List<(GraphNode Node, int Pin)>();
@@ -149,7 +156,8 @@ public static class MaterialGraphBuilder
             else
             {
                 pin = AddShaderPin("c:" + p.Name, p.Name, pinKind,
-                    con is null ? "" : con.IsUsed ? con.TypeName : con.TypeName + " (unread)");
+                    con is null ? "" : con.IsUsed ? con.TypeName : con.TypeName + " (unread)",
+                    components: con is null ? ComponentsOf(p.TypeName) : ConstantComponents(con.TypeName));
                 if (con is { IsUsed: false }) why = "Declared by the shader but not read by this permutation.";
             }
 
@@ -180,7 +188,7 @@ public static class MaterialGraphBuilder
                     new GraphPin
                     {
                         Name = "Out", IsInput = false, Row = 0, Detail = valueText,
-                        Kind = pinKind,
+                        Kind = pinKind, Components = ComponentsOf(p.TypeName),
                     },
                 },
                 Swatch = swatch,
@@ -190,6 +198,19 @@ public static class MaterialGraphBuilder
             }, pin));
             pi++;
         }
+
+        // M831: constants the shader declares AND reads that the material does not author. They have no node, only a pin (dashed, like
+        // Unreal's unconnected inputs), so a wire can be made to them and "Create parameter here" has a target. Limited to the shader's
+        // own material parameters (the shaders.bin defaults), not the engine-fed per-frame / per-object buffers.
+        if (reflected)
+            foreach (var (pname, defaults) in info!.ParameterDefaults.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                if (!declared.TryGetValue(pname, out var con) || !con.IsUsed || seenParams.Contains(pname)) continue;
+                int comps = ConstantComponents(con.TypeName);
+                if (comps == 0) continue;
+                AddShaderPin("c:" + con.Name, con.Name, comps == 1 ? GraphPinKind.Scalar : GraphPinKind.Vector,
+                    $"{con.TypeName} default " + string.Join(" ", defaults.Select(F)), components: comps);
+            }
 
         // ------------------------------------------------------------- switches and macros
         var swNodes = new List<(GraphNode Node, int Pin)>();
@@ -339,6 +360,8 @@ public static class MaterialGraphBuilder
             foreach (var (node, pin) in group)
             {
                 nodes.Add(node);
+                // M831: a texture sample has the shape of the input it feeds; unwired, it is a 2D texture (every .tex a material names is)
+                if (node.Kind == GraphNodeKind.Texture) node.Outputs[0].Dimension = pin >= 0 && shaderIn[pin].Dimension.Length > 0 ? shaderIn[pin].Dimension : "tex2d";
                 if (pin >= 0)
                 {
                     wires.Add(new GraphWire { FromNode = node.Id, FromPin = 0, ToNode = shaderNode.Id, ToPin = pin, SourceKind = node.Kind });
@@ -444,7 +467,7 @@ public static class MaterialGraphBuilder
         };
     }
 
-    private static (double, double, double, double) BoundsOf(List<GraphNode> nodes, List<GraphFrame> frames)
+    internal static (double, double, double, double) BoundsOf(IReadOnlyList<GraphNode> nodes, IReadOnlyList<GraphFrame> frames)
     {
         double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
         foreach (var n in nodes) { x0 = Math.Min(x0, n.X); y0 = Math.Min(y0, n.Y); x1 = Math.Max(x1, n.Right); y1 = Math.Max(y1, n.Bottom); }
@@ -470,6 +493,18 @@ public static class MaterialGraphBuilder
             Details = details,
             Width = SwitchWidth,
         };
+
+    /// <summary>M831: component count of a parameter's bin type: F32 1, Vector2 2, Vector3 3, Vector4 / Color 4; 0 = not a numeric vector.</summary>
+    public static int ComponentsOf(string binTypeName) => binTypeName switch
+    {
+        "F32" => 1, "Vector2" => 2, "Vector3" => 3, "Vector4" or "Color" => 4, _ => 0,
+    };
+
+    /// <summary>M831: component count of a shader constant's HLSL type: float 1, float2 2, float3 3, float4 4; 0 = anything else (a matrix, an int).</summary>
+    public static int ConstantComponents(string hlslType) => hlslType switch
+    {
+        "float" => 1, "float2" => 2, "float3" => 3, "float4" => 4, _ => 0,
+    };
 
     private static string Auth(MaterialBinding b, string field) => b.PassAuthors(field) ? "" : "   (not authored: schema default)";
 
