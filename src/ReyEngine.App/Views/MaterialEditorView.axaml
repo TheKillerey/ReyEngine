@@ -45,6 +45,8 @@
                   ToolTip.Tip="Push every edit to the viewport automatically (debounced)" />
         <Button Classes="tool" Content="Save To Override" Command="{Binding SaveCommand}" />
         <Button Classes="tool" Content="Revert All" Command="{Binding RevertAllCommand}" />
+        <Button Classes="tool" Content="Material Graph" Command="{Binding ShowMaterialGraphCommand}"
+                ToolTip.Tip="Open the selected material as a node graph (view-only): its textures, parameters and switches wired into the shader. The graph shows the SAVED material; unsaved edits are not shown." />
       </StackPanel>
 
       <!-- M351e: the selector is a ComboBox ABOVE the detail (user feedback on the

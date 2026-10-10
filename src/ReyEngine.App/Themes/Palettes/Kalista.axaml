@@ -83,6 +83,26 @@
   <SolidColorBrush x:Key="ReyAccent2SoftBrush" Color="{StaticResource ReyAccent2Soft}" />
   <SolidColorBrush x:Key="ReyBgVeilBrush" Color="{StaticResource ReyBgVeil}" />
 
+  <!-- M829: Material Graph node colours - the title bar of each node type, and the comment frames. The
+       same functional hues in every palette (a texture is blue, a parameter green...), so a graph reads the
+       same whatever the accent. -->
+  <Color x:Key="ReyGraphTexture">#3B78B8</Color>
+  <Color x:Key="ReyGraphParam">#2F9E5B</Color>
+  <Color x:Key="ReyGraphSwitch">#B8862F</Color>
+  <Color x:Key="ReyGraphMacro">#8160C4</Color>
+  <Color x:Key="ReyGraphShader">#2E8F96</Color>
+  <Color x:Key="ReyGraphOutput">#A5383F</Color>
+  <Color x:Key="ReyGraphComment">#14FFFFFF</Color>
+  <Color x:Key="ReyGraphCommentBorder">#33FFFFFF</Color>
+  <SolidColorBrush x:Key="ReyGraphTextureBrush" Color="{StaticResource ReyGraphTexture}" />
+  <SolidColorBrush x:Key="ReyGraphParamBrush" Color="{StaticResource ReyGraphParam}" />
+  <SolidColorBrush x:Key="ReyGraphSwitchBrush" Color="{StaticResource ReyGraphSwitch}" />
+  <SolidColorBrush x:Key="ReyGraphMacroBrush" Color="{StaticResource ReyGraphMacro}" />
+  <SolidColorBrush x:Key="ReyGraphShaderBrush" Color="{StaticResource ReyGraphShader}" />
+  <SolidColorBrush x:Key="ReyGraphOutputBrush" Color="{StaticResource ReyGraphOutput}" />
+  <SolidColorBrush x:Key="ReyGraphCommentBrush" Color="{StaticResource ReyGraphComment}" />
+  <SolidColorBrush x:Key="ReyGraphCommentBorderBrush" Color="{StaticResource ReyGraphCommentBorder}" />
+
   <!-- ============================================================================
        Fluent theme tint: steer Avalonia's built-in controls (selection highlights,
        sliders, checkboxes, menus, inputs, combo dropdowns) onto the Kalista palette.

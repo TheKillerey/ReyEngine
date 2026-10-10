@@ -1038,6 +1038,10 @@ public sealed class MaterialBinding
     internal BinTreeStruct? PassStruct { get; init; }
     public bool CanEditRenderState => PassStruct is not null;
 
+    /// <summary>M829: true when the first pass AUTHORS <paramref name="field"/> (so a view can tell "set to the default"
+    /// from "absent, running on the schema default"). False for a binding with no pass struct or a linked one.</summary>
+    public bool PassAuthors(string field) => PassStruct is not null && FindProp(PassStruct, field) is not null;
+
     /// <summary>Current value of a pass bool, honouring "field absent = <paramref name="whenAbsent"/>".</summary>
     public bool GetPassBool(string field, bool whenAbsent) =>
         PassStruct is null ? whenAbsent

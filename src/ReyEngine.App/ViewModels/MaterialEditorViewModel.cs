@@ -1642,6 +1642,10 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     public Action? OpenIssues { get; set; }
     [RelayCommand] private void ShowIssues() => OpenIssues?.Invoke();
 
+    /// <summary>M829: host hook - open the Material Graph (view-only node view) on a bin and a material name.</summary>
+    public Action<string?, string?>? OpenMaterialGraph { get; set; }
+    [RelayCommand] private void ShowMaterialGraph() => OpenMaterialGraph?.Invoke(BinEntry?.Path, SelectedMaterial?.Model.Name);
+
     // ---- M52: shader selector — swap the pass shader + auto-add the samplers that shader uses ----
     /// <summary>Distinct shaders seen in the loaded document (the realistic choices for this map/skin).</summary>
     public ObservableCollection<string> KnownShaders { get; } = new();

@@ -386,6 +386,13 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
     public bool CacheAvailable => _cache is not null;
 
+    /// <summary>M829: the node-graph view of the material or shader being inspected (read-only).</summary>
+    public MaterialGraphViewModel MaterialGraph { get; }
+
+    /// <summary>M829: set while ApplyMaterial drives Load(), so the shader-only graph does not replace the
+    /// material graph that was built when the material was picked.</summary>
+    private bool _loadingMaterial;
+
     public ShaderPreviewViewModel(string? gameDataFinalDir, IHashResolver? resolver,
         Func<ulong, byte[]?>? readAsset = null,
         IEnumerable<(string Path, ulong Hash)>? binAssets = null,
@@ -393,6 +400,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         IEnumerable<(string Path, ulong Hash)>? sceneAssets = null)
     {
         _readAsset = readAsset;
+        MaterialGraph = new MaterialGraphViewModel(readAsset is null ? null : h => { try { return readAsset(h); } catch { return null; } });
         _resolveBinName = resolveBinName ?? (_ => null);
         if (binAssets is not null)
             foreach (var (path, hash) in binAssets)
@@ -531,6 +539,67 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     }
 
     partial void OnBinFilterChanged(string value) => ApplyBinFilter();
+
+    /// <summary>M829: picking a material shows its node graph at once - it only needs the binding and the
+    /// shader cache, not a D3D11 load, so "Load this material" stays the step that previews it.</summary>
+    partial void OnSelectedMaterialChanged(MaterialRow? value)
+    {
+        if (value is null) return;
+        try { MaterialGraph.ShowMaterial(value.Binding, _cache, _perms); }
+        catch (Exception ex) { Status = $"The material graph could not be built: {ex.Message}"; }
+
+        // the Material Editor shows a lit sphere beside the graph, so picking a material previews it too - but
+        // debounced (a quick run down the list must not load a shader and its textures for every row it passes
+        // over), and never over a scene the Scene tab has loaded
+        _pickCts?.Cancel();
+        _pickCts?.Dispose();
+        _pickCts = null;
+        if (!PreviewOnPick || _cache is null || !value.HasShader || SceneSubmeshes.Count > 0) return;
+        var cts = _pickCts = new CancellationTokenSource();
+        _ = DebouncedApplyAsync(value, cts.Token);
+    }
+
+    private CancellationTokenSource? _pickCts;
+
+    private async Task DebouncedApplyAsync(MaterialRow picked, CancellationToken token)
+    {
+        try { await Task.Delay(150, token); }
+        catch (OperationCanceledException) { return; }
+        // back on the UI thread (the continuation captures its context); the pick may have moved on or the window closed
+        if (token.IsCancellationRequested || _disposed || !ReferenceEquals(SelectedMaterial, picked) || SceneSubmeshes.Count > 0) return;
+        ApplyMaterial();
+    }
+
+    /// <summary>M829: show a material by bin path and name - what the Material Editor's "Material Graph" button
+    /// asks for. A bin the window does not list, or a name the bin does not hold, leaves the window as it was
+    /// and says so in the status line.</summary>
+    public void SelectMaterial(string? binPath, string? materialName, bool unsavedEdits = false)
+    {
+        if (string.IsNullOrEmpty(binPath) || string.IsNullOrEmpty(materialName)) return;
+        void NotFound(string why) { Status = why; HasError = true; MaterialGraph.ShowMessage(why); }
+        var bin = MaterialBins.FirstOrDefault(b => b.Path.Equals(binPath, StringComparison.OrdinalIgnoreCase))
+                  ?? _allBins.FirstOrDefault(b => b.Path.Equals(binPath, StringComparison.OrdinalIgnoreCase));
+        if (bin is null) { NotFound($"'{binPath}' is not among the mounted .bin assets, so its material cannot be shown here."); return; }
+        if (!MaterialBins.Contains(bin)) { BinFilter = ""; }
+        SelectedBin = MaterialBins.FirstOrDefault(b => b == bin) ?? bin;
+        var row = Materials.FirstOrDefault(m => m.Name.Equals(materialName, StringComparison.OrdinalIgnoreCase));
+        if (row is null) { NotFound($"'{materialName}' was not found in {System.IO.Path.GetFileName(binPath)} or its dependencies."); return; }
+        SelectedMaterial = row;
+        // the same row can already be selected (re-targeting after a miss cleared the graph): show it explicitly
+        if (MaterialGraph.Graph?.MaterialName != row.Binding.Name)
+        {
+            try { MaterialGraph.ShowMaterial(row.Binding, _cache, _perms); }
+            catch (Exception ex) { Status = $"The material graph could not be built: {ex.Message}"; }
+        }
+        MaterialGraph.SourceNote = unsavedEdits
+            ? "The editor has unsaved edits to this material. This graph shows the saved material; unsaved edits are not shown."
+            : "";
+    }
+
+    /// <summary>M829: load the picked material into the preview straight away (what "Load this material" does),
+    /// so the sphere beside the graph always shows the material the graph describes. Untick it to browse
+    /// materials without disturbing a loaded scene.</summary>
+    [ObservableProperty] private bool _previewOnPick = true;
 
     private void ApplyBinFilter()
     {
@@ -716,7 +785,15 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                              ?? new PermutationRow { Perm = vsPerm, Ordinal = -1 };
         SelectedPixelPerm = PixelPermutations.FirstOrDefault(r => r.Perm.Key == psPerm.Key)
                             ?? new PermutationRow { Perm = psPerm, Ordinal = -1 };
-        Load();
+        _loadingMaterial = true;
+        try { Load(); }
+        finally { _loadingMaterial = false; }
+        // a raw shader loaded in between replaced the graph: loading the material brings ITS graph back
+        if (MaterialGraph.Graph?.MaterialName != b.Name)
+        {
+            try { MaterialGraph.ShowMaterial(b, _cache, _perms); }
+            catch (Exception ex) { _ = ex; }
+        }
         if (!IsLoaded) { MaterialReport = sb.ToString() + "\\nShader creation failed - see the Shader tab."; return; }
 
         // ---- textures, from the game's own .tex files
@@ -739,7 +816,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
             try
             {
-                var data = _readAsset(HashAlgorithms.WadPath(slot.Path.ToLowerInvariant()));
+                // M829: the chunk hash, not the path - since 16.17 a texture the dictionary cannot name reads as
+                // "0x....", and hashing that text finds nothing.
+                ulong chunk = slot.ChunkHash != 0 ? slot.ChunkHash : HashAlgorithms.WadPath(slot.Path.ToLowerInvariant());
+                var data = _readAsset(chunk);
                 if (data is null || data.Length == 0)
                 { sb.AppendLine($"   !  {slot.SamplerName,-28} {slot.Path}  NOT FOUND"); missing++; continue; }
 
@@ -1065,7 +1145,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// <c>_SharedTexture</c> are engine-supplied (FOW, the colour-remap ramp) and are never a material's
     /// diffuse. This is a preview affordance and it is reported on the row, not a claim about how the engine
     /// binds.</para></summary>
-    private static string? ResolveTextureTarget(string samplerName, DxbcShader ps, DxbcShader vs)
+    public static string? ResolveTextureTarget(string samplerName, DxbcShader ps, DxbcShader vs)
     {
         string exact = samplerName + "__TX";
         foreach (var refl in new[] { ps, vs })
@@ -1501,6 +1581,16 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
         IsLoaded = true;
         HasError = false;
+        if (!_loadingMaterial)
+        {
+            try
+            {
+                MaterialGraph.ShowShader(SelectedShader.Full, _vs, _ps, _perms,
+                    $"blob #{SelectedPixelPerm.Perm.BlobIndex}, key 0x{SelectedPixelPerm.Perm.Key:x16}",
+                    $"blob #{SelectedVertexPerm.Perm.BlobIndex}, key 0x{SelectedVertexPerm.Perm.Key:x16}");
+            }
+            catch (Exception ex) { _ = ex; /* the graph is a view; a failure here must not undo a successful load */ }
+        }
         Status = $"Loaded with shader defaults: {_appliedDefaults.TextureCount} texture(s), "
                  + $"{_appliedDefaults.ParameterCount} parameter(s), {report.Steps.Count} pipeline objects"
                  + (_appliedDefaults.MissingTextures > 0
@@ -1611,6 +1701,13 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         // Only auto-swap when something is already playing; otherwise wait for the Play button so a stray
         // click in the list does not blow away a loaded mesh preview.
         if (_playback is not null) PlayParticles();
+    }
+
+    /// <summary>M829: the preview-mesh buttons above the preview (Sphere / Cube / Plane / Particle Quad).</summary>
+    [RelayCommand]
+    private void SelectMesh(string? name)
+    {
+        if (!string.IsNullOrEmpty(name)) SelectedMesh = name;
     }
 
     partial void OnSelectedMeshChanged(string value)
@@ -2072,8 +2169,15 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     partial void OnAlphaBlendChanged(bool v) => RebuildBindings();
     partial void OnTransposeMatricesChanged(bool v) => RebuildBindings();
 
+    private bool _disposed;
+
     public void Dispose()
     {
+        _disposed = true;
+        _pickCts?.Cancel();
+        _pickCts?.Dispose();
+        _pickCts = null;
+        MaterialGraph.Dispose();
         _timer.Stop();
         _renderer.Dispose();
         _cache?.Dispose();

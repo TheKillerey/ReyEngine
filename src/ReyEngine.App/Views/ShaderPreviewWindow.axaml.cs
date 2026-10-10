@@ -20,7 +20,7 @@ public partial class ShaderPreviewWindow : Window
         if (this.FindControl<ListBox>("TextureList") is { } list)
             list.DoubleTapped += OnTextureDoubleTapped;
 
-        Closed += (_, _) => { _closed = true; (DataContext as ShaderPreviewViewModel)?.Dispose(); };
+        Closed += (_, _) => { _closed = true; (DataContext as ShaderPreviewViewModel)?.Dispose(); if (_hooked is not null) { _hooked.FitRequested -= OnFit; _hooked.FocusRequested -= OnFocusNode; } };
 
         // M215: the same camera bindings as the map viewport - WASD/QE fly, drag to look, middle-drag to
         // pan, alt-drag to orbit, wheel to zoom, LMB+wheel for fly speed, F to reframe.
@@ -38,6 +38,9 @@ public partial class ShaderPreviewWindow : Window
             surface.PointerMoved += OnSurfaceMoved;
             surface.PointerWheelChanged += OnSurfaceWheel;
         }
+        // M829: the graph canvas is driven by the view model's Home / Search commands
+        DataContextChanged += (_, _) => HookGraph();
+        HookGraph();
         AddHandler(KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, OnPreviewKeyUp, RoutingStrategies.Tunnel);
         Deactivated += (_, _) => Vm?.ClearKeys();
@@ -50,6 +53,29 @@ public partial class ShaderPreviewWindow : Window
     }
 
     private ShaderPreviewViewModel? Vm => DataContext as ShaderPreviewViewModel;
+
+    private MaterialGraphViewModel? _hooked;
+
+    /// <summary>M829: Home frames the whole graph and Search centres a node - both are view actions the
+    /// canvas owns, so the view model raises events and the window forwards them.</summary>
+    private void HookGraph()
+    {
+        if (_hooked is not null)
+        {
+            _hooked.FitRequested -= OnFit;
+            _hooked.FocusRequested -= OnFocusNode;
+            _hooked = null;
+        }
+        if (DataContext is ShaderPreviewViewModel vm)
+        {
+            _hooked = vm.MaterialGraph;
+            _hooked.FitRequested += OnFit;
+            _hooked.FocusRequested += OnFocusNode;
+        }
+    }
+
+    private void OnFit() => this.FindControl<MaterialGraphCanvas>("GraphCanvas")?.FitToGraph();
+    private void OnFocusNode(string id) => this.FindControl<MaterialGraphCanvas>("GraphCanvas")?.FocusNode(id);
 
     private bool _closed;
 
@@ -112,11 +138,16 @@ public partial class ShaderPreviewWindow : Window
     private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
     {
         // never swallow typing in a filter box or a constant override
-        if (FocusManager?.GetFocusedElement() is TextBox) return;
+        // ... nor the graph canvas, whose F (focus node) and Home are its own: fly keys must not move the 3D camera
+        if (FocusManager?.GetFocusedElement() is TextBox or MaterialGraphCanvas) return;
         Vm?.KeyDown(e.Key);
     }
 
-    private void OnPreviewKeyUp(object? sender, KeyEventArgs e) => Vm?.KeyUp(e.Key);
+    private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
+    {
+        // a key released after focus moved to the canvas must still let go of the camera
+        Vm?.KeyUp(e.Key);
+    }
 
     private async void OnTextureDoubleTapped(object? sender, TappedEventArgs e)
     {

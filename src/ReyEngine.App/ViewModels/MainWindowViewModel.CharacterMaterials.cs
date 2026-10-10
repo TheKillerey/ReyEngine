@@ -63,6 +63,7 @@ public sealed partial class MainWindowViewModel
         editor.RequestCatalog = LoadShaderCatalogAsync;   // M103
         editor.RequestCommonShaderSetup = LoadCommonShaderSetupAsync;
         editor.OpenIssues = () => OpenMaterialBinIssues(editor);   // M125
+        editor.OpenMaterialGraph = (bin, name) => OpenShaderPreview(bin, name, editor.IsDirty);   // M829
     }
 
     /// <summary>The catalogue goes to every editor, and the environment that produced it is mirrored
