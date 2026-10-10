@@ -13,7 +13,16 @@ namespace ReyEngine.Formats.Materials.Graph;
 /// and the graph is REBUILT from the binding afterwards (node ids are positional and stable, so a selection survives);
 /// <see cref="GraphNode.Source"/> names the element a node stands for.</para>
 /// </summary>
-public enum GraphNodeKind { Texture, Scalar, Vector, Color, Switch, Macro, Shader, Output }
+public enum GraphNodeKind
+{
+    Texture, Scalar, Vector, Color, Switch, Macro, Shader, Output,
+    /// <summary>M832 (Shader Graph): a texture sample node (compact, no thumbnail).</summary>
+    Sample,
+    /// <summary>M832 (Shader Graph): a math or vector node.</summary>
+    Math,
+    /// <summary>M832 (Shader Graph): a value input (parameter, constant, texcoord, time).</summary>
+    Input,
+}
 
 /// <summary>Which column / comment frame a node belongs to.</summary>
 public enum GraphGroup { Textures, Parameters, Switches, Shader, Output }
@@ -29,6 +38,8 @@ public enum GraphNodeState
     Unused,
     /// <summary>Not authored by the material; shown because the shader defines a default for it.</summary>
     ShaderDefault,
+    /// <summary>M832 (Shader Graph): the node has an error (drawn with a red edge; the message is in <see cref="GraphNode.Message"/>).</summary>
+    Error,
 }
 
 public sealed class GraphPin
@@ -92,6 +103,9 @@ public sealed class GraphNode
     /// <summary>The sampler / parameter / switch / macro name in the bin.</summary>
     public string Source { get; init; } = "";
 
+    /// <summary>M832: what is wrong with the node (Shader Graph errors), shown in its tooltip. Empty = nothing.</summary>
+    public string Message { get; init; } = "";
+
     // ---- layout, in graph units. Written by the layout pass, which is deterministic. ----
     public double X { get; internal set; }
     public double Y { get; internal set; }
@@ -119,6 +133,9 @@ public sealed class GraphWire
     public required int ToPin { get; init; }
     /// <summary>The kind of the source node, so a view can colour the wire by what feeds it.</summary>
     public required GraphNodeKind SourceKind { get; init; }
+
+    /// <summary>M832: the wire ends at an input that reports an error (drawn red).</summary>
+    public bool Error { get; init; }
 }
 
 /// <summary>A grey comment frame around a group of nodes (Unreal's comment box).</summary>

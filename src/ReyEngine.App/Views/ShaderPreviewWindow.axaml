@@ -67,7 +67,7 @@
                   ToolTip.Tip="Put the undone edit back (Ctrl+Y)." />
           <TextBlock Text="● unsaved edits" FontSize="10.5" VerticalAlignment="Center" Foreground="{DynamicResource ReyWarningBrush}"
                      IsVisible="{Binding MaterialGraph.ShowDirty}"
-                     ToolTip.Tip="The Material Editor holds edits that are not saved yet - the same flag its Material tab shows. Closing this window keeps them pending in the editor." />
+                     ToolTip.Tip="{Binding MaterialGraph.DirtyTip}" />
           <TextBlock Text="{Binding MaterialGraph.EditStatus}" FontSize="10.5" Opacity="0.7" VerticalAlignment="Center"
                      MaxWidth="320" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource ReyTextBrush}"
                      ToolTip.Tip="{Binding MaterialGraph.EditStatus}" />
@@ -91,6 +91,34 @@
                         ToolTip.Tip="Dim every node that is not connected to the selected one." />
           <Button Classes="tool" Content="Reload from the WAD" Command="{Binding ReloadCommand}"
                   ToolTip.Tip="Reload the loaded shader permutation from the shader cache." />
+          <!-- M832: Shader Graph entry points -->
+          <Border Width="1" Height="20" Background="{DynamicResource ReyBorderAccentBrush}" Margin="4,0" />
+          <Button Classes="tool" Content="New Shader Graph" Command="{Binding NewShaderGraphCommand}"
+                  IsEnabled="{Binding CanNewShaderGraph}"
+                  ToolTip.Tip="Start a custom shader graph on the shader of the picked material (supported base: DefaultEnv_Flat). Preview only: the game does not see custom shaders yet." />
+          <Button x:Name="OpenShaderGraphButton" Classes="tool" Content="Open Shader Graph"
+                  ToolTip.Tip="Open a Shader Graph saved in this project (.reyengine/shadergraphs)." Click="OnOpenShaderGraphClick">
+            <Button.Flyout>
+              <Flyout Placement="BottomEdgeAlignedLeft">
+                <StackPanel MinWidth="260" Spacing="4">
+                  <TextBlock Text="SAVED SHADER GRAPHS" FontSize="10" FontWeight="Bold" LetterSpacing="1.2" Foreground="{DynamicResource ReyAccentBrush}" />
+                  <TextBlock Text="None saved in this project yet." FontSize="10.5" Opacity="0.65" Foreground="{DynamicResource ReyTextBrush}"
+                             IsVisible="{Binding ShaderGraph.NoSavedGraphs}" />
+                  <ItemsControl ItemsSource="{Binding ShaderGraph.SavedGraphs}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SgFileRow">
+                        <Button Classes="tool" Content="{Binding Name}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                Click="OnSavedGraphClick" Tag="{Binding}" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+          <Button Classes="tool" Content="Close Shader Graph" Command="{Binding CloseShaderGraphCommand}"
+                  IsVisible="{Binding ShaderGraphActive}"
+                  ToolTip.Tip="Leave the Shader Graph and go back to the material graph (the preview draws Riot's own shader again)." />
         </StackPanel>
         <TextBlock Grid.Column="5" Text="{Binding MaterialGraph.Summary}" FontSize="11" Opacity="0.7"
                    VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
@@ -178,7 +206,7 @@
         <!-- Details and the old tool tabs -->
         <Border Grid.Row="2" Margin="6,0,0,6" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
                 CornerRadius="6" Background="{DynamicResource ReyPanelBrush}">
-          <TabControl Classes="dense" Margin="2">
+          <TabControl x:Name="LeftTabs" Classes="dense" Margin="2">
             <TabControl.ItemsPanel>
               <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
             </TabControl.ItemsPanel>
@@ -319,6 +347,56 @@
                             </ItemsControl.ItemTemplate>
                           </ItemsControl>
                         </Expander>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+
+            <!-- ======== Shader Graph (M832): the open graph's settings, the selected node and the diagnostics ======== -->
+            <TabItem x:Name="ShaderGraphTab" Header="Shader Graph" FontSize="11" IsVisible="{Binding ShaderGraphActive}">
+              <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="8" Spacing="6">
+                  <Border Background="{DynamicResource ReyWarningSoftBrush}" CornerRadius="4" Padding="8,6">
+                    <TextBlock Text="{Binding ShaderGraph.BannerText}" FontSize="10.5" TextWrapping="Wrap" FontWeight="SemiBold"
+                               Foreground="{DynamicResource ReyWarningBrush}" />
+                  </Border>
+                  <TextBlock Text="{Binding ShaderGraph.GraphName}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"
+                             Foreground="{DynamicResource ReyTextBrightBrush}" />
+                  <TextBlock Text="{Binding ShaderGraph.BaseShaderName, StringFormat='Base shader: {0}'}" FontSize="10.5" Opacity="0.65"
+                             TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                  <TextBlock Text="{Binding ShaderGraph.CompileState}" FontSize="10.5" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                  <CheckBox Content="Show the graph in the preview" IsChecked="{Binding ShaderGraph.PreviewEnabled}" FontSize="11"
+                            ToolTip.Tip="Swap Riot's pixel shader for the graph's compiled one, on the open material (the Riot vertex shader stays). Untick to see Riot's shader." />
+                  <TextBlock Text="{Binding GraphPreviewNote}" FontSize="10.5" Opacity="0.8" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                  <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,2" />
+                  <TextBlock Classes="cap" Text="SELECTED NODE" />
+                  <TextBlock Text="Select a node to edit its settings." FontSize="10.5" Opacity="0.6" Foreground="{DynamicResource ReyTextBrush}"
+                             IsVisible="{Binding ShaderGraph.NoPropRows}" />
+                  <ItemsControl ItemsSource="{Binding ShaderGraph.PropRows}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SgPropRow">
+                        <StackPanel Spacing="2" Margin="0,3">
+                          <TextBlock Text="{Binding Label}" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource ReyTextBrush}" />
+                          <TextBox Text="{Binding Text}" FontSize="11" FontFamily="Consolas" IsVisible="{Binding !HasChoices}" LostFocus="OnEditLostFocus">
+                            <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitCommand}" /></TextBox.KeyBindings>
+                          </TextBox>
+                          <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Text}" FontSize="11" IsVisible="{Binding HasChoices}"
+                                    HorizontalAlignment="Stretch" />
+                          <TextBlock Text="{Binding Hint}" FontSize="9.5" Opacity="0.55" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,2" />
+                  <TextBlock Classes="cap" Text="DIAGNOSTICS" />
+                  <TextBlock Text="No errors or warnings." FontSize="10.5" Opacity="0.6" Foreground="{DynamicResource ReyTextBrush}"
+                             IsVisible="{Binding ShaderGraph.NoDiagnosticRows}" />
+                  <ItemsControl ItemsSource="{Binding ShaderGraph.DiagnosticRows}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SgDiagnosticRow">
+                        <TextBlock Text="{Binding Text}" FontSize="10.5" TextWrapping="Wrap" Margin="0,2" Foreground="{DynamicResource ReyTextBrush}" />
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
@@ -643,18 +721,37 @@
       <GridSplitter Grid.Column="1" Background="Transparent" ResizeDirection="Columns" />
 
       <!-- ============================ the node graph ============================ -->
-      <Border Grid.Column="2" Margin="0,6,6,0" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
-              CornerRadius="6" ClipToBounds="True">
-        <views:MaterialGraphCanvas x:Name="GraphCanvas"
-                                   Graph="{Binding MaterialGraph.Graph}"
-                                   SelectedNodeId="{Binding MaterialGraph.SelectedNodeId, Mode=TwoWay}"
-                                   HideUnrelated="{Binding MaterialGraph.HideUnrelated}"
-                                   Thumbnails="{Binding MaterialGraph.Thumbnails}"
-                                   Breadcrumb="{Binding MaterialGraph.Breadcrumb}"
-                                   EmptyText="{Binding MaterialGraph.EmptyText}"
-                                   ModeText="{Binding MaterialGraph.ModeBadge}"
-                                   Wiring="{Binding MaterialGraph}" />
-      </Border>
+      <Grid Grid.Column="2" Margin="0,6,6,0" RowDefinitions="Auto,*">
+        <!-- M832: the Shader Graph is preview-only, and the window says so above the graph -->
+        <Border Grid.Row="0" IsVisible="{Binding ShaderGraphActive}" Background="{DynamicResource ReyWarningSoftBrush}"
+                CornerRadius="6" Padding="10,6" Margin="0,0,0,4">
+          <TextBlock Text="Preview only: the game does not see custom shaders yet." FontSize="11.5" FontWeight="SemiBold"
+                     Foreground="{DynamicResource ReyWarningBrush}" />
+        </Border>
+        <Border Grid.Row="1" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
+                CornerRadius="6" ClipToBounds="True">
+          <Panel>
+            <views:MaterialGraphCanvas x:Name="GraphCanvas"
+                                       IsVisible="{Binding MaterialGraphActive}"
+                                       Graph="{Binding MaterialGraph.Graph}"
+                                       SelectedNodeId="{Binding MaterialGraph.SelectedNodeId, Mode=TwoWay}"
+                                       HideUnrelated="{Binding MaterialGraph.HideUnrelated}"
+                                       Thumbnails="{Binding MaterialGraph.Thumbnails}"
+                                       Breadcrumb="{Binding MaterialGraph.Breadcrumb}"
+                                       EmptyText="{Binding MaterialGraph.EmptyText}"
+                                       ModeText="{Binding MaterialGraph.ModeBadge}"
+                                       Wiring="{Binding MaterialGraph}" />
+            <views:MaterialGraphCanvas x:Name="ShaderGraphCanvas"
+                                       IsVisible="{Binding ShaderGraphActive}"
+                                       Graph="{Binding ShaderGraph.Graph}"
+                                       SelectedNodeId="{Binding ShaderGraph.SelectedNodeId, Mode=TwoWay}"
+                                       Breadcrumb="{Binding ShaderGraph.GraphName, StringFormat='{}{0} > Shader Graph'}"
+                                       EmptyText="Open or create a Shader Graph."
+                                       ModeText="EDITABLE"
+                                       ShaderEditor="{Binding ShaderGraph}" />
+          </Panel>
+        </Border>
+      </Grid>
     </Grid>
 
     <GridSplitter Grid.Row="3" Background="Transparent" ResizeDirection="Rows" />
@@ -710,11 +807,12 @@
         <TabItem Header="Shader Code" FontSize="11" IsSelected="{Binding MaterialGraph.CodeTabActive, Mode=TwoWay}">
           <DockPanel Margin="6">
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="10" Margin="0,0,0,4">
-              <ComboBox SelectedIndex="{Binding MaterialGraph.CodeStage}" FontSize="11" Width="150">
+              <ComboBox SelectedIndex="{Binding MaterialGraph.CodeStage}" FontSize="11" Width="230">
                 <ComboBoxItem Content="Pixel shader" />
                 <ComboBoxItem Content="Vertex shader" />
+                <ComboBoxItem Content="Shader Graph HLSL (generated)" />
               </ComboBox>
-              <TextBlock Text="{Binding MaterialGraph.CodeNote}" FontSize="10" Opacity="0.65" TextWrapping="Wrap" MaxWidth="1100"
+              <TextBlock Text="{Binding MaterialGraph.CodeNoteShown}" FontSize="10" Opacity="0.65" TextWrapping="Wrap" MaxWidth="1100"
                          VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
             </StackPanel>
             <TextBox Text="{Binding MaterialGraph.ShaderCodeText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True"

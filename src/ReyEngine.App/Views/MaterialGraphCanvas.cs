@@ -32,7 +32,7 @@ namespace ReyEngine.App.Views;
 /// selected node, a right click (without moving) opens the add / create menu. The canvas only ASKS: every change is made by
 /// <see cref="MaterialGraphViewModel"/> (<see cref="Wiring"/>) through the Material Editor's entries and undo stack.</para>
 /// </summary>
-public sealed class MaterialGraphCanvas : Control
+public sealed partial class MaterialGraphCanvas : Control
 {
     public static readonly StyledProperty<MaterialGraph?> GraphProperty =
         AvaloniaProperty.Register<MaterialGraphCanvas, MaterialGraph?>(nameof(Graph));
@@ -59,6 +59,13 @@ public sealed class MaterialGraphCanvas : Control
     /// <summary>M831: the view model that wires, moves, creates and deletes (null = the canvas only views).</summary>
     public static readonly StyledProperty<MaterialGraphViewModel?> WiringProperty =
         AvaloniaProperty.Register<MaterialGraphCanvas, MaterialGraphViewModel?>(nameof(Wiring));
+
+    /// <summary>M832: the Shader Graph editor. When set the canvas edits a Shader Graph (any output to any input, a search palette on right-click)
+    /// instead of wiring a material.</summary>
+    public static readonly StyledProperty<ShaderGraphViewModel?> ShaderEditorProperty =
+        AvaloniaProperty.Register<MaterialGraphCanvas, ShaderGraphViewModel?>(nameof(ShaderEditor));
+
+    public ShaderGraphViewModel? ShaderEditor { get => GetValue(ShaderEditorProperty); set => SetValue(ShaderEditorProperty, value); }
 
     static MaterialGraphCanvas()
     {
@@ -109,7 +116,8 @@ public sealed class MaterialGraphCanvas : Control
                                 && before.MaterialName == after.MaterialName && !_needFit;
             if (!sameMaterial) _needFit = true;
             _hoverId = null;
-            CancelGesture();
+            // M832: a Shader Graph is re-projected when its compile finishes; that must not drop a wire the person is dragging
+            if (!(sameMaterial && ShaderEditor is not null)) CancelGesture();
             InvalidateVisual();
             // framed after layout, never from inside a render pass (a visual cannot invalidate itself there)
             Avalonia.Threading.Dispatcher.UIThread.Post(() => { if (_needFit) FitToGraph(); }, Avalonia.Threading.DispatcherPriority.Loaded);
@@ -176,7 +184,7 @@ public sealed class MaterialGraphCanvas : Control
 
     // =============================================================================== input
 
-    private enum Gesture { None, Pan, Node, Wire }
+    private enum Gesture { None, Pan, Node, Wire, SgWire }
 
     private Gesture _gesture;
     private bool _rightPan;
@@ -253,6 +261,7 @@ public sealed class MaterialGraphCanvas : Control
         e.Handled = true;
         if (Graph is null) return;
 
+        if (ShaderEditor is not null && SgPointerPressed(e, pt)) return;
         if (pt.Properties.IsLeftButtonPressed)
         {
             if (PinAt(pt.Position) is { } hit)
@@ -346,11 +355,15 @@ public sealed class MaterialGraphCanvas : Control
                 if (!_dragMoved && Math.Abs(pos.X - _dragStart.X) < 4 && Math.Abs(pos.Y - _dragStart.Y) < 4) return;
                 _dragMoved = true;
                 double nx = _dragOrigin.X + (pos.X - _dragStart.X) / _zoom, ny = _dragOrigin.Y + (pos.Y - _dragStart.Y) / _zoom;
-                if (Wiring is { } wv) wv.MoveNode(_dragNode.Id, nx, ny); else _dragNode.SetPosition(nx, ny);
+                if (ShaderEditor is { } se) se.MoveNode(_dragNode.Id, nx, ny);
+                else if (Wiring is { } wv) wv.MoveNode(_dragNode.Id, nx, ny); else _dragNode.SetPosition(nx, ny);
                 InvalidateVisual();
                 return;
             case Gesture.Wire:
                 UpdateWire(pos);
+                return;
+            case Gesture.SgWire:
+                SgUpdateWire(pos);
                 return;
         }
 
@@ -405,6 +418,7 @@ public sealed class MaterialGraphCanvas : Control
         Cursor = null;
 
         if (gesture == Gesture.Wire) { FinishWire(); ReleaseCapture(e); return; }
+        if (gesture == Gesture.SgWire) { SgFinishWire(); ReleaseCapture(e); return; }
         ReleaseCapture(e);
         if (gesture == Gesture.Node)
         {
@@ -506,6 +520,8 @@ public sealed class MaterialGraphCanvas : Control
         if (e.Key == Key.Home) { FitToGraph(); e.Handled = true; }
         else if (e.Key == Key.F && SelectedNodeId is { } id) { FocusNode(id); e.Handled = true; }
         else if (e.Key == Key.Escape && _gesture == Gesture.Wire) { CancelGesture(); InvalidateVisual(); e.Handled = true; }
+        else if (e.Key == Key.Escape && _gesture == Gesture.SgWire) { CancelGesture(); InvalidateVisual(); e.Handled = true; }
+        else if (e.Key == Key.Delete && SelectedNodeId is { } sdel && ShaderEditor is { } sed) { sed.DeleteNode(sdel); e.Handled = true; }
         else if (e.Key == Key.Delete && SelectedNodeId is { } del && Wiring is { } w) { w.DeleteNode(del); e.Handled = true; }
     }
 
@@ -578,6 +594,7 @@ public sealed class MaterialGraphCanvas : Control
 
     private void ShowMenu(Point screen)
     {
+        if (ShaderEditor is not null) { SgShowMenu(screen); return; }
         var items = BuildMenu(screen);
         if (items.Count == 0) return;
         var menu = new ContextMenu { ItemsSource = items };
@@ -600,6 +617,7 @@ public sealed class MaterialGraphCanvas : Control
         var lines = new List<string> { n.Title };
         if (n.Subtitle.Length > 0 && n.Subtitle != n.Title) lines.Add(n.Subtitle);
         if (n.TexturePath.Length > 0) lines.Add(n.TexturePath);
+        if (n.Message.Length > 0) lines.Add(n.Message);
         if (n.State == GraphNodeState.Unused) lines.Add("Not used by the resolved shader permutation");
         if (n.State == GraphNodeState.ShaderDefault) lines.Add("Shader default - the material does not set this");
         return string.Join("\n", lines);
@@ -680,8 +698,9 @@ public sealed class MaterialGraphCanvas : Control
 
     private IBrush KindBrush(Palette p, GraphNodeKind k) => k switch
     {
-        GraphNodeKind.Texture => p.Texture,
-        GraphNodeKind.Scalar or GraphNodeKind.Vector or GraphNodeKind.Color => p.Param,
+        GraphNodeKind.Texture or GraphNodeKind.Sample => p.Texture,
+        GraphNodeKind.Scalar or GraphNodeKind.Vector or GraphNodeKind.Color or GraphNodeKind.Input => p.Param,
+        GraphNodeKind.Math => p.Macro,
         GraphNodeKind.Switch => p.Switch,
         GraphNodeKind.Macro => p.Macro,
         GraphNodeKind.Shader => p.Shader,
@@ -743,7 +762,7 @@ public sealed class MaterialGraphCanvas : Control
         DrawGrid(ctx, pal, area);
 
         // watermark, under everything (Unreal's big faint "MATERIAL")
-        var wm = Text("MATERIAL", 76, WithOpacity(pal.TextDim, 0.16), bold: true);
+        var wm = Text(ShaderEditor is null ? "MATERIAL" : "SHADER GRAPH", 76, WithOpacity(pal.TextDim, 0.16), bold: true);
         ctx.DrawText(wm, new Point(Bounds.Width - wm.Width - 24, Bounds.Height - wm.Height - 22));
 
         var related = HideUnrelated && SelectedNodeId is { } sel ? g.RelatedTo(sel) : null;
@@ -778,7 +797,8 @@ public sealed class MaterialGraphCanvas : Control
 
                 bool lit = SelectedNodeId is { } s && (w.FromNode == s || w.ToNode == s);
                 bool dimmed = related is not null && !(related.Contains(w.FromNode) && related.Contains(w.ToNode));
-                var color = KindBrush(pal, w.SourceKind);
+                if (_gesture == Gesture.SgWire && SgIsCarried(w, g)) continue;   // the wire being moved is drawn as the live wire
+                var color = w.Error ? Res("ReyErrorBrush", Brushes.Red) : KindBrush(pal, w.SourceKind);
                 var brush = WithOpacity(color, dimmed ? 0.12 : lit ? 1.0 : 0.72);
                 double thick = Math.Max(lit ? 2.6 : 1.7, 1.2 / _zoom);
                 var geo = new StreamGeometry();
@@ -802,6 +822,7 @@ public sealed class MaterialGraphCanvas : Control
             }
 
             if (_gesture == Gesture.Wire) DrawLiveWire(ctx, pal, g);
+            if (_gesture == Gesture.SgWire) SgDrawLiveWire(ctx, pal, g);
         }
 
         // ---- overlay, in screen space ----
@@ -810,6 +831,7 @@ public sealed class MaterialGraphCanvas : Control
                 new Point(16, 12));
         ctx.DrawText(Text(ZoomText, 11, pal.TextDim), new Point(16, Bounds.Height - 24));
         if (_gesture == Gesture.Wire) DrawWireLabel(ctx, pal);
+        if (_gesture == Gesture.SgWire) SgDrawWireLabel(ctx, pal);
         if (ModeText.Length > 0)
         {
             var mode = Text(ModeText, 10, ModeText == "EDITABLE" ? pal.Accent : pal.TextDim, bold: true);
@@ -907,6 +929,7 @@ public sealed class MaterialGraphCanvas : Control
         var rect = new Rect(n.X, n.Y, n.Width, n.Height);
         var kind = KindBrush(pal, n.Kind);
         var edge = selected ? new Pen(pal.Accent, 2.4)
+            : n.State == GraphNodeState.Error ? new Pen(Res("ReyErrorBrush", Brushes.Red), 2.0)
             : n.State == GraphNodeState.ShaderDefault ? new Pen(pal.TextDim, 1.2, new DashStyle(new double[] { 3, 3 }, 0))
             : new Pen(hover ? pal.TextDim : pal.Border, 1.2);
 
@@ -920,7 +943,8 @@ public sealed class MaterialGraphCanvas : Control
         {
             GraphNodeKind.Texture => "TEXTURE SAMPLE", GraphNodeKind.Scalar => "SCALAR", GraphNodeKind.Vector => "VECTOR",
             GraphNodeKind.Color => "COLOUR", GraphNodeKind.Switch => "SWITCH", GraphNodeKind.Macro => "DEFINE",
-            GraphNodeKind.Shader => "SHADER", _ => "MATERIAL",
+            GraphNodeKind.Shader => "SHADER", GraphNodeKind.Sample => "TEXTURE", GraphNodeKind.Math => "MATH",
+            GraphNodeKind.Input => "INPUT", GraphNodeKind.Output when ShaderEditor is not null => "OUTPUT", _ => "MATERIAL",
         };
         double tagW = 0;
         if (detail)

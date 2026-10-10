@@ -410,11 +410,13 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         Func<ulong, byte[]?>? readAsset = null,
         IEnumerable<(string Path, ulong Hash)>? binAssets = null,
         Func<uint, string?>? resolveBinName = null,
-        IEnumerable<(string Path, ulong Hash)>? sceneAssets = null)
+        IEnumerable<(string Path, ulong Hash)>? sceneAssets = null,
+        Func<string?>? projectRoot = null)
     {
         _readAsset = readAsset;
         MaterialGraph = new MaterialGraphViewModel(readAsset is null ? null : h => { try { return readAsset(h); } catch { return null; } });
         MaterialGraph.Edited += OnGraphEdited;
+        InitShaderGraph(projectRoot);   // M832
         _resolveBinName = resolveBinName ?? (_ => null);
         if (binAssets is not null)
             foreach (var (path, hash) in binAssets)
@@ -558,6 +560,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// shader cache, not a D3D11 load, so "Load this material" stays the step that previews it.</summary>
     partial void OnSelectedMaterialChanged(MaterialRow? value)
     {
+        OnPropertyChanged(nameof(CanNewShaderGraph));   // M832
         if (value is null) return;
         try { ShowGraphFor(value); }
         catch (Exception ex) { Status = $"The material graph could not be built: {ex.Message}"; }
@@ -887,11 +890,21 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 // M829: the chunk hash, not the path - since 16.17 a texture the dictionary cannot name reads as
                 // "0x....", and hashing that text finds nothing.
                 ulong chunk = slot.ChunkHash != 0 ? slot.ChunkHash : HashAlgorithms.WadPath(slot.Path.ToLowerInvariant());
-                var data = _readAsset(chunk);
-                if (data is null || data.Length == 0)
-                { sb.AppendLine($"   !  {slot.SamplerName,-28} {slot.Path}  NOT FOUND"); missing++; continue; }
+                // M832: while a Shader Graph is open every compile re-applies the material; decoding its textures again each time would
+                // hitch the UI on every edit, so the decoded images are kept for the life of the graph (cleared when it opens or closes)
+                if (!(ShaderGraph.IsOpen && _graphTextures.TryGetValue(chunk, out var img)))
+                {
+                    var data = _readAsset(chunk);
+                    if (data is null || data.Length == 0)
+                    { sb.AppendLine($"   !  {slot.SamplerName,-28} {slot.Path}  NOT FOUND"); missing++; continue; }
 
-                var img = TextureDecoder.Decode(data);
+                    img = TextureDecoder.Decode(data);
+                    if (ShaderGraph.IsOpen)
+                    {
+                        if (_graphTextures.Count > 24) _graphTextures.Clear();
+                        _graphTextures[chunk] = img;
+                    }
+                }
                 _renderer.SetTexture(target, img.Rgba, img.Width, img.Height);
                 var row = TextureSlots.FirstOrDefault(t => t.Name.Equals(target, StringComparison.OrdinalIgnoreCase));
                 if (row is not null) row.Source = $"{System.IO.Path.GetFileName(slot.Path)} ({img.Width}x{img.Height})";
@@ -1630,6 +1643,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         if (_vs is null) { Fail($"vertex stage: {e1}"); return; }
         _ps = _cache.LoadShader(psPath, SelectedPixelPerm.Perm.BlobIndex, out var e2);
         if (_ps is null) { Fail($"pixel stage: {e2}"); return; }
+        _ps = ApplyShaderGraphPixelOverride(SelectedShader.Full, _ps);   // M832: a Shader Graph pixel shader stands in for Riot's, preview only
 
         var report = _renderer.LoadShaders(_vs, _ps);
         if (!report.Success) { Fail(report.Error ?? "shader creation failed"); BuildMetadata(vsPath, psPath, report); return; }
@@ -2002,7 +2016,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         Bindings = sb.ToString();
     }
 
-    private void AppendLog() => Log = string.Join("\n", _renderer.Diagnostics);
+    private void AppendLog() =>
+        Log = string.Join("\n", _renderer.Diagnostics) + (_graphLog.Length > 0 ? "\n\n" + _graphLog : "");
 
     // ---------------------------------------------------------------- frame loop
 
@@ -2246,6 +2261,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         _pickCts?.Dispose();
         _pickCts = null;
         MaterialGraph.Dispose();
+        ShaderGraph.Dispose();
         _timer.Stop();
         _renderer.Dispose();
         _cache?.Dispose();

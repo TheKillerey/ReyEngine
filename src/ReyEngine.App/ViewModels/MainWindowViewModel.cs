@@ -17943,7 +17943,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             readAsset: h => { try { return ReadAsset(h); } catch { return null; } },
             binAssets: bins,
             resolveBinName: h => _resolver.Database.TryGetBinName(h, out var n) ? n : null,
-            sceneAssets: scenes);
+            sceneAssets: scenes,
+            projectRoot: () => string.IsNullOrEmpty(Project.RootPath) ? null : Project.RootPath);   // M832: where Shader Graphs are saved
 
         if (bins.Count == 0)
             _log.Info("Shader", "No .bin assets are mounted, so the Material tab will be empty. "

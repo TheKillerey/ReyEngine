@@ -38,6 +38,7 @@ public sealed class ShaderPermutationIndex
     private readonly Dictionary<string, Dictionary<string, bool>> _switchDefaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<string, float[]>> _paramDefaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Dictionary<string, string>> _textureDefaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<string>> _textureNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly WadFile? _cache;
     private readonly Dictionary<ulong, string> _cachePaths = new();
     /// <summary>M590: 64-bit wad-path lookup for defaultTexturePath, a WadChunkLink since 16.17.</summary>
@@ -99,6 +100,7 @@ public sealed class ShaderPermutationIndex
                 _switchDefaults[shaderPath] = defaults.Switches;
                 _paramDefaults[shaderPath] = defaults.Parameters;
                 _textureDefaults[shaderPath] = defaults.Textures;
+                _textureNames[shaderPath] = defaults.TextureNames;
             }
         }
         catch { /* best effort — an unreadable shaders.bin just means fewer fixed defines */ }
@@ -592,6 +594,15 @@ public sealed class ShaderPermutationIndex
 
     private static readonly Dictionary<string, string> EmptyTextures = new();
 
+    /// <summary>M832: every texture input shaders.bin DECLARES for the shader (<c>textures[].name</c>), with or without a default path. The
+    /// Shader Graph limits its texture nodes to these.</summary>
+    public bool TryGetTextureNames(string shader, out IReadOnlyList<string> names)
+    {
+        if (_textureNames.TryGetValue(shader, out var d)) { names = d; return true; }
+        names = Array.Empty<string>();
+        return false;
+    }
+
     /// <summary>Convert a generated-cache name back to the <c>objectPath</c> spelling used by
     /// <c>shaders.bin</c>.</summary>
     public static string DefinitionPathForCacheShader(string cacheShader)
@@ -644,17 +655,19 @@ public sealed class ShaderPermutationIndex
             }
 
         var textures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var textureNames = new List<string>();
         if (obj.Properties.TryGetValue(texturesHash, out var txp) && txp is BinTreeContainer texturesContainer)
             foreach (var el in texturesContainer.Elements.OfType<BinTreeStruct>())
             {
                 string? name = el.Properties.TryGetValue(nameHash, out var np) && np is BinTreeString ns ? ns.Value : null;
+                if (!string.IsNullOrWhiteSpace(name)) textureNames.Add(name);
                 // M590: defaultTexturePath is a WadChunkLink on the current patch.
                 string? path = el.Properties.TryGetValue(texturePathHash, out var pp) && Meta.BinTexturePath.Is(pp)
                     ? Meta.BinTexturePath.Read(pp, resolveWadPath) : null;
                 if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(path)) textures[name] = path;
             }
 
-        return new ShaderDefinitionDefaults(features, switches, parameters, textures);
+        return new ShaderDefinitionDefaults(features, switches, parameters, textures) { TextureNames = textureNames };
     }
 
     public bool TryGetShaderDefs(string shader,
@@ -675,4 +688,8 @@ public sealed record ShaderDefinitionDefaults(
     Dictionary<string, string> FeatureDefines,
     Dictionary<string, bool> Switches,
     Dictionary<string, float[]> Parameters,
-    Dictionary<string, string> Textures);
+    Dictionary<string, string> Textures)
+{
+    /// <summary>M832: every declared texture name (the dictionary above holds only those with a default path).</summary>
+    public List<string> TextureNames { get; init; } = new();
+}

@@ -109,7 +109,13 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
     [ObservableProperty] private string _vertexCode = "";
     [ObservableProperty] private string _codeNote = "No shader is resolved yet.";
     [ObservableProperty, NotifyPropertyChangedFor(nameof(ShaderCodeText))] private int _codeStage;
-    public string ShaderCodeText => CodeStage == 0 ? PixelCode : VertexCode;
+    public string ShaderCodeText => CodeStage switch { 0 => PixelCode, 1 => VertexCode, _ => ShaderGraph?.Hlsl ?? "" };
+
+    /// <summary>M832: the line above the listing: the disassembly note, or the generated HLSL's (stage 2).</summary>
+    public string CodeNoteShown => CodeStage >= 2 ? ShaderGraph?.HlslNote ?? "" : CodeNote;
+
+    partial void OnCodeStageChanged(int value) => OnPropertyChanged(nameof(CodeNoteShown));
+    partial void OnCodeNoteChanged(string value) => OnPropertyChanged(nameof(CodeNoteShown));
 
     partial void OnPixelCodeChanged(string value) => OnPropertyChanged(nameof(ShaderCodeText));
     partial void OnVertexCodeChanged(string value) => OnPropertyChanged(nameof(ShaderCodeText));

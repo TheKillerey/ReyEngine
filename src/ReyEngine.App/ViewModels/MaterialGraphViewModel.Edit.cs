@@ -42,6 +42,54 @@ public sealed partial class MaterialGraphViewModel
      NotifyCanExecuteChangedFor(nameof(UndoCommand)), NotifyCanExecuteChangedFor(nameof(RedoCommand))]
     private bool _canEdit;
 
+    // ---- M832: a Shader Graph takes over the toolbar (Apply / Save / Undo / Redo, Ctrl+Z / Ctrl+Y / Ctrl+S) while one is open ----
+    private ShaderGraphViewModel? _sg;
+
+    /// <summary>The Shader Graph editor the window owns (null until the window attaches it).</summary>
+    public ShaderGraphViewModel? ShaderGraph => _sg;
+
+    private bool SgActive => _sg is { IsOpen: true };
+
+    /// <summary>The toolbar commands run when a material is editable OR a Shader Graph is open.</summary>
+    public bool CanRun => CanEdit || SgActive;
+
+    public void AttachShaderGraph(ShaderGraphViewModel sg)
+    {
+        _sg = sg;
+        sg.StateChanged += OnShaderGraphState;
+        sg.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(ShaderGraphViewModel.Hlsl) or nameof(ShaderGraphViewModel.HlslNote))
+            {
+                OnPropertyChanged(nameof(ShaderCodeText));
+                OnPropertyChanged(nameof(CodeNoteShown));
+            }
+            // the generated HLSL is shown next to the disassembly: a graph opening brings it up, closing goes back to the pixel listing
+            if (e.PropertyName == nameof(ShaderGraphViewModel.IsOpen)) CodeStage = sg.IsOpen ? 2 : 0;
+        };
+    }
+
+    private void OnShaderGraphState()
+    {
+        OnPropertyChanged(nameof(ShowDirty));
+        OnPropertyChanged(nameof(SaveTip));
+        OnPropertyChanged(nameof(ApplyTip));
+        ApplyEditsCommand.NotifyCanExecuteChanged();
+        SaveCommand.NotifyCanExecuteChanged();
+        UndoCommand.NotifyCanExecuteChanged();
+        RedoCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(DirtyTip));
+        if (SgActive) { EditStatus = _sg!.Status; _sgWasActive = true; }
+        else if (_sgWasActive) { _sgWasActive = false; EditStatus = ""; }   // the last Shader Graph line does not outlive the graph
+    }
+
+    private bool _sgWasActive;
+
+    /// <summary>The tooltip of the unsaved-edits marker: whose edits it counts.</summary>
+    public string DirtyTip => SgActive
+        ? "The Shader Graph has changes that are not saved yet. Save (Ctrl+S) writes it to the project."
+        : "The Material Editor holds edits that are not saved yet - the same flag its Material tab shows. Closing this window keeps them pending in the editor.";
+
     /// <summary>Why the graph is read-only, or what editing it does. Always set.</summary>
     [ObservableProperty, NotifyPropertyChangedFor(nameof(SaveTip)), NotifyPropertyChangedFor(nameof(ApplyTip))]
     private string _editNote = NoEditorNote;
@@ -52,18 +100,22 @@ public sealed partial class MaterialGraphViewModel
     /// <summary>The Material Editor has unsaved edits (the same flag its Material tab shows).</summary>
     [ObservableProperty] private bool _isEditorDirty;
 
-    public bool ShowDirty => CanEdit && IsEditorDirty;
+    public bool ShowDirty => SgActive ? _sg!.IsDirty : CanEdit && IsEditorDirty;
     partial void OnIsEditorDirtyChanged(bool value) => OnPropertyChanged(nameof(ShowDirty));
     partial void OnCanEditChanged(bool value) => OnPropertyChanged(nameof(ShowDirty));
 
     /// <summary>The canvas's corner label.</summary>
     public string ModeBadge => CanEdit ? "EDITABLE" : "READ ONLY";
 
-    public string SaveTip => CanEdit
+    public string SaveTip => SgActive
+        ? "Save the Shader Graph to the project (.reyengine/shadergraphs). Ctrl+S saves too. It is editor data: Build Package does not pack it."
+        : CanEdit
         ? "Save the material file: the same command as the Material tab's Save To Override, so the project override, GameData and Copy To Project rules apply. Ctrl+S saves too."
         : EditNote;
 
-    public string ApplyTip => CanEdit
+    public string ApplyTip => SgActive
+        ? "Compile the Shader Graph now and show it in the preview (it also recompiles by itself after each edit)."
+        : CanEdit
         ? "Show the material in the main viewport now (the Material tab's Apply). Edits already reach it live."
         : EditNote;
 
@@ -273,22 +325,28 @@ public sealed partial class MaterialGraphViewModel
     // ============================================================================== toolbar commands
 
     /// <summary>The Material tab's Apply: show the material in the main viewport now.</summary>
-    [RelayCommand(CanExecute = nameof(CanEdit))]
-    private void ApplyEdits() { CommitPending(); _editor?.ApplyCommand.Execute(null); }
+    [RelayCommand(CanExecute = nameof(CanRun))]
+    private void ApplyEdits()
+    {
+        if (SgActive) { _sg!.RequestCompile(immediate: true); return; }
+        CommitPending(); _editor?.ApplyCommand.Execute(null);
+    }
 
     /// <summary>The Material tab's Save To Override, unchanged: the editor's own save command, so the project file or override, the GameData declaration and the Copy To Project rules all apply.</summary>
-    [RelayCommand(CanExecute = nameof(CanEdit))]
+    [RelayCommand(CanExecute = nameof(CanRun))]
     private async Task Save()
     {
+        if (SgActive) { _sg!.Commit(); await _sg.SaveAsync(); return; }
         if (_editor is null) return;
         CommitPending();
         await _editor.SaveCommand.ExecuteAsync(null);
         IsEditorDirty = _editor.IsDirty;
     }
 
-    [RelayCommand(CanExecute = nameof(CanEdit))]
+    [RelayCommand(CanExecute = nameof(CanRun))]
     private void Undo()
     {
+        if (SgActive) { _sg!.Undo(); return; }
         CommitPending();
         var us = _editor?.UndoService;
         if (us is null) { EditStatus = "There is no undo history to use."; return; }
@@ -304,9 +362,10 @@ public sealed partial class MaterialGraphViewModel
         finally { _historyStep = false; }
     }
 
-    [RelayCommand(CanExecute = nameof(CanEdit))]
+    [RelayCommand(CanExecute = nameof(CanRun))]
     private void Redo()
     {
+        if (SgActive) { _sg!.Redo(); return; }
         CommitPending();
         var us = _editor?.UndoService;
         if (us is null) { EditStatus = "There is no undo history to use."; return; }

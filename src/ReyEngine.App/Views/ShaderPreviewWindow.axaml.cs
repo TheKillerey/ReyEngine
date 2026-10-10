@@ -20,6 +20,7 @@ public partial class ShaderPreviewWindow : Window
         if (this.FindControl<ListBox>("TextureList") is { } list)
             list.DoubleTapped += OnTextureDoubleTapped;
 
+        Closing += OnWindowClosing;
         Closed += (_, _) => { _closed = true; (DataContext as ShaderPreviewViewModel)?.Dispose(); if (_hooked is not null) { _hooked.FitRequested -= OnFit; _hooked.FocusRequested -= OnFocusNode; } };
 
         // M215: the same camera bindings as the map viewport - WASD/QE fly, drag to look, middle-drag to
@@ -55,6 +56,47 @@ public partial class ShaderPreviewWindow : Window
     private ShaderPreviewViewModel? Vm => DataContext as ShaderPreviewViewModel;
 
     private MaterialGraphViewModel? _hooked;
+    private ShaderPreviewViewModel? _hookedPreview;
+    private bool _closeConfirmed;
+
+    /// <summary>M832: a Shader Graph with unsaved changes is never dropped silently. The close is held back and the person chooses: Save,
+    /// Discard, or neither (the window stays).</summary>
+    private async void OnWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (_closeConfirmed || Vm?.ShaderGraph is not { IsOpen: true, IsDirty: true } sg) return;
+        e.Cancel = true;
+        bool save = await PromptWindow.ConfirmAsync(this, "Unsaved Shader Graph",
+            $"The Shader Graph '{sg.GraphName}' has changes that are not saved. Save it to the project before closing?", "Save");
+        if (save)
+        {
+            if (!await sg.SaveAsync()) return;            // the status line says why; the window stays open
+        }
+        else if (!await PromptWindow.ConfirmAsync(this, "Discard the Shader Graph changes?",
+                     $"Close without saving '{sg.GraphName}'? Its unsaved changes are lost.", "Discard"))
+            return;
+        _closeConfirmed = true;
+        Close();
+    }
+
+    /// <summary>M832: opening a Shader Graph brings its settings tab forward; closing it puts the Details tab back.</summary>
+    private void OnPreviewVmChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ShaderPreviewViewModel.ShaderGraphActive)) return;
+        if (this.FindControl<TabControl>("LeftTabs") is not { } tabs) return;
+        if (_hookedPreview?.ShaderGraphActive == true && this.FindControl<TabItem>("ShaderGraphTab") is { } tab) tabs.SelectedItem = tab;
+        else if (tabs.SelectedItem is TabItem { Name: "ShaderGraphTab" } && tabs.Items.OfType<TabItem>().FirstOrDefault() is { } first) tabs.SelectedItem = first;
+        this.FindControl<MaterialGraphCanvas>("ShaderGraphCanvas")?.FitToGraph();
+    }
+
+    /// <summary>M832: the Open list is read from the project folder each time it is shown.</summary>
+    private void OnOpenShaderGraphClick(object? sender, RoutedEventArgs e) => Vm?.ShaderGraph.RefreshSavedGraphs();
+
+    private void OnSavedGraphClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: SgFileRow row }) return;
+        this.FindControl<Button>("OpenShaderGraphButton")?.Flyout?.Hide();
+        Vm?.OpenShaderGraphCommand.Execute(row);
+    }
 
     /// <summary>M829: Home frames the whole graph and Search centres a node - both are view actions the
     /// canvas owns, so the view model raises events and the window forwards them.</summary>
@@ -66,15 +108,23 @@ public partial class ShaderPreviewWindow : Window
             _hooked.FocusRequested -= OnFocusNode;
             _hooked = null;
         }
+        if (_hookedPreview is not null) _hookedPreview.PropertyChanged -= OnPreviewVmChanged;
+        _hookedPreview = null;
         if (DataContext is ShaderPreviewViewModel vm)
         {
             _hooked = vm.MaterialGraph;
             _hooked.FitRequested += OnFit;
             _hooked.FocusRequested += OnFocusNode;
+            _hookedPreview = vm;
+            vm.PropertyChanged += OnPreviewVmChanged;
         }
     }
 
-    private void OnFit() => this.FindControl<MaterialGraphCanvas>("GraphCanvas")?.FitToGraph();
+    private void OnFit()
+    {
+        this.FindControl<MaterialGraphCanvas>("GraphCanvas")?.FitToGraph();
+        this.FindControl<MaterialGraphCanvas>("ShaderGraphCanvas")?.FitToGraph();
+    }
     private void OnFocusNode(string id) => this.FindControl<MaterialGraphCanvas>("GraphCanvas")?.FocusNode(id);
 
     private bool _closed;
@@ -158,6 +208,7 @@ public partial class ShaderPreviewWindow : Window
         if (sender is TextBox { Tag: "hex", DataContext: GraphParamEditRow colour }) { colour.CommitHexCommand.Execute(null); return; }
         switch ((sender as Control)?.DataContext)
         {
+            case SgPropRow sg: sg.Commit(); break;
             case GraphComponentField f: f.CommitCommand.Execute(null); break;
             case GraphEditRow row: row.Commit(); break;
         }
