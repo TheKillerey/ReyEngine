@@ -3,14 +3,15 @@ using System.Numerics;
 namespace ReyEngine.Formats.Materials.Graph;
 
 /// <summary>
-/// M829: the VIEW-ONLY node graph of one Riot material - what Unreal's Material Editor shows for a material,
+/// M829: the node graph of one Riot material - what Unreal's Material Editor shows for a material,
 /// built from the real <see cref="MaterialBinding"/> (StaticMaterialDef) and the shader it names.
 ///
 /// <para>Nothing in here is invented: a node exists because the bin authors it (a sampler, a paramValues
 /// entry, a switch, a shader macro) or because the shader declares it (a texture input, a switch default).
 /// The graph is a read-only projection; it holds no reference back into the BinTree, so it can never write
-/// to the material. A later EDITABLE version would keep <see cref="GraphNode.Source"/> to find the element
-/// again.</para>
+/// to the material. M830: it is still a projection - an edit is made by the Material Editor's own row view models
+/// and the graph is REBUILT from the binding afterwards (node ids are positional and stable, so a selection survives);
+/// <see cref="GraphNode.Source"/> names the element a node stands for.</para>
 /// </summary>
 public enum GraphNodeKind { Texture, Scalar, Vector, Color, Switch, Macro, Shader, Output }
 
@@ -74,7 +75,7 @@ public sealed class GraphNode
     /// <summary>Colour nodes: the colour, 0..1 per channel (not clamped - a brightness boost stays visible).</summary>
     public Vector4? Swatch { get; init; }
 
-    /// <summary>The sampler / parameter / switch / macro name in the bin, for a later editable version.</summary>
+    /// <summary>The sampler / parameter / switch / macro name in the bin.</summary>
     public string Source { get; init; } = "";
 
     // ---- layout, in graph units. Written by the layout pass, which is deterministic. ----

@@ -363,7 +363,7 @@ public sealed class MaterialGraphTests
 
     // ===================================================================== the window
 
-    private static string? Source(params string[] parts)
+    internal static string? Source(params string[] parts)
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
         {
@@ -422,25 +422,49 @@ public sealed class MaterialGraphTests
                 "MaterialGraphViewModel has no " + m.Groups[1].Value);
     }
 
+    /// <summary>M830: the graph edits - but only through the Material Editor. The toolbar's Apply / Save are the editor's own
+    /// commands (disabled, with the reason as their tooltip, when there is no editor), the canvas still writes nothing, and the
+    /// edit rows apply values by the editor's row view models rather than by touching the document.</summary>
     [Fact]
-    public void TheEditorOffersNoWayToEditTheGraph_AndSaysWhyOnTheDisabledButtons()
+    public void TheGraphEditsOnlyThroughTheMaterialEditor_AndTheDisabledReasonIsTheTooltip()
     {
         var xaml = Source("src", "ReyEngine.App", "Views", "ShaderPreviewWindow.axaml");
         var canvas = Source("src", "ReyEngine.App", "Views", "MaterialGraphCanvas.cs");
-        if (xaml is null || canvas is null) return;
+        var rows = Source("src", "ReyEngine.App", "ViewModels", "MaterialGraphEditRows.cs");
+        var graphVm = Source("src", "ReyEngine.App", "ViewModels", "MaterialGraphViewModel.Edit.cs");
+        if (xaml is null || canvas is null || rows is null || graphVm is null) return;
 
-        foreach (string label in new[] { "Apply", "Save" })
+        foreach (var (label, command, tip) in new[] { ("Apply", "ApplyEditsCommand", "ApplyTip"), ("Save", "SaveCommand", "SaveTip"), ("Undo", "UndoCommand", ""), ("Redo", "RedoCommand", "") })
         {
             var m = Regex.Match(xaml, "<Button[^>]*Content=\"" + label + "\"[^>]*>");
             Assert.True(m.Success, label + " button missing");
-            Assert.Contains("IsEnabled=\"False\"", m.Value);
-            Assert.Contains("view-only in this version", m.Value);
+            Assert.Contains("Command=\"{Binding MaterialGraph." + command + "}\"", m.Value);
+            Assert.DoesNotContain("IsEnabled=\"False\"", m.Value);
+            if (tip.Length > 0) Assert.Contains("{Binding MaterialGraph." + tip + "}", m.Value);   // the reason a disabled button gives
         }
-        // the canvas selects and pans; it never writes anything
+        Assert.DoesNotContain("view-only in this version", xaml);
+        foreach (string key in new[] { "Ctrl+Z", "Ctrl+Y", "Ctrl+S" })
+            Assert.Contains("Gesture=\"" + key + "\"", xaml);
+
+        // the canvas selects and pans; it never writes anything, and it says whether the graph is editable
         Assert.DoesNotContain("SetOn(", canvas);
         Assert.DoesNotContain(".Apply(", canvas);
         Assert.DoesNotContain("SetPath(", canvas);
-        Assert.Contains("VIEW ONLY", canvas);
+        Assert.DoesNotContain("VIEW ONLY", canvas);
+        Assert.Contains("ModeText=\"{Binding MaterialGraph.ModeBadge}\"", xaml);
+
+        // one store, one save: the rows and the view model go through the editor's view models and commands
+        foreach (string source in new[] { rows, graphVm })
+        {
+            Assert.DoesNotContain("StoreOverrideBytes", source);
+            Assert.DoesNotContain("Serialize(", source);
+            Assert.DoesNotContain(".Model.Apply(", source);
+            Assert.DoesNotContain(".SetPath(", source);
+            Assert.DoesNotContain(".SetOn(", source);
+        }
+        Assert.Contains("_editor.SaveCommand.ExecuteAsync", graphVm);
+        Assert.Contains("Parameter.ApplyCommand.Execute", rows);
+        Assert.Contains("Slot.ApplyCommand.Execute", rows);
     }
 
     // ===================================================================== the view model and the window
@@ -490,8 +514,8 @@ public sealed class MaterialGraphTests
         Assert.Contains("_graphWindow is { IsVisible: true } open", main);      // a second click re-targets the open window
         Assert.Contains("open.Activate()", main);
         Assert.Contains("editor.IsDirty", materials);                           // the unsaved-edits flag travels with the request
-        Assert.Contains("unsaved edits are not shown", pick);
-        Assert.Contains("unsaved edits are not shown", editor);
+        Assert.Contains("unsaved edits are not shown", pick);                   // only said when no editor is behind the graph
+        Assert.Contains("edits THIS editor's material", editor);                // M830: with one, the graph IS the editor's document
         Assert.Contains("Task.Delay(150, token)", pick);                        // the preview apply is debounced
         Assert.Contains("SceneSubmeshes.Count > 0", pick);                      // and never replaces a loaded scene
     }

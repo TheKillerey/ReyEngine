@@ -687,6 +687,14 @@ public sealed partial class MaterialSwitchViewModel : ViewModelBase
         Model.SetOn(value);
         RaiseDirty();
         _binding.RaiseDirty();
+        // M830: a toggle is one undo step, from the Material tab and the Material Graph alike (it recorded
+        // nothing before, so the graph's Ctrl+Z would have skipped it)
+        _binding.Owner?.UndoService?.PushApplied(new SwitchEditCommand(_binding.Owner.DocContext, Model, !value, value, () =>
+        {
+            SyncFromModel();
+            _binding.RaiseDirty();
+            _binding.Owner?.NotifyChanged();
+        }));
         _binding.Owner?.NotifyChanged();
     }
 
@@ -1146,6 +1154,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     {
         if (_renderStateLoading) return;
         Model.SetPassBool("cullEnable", value);
+        PushRenderStateUndo(new PassBoolEditCommand(Owner?.DocContext, Model, "cullEnable", !value, value, RenderStateChangedByUndo));
         AfterRenderStateEdit();
     }
 
@@ -1153,6 +1162,18 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     {
         if (_renderStateLoading) return;
         Model.SetPassBool("blendEnable", value);
+        PushRenderStateUndo(new PassBoolEditCommand(Owner?.DocContext, Model, "blendEnable", !value, value, RenderStateChangedByUndo));
+        AfterRenderStateEdit();
+    }
+
+    // M830: render-state edits are undoable (they recorded nothing before), so the Material Graph's Ctrl+Z
+    // can take back a cull or blend change made on either surface.
+    private void PushRenderStateUndo(Core.Undo.IEditorCommand command) => Owner?.UndoService?.PushApplied(command);
+
+    /// <summary>Undo/redo of a render-state command wrote the model: show it and tell the editor.</summary>
+    private void RenderStateChangedByUndo()
+    {
+        LoadRenderState();
         AfterRenderStateEdit();
     }
 
@@ -1200,6 +1221,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     private void WriteBlendFactor(string half, int factor)
     {
         if (_renderStateLoading) return;
+        int before = half == "src" ? SrcColorBlendFactor : DstColorBlendFactor;   // M830: for the undo step
         if (factor < 0)
         {
             Model.RemovePassProperty(half + "ColorBlendFactor");
@@ -1217,6 +1239,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
         OnPropertyChanged(nameof(SrcBlendChoice));
         OnPropertyChanged(nameof(DstBlendChoice));
+        if (before != factor)
+            PushRenderStateUndo(new BlendFactorEditCommand(Owner?.DocContext, Model, half, before, factor, RenderStateChangedByUndo));
         AfterRenderStateEdit();
     }
 
@@ -2182,6 +2206,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         ShowModifiedOnly = false;
         ApplyFilter();
         RefreshBulk();   // M645: a pick from the previous document is gone with it
+        ModelChanged?.Invoke();   // M830: a graph showing the previous document's material lets go of it
     }
 
     public void Clear()
@@ -2196,6 +2221,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         BulkShaderStatus = ""; UpdateBulkShaderPreview();
         BulkCommonSetupStatus = ""; IsApplyingCommonSetups = false;
         BulkSelection.Clear();   // M645
+        ModelChanged?.Invoke();   // M830
     }
 
     public byte[]? Serialize() => _doc?.Serialize();
@@ -2230,6 +2256,11 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     /// material could leave the auto-save timer un-armed and the edit unsaved.</summary>
     public Action? Edited { get; set; }
 
+    /// <summary>M830: raised after every edit, undo, reload and clear, on the UI thread. The Material Graph window
+    /// hangs off it, so the graph and this editor show one document: a value changed on either surface (or undone
+    /// from the main window) reaches the other.</summary>
+    public event Action? ModelChanged;
+
     public void NotifyChanged()
     {
         IsDirty = _doc?.IsDirty ?? false;
@@ -2239,6 +2270,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
         ScheduleLiveApply();
         if (IsDirty) Edited?.Invoke();
         if (IsBulk) RefreshBulk();   // M645: the shared labels follow single edits too
+        ModelChanged?.Invoke();
     }
 
     // ---- M351i + M351k: what happens when a material becomes the selected one ----

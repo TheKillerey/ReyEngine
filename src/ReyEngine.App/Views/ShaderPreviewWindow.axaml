@@ -18,6 +18,15 @@
          Debug -> left "Debug"    Material -> left "Material"    Particles -> left "Particles"
          Bindings / Compare / Log -> bottom tabs    Textures -> left "Textures"
          Constants -> left "Parameters"   the render toggles and sun sliders -> the preview's "Show" menu -->
+  <Window.KeyBindings>
+    <!-- M830: the Material Editor's undo stack, from the window. In a text box Ctrl+Z is the box's own (text) undo; the
+         Undo / Redo buttons in the toolbar always reach the material. -->
+    <KeyBinding Gesture="Ctrl+Z" Command="{Binding MaterialGraph.UndoCommand}" />
+    <KeyBinding Gesture="Ctrl+Y" Command="{Binding MaterialGraph.RedoCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding MaterialGraph.RedoCommand}" />
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding MaterialGraph.SaveCommand}" />
+  </Window.KeyBindings>
+
   <Window.Styles>
     <Style Selector="Button.mesh">
       <Setter Property="Padding" Value="9,3" />
@@ -48,8 +57,20 @@
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="10,6">
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto">
         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
-          <Button Classes="tool" Content="Apply" IsEnabled="False" ToolTip.Tip="Applying graph edits to the material is not available: view-only in this version." />
-          <Button Classes="tool" Content="Save" IsEnabled="False" ToolTip.Tip="Saving a material from the graph is not available: view-only in this version." />
+          <Button Classes="tool" Content="Apply" Command="{Binding MaterialGraph.ApplyEditsCommand}"
+                  ToolTip.Tip="{Binding MaterialGraph.ApplyTip}" />
+          <Button Classes="tool" Content="Save" Command="{Binding MaterialGraph.SaveCommand}"
+                  ToolTip.Tip="{Binding MaterialGraph.SaveTip}" />
+          <Button Classes="tool" Content="Undo" Command="{Binding MaterialGraph.UndoCommand}"
+                  ToolTip.Tip="Take back the last edit of this material file (Ctrl+Z). It is the Material Editor's undo stack." />
+          <Button Classes="tool" Content="Redo" Command="{Binding MaterialGraph.RedoCommand}"
+                  ToolTip.Tip="Put the undone edit back (Ctrl+Y)." />
+          <TextBlock Text="● unsaved edits" FontSize="10.5" VerticalAlignment="Center" Foreground="{DynamicResource ReyWarningBrush}"
+                     IsVisible="{Binding MaterialGraph.ShowDirty}"
+                     ToolTip.Tip="The Material Editor holds edits that are not saved yet - the same flag its Material tab shows. Closing this window keeps them pending in the editor." />
+          <TextBlock Text="{Binding MaterialGraph.EditStatus}" FontSize="10.5" Opacity="0.7" VerticalAlignment="Center"
+                     MaxWidth="320" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource ReyTextBrush}"
+                     ToolTip.Tip="{Binding MaterialGraph.EditStatus}" />
         </StackPanel>
         <Border Grid.Column="1" Width="1" Height="20" Background="{DynamicResource ReyBorderAccentBrush}" Margin="10,0" />
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
@@ -180,6 +201,106 @@
                     <TextBlock Text="{Binding MaterialGraph.DetailNotes}" FontSize="10.5" TextWrapping="Wrap"
                                Foreground="{DynamicResource ReyTextBrush}" />
                   </Border>
+                  <!-- M830: editing. The note says what the graph edits - or why it is read-only. -->
+                  <Border Background="{DynamicResource ReyCardBrush}" BorderBrush="{DynamicResource ReyBorderBrush}"
+                          BorderThickness="1" CornerRadius="4" Padding="8,6">
+                    <TextBlock Text="{Binding MaterialGraph.EditNote}" FontSize="10.5" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ReyTextBrush}" />
+                  </Border>
+                  <ItemsControl ItemsSource="{Binding MaterialGraph.EditRows}">
+                    <ItemsControl.DataTemplates>
+
+                      <DataTemplate DataType="vm:GraphParamEditRow">
+                        <StackPanel Spacing="5" Margin="0,4,0,8">
+                          <TextBlock Text="{Binding Heading}" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextBrightBrush}" />
+                          <TextBlock IsVisible="{Binding IsDriven}" Text="{Binding DrivenNote}" FontSize="10" TextWrapping="Wrap"
+                                     Foreground="{DynamicResource ReyWarningBrush}" />
+                          <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding HasPicker}">
+                            <ColorPicker Color="{Binding PickerColor, Mode=TwoWay}" IsAlphaVisible="False" IsAlphaEnabled="False" MinWidth="110"
+                                         ToolTip.Tip="Pick the colour. Only the channels you change are rewritten; a value above 1 (a brightness boost) is kept." />
+                            <TextBox Text="{Binding Hex}" Width="86" FontFamily="Consolas" FontSize="10.5" VerticalAlignment="Center"
+                                     Tag="hex" LostFocus="OnEditLostFocus" ToolTip.Tip="#RRGGBB - Enter applies.">
+                              <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitHexCommand}" /></TextBox.KeyBindings>
+                            </TextBox>
+                          </StackPanel>
+                          <ItemsControl ItemsSource="{Binding Components}" IsVisible="{Binding UseComponents}">
+                            <ItemsControl.ItemsPanel>
+                              <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="3" Margin="0,0,8,3">
+                                  <TextBlock Text="{Binding Label}" FontSize="10.5" Opacity="0.65" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
+                                  <TextBox Text="{Binding Text}" Width="76" FontFamily="Consolas" FontSize="10.5" LostFocus="OnEditLostFocus">
+                                    <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitCommand}" /></TextBox.KeyBindings>
+                                  </TextBox>
+                                </StackPanel>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                          <TextBox IsVisible="{Binding UseRaw}" Text="{Binding RawText}" FontFamily="Consolas" FontSize="10.5" LostFocus="OnEditLostFocus">
+                            <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitTextCommand}" /></TextBox.KeyBindings>
+                          </TextBox>
+                          <TextBlock IsVisible="{Binding HasError}" Text="{Binding Error}" FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyErrorBrush}" />
+                        </StackPanel>
+                      </DataTemplate>
+
+                      <DataTemplate DataType="vm:GraphTextureEditRow">
+                        <StackPanel Spacing="5" Margin="0,4,0,8">
+                          <TextBlock Text="{Binding Heading}" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextBrightBrush}" />
+                          <TextBox Text="{Binding Pending}" FontFamily="Consolas" FontSize="10.5" LostFocus="OnEditLostFocus"
+                                   ToolTip.Tip="The texture path. Enter applies it, as in the Material tab.">
+                            <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitPathCommand}" /></TextBox.KeyBindings>
+                          </TextBox>
+                          <TextBlock IsVisible="{Binding Slot.Unresolved}" Text="Not found in the mounted archives or the project." FontSize="10"
+                                     Foreground="{DynamicResource ReyWarningBrush}" />
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Classes="tool" Content="Replace Texture…" Command="{Binding Slot.ReplaceCommand}" FontSize="10.5" />
+                            <Button Classes="tool" Content="Open" Command="{Binding Slot.OpenCommand}" FontSize="10.5" />
+                          </StackPanel>
+                          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="3" IsVisible="{Binding Slot.CanEditAddress}">
+                            <TextBlock Grid.Row="0" Text="Address U" FontSize="10.5" Opacity="0.65" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
+                            <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding Slot.AddressOptions}" SelectedIndex="{Binding Slot.AddressUIndex}" FontSize="10.5" HorizontalAlignment="Stretch" />
+                            <TextBlock Grid.Row="1" Text="Address V" FontSize="10.5" Opacity="0.65" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
+                            <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Slot.AddressOptions}" SelectedIndex="{Binding Slot.AddressVIndex}" FontSize="10.5" HorizontalAlignment="Stretch" />
+                            <TextBlock Grid.Row="2" Text="Address W" FontSize="10.5" Opacity="0.65" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
+                            <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding Slot.AddressOptions}" SelectedIndex="{Binding Slot.AddressWIndex}" FontSize="10.5" HorizontalAlignment="Stretch" />
+                          </Grid>
+                        </StackPanel>
+                      </DataTemplate>
+
+                      <DataTemplate DataType="vm:GraphSwitchEditRow">
+                        <StackPanel Spacing="5" Margin="0,4,0,8">
+                          <TextBlock Text="{Binding Heading}" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextBrightBrush}" />
+                          <CheckBox Content="On" IsChecked="{Binding Switch.IsOn}" FontSize="11" />
+                          <TextBlock Text="{Binding Hint}" FontSize="10" Opacity="0.65" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                        </StackPanel>
+                      </DataTemplate>
+
+                      <DataTemplate DataType="vm:GraphRenderStateEditRow">
+                        <StackPanel Spacing="5" Margin="0,4,0,8" IsEnabled="{Binding CanEdit}">
+                          <TextBlock Text="{Binding Heading}" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextBrightBrush}" />
+                          <CheckBox Content="Cull back faces (cullEnable)" IsChecked="{Binding Binding.CullEnable}" FontSize="11" />
+                          <CheckBox Content="Alpha blending (blendEnable)" IsChecked="{Binding Binding.BlendEnable}" FontSize="11" />
+                          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="6" RowSpacing="3">
+                            <TextBlock Grid.Row="0" Text="Source factor" FontSize="10.5" Opacity="0.65" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
+                            <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding Binding.BlendFactorChoices}" SelectedIndex="{Binding Binding.SrcBlendChoice}" FontSize="10.5" HorizontalAlignment="Stretch" />
+                            <TextBlock Grid.Row="1" Text="Destination factor" FontSize="10.5" Opacity="0.65" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
+                            <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Binding.BlendFactorChoices}" SelectedIndex="{Binding Binding.DstBlendChoice}" FontSize="10.5" HorizontalAlignment="Stretch" />
+                          </Grid>
+                          <TextBlock Text="{Binding Note}" FontSize="10" Opacity="0.65" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                        </StackPanel>
+                      </DataTemplate>
+
+                      <DataTemplate DataType="vm:GraphNoteRow">
+                        <StackPanel Spacing="3" Margin="0,4,0,8">
+                          <TextBlock Text="{Binding Heading}" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextBrightBrush}" />
+                          <TextBlock Text="{Binding Text}" FontSize="10.5" Opacity="0.75" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                        </StackPanel>
+                      </DataTemplate>
+
+                    </ItemsControl.DataTemplates>
+                  </ItemsControl>
                   <ItemsControl ItemsSource="{Binding MaterialGraph.DetailGroups}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate x:DataType="vm:DetailGroup">
@@ -459,7 +580,7 @@
               <DockPanel Margin="6">
                 <TextBlock DockPanel.Dock="Top" FontSize="10" Opacity="0.6" TextWrapping="Wrap" Margin="2,0,2,6"
                            Foreground="{DynamicResource ReyTextBrush}"
-                           Text="Shader constants are pre-filled from shaders.bin. Edit them to override the authored value of the PREVIEW; empty means the preview supplies runtime values such as camera, sun and time. Values are written at the byte offset the shader declares. (The graph itself is view-only.)" />
+                           Text="Shader constants are pre-filled from shaders.bin. Edit them to override the authored value of the PREVIEW; empty means the preview supplies runtime values such as camera, sun and time. Values are written at the byte offset the shader declares. (These overrides are preview-only and are never saved to the material: edit a value in the graph's Details panel to change the material.)" />
                 <ListBox ItemsSource="{Binding Constants}">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:ConstantRow">
@@ -530,7 +651,8 @@
                                    HideUnrelated="{Binding MaterialGraph.HideUnrelated}"
                                    Thumbnails="{Binding MaterialGraph.Thumbnails}"
                                    Breadcrumb="{Binding MaterialGraph.Breadcrumb}"
-                                   EmptyText="{Binding MaterialGraph.EmptyText}" />
+                                   EmptyText="{Binding MaterialGraph.EmptyText}"
+                                   ModeText="{Binding MaterialGraph.ModeBadge}" />
       </Border>
     </Grid>
 

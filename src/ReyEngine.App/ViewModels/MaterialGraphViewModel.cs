@@ -24,7 +24,13 @@ public sealed class MaterialStatRow
 
 /// <summary>
 /// M829: the state behind the Material Graph - the graph itself, its selection, search, the Details panel, the
-/// Stats tab and the Shader Code tab. View-only: nothing here writes to a material.
+/// Stats tab and the Shader Code tab.
+///
+/// <para>M830: it EDITS values - parameters, textures, switches and the render state - but only through the
+/// Material Editor that opened the window: the graph is built from the editor's own <see cref="MaterialBinding"/>
+/// and every edit goes through that editor's row view models (see <see cref="GraphEditRow"/>), so the Material tab,
+/// the graph, the undo stack, the dirty flag, the save and the live preview are one thing. A window without an
+/// editor (shader browsing, particles) or a linked-bin material stays read-only and says why.</para>
 ///
 /// <para>It is fed by <see cref="ShaderPreviewViewModel"/>: picking a material builds the graph at once (no
 /// D3D11 device needed - the shader is only reflected), and loading a raw shader builds the shader-only graph.
@@ -32,7 +38,9 @@ public sealed class MaterialStatRow
 /// </summary>
 public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposable
 {
-    public const string ViewOnlyTip = "Editing nodes is not available yet: this version of the Material Graph is view-only.";
+    /// <summary>Why a graph with no Material Editor behind it cannot be edited.</summary>
+    public const string NoEditorNote = "Read-only: this graph is not attached to a Material Editor. Open the material with the Material Editor's "
+                                       + "Material Graph button to edit its values here.";
 
     public MaterialGraphViewModel(Func<ulong, byte[]?>? readAsset)
     {
@@ -43,6 +51,7 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
 
     public void Dispose()
     {
+        DetachEditor();
         Thumbnails.Dispose();
         Interlocked.Increment(ref _codeVersion);   // an in-flight disassembly is dropped
     }
@@ -55,6 +64,9 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
     public void ShowMessage(string text)
     {
         SelectedNodeId = null;
+        DetachEditor();
+        _binding = null;
+        SetReadOnly(text);
         Graph = null;
         Breadcrumb = "";
         EmptyText = text;
@@ -109,17 +121,42 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
     // ============================================================================== feeding
 
     /// <summary>Show a material: resolve its shader, build the graph, fill Details / Stats / Code.</summary>
-    public void ShowMaterial(MaterialBinding binding, ShaderCacheReader? cache, ShaderPermutationIndex? perms)
+    /// <param name="editor">The Material Editor that holds <paramref name="binding"/> as one of its materials: the graph
+    /// then edits it. Null = read-only, for <paramref name="readOnlyReason"/> (default: <see cref="NoEditorNote"/>).</param>
+    public void ShowMaterial(MaterialBinding binding, ShaderCacheReader? cache, ShaderPermutationIndex? perms,
+        MaterialEditorViewModel? editor = null, string readOnlyReason = "")
     {
+        _cache = cache; _perms = perms; _binding = binding;
+        AttachEditor(binding, editor, readOnlyReason);
+        var graph = BuildGraph(out var vs, out var ps, out string note);
+        Apply(graph, binding, vs, ps, note, keepSelection: false, shaderChanged: true);
+    }
+
+    private MaterialGraph BuildGraph(out DxbcShader? vs, out DxbcShader? ps, out string note)
+    {
+        var binding = _binding!;
         MaterialGraphShaderInfo? info = null;
-        DxbcShader? vs = null, ps = null;
-        string note = cache is null ? "the shader cache is not available" : "";
-        if (cache is not null)
+        vs = ps = null;
+        note = _cache is null ? "the shader cache is not available" : "";
+        if (_cache is not null)
         {
-            try { info = MaterialGraphShaderResolver.Resolve(cache, perms, binding, out note, out vs, out ps, ShaderPreviewViewModel.ResolveTextureTarget); }
+            try { info = MaterialGraphShaderResolver.Resolve(_cache, _perms, binding, out note, out vs, out ps, ShaderPreviewViewModel.ResolveTextureTarget); }
             catch (Exception ex) { note = "shader resolution failed: " + ex.Message; info = null; }
         }
-        Apply(MaterialGraphBuilder.Build(binding, info), binding, vs, ps, note);
+        _info = info;
+        _shaderSig = ShaderSignature(binding);
+        return MaterialGraphBuilder.Build(binding, info);
+    }
+
+    /// <summary>What picks the compiled permutation: the shader, the switches and the macros. A value edit leaves it alone, so
+    /// the shader is not resolved again; a switch toggle changes it, and does.</summary>
+    private static string ShaderSignature(MaterialBinding b)
+    {
+        var sb = new System.Text.StringBuilder(b.RenderShader ?? "");
+        foreach (var sw in b.CanEditSwitches ? b.AllSwitches : b.SwitchEntries) sb.Append('|').Append(sw.Name).Append(sw.On ? "=1" : "=0");
+        sb.Append('#');
+        foreach (var m in b.CanEditMacros ? b.AllMacros : b.MacroEntries) sb.Append('|').Append(m.Name).Append('=').Append(m.Value);
+        return sb.ToString();
     }
 
     /// <summary>Show a loaded shader on its own (no material), reflecting the permutation that is loaded.</summary>
@@ -137,25 +174,37 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
             if (perms.TryGetParameterDefaults(def, out var p)) pd = p;
             if (perms.TryGetTextureDefaults(def, out var t)) td = t;
         }
+        DetachEditor();
+        _binding = null;
+        SetReadOnly("Read-only: a shader on its own has no material to edit. Pick a material (Material tab) opened from the Material Editor to edit it.");
         Func<string, string?>? rule = vs is null || ps is null ? null : sampler => ShaderPreviewViewModel.ResolveTextureTarget(sampler, ps, vs);
         var info = MaterialGraphShaderInfo.FromReflection(def, vs, ps, sw, feat, pd, td, rule,
             pixelPermutation: pixelPermutation, vertexPermutation: vertexPermutation);
-        Apply(MaterialGraphBuilder.BuildForShader(def, info), null, vs, ps, "");
+        Apply(MaterialGraphBuilder.BuildForShader(def, info), null, vs, ps, "", keepSelection: false, shaderChanged: true);
     }
 
-    private void Apply(MaterialGraph graph, MaterialBinding? binding, DxbcShader? vs, DxbcShader? ps, string note)
+    private void Apply(MaterialGraph graph, MaterialBinding? binding, DxbcShader? vs, DxbcShader? ps, string note,
+        bool keepSelection, bool shaderChanged)
     {
-        SelectedNodeId = null;
-        SearchStatus = "";
-        SourceNote = "";
+        string? kept = keepSelection ? SelectedNodeId : null;
+        if (!keepSelection) { SelectedNodeId = null; SearchStatus = ""; SourceNote = ""; }
         EmptyText = DefaultEmptyText;
         Graph = graph;
         Breadcrumb = $"{LeafOf(graph.MaterialName)} > Material Graph";
         OnPropertyChanged(nameof(Summary));
-        RefreshDetails();
+        if (keepSelection)
+        {
+            // an edit rebuilds the graph: node ids are positional and stable, so the selection stays unless its node is gone
+            if (kept is not null && graph.Find(kept) is null) SelectedNodeId = null;
+            else RefreshDetails(keepRows: true);
+        }
+        else RefreshDetails();
 
-        ShaderStats.Clear();
-        foreach (var r in MaterialGraphStats.Shader(vs, ps)) ShaderStats.Add(r);
+        if (shaderChanged)
+        {
+            ShaderStats.Clear();
+            foreach (var r in MaterialGraphStats.Shader(vs, ps)) ShaderStats.Add(r);
+        }
         MaterialStats.Clear();
         foreach (var (label, value) in MaterialGraphStats.Material(graph))
             MaterialStats.Add(new MaterialStatRow { Label = label, Value = value });
@@ -163,7 +212,7 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
             ? "No compiled permutation is resolved, so no shader figures can be shown" + (note.Length > 0 ? ": " + note : ".")
             : "Figures come from the permutation this material resolves to (the same one the preview loads).";
 
-        FillCode(vs, ps, note);
+        if (shaderChanged) FillCode(vs, ps, note);
     }
 
     // ---- Shader Code tab: disassembled only when the tab is shown, on a worker thread ----
@@ -248,7 +297,7 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
 
     partial void OnSelectedNodeIdChanged(string? value) => RefreshDetails();
 
-    private void RefreshDetails()
+    private void RefreshDetails(bool keepRows = false)
     {
         DetailGroups.Clear();
         var g = Graph;
@@ -257,6 +306,8 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
             DetailTitle = "Material Graph";
             DetailSubtitle = "";
             DetailNotes = "";
+            EditRows.Clear();
+            _rowsFor = null;
             return;
         }
 
@@ -282,6 +333,7 @@ public sealed partial class MaterialGraphViewModel : ObservableObject, IDisposab
 
         foreach (var grp in items.GroupBy(i => i.Category))
             DetailGroups.Add(new DetailGroup { Category = grp.Key, Items = grp.ToList() });
+        RefreshEditRows(node, keepRows);
     }
 
     // ============================================================================== commands

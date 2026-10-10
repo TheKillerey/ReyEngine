@@ -21,6 +21,13 @@ public sealed class UndoRedoService
     public bool CanRedo => _redo.Count > 0;
     public string? UndoName => _undo.Count > 0 ? _undo[^1].Name : null;
     public string? RedoName => _redo.Count > 0 ? _redo[^1].Name : null;
+
+    /// <summary>M830: the document the next Undo would change (null when there is nothing to undo). The
+    /// stack is global, so a window that undoes only ITS document's edits asks this first.</summary>
+    public object? UndoContext => _undo.Count > 0 ? _undo[^1].Context : null;
+
+    /// <summary>M830: the document the next Redo would change.</summary>
+    public object? RedoContext => _redo.Count > 0 ? _redo[^1].Context : null;
     public IReadOnlyList<IEditorCommand> UndoHistory => _undo;
 
     /// <summary>True when the stack position differs from the last <see cref="MarkSaved"/> point.</summary>

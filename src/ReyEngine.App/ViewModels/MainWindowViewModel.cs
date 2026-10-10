@@ -17909,12 +17909,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     /// <summary>M829: the Material Graph window. With a bin path and a material name (from the Material
     /// Editor's "Material Graph" button) it opens already showing that material.</summary>
-    private void OpenShaderPreview(string? binPath, string? materialName, bool unsavedEdits = false)
+    private void OpenShaderPreview(string? binPath, string? materialName, bool unsavedEdits = false, MaterialEditorViewModel? editor = null)
     {
         // one window: a second click re-targets the open one instead of building another D3D11 device
         if (_graphWindow is { IsVisible: true } open && open.DataContext is ShaderPreviewViewModel openVm)
         {
-            openVm.SelectMaterial(binPath, materialName, unsavedEdits);
+            openVm.SelectMaterial(binPath, materialName, unsavedEdits, editor);
             open.Activate();
             return;
         }
@@ -17956,7 +17956,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (PromptOwner is not null) win.Show(PromptOwner); else win.Show();
         _graphWindow = win;
         win.Closed += (_, _) => { if (ReferenceEquals(_graphWindow, win)) _graphWindow = null; };
-        vm.SelectMaterial(binPath, materialName, unsavedEdits);
+        vm.SelectMaterial(binPath, materialName, unsavedEdits, editor);
         _log.Info("Shader", "DX11 Shader Preview opened (experimental).");
     }
     [RelayCommand] private void ClearConsole() { Console.Clear(); UnseenConsoleProblems = 0; }

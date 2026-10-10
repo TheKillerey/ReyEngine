@@ -140,6 +140,8 @@ public partial class ShaderPreviewWindow : Window
         // never swallow typing in a filter box or a constant override
         // ... nor the graph canvas, whose F (focus node) and Home are its own: fly keys must not move the 3D camera
         if (FocusManager?.GetFocusedElement() is TextBox or MaterialGraphCanvas) return;
+        // M830: Ctrl+Z / Ctrl+Y / Ctrl+S are the editor's (window key bindings), never camera keys
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
         Vm?.KeyDown(e.Key);
     }
 
@@ -147,6 +149,18 @@ public partial class ShaderPreviewWindow : Window
     {
         // a key released after focus moved to the canvas must still let go of the camera
         Vm?.KeyUp(e.Key);
+    }
+
+    /// <summary>M830: an editor box lost focus - what was typed in it is applied (Enter does the same). The row ignores a
+    /// value that did not change, so tabbing through boxes writes nothing.</summary>
+    private void OnEditLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox { Tag: "hex", DataContext: GraphParamEditRow colour }) { colour.CommitHexCommand.Execute(null); return; }
+        switch ((sender as Control)?.DataContext)
+        {
+            case GraphComponentField f: f.CommitCommand.Execute(null); break;
+            case GraphEditRow row: row.Commit(); break;
+        }
     }
 
     private async void OnTextureDoubleTapped(object? sender, TappedEventArgs e)

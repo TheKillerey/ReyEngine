@@ -117,7 +117,20 @@ public sealed class ParticleSystemRow
 /// <summary>One material inside the selected bin.</summary>
 public sealed class MaterialRow
 {
-    public required MaterialBinding Binding { get; init; }
+    /// <summary>M830: settable - a row opened from a Material Editor takes the editor's own binding, so the graph and
+    /// the preview show (and edit) the live document rather than a second parse of the saved bin.</summary>
+    public required MaterialBinding Binding { get; set; }
+
+    private MaterialBinding? _parsed;
+
+    /// <summary>The binding parsed from the saved bin, kept while the row shows an editor's live binding.</summary>
+    public MaterialBinding SavedBinding => _parsed ?? Binding;
+
+    /// <summary>Show (and edit) the editor's binding while the graph is attached to it.</summary>
+    public void UseEditorBinding(MaterialBinding editors) { _parsed ??= Binding; Binding = editors; }
+
+    /// <summary>The graph is read-only or detached: back to the parsed binding.</summary>
+    public void RestoreSavedBinding() { if (_parsed is not null) { Binding = _parsed; _parsed = null; } }
     /// <summary>Which bin it actually came from - often a long-named dependency, not the one picked.</summary>
     public string SourceBin { get; init; } = "";
     public string Name => Binding.Name;
@@ -401,6 +414,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     {
         _readAsset = readAsset;
         MaterialGraph = new MaterialGraphViewModel(readAsset is null ? null : h => { try { return readAsset(h); } catch { return null; } });
+        MaterialGraph.Edited += OnGraphEdited;
         _resolveBinName = resolveBinName ?? (_ => null);
         if (binAssets is not null)
             foreach (var (path, hash) in binAssets)
@@ -545,7 +559,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     partial void OnSelectedMaterialChanged(MaterialRow? value)
     {
         if (value is null) return;
-        try { MaterialGraph.ShowMaterial(value.Binding, _cache, _perms); }
+        try { ShowGraphFor(value); }
         catch (Exception ex) { Status = $"The material graph could not be built: {ex.Message}"; }
 
         // the Material Editor shows a lit sphere beside the graph, so picking a material previews it too - but
@@ -573,9 +587,10 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// <summary>M829: show a material by bin path and name - what the Material Editor's "Material Graph" button
     /// asks for. A bin the window does not list, or a name the bin does not hold, leaves the window as it was
     /// and says so in the status line.</summary>
-    public void SelectMaterial(string? binPath, string? materialName, bool unsavedEdits = false)
+    public void SelectMaterial(string? binPath, string? materialName, bool unsavedEdits = false, MaterialEditorViewModel? editor = null)
     {
         if (string.IsNullOrEmpty(binPath) || string.IsNullOrEmpty(materialName)) return;
+        _editor = editor;   // M830: the Material Editor whose document the graph edits (null = read-only)
         void NotFound(string why) { Status = why; HasError = true; MaterialGraph.ShowMessage(why); }
         var bin = MaterialBins.FirstOrDefault(b => b.Path.Equals(binPath, StringComparison.OrdinalIgnoreCase))
                   ?? _allBins.FirstOrDefault(b => b.Path.Equals(binPath, StringComparison.OrdinalIgnoreCase));
@@ -585,15 +600,68 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         var row = Materials.FirstOrDefault(m => m.Name.Equals(materialName, StringComparison.OrdinalIgnoreCase));
         if (row is null) { NotFound($"'{materialName}' was not found in {System.IO.Path.GetFileName(binPath)} or its dependencies."); return; }
         SelectedMaterial = row;
-        // the same row can already be selected (re-targeting after a miss cleared the graph): show it explicitly
-        if (MaterialGraph.Graph?.MaterialName != row.Binding.Name)
+        // the same row can already be selected (re-targeting after a miss cleared the graph, or another editor): show it explicitly
+        if (MaterialGraph.Graph?.MaterialName != row.Binding.Name || !ReferenceEquals(MaterialGraph.AttachedEditor, editor))
         {
-            try { MaterialGraph.ShowMaterial(row.Binding, _cache, _perms); }
+            try { ShowGraphFor(row); }
             catch (Exception ex) { Status = $"The material graph could not be built: {ex.Message}"; }
         }
-        MaterialGraph.SourceNote = unsavedEdits
+        // with an editor behind it the graph shows the editor's live document, unsaved edits included; without one it
+        // shows the saved bin, and says so when the editor has edits it cannot see
+        MaterialGraph.SourceNote = unsavedEdits && !MaterialGraph.CanEdit
             ? "The editor has unsaved edits to this material. This graph shows the saved material; unsaved edits are not shown."
             : "";
+    }
+
+    /// <summary>M830: the Material Editor whose document the graph edits, or null.</summary>
+    private MaterialEditorViewModel? _editor;
+
+    private static string NormalizeBinPath(string? p) => (p ?? "").Replace('\\', '/').Trim();
+
+    /// <summary>M830: show a row's graph, editable when it is one of the materials of the open Material Editor. The row then
+    /// takes the editor's own binding, so the graph, the preview and the editor share one document; every other case is
+    /// read-only, with the reason in the graph.</summary>
+    private void ShowGraphFor(MaterialRow row)
+    {
+        string reason = "";
+        var editor = _editor;
+        if (editor is not null)
+        {
+            string editorBin = NormalizeBinPath(editor.BinEntry?.Path);
+            var vm = editor.Materials.FirstOrDefault(m => m.Model.Name.Equals(row.Binding.Name, StringComparison.OrdinalIgnoreCase));
+            row.RestoreSavedBinding();
+            if (!string.Equals(editorBin, NormalizeBinPath(row.SourceBin), StringComparison.OrdinalIgnoreCase))
+            {
+                reason = $"Read-only: this material comes from {System.IO.Path.GetFileName(row.SourceBin)}, but the Material Editor has "
+                         + $"{(editorBin.Length == 0 ? "no file" : System.IO.Path.GetFileName(editorBin))} open. Edits only reach the file the editor holds.";
+                editor = null;
+            }
+            else if (vm is null)
+            {
+                reason = "Read-only: the Material Editor does not list a material of this name, so there is no document to write an edit to.";
+                editor = null;
+            }
+            else row.UseEditorBinding(vm.Model);
+        }
+        else row.RestoreSavedBinding();
+        MaterialGraph.ShowMaterial(row.Binding, _cache, _perms, editor, reason);
+    }
+
+    private void OnGraphEdited()
+    {
+        // the editor loaded its file again and the graph followed it to the new document's binding: the row follows too
+        if (MaterialGraph.EditedBinding is { } rebound && SelectedMaterial is { } row && !ReferenceEquals(row.Binding, rebound)
+            && row.Binding.Name == rebound.Name)
+            row.UseEditorBinding(rebound);
+        else if (!MaterialGraph.CanEdit && SelectedMaterial is { } stale)
+            stale.RestoreSavedBinding();   // the graph let go of the editor: the row shows the saved bin again
+        // the window's own preview follows the document too, debounced like a pick; never over a loaded scene
+        if (_disposed || !IsLoaded || !PreviewOnPick || _cache is null || SceneSubmeshes.Count > 0) return;
+        if (SelectedMaterial is not { } picked || !picked.HasShader || !ReferenceEquals(picked.Binding, MaterialGraph.EditedBinding)) return;
+        _pickCts?.Cancel();
+        _pickCts?.Dispose();
+        var cts = _pickCts = new CancellationTokenSource();
+        _ = DebouncedApplyAsync(picked, cts.Token);
     }
 
     /// <summary>M829: load the picked material into the preview straight away (what "Load this material" does),
@@ -791,7 +859,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         // a raw shader loaded in between replaced the graph: loading the material brings ITS graph back
         if (MaterialGraph.Graph?.MaterialName != b.Name)
         {
-            try { MaterialGraph.ShowMaterial(b, _cache, _perms); }
+            try { ShowGraphFor(SelectedMaterial); }
             catch (Exception ex) { _ = ex; }
         }
         if (!IsLoaded) { MaterialReport = sb.ToString() + "\\nShader creation failed - see the Shader tab."; return; }

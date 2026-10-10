@@ -11,7 +11,7 @@ using ReyEngine.Formats.Materials.Graph;
 namespace ReyEngine.App.Views;
 
 /// <summary>
-/// M829: the Material Graph canvas - a read-only node graph drawn the way Unreal's Material Editor draws one:
+/// M829: the Material Graph canvas - a node graph drawn the way Unreal's Material Editor draws one:
 /// a dark grid, coloured title bars by node type, named pins with dots, bezier wires, grey comment frames, a
 /// faint "MATERIAL" watermark and a zoom readout.
 ///
@@ -19,10 +19,11 @@ namespace ReyEngine.App.Views;
 /// 2,000-unit-tall graph costs one <see cref="Render"/> pass. Nodes and pins outside the viewport are skipped
 /// and text is dropped below a zoom where it could not be read anyway.</para>
 ///
-/// <para>View-only by design: pan (middle or right drag, or left drag on empty canvas), wheel zoom about the
-/// pointer, click to select, Home to fit. There is no node dragging, no wire dragging and nothing that writes
-/// back to the material. Colours come from the theme (ReyGraph* keys, plus the usual Rey* surface brushes), so
-/// every palette restyles it.</para>
+/// <para>The canvas itself never changes a material: pan (middle or right drag, or left drag on empty canvas), wheel
+/// zoom about the pointer, click to select, Home to fit. There is no node dragging and no wire dragging. M830: values
+/// are edited in the Details panel through the Material Editor's own row view models, and the view model hands the
+/// canvas a rebuilt graph after each edit; the canvas keeps its pan and zoom for a graph of the same material. Colours
+/// come from the theme (ReyGraph* keys, plus the usual Rey* surface brushes), so every palette restyles it.</para>
 /// </summary>
 public sealed class MaterialGraphCanvas : Control
 {
@@ -44,10 +45,14 @@ public sealed class MaterialGraphCanvas : Control
     public static readonly StyledProperty<string> EmptyTextProperty =
         AvaloniaProperty.Register<MaterialGraphCanvas, string>(nameof(EmptyText), "");
 
+    /// <summary>M830: the corner label ("EDITABLE" / "READ ONLY").</summary>
+    public static readonly StyledProperty<string> ModeTextProperty =
+        AvaloniaProperty.Register<MaterialGraphCanvas, string>(nameof(ModeText), "");
+
     static MaterialGraphCanvas()
     {
         AffectsRender<MaterialGraphCanvas>(GraphProperty, SelectedNodeIdProperty, HideUnrelatedProperty,
-            BreadcrumbProperty, EmptyTextProperty);
+            BreadcrumbProperty, EmptyTextProperty, ModeTextProperty);
         FocusableProperty.OverrideDefaultValue<MaterialGraphCanvas>(true);
         ClipToBoundsProperty.OverrideDefaultValue<MaterialGraphCanvas>(true);
     }
@@ -58,6 +63,7 @@ public sealed class MaterialGraphCanvas : Control
     public GraphThumbnails? Thumbnails { get => GetValue(ThumbnailsProperty); set => SetValue(ThumbnailsProperty, value); }
     public string Breadcrumb { get => GetValue(BreadcrumbProperty); set => SetValue(BreadcrumbProperty, value); }
     public string EmptyText { get => GetValue(EmptyTextProperty); set => SetValue(EmptyTextProperty, value); }
+    public string ModeText { get => GetValue(ModeTextProperty); set => SetValue(ModeTextProperty, value); }
 
     // ---- view transform: screen = graph * zoom + pan ----
     private double _zoom = 1, _panX, _panY;
@@ -86,7 +92,10 @@ public sealed class MaterialGraphCanvas : Control
         base.OnPropertyChanged(change);
         if (change.Property == GraphProperty)
         {
-            _needFit = true;
+            // M830: an edit hands over a rebuilt graph of the SAME material - keep the view where the person put it
+            bool sameMaterial = change.OldValue is MaterialGraph before && change.NewValue is MaterialGraph after
+                                && before.MaterialName == after.MaterialName && !_needFit;
+            if (!sameMaterial) _needFit = true;
             _hoverId = null;
             InvalidateVisual();
             // framed after layout, never from inside a render pass (a visual cannot invalidate itself there)
@@ -448,8 +457,11 @@ public sealed class MaterialGraphCanvas : Control
             ctx.DrawText(Text(Breadcrumb, 15, WithOpacity(pal.TextBright, 0.9), bold: true, maxWidth: Math.Max(80, Bounds.Width - 220)),
                 new Point(16, 12));
         ctx.DrawText(Text(ZoomText, 11, pal.TextDim), new Point(16, Bounds.Height - 24));
-        var view1 = Text("VIEW ONLY", 10, pal.TextDim, bold: true);
-        ctx.DrawText(view1, new Point(Bounds.Width - view1.Width - 16, 14));
+        if (ModeText.Length > 0)
+        {
+            var mode = Text(ModeText, 10, ModeText == "EDITABLE" ? pal.Accent : pal.TextDim, bold: true);
+            ctx.DrawText(mode, new Point(Bounds.Width - mode.Width - 16, 14));
+        }
     }
 
     private void DrawGrid(DrawingContext ctx, Palette pal, Rect area)

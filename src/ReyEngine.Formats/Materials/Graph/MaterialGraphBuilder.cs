@@ -195,7 +195,7 @@ public static class MaterialGraphBuilder
         var swNodes = new List<(GraphNode Node, int Pin)>();
         var seenSwitch = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int si = 0;
-        foreach (var sw in b.SwitchEntries)
+        foreach (var sw in b.CanEditSwitches ? b.AllSwitches : b.SwitchEntries)   // M830: a switch added after the parse is a node too
         {
             bool repeat = !seenSwitch.Add(sw.Name);
             var state = GraphNodeState.Authored;
@@ -234,7 +234,7 @@ public static class MaterialGraphBuilder
 
         int mi = 0;
         var seenMacro = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var m in b.MacroEntries)
+        foreach (var m in b.CanEditMacros ? b.AllMacros : b.MacroEntries)
         {
             bool repeat = !seenMacro.Add(m.Name);
             int pin = repeat ? -1 : AddShaderPin("mac:" + m.Name, m.Name, GraphPinKind.Bool, "define");
