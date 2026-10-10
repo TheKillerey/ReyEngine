@@ -34,7 +34,9 @@ public static class ShaderCachePatchWriter
     /// The shipped reader strips it before D3D shader creation; matching it keeps custom and Riot records
     /// byte-for-byte compatible at the container layer.
     /// </summary>
-    public static byte[] WriteContainer(IReadOnlyList<byte[]> blobs)
+    /// <param name="trailer">The byte after each record. 0 is what this writer has always written; M833 ships 0x35, the trailer Riot's own
+    /// 73,559 records carry and the one proven in game with a mod-added pixel shader.</param>
+    public static byte[] WriteContainer(IReadOnlyList<byte[]> blobs, byte trailer = 0)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
@@ -44,7 +46,7 @@ public static class ShaderCachePatchWriter
                 throw new InvalidDataException("shader blob is not a DXBC container");
             writer.Write(checked(blob.Length + 1));
             writer.Write(blob);
-            writer.Write((byte)0);
+            writer.Write(trailer);
         }
         writer.Flush();
         return stream.ToArray();

@@ -16413,6 +16413,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     foreach (var (_, path) in Core.Build.WadPackService.EnumerateChunkFiles(abs))
                         files.Add((layer, folderName, Path.GetRelativePath(abs, path).Replace('\\', '/'), path));
                 }
+                // M833: Shader Graphs ride a send exactly like an export: a material that names one is checked, and Riot's installed pixel table and
+                // last container are rebuilt with the graph's blobs. They are written to a temporary folder (never the project, the game or data/).
+                string? graphTemp = null;
+                try
+                {
+                    var sources = Project.ProjectFolders.Select(Project.ResolveProjectPath).Where(Directory.Exists).ToList();
+                    var graphShip = Services.ShaderGraphShipService.Prepare(Project.RootPath, GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory),
+                        sources, ResolveBinName, _resolver.Database);
+                    if (graphShip is not null)
+                    {
+                        foreach (var line in graphShip.Report) _log.Info("LTK", line);
+                        graphTemp = Path.Combine(Path.GetTempPath(), "reyengine-shadergraph-" + Guid.NewGuid().ToString("N"));
+                        string homeLayer = ReyEngine.Core.Projects.ProjectLayer.BaseLayer;   // the generated shader cache is always in the base layer
+                        foreach (var (rel, bytes) in graphShip.Files)
+                        {
+                            string dest = Path.Combine(graphTemp, rel.Replace('/', Path.DirectorySeparatorChar));
+                            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                            File.WriteAllBytes(dest, bytes);
+                            files.Add((homeLayer, "ShaderCache.dx11", rel, dest));
+                        }
+                    }
                 if (files.Count == 0 && !layerContent)
                     throw new InvalidOperationException("The project has no packable content to send.");
                 // M757: game bins as declarations against the game's copy, when the project asks for it
@@ -16429,6 +16450,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var sendOptions = Core.Build.LtkProjectLayers.ForSend(options, Project, imported,
                     Formats.Meta.BinDeclarations.WithImported(manifests, imported));
                 return Core.Build.LtkWorkshopExporter.Send(sendOptions, files);
+                }
+                finally
+                {
+                    if (graphTemp is not null) try { Directory.Delete(graphTemp, recursive: true); } catch { /* a temp folder left behind is harmless */ }
+                }
             });
             foreach (var (level, line) in declarationReport)
                 if (level == 0) _log.Success("LTK", line); else _log.Info("LTK", line);
@@ -17590,6 +17616,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var apply = new Dictionary<ulong, byte[]>();
             foreach (var (hash, file) in overridesByHash)
                 if (arc.TryGetEntry(hash, out _) && File.Exists(file)) apply[hash] = File.ReadAllBytes(file);
+            foreach (var (h, bytes) in apply)
+                if (Core.Build.ShaderGraphShipGuard.Mentions(bytes))
+                    throw new InvalidOperationException(Core.Build.ShaderGraphShipGuard.Message($"A replacement for {Path.GetFileName(w)} (0x{h:x16})"));
             var outWad = Path.Combine(buildRoot, Path.GetFileName(w));
             var report = new BuildReport { OutputPath = outWad };
             WadRepackService.Repack(src, apply, outWad, report);
@@ -17672,6 +17701,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 catch (Exception ex) { _log.Warn("Build", $"Could not check {Path.GetFileName(geoPath)} for unused buffers: {ex.Message}"); }
             }
 
+        // M833: Shader Graphs. A staged material that names a graph (REY_GRAPH) is checked, its graph compiled, and Riot's INSTALLED pixel table
+        // and last container for its base shader are rebuilt with the graph's blobs. Done BEFORE the declarations step (which takes bins out of
+        // the staged copies) and written AFTER it, into the build's staging folder only - never the project, the game or data/.
+        Services.ShaderGraphShipResult? graphShip = null;
+        string graphLayer = ReyEngine.Core.Projects.ProjectLayer.BaseLayer;
+        {
+            progress?.Report((0.285, "Checking Shader Graphs…"));
+            graphShip = Services.ShaderGraphShipService.Prepare(Project.RootPath, GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory),
+                stagedFolders.Select(f => f.dir).ToList(), ResolveBinName, _resolver.Database);
+            if (graphShip is not null)
+            {
+                foreach (var line in graphShip.Report) _log.Info("Build", line);
+                // the generated shader cache always ships in the BASE layer (graphLayer stays base): twin keys do nothing while a layer is off,
+                // and a base table is there whichever optional layer carries the assigned materials
+            }
+        }
+
         // M814: game bins as declarations. The plan reads the STAGED files (project files with the overrides
         // applied - exactly what would be packed) and removes the declared and unchanged ones from the staged
         // copies only; the project's own files are never touched.
@@ -17682,11 +17728,39 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var candidates = new List<Formats.Meta.DeclarationFile>();
             foreach (var (_, dir, layer, leaf, _) in stagedFolders)
                 foreach (var (_, path) in WadPackService.EnumerateChunkFiles(dir))
+                {
+                    // M833: a bin that names a Shader Graph is never a declaration - it ships whole, with the shader cache patch beside it
+                    if (graphShip is not null && path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) && Core.Build.ShaderGraphShipGuard.Mentions(File.ReadAllBytes(path)))
+                    { _log.Info("Build", "A bin that names a Shader Graph ships whole and not as a declaration: " + path); continue; }
                     candidates.Add(new Formats.Meta.DeclarationFile(layer, leaf,
                         Path.GetRelativePath(dir, path).Replace('\\', '/'), path));
+                }
             plan = PlanDeclarations(candidates);
             foreach (var gone in plan.Dropped)
                 if (IsSameOrChild(gone.AbsPath, stagingRoot)) File.Delete(gone.AbsPath);
+        }
+
+        // M833: the shader cache patch of the Shader Graphs joins the ShaderCache.dx11 WAD of the package (the project's own folder of that
+        // name when it has one - already checked not to hold the same table or container - else a staging folder of its own).
+        if (graphShip is not null)
+        {
+            const string CacheLeaf = "ShaderCache.dx11";
+            int at = stagedFolders.FindIndex(f => f.leaf.Equals(CacheLeaf, StringComparison.OrdinalIgnoreCase));
+            string cacheDir;
+            if (at >= 0) cacheDir = stagedFolders[at].dir;
+            else
+            {
+                cacheDir = Path.Combine(stagingRoot, CacheLeaf);
+                stagedFolders.Add((CacheLeaf, cacheDir, graphLayer, CacheLeaf, false));
+                staged++;
+            }
+            foreach (var (path, bytes) in graphShip.Files)
+            {
+                string dest = Path.Combine(cacheDir, path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.WriteAllBytes(dest, bytes);
+                files++;
+            }
         }
 
         // Pack each staged folder into a distributable .wad.client.

@@ -929,6 +929,11 @@ public sealed class MaterialBinding
         if (string.IsNullOrWhiteSpace(name)) return null;
         uint canonicalField = HashAlgorithms.Fnv1a("shaderMacros");
         uint rawField = HashAlgorithms.Fnv1aRaw("shaderMacros");
+        // M833: Serialize strips an EMPTY map from the tree (BinEmptyProperty.Strip) but this object keeps pointing at it, so an
+        // assign -> save -> unassign -> save -> assign would write into the orphan and be lost. Put it back on the material first.
+        if (_macroMap is not null && MaterialObject is not null
+            && !MaterialObject.Properties.Values.Any(p => ReferenceEquals(p, _macroMap)))
+            MaterialObject.Properties[canonicalField] = _macroMap;
         if (_macroMap is null)
         {
             if (MaterialObject is null) return null;

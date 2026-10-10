@@ -59,6 +59,7 @@ public sealed partial class MainWindowViewModel
         editor.AskMacroSupport = CachedMacroSupport;   // M506: inline permutation verdicts
         editor.Warn = m => _log.Warn("Material", m);                 // M533
         editor.AskMacroFixes = SuggestMacroFixes;                    // M533
+        editor.ProjectRoot = () => string.IsNullOrEmpty(Project.RootPath) ? null : Project.RootPath;   // M833: where Shader Graphs live
         editor.SaveOverride = saveOverride;
         editor.RequestCatalog = LoadShaderCatalogAsync;   // M103
         editor.RequestCommonShaderSetup = LoadCommonShaderSetupAsync;

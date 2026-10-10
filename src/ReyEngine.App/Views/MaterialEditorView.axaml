@@ -566,6 +566,31 @@
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
                   </StackPanel>
+                  <StackPanel Spacing="3" Margin="0,3,0,0" IsVisible="{Binding HasGraphSection}">
+                    <TextBlock Text="SHADER GRAPH" FontSize="8" FontWeight="SemiBold"
+                               Foreground="{DynamicResource ReyTextDimBrush}" />
+                    <TextBlock Text="{Binding GraphAssignmentText}" FontSize="9" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding !GraphAssignmentIsError}" />
+                    <TextBlock Text="{Binding GraphAssignmentText}" FontSize="9" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding GraphAssignmentIsError}" />
+                    <ItemsControl ItemsSource="{Binding GraphChoices}" IsVisible="{Binding HasGraphChoices}">
+                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SgGraphChoice">
+                          <Button Classes="tool" FontSize="9" Margin="0,0,3,3"
+                                  Command="{Binding $parent[ItemsControl].((vm:MaterialBindingViewModel)DataContext).AssignGraphCommand}"
+                                  CommandParameter="{Binding}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                              <TextBlock Text="Assign" FontSize="9" />
+                              <TextBlock Text="{Binding Name}" FontSize="9" />
+                            </StackPanel>
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Classes="tool" FontSize="9" Content="Unassign graph" HorizontalAlignment="Left"
+                            IsVisible="{Binding HasGraphAssigned}" Command="{Binding UnassignGraphCommand}" />
+                  </StackPanel>
                   <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMacros}">
                     <TextBlock Text="SHADER MACROS" FontSize="8" FontWeight="SemiBold"
                                Foreground="{DynamicResource ReyTextDimBrush}" />

@@ -264,6 +264,34 @@ public sealed class MacroEditCommand : IEditorCommand
     public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
 }
 
+/// <summary>M833: reversible macro PRESENCE edit - the value a macro had (null = the material had none) and the value it gets (null = removed).
+/// Assigning a Shader Graph writes REY_GRAPH, unassigning removes it, and undo restores exactly the state before, absent included.</summary>
+public sealed class MacroPresenceCommand : IEditorCommand
+{
+    private readonly MaterialBinding _binding;
+    private readonly string _name;
+    private readonly string? _old, _new;
+    private readonly Action? _onApplied;
+
+    public MacroPresenceCommand(object? context, MaterialBinding binding, string name, string? oldValue, string? newValue, Action? onApplied)
+    {
+        Context = context; _binding = binding; _name = name; _old = oldValue; _new = newValue; _onApplied = onApplied;
+    }
+
+    public static void Write(MaterialBinding binding, string name, string? value)
+    {
+        if (value is null) binding.RemoveMacro(name);
+        else binding.SetMacroValue(name, value);
+    }
+
+    public string Name => _new is null ? $"Remove {_name}" : $"Set {_name}";
+    public object? Context { get; }
+    public void Execute() { Write(_binding, _name, _new); _onApplied?.Invoke(); }
+    public void Undo() { Write(_binding, _name, _old); _onApplied?.Invoke(); }
+    public bool CanMergeWith(IEditorCommand next) => false;
+    public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
+}
+
 /// <summary>M645: reversible pass boolean (cullEnable / blendEnable). Undo restores the value the pass READ
 /// before the edit; a field that was absent comes back written at its default rather than absent, because
 /// the pass reads absent and default identically and the binding does not expose which it was.</summary>

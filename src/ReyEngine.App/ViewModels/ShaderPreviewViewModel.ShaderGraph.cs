@@ -170,8 +170,8 @@ public sealed partial class ShaderPreviewViewModel
         ShaderGraph.SignatureIndex = sig.Index;
         bool stale = ShaderGraph.LastBuild is { } last && (last.Analysis.HasErrors || last.For(sig) is { Ok: false });
         GraphPreviewNote = stale
-            ? $"Preview: the Shader Graph '{ShaderGraph.GraphName}' - LAST GOOD compile (the graph has errors now). The game does not see custom shaders yet."
-            : $"Preview: the Shader Graph '{ShaderGraph.GraphName}' replaces Riot's pixel shader (signature #{sig.Index}). The game does not see custom shaders yet.";
+            ? $"Preview: the Shader Graph '{ShaderGraph.GraphName}' - LAST GOOD compile (the graph has errors now). Shipped when a material is assigned to it. The map viewport still draws Riot's shader."
+            : $"Preview: the Shader Graph '{ShaderGraph.GraphName}' replaces Riot's pixel shader (signature #{sig.Index}). Shipped when a material is assigned to it. The map viewport still draws Riot's shader.";
         return good.Shader;
     }
 }

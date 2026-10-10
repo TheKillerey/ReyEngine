@@ -7,6 +7,7 @@ using ReyEngine.Core.Assets;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Materials.ShaderGraph;
 using ReyEngine.Formats.Shaders;
 using MacroSupport = ReyEngine.Formats.MapGeo.LegacyMapPorter.MacroSupport;
 
@@ -561,6 +562,8 @@ public sealed partial class MaterialMacroViewModel : ViewModelBase
     partial void OnIsOnChanged(bool value)
     {
         if (_initializing) return;
+        // M833: REY_GRAPH carries the graph's number; a tick box would overwrite it with 1 or 0. Assign / Unassign change it.
+        if (SgShip.IsGraphMacro(Name)) { SyncFromModel(); return; }
         _binding.SetMacro(Name, value);
         RaiseDirty();
         RefreshStatus();      // 0 and 1 are different permutation keys — the verdict can differ too
@@ -708,6 +711,12 @@ public sealed partial class MaterialSwitchViewModel : ViewModelBase
     private void Remove() => _binding.RemoveSwitch(this);
 }
 
+/// <summary>M833: a graph of the open project that can be assigned to a material (its base shader is the material's shader).</summary>
+public sealed record SgGraphChoice(string Stem, string Name, string BaseShader)
+{
+    public override string ToString() => Name;
+}
+
 public sealed partial class MaterialBindingViewModel : ViewModelBase
 {
     public MaterialBinding Model { get; }
@@ -765,6 +774,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
             foreach (var m in model.AllMacros) Macros.Add(new MaterialMacroViewModel(m, this));        // M150
         }
         RefreshMissingMacros();
+        RefreshGraphSection();   // M833
         LoadRenderState();   // M106
         // M351j: seed the editable UV fields from the parse-time profile
         UvScaleText = FmtVec2(model.Profile.UvScale);
@@ -928,6 +938,8 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     internal MacroSupport SupportFor(string macro, string value)
     {
         string shader = Model.RenderShader ?? "";
+        // M833: REY_GRAPH is not a Riot permutation axis; the export adds it to the shader cache. "Would crash" would be a lie here.
+        if (SgShip.IsGraphMacro(macro)) return MacroSupport.Cooked;
         if (shader.Length == 0 || Owner?.AskMacroSupport is not { } ask) return MacroSupport.Unknown;
         return ask(shader, Model.Switches, macro, value);
     }
@@ -938,7 +950,94 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     {
         foreach (var m in Macros) m.RefreshStatus();
         RefreshMissingMacros();
+        RefreshGraphSection(rescan: true);   // M833: a graph saved since the editor loaded appears when a material is picked
     }
+
+    // ---- M833: Shader Graph assignment (REY_GRAPH = the graph's number) ----
+
+    public ObservableCollection<SgGraphChoice> GraphChoices { get; } = new();
+    [ObservableProperty] private bool _hasGraphSection;
+    [ObservableProperty] private bool _hasGraphAssigned;
+    [ObservableProperty] private bool _hasGraphChoices;
+    [ObservableProperty] private bool _graphAssignmentIsError;
+    [ObservableProperty] private string _graphAssignmentText = "";
+
+    private string? GraphMacroValue() =>
+        Model.AllMacros.FirstOrDefault(m => SgShip.IsGraphMacro(m.Name))?.Value;
+
+    /// <summary>Which graph this material names, whether that graph exists, and which graphs could be assigned. Read from the project folder each time
+    /// (a few small JSON files), so a graph saved in the Shader Graph window shows up here without a refresh button.</summary>
+    public void RefreshGraphSection(bool rescan = false)
+    {
+        GraphChoices.Clear();
+        string shader = Model.RenderShader ?? "";
+        string? root = Owner?.ProjectRoot?.Invoke();
+        string? assigned = IsLinked ? null : GraphMacroValue();
+        bool supported = !IsLinked && Model.CanEditMacros && SgBase.IsSupported(shader);
+        HasGraphAssigned = assigned is not null;
+        HasGraphSection = supported || assigned is not null;
+        GraphAssignmentIsError = false;
+        GraphAssignmentText = "";
+        if (!HasGraphSection) { HasGraphChoices = false; return; }
+
+        if (root is not null && supported)
+            foreach (var c in Owner!.GraphFiles(root, rescan))
+                if (SgBase.Normalize(c.BaseShader) == SgBase.Normalize(shader)) GraphChoices.Add(c);
+        HasGraphChoices = GraphChoices.Count > 0;
+
+        if (assigned is null)
+        {
+            GraphAssignmentText = root is null ? "Open a project to assign a Shader Graph." : GraphChoices.Count == 0 ? "No Shader Graph of this project is built for this shader." : "No Shader Graph assigned.";
+            return;
+        }
+        if (!SgShipValidator.TryParseNumber(assigned, out int n))
+        { GraphAssignmentIsError = true; GraphAssignmentText = $"{SgShip.Macro}={assigned} is not a graph number. The export is blocked until it is fixed or unassigned."; return; }
+        if (root is null) { GraphAssignmentText = $"Shader Graph #{n} (open the project to check that the graph exists)."; return; }
+        var r = SgShipValidator.Resolve(root, shader, n);
+        if (r.Document is null) { GraphAssignmentIsError = true; GraphAssignmentText = $"Shader Graph #{n}: {r.Problem}. The export is blocked until it is fixed or unassigned."; return; }
+        if (SgBase.Normalize(r.Document.BaseShader) != SgBase.Normalize(shader))
+        { GraphAssignmentIsError = true; GraphAssignmentText = $"Shader Graph '{r.Entry!.File}' (#{n}) is built for {r.Document.BaseShader}, not {shader}. The export is blocked."; return; }
+        GraphAssignmentText = $"Shader Graph '{r.Entry!.File}' (#{n}) ships with the mod. It is rebuilt from the installed game on every export, so re-export after each patch. Do not rename the graph file: its number is kept under its file name. The map viewport still draws Riot's shader for this material; the Shader Graph window previews the graph.";
+    }
+
+    private void RebuildMacros()
+    {
+        Macros.Clear();
+        foreach (var m in Model.AllMacros) Macros.Add(new MaterialMacroViewModel(m, this));
+        foreach (var m in Macros) m.RefreshStatus();
+        RefreshMissingMacros();
+        RefreshGraphSection();
+        RaiseDirty();
+        Owner?.NotifyChanged();
+    }
+
+    private void PushGraphMacro(string? newValue)
+    {
+        if (Owner is null) return;
+        string? old = GraphMacroValue();
+        if (old == newValue) return;
+        var cmd = new MacroPresenceCommand(Owner.DocContext, Model, SgShip.Macro, old, newValue, RebuildMacros);
+        cmd.Execute();                               // one step: the macro, the rows and the section follow it
+        Owner.UndoService?.PushApplied(cmd);
+    }
+
+    /// <summary>Assign a graph: REY_GRAPH=&lt;its number&gt; on this material, by the editor's own macro write (one undo step, saved by the normal Save).</summary>
+    [RelayCommand]
+    private void AssignGraph(SgGraphChoice? choice)
+    {
+        if (choice is null || Owner is null) return;
+        string shader = Model.RenderShader ?? "";
+        if (!SgBase.IsSupported(shader)) { Owner.Warn?.Invoke($"{Model.Name}: {shader} is not a base shader a Shader Graph supports."); return; }
+        if (Owner.ProjectRoot?.Invoke() is not { } root) { Owner.Warn?.Invoke("Open a project before assigning a Shader Graph."); return; }
+        int n;
+        try { n = ShaderGraphRegistry.NumberFor(root, choice.Stem, choice.BaseShader); }
+        catch (Exception ex) { Owner.Warn?.Invoke($"The graph number could not be stored: {ex.Message}"); return; }
+        PushGraphMacro(n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>Remove REY_GRAPH from this material (undoable). The graph file stays in the project.</summary>
+    [RelayCommand]
+    private void UnassignGraph() => PushGraphMacro(null);
 
     private void RefreshMissingMacros()
     {
@@ -1849,6 +1948,31 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     /// "it was added and the save is broken".</summary>
     public Action<string>? Warn { get; set; }
 
+    /// <summary>M833: the open project's folder, where the Shader Graphs live (<c>.reyengine/shadergraphs</c>). Null with no project.</summary>
+    public Func<string?>? ProjectRoot { get; set; }
+
+    private List<SgGraphChoice>? _graphFiles;
+
+    /// <summary>The graphs of the project folder, read once per document load (and again when a material is picked) instead of once per material.</summary>
+    internal IReadOnlyList<SgGraphChoice> GraphFiles(string root, bool rescan)
+    {
+        if (_graphFiles is not null && !rescan) return _graphFiles;
+        var list = new List<SgGraphChoice>();
+        string dir = ShaderGraphRegistry.FolderIn(root);
+        if (Directory.Exists(dir))
+            foreach (string f in Directory.EnumerateFiles(dir, "*" + ShaderGraphDocument.FileSuffix).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var doc = ShaderGraphJson.TryDeserialize(File.ReadAllText(f), out _);
+                    if (doc is not null)
+                        list.Add(new SgGraphChoice(ShaderGraphRegistry.StemOf(f), doc.Name.Length > 0 ? doc.Name : ShaderGraphRegistry.StemOf(f), doc.BaseShader));
+                }
+                catch { /* an unreadable graph file is not offered */ }
+            }
+        return _graphFiles = list;
+    }
+
     /// <summary>M533: what would have to change for a refused define to become legal on this material.
     /// The permutation index already knows; nothing was asking it on this path.</summary>
     public Func<MaterialBinding, string, IReadOnlyList<string>>? AskMacroFixes { get; set; }
@@ -2203,6 +2327,7 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     {
         BaseBytes = sourceBytes;
         StaleReason = null;
+        _graphFiles = null;   // M833
         if (_doc is not null) UndoService?.PurgeContext(_doc); // stale commands must never mutate a replaced doc
         _doc = doc;
         BinEntry = binEntry;

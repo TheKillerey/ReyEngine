@@ -325,6 +325,29 @@ public sealed class ShaderGraphRealDataTests(ITestOutputHelper output)
         Assert.True(red > 500);
     }
 
+    /// <summary>M833: the graph the test3 package ships (texture x TintColor, with green stripes), drawn by the real D3D11 preview.</summary>
+    [Fact]
+    public void The_test3_graph_draws_texture_times_tint_with_green_stripes()
+    {
+        using var rig = Rig.Open(output);
+        if (rig is null) return;
+        var (vs, ps) = rig.Riot(FlatMacros);
+        var tex = new Dictionary<string, byte[]> { ["DiffuseTexture__TX"] = Texture((u, v) => (0.8f, 0.8f, 0.8f)) };   // a flat grey, so only the tint and the stripes show
+        var f = Render(vs, CompileFor(rig, ShaderGraphShipRealDataTests.Test3Graph(), ps).Shader!, tex, new() { ["TintColor"] = new[] { 0.6f, 0.8f, 1f, 1f } }, "m833_test3_green_stripes");
+        if (f is null) return;
+        int tinted = 0, green = 0;
+        for (int i = 0; i + 3 < f.Bgra.Length; i += 4)
+        {
+            if (IsClear(f.Bgra, i)) continue;
+            byte b = f.Bgra[i], g = f.Bgra[i + 1], r = f.Bgra[i + 2];
+            if (g > 200 && r < 40 && b < 40) green++;
+            else if (b > g && g > r) tinted++;
+        }
+        output.WriteLine($"green-stripe pixels {green}, tinted pixels {tinted}");
+        Assert.True(green > 2000, "no green stripes");
+        Assert.True(tinted > 2000, "no tinted texture between the stripes");
+    }
+
     [Fact]
     public void A_lerp_of_two_samples_of_the_texture_follows_its_parameter_exactly_and_two_textures_bind_by_name()
     {

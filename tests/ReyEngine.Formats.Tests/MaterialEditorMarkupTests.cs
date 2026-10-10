@@ -48,7 +48,7 @@ public sealed class MaterialEditorMarkupTests
         foreach (string command in new[]
         {
             "AddShaderSamplerCommand", "AddShaderSwitchCommand", "AddMacroCommand",
-            "AddShaderParameterCommand", "RemoveParameterCommand",
+            "AddShaderParameterCommand", "RemoveParameterCommand", "AssignGraphCommand",
         })
             Assert.Contains($"$parent[ItemsControl].((vm:MaterialBindingViewModel)DataContext).{command}", xaml);
 

@@ -95,7 +95,7 @@
           <Border Width="1" Height="20" Background="{DynamicResource ReyBorderAccentBrush}" Margin="4,0" />
           <Button Classes="tool" Content="New Shader Graph" Command="{Binding NewShaderGraphCommand}"
                   IsEnabled="{Binding CanNewShaderGraph}"
-                  ToolTip.Tip="Start a custom shader graph on the shader of the picked material (supported base: DefaultEnv_Flat). Preview only: the game does not see custom shaders yet." />
+                  ToolTip.Tip="Start a custom shader graph on the shader of the picked material (supported base: DefaultEnv_Flat). Graphs ship when assigned to a material (Material Editor). The map viewport shows Riot's shader." />
           <Button x:Name="OpenShaderGraphButton" Classes="tool" Content="Open Shader Graph"
                   ToolTip.Tip="Open a Shader Graph saved in this project (.reyengine/shadergraphs)." Click="OnOpenShaderGraphClick">
             <Button.Flyout>
@@ -722,10 +722,10 @@
 
       <!-- ============================ the node graph ============================ -->
       <Grid Grid.Column="2" Margin="0,6,6,0" RowDefinitions="Auto,*">
-        <!-- M832: the Shader Graph is preview-only, and the window says so above the graph -->
+        <!-- M832/M833: the window says above the graph when it ships -->
         <Border Grid.Row="0" IsVisible="{Binding ShaderGraphActive}" Background="{DynamicResource ReyWarningSoftBrush}"
                 CornerRadius="6" Padding="10,6" Margin="0,0,0,4">
-          <TextBlock Text="Preview only: the game does not see custom shaders yet." FontSize="11.5" FontWeight="SemiBold"
+          <TextBlock Text="Graphs ship when assigned: they are rebuilt from the installed game on every export, so re-export after each patch." TextWrapping="Wrap" FontSize="11.5" FontWeight="SemiBold"
                      Foreground="{DynamicResource ReyWarningBrush}" />
         </Border>
         <Border Grid.Row="1" BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"

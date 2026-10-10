@@ -253,7 +253,7 @@ public sealed class ShaderGraphTests
         Assert.True(r.Ok, string.Join("; ", r.Errors));
         const string expected = """
             // ReyEngine Shader Graph "t" on Shaders/StaticMesh/DefaultEnv_Flat
-            // PREVIEW ONLY: the game does not see custom shaders yet.
+            // Shipped when a material is assigned to this graph.
             // Pixel input signature #0: SV_Position0:xyzw@r0/sv1/t3 TEXCOORD0:xyzw@r1/sv0/t3 TEXCOORD1:xy@r2/sv0/t3 => SV_Target0:xyzw@r0/sv0/t3 SV_Target1:xyzw@r1/sv0/t3
 
             // ---- $Globals: base shader parameters the graph reads (the client fills them by name)
@@ -490,8 +490,10 @@ public sealed class ShaderGraphTests
         foreach (string f in Directory.GetFiles(Path.Combine(root, "src", "ReyEngine.Formats", "Materials", "ShaderGraph"), "*.cs"))
         {
             string text = File.ReadAllText(f);
-            Assert.DoesNotContain("REY_GRAPH", text);
             Assert.DoesNotContain("StoreOverrideBytes", text);
+            // M833: ONE file ships a graph (the pack-time TOC/container builder); the editor's own files still never touch the cache
+            if (Path.GetFileName(f) == "ShaderGraphShip.cs") continue;
+            Assert.DoesNotContain("REY_GRAPH", text);
             Assert.DoesNotContain("ShaderCachePatchWriter", text);
         }
     }
@@ -596,7 +598,7 @@ public sealed class ShaderGraphTests
         Assert.Contains("x:Name=\"ShaderGraphCanvas\"", xaml);
         Assert.Contains("ShaderEditor=\"{Binding ShaderGraph}\"", xaml);
         Assert.Contains("Shader Graph HLSL (generated)", xaml);
-        Assert.Contains("Preview only: the game does not see custom shaders yet.", xaml);
+        Assert.Contains("Graphs ship when assigned: they are rebuilt from the installed game on every export, so re-export after each patch.", xaml);
 
         // the one literal colour that was there before (the preview surface's hit-test fill) is the only one
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(xaml, "=\"#[0-9A-Fa-f]{3,8}\""));

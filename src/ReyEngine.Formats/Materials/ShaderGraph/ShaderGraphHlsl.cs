@@ -123,7 +123,7 @@ public static class SgHlsl
         }
 
         L($"// ReyEngine Shader Graph \"{Ascii(doc.Name)}\" on {Ascii(b.Shader)}");
-        L("// PREVIEW ONLY: the game does not see custom shaders yet.");
+        L("// Shipped when a material is assigned to this graph.");
         L($"// Pixel input signature #{sig.Index}: {Ascii(sig.Text)}");
         L();
         if (parameters.Count > 0)

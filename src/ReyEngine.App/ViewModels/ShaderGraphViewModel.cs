@@ -59,7 +59,7 @@ public sealed record SgFileRow(string Path, string Name)
 ///
 /// <para><b>Document.</b> A <see cref="ShaderGraphDocument"/> (JSON) saved in the open project at
 /// <c>.reyengine/shadergraphs/&lt;name&gt;.shadergraph.json</c>: editor data, skipped by Build Package and the exporters, referenced by no
-/// bin. Preview only - the game does not see custom shaders yet.</para>
+/// bin. M833: a graph ships when a material is assigned to it (REY_GRAPH); the export rebuilds the shader cache patch from the installed game.</para>
 ///
 /// <para><b>Editing.</b> Every gesture (add, delete, connect, disconnect, edit a setting) is ONE undo step on this view model's OWN undo
 /// stack (a private <see cref="UndoRedoService"/>: a Shader Graph edit never lands on the Material Editor's or the main window's stack),
@@ -69,7 +69,7 @@ public sealed record SgFileRow(string Path, string Name)
 /// </summary>
 public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
 {
-    public const string Banner = "Preview only: the game does not see custom shaders yet. A Shader Graph is saved in the project and shown here; it is not packed into the mod.";
+    public const string Banner = "Graphs ship when assigned: they are rebuilt from the installed game on every export, so re-export after each patch.";
 
     private readonly Func<string?> _projectRoot;
     private readonly UndoRedoService _undo = new();
@@ -296,7 +296,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
                 _undo.MarkSaved();
                 _moved = false;
                 IsDirty = false;
-                Status = $"Saved {Path.GetFileName(path)} to the project (editor data only: it is not packed into the mod).";
+                Status = $"Saved {Path.GetFileName(path)} to the project (editor data: the graph itself is not packed; a material it is assigned to ships its compiled shader).";
             }
             else Status = $"Saved {Path.GetFileName(path)}; the graph was edited while it was being written, so it is still marked as changed.";
             RefreshSavedGraphs();

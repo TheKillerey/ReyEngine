@@ -31,6 +31,13 @@ public static class BuildPackageService
             catch (Exception ex) { report.Add(BuildSeverity.Error, $"Could not read override {Path.GetFileName(ov.OverrideFile)}: {ex.Message}"); }
         }
 
+        foreach (var (hash, bytes) in overrideBytes)
+            if (ShaderGraphShipGuard.Mentions(bytes))
+            {
+                report.Add(BuildSeverity.Error, ShaderGraphShipGuard.Message($"The override 0x{hash:x16}"));
+                return report;
+            }
+
         try
         {
             WadRepackService.Repack(project.SourceWadPath, overrideBytes, outputPath, report, progress, ct);

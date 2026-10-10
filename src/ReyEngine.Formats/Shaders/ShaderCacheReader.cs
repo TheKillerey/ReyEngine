@@ -491,6 +491,35 @@ public sealed class ShaderCacheReader : IDisposable
         return null;
     }
 
+    /// <summary>M833: the raw bytes of one cache entry (a TOC), either spelling; <paramref name="resolvedPath"/> is the one the cache holds.</summary>
+    public byte[]? ReadEntry(string path, out string? resolvedPath)
+    {
+        resolvedPath = null;
+        if (_wad is null) return null;
+        resolvedPath = ResolveCachePath(path, WadHas);
+        if (resolvedPath is null) return null;
+        try { return _wad.Extract(HashAlgorithms.WadPath(resolvedPath.ToLowerInvariant())); }
+        catch { return null; }
+    }
+
+    /// <summary>M833: the raw bytes of one blob container of a stage TOC (<c>{tocPath}_{containerBase}</c>, either spelling), untouched - the
+    /// records with their length prefixes and trailers. <paramref name="resolvedPath"/> is the spelling the cache holds.</summary>
+    public byte[]? ReadContainer(string tocPath, uint containerBase, out string? resolvedPath, out string? error)
+    {
+        resolvedPath = null; error = null;
+        if (_wad is null) { error = "no shader cache open"; return null; }
+        string wanted = $"{tocPath}_{containerBase}";
+        resolvedPath = ResolveCachePath(wanted, WadHas);
+        if (resolvedPath is null) { error = "blob container not in the cache, tried: " + string.Join(" and ", CachePathCandidates(wanted)); return null; }
+        try
+        {
+            var bytes = _wad.Extract(HashAlgorithms.WadPath(resolvedPath.ToLowerInvariant()));
+            if (bytes is not { Length: > 0 }) { error = $"blob container is empty: {resolvedPath}"; return null; }
+            return bytes;
+        }
+        catch (Exception ex) { error = $"container {resolvedPath}: {ex.Message}"; return null; }
+    }
+
     /// <summary>Fetch one blob's DXBC, trimmed to the size its own header declares.</summary>
     /// <param name="error">Set when the blob could not be produced; the value is then null.</param>
     /// <param name="wasTrimmed">True when the container's length prefix over-reported, which is the norm.</param>
