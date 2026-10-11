@@ -56,6 +56,10 @@ public sealed class GraphPin
     /// <summary>A short value / explanation shown beside the pin name.</summary>
     public string Detail { get; init; } = "";
 
+    /// <summary>M836: a Shader Graph input pin that is wired AND still stores a constant of its own: the constant's text. The wire wins, so the constant is shown
+    /// struck through and dimmed ("linked: constant 3 ignored"). Empty = nothing is being ignored.</summary>
+    public string IgnoredConstant { get; init; } = "";
+
     /// <summary>M831: shader input pins: the shader's own identity of the input ("tx:Name", "c:Name", "sw:Name", "mac:Name"). Empty elsewhere.</summary>
     public string Key { get; init; } = "";
 

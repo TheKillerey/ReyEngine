@@ -609,8 +609,10 @@
                         </ItemsControl.ItemTemplate>
                       </ItemsControl>
                     </StackPanel>
-                    <StackPanel Spacing="2" IsVisible="{Binding HasGraphTextures}">
+                    <StackPanel Spacing="2">
                       <TextBlock Text="GRAPH TEXTURES (custom)" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <TextBlock Text="none: add one in the Shader Graph (+ Texture)" FontSize="8.5" TextWrapping="Wrap" IsVisible="{Binding HasNoGraphTextures}"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" />
                       <ItemsControl ItemsSource="{Binding GraphTextures}">
                         <ItemsControl.ItemTemplate>
                           <DataTemplate x:DataType="vm:GraphTextureRow">

@@ -497,7 +497,7 @@ public static class Dx11SceneBuilder
                     // the editor began a map load while this loop ran, or the job was cancelled: wait, or stop
                     if (checkpoint is not null && !checkpoint()) { loop.Stop(); return before; }
                     byte[] bytes;
-                    try { bytes = readAsset(HashAlgorithms.WadPath(keys[i])) ?? Array.Empty<byte>(); }
+                    try { bytes = readAsset(Formats.Meta.BinTexturePath.HashOfReference(keys[i])) ?? Array.Empty<byte>(); }
                     catch { return before; }
                     if (bytes.Length == 0) return before;
                     try { decoded[keys[i]] = TextureDecoder.DecodeToMaxSize(bytes, limits.MaxTextureSize); }
@@ -513,7 +513,7 @@ public static class Dx11SceneBuilder
 
         for (int i = 0; i < keys.Length; i++)
         {
-            try { raw[i] = readAsset(HashAlgorithms.WadPath(keys[i])) ?? Array.Empty<byte>(); }
+            try { raw[i] = readAsset(Formats.Meta.BinTexturePath.HashOfReference(keys[i])) ?? Array.Empty<byte>(); }
             catch { raw[i] = Array.Empty<byte>(); }
         }
 

@@ -114,4 +114,28 @@ public sealed partial class MaterialGraphViewModel
         if (applied.Count == 0 && skipped.Count == 0) note = $"No assigned material carries a '{from}' texture.";
         return (applied.Count, note);
     }
+
+    /// <summary>M836: "+ New texture..." in the Shader Graph (and its undo) reaches the materials assigned to the graph: each gets the samplerValues entry (the graph's default
+    /// image), or loses it again on undo, all ONE composite step on the editor's stack. A material that already has it is left alone.</summary>
+    internal (int Changed, string Note) FollowCustomTextureAdd(string? graphPath, SgCustomTexture texture, bool add)
+    {
+        var editor = _editor;
+        var mats = MaterialsOfGraph(graphPath, out string? problem);
+        if (editor is null || mats.Count == 0) return (0, problem is null ? "No material of the open Material Editor document is assigned to this graph." : "(" + problem + ")");
+        var commands = new List<IEditorCommand>();
+        foreach (var mb in mats)
+        {
+            var step = add ? mb.AddGraphTextureStep(texture) : mb.RemoveGraphTextureStep(texture.Name);
+            if (step is null) continue;
+            commands.Add(step);
+            SyncRows(editor, mb);
+        }
+        if (commands.Count > 0)
+        {
+            string name = (add ? "Add texture " : "Remove texture ") + texture.Name;
+            editor.UndoService?.PushApplied(commands.Count == 1 ? commands[0] : new CompositeCommand(name, commands, editor.DocContext));
+            editor.NotifyChanged();
+        }
+        return (commands.Count, "");
+    }
 }

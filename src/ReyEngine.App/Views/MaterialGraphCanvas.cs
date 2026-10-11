@@ -615,6 +615,7 @@ public sealed partial class MaterialGraphCanvas : Control
     {
         var lines = new List<string> { $"{n.Title}: {p.Name}" };
         if (p.Detail.Length > 0) lines.Add(p.Detail);
+        if (p.IgnoredConstant.Length > 0) lines.Add($"linked: constant {p.IgnoredConstant} ignored");
         if (n.Kind == GraphNodeKind.Shader && p.IsInput && p.Key.Length > 0 && p.Kind != GraphPinKind.Bool)
             lines.Add(p.Linked ? "Drag the end to move it, off a pin to disconnect. Alt+click breaks it." : "Not connected: the shader default applies. Right-click to create one here.");
         else if (!p.IsInput && n.Kind is GraphNodeKind.Texture or GraphNodeKind.Scalar or GraphNodeKind.Vector or GraphNodeKind.Color)
@@ -1008,6 +1009,18 @@ public sealed partial class MaterialGraphCanvas : Control
                 var df = Text(detailText, 9.5, attr && pin.Shaded ? pal.TextBright : pal.TextDim, maxWidth: n.Width * 0.5);
                 detailW = df.Width;
                 ctx.DrawText(df, new Point(n.Right - df.Width - 8, py - df.Height / 2));
+            }
+            if (pin.IgnoredConstant.Length > 0)
+            {
+                // M836: a wired pin's own constant is ignored: shown dim and struck through, left of the type
+                var gf = Text(pin.IgnoredConstant, 9, pal.TextDim, maxWidth: n.Width * 0.3);
+                double gx = n.Right - detailW - 8 - (detailW > 0 ? 6 : 0) - gf.Width;
+                using (ctx.PushOpacity(0.5))
+                {
+                    ctx.DrawText(gf, new Point(gx, py - gf.Height / 2));
+                    ctx.DrawLine(new Pen(pal.TextDim, 1), new Point(gx, py), new Point(gx + gf.Width, py));
+                }
+                detailW += gf.Width + 6;
             }
             ctx.DrawText(Text(pin.Name, 10, nameBrush, maxWidth: n.Width - 24 - detailW), new Point(n.X + 10, py - 7));
         }

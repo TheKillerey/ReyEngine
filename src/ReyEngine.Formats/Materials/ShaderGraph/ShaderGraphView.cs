@@ -44,6 +44,7 @@ public static class SgGraphView
                     inputs.Add(new GraphPin
                     {
                         Name = pd.Name, IsInput = true, Row = i, Linked = linked, Detail = detail,
+                        IgnoredConstant = linked && n.Props.TryGetValue(pd.Name, out var ignored) ? ignored.Trim() : "",
                         Kind = pd.Name == SgCatalog.BaseColorPin ? GraphPinKind.Color : KindOf(pd.Fixed > 0 ? pd.Fixed : 1),
                         Components = pd.Fixed,
                     });

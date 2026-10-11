@@ -14,6 +14,7 @@ using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Shaders;
 using ReyEngine.Formats.Vfx;
+using ReyEngine.Formats.Meta;
 using ReyEngine.App.Services;
 using ReyEngine.Rendering;
 using ReyEngine.Rendering.D3D11;
@@ -1395,7 +1396,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             if (_renderer.HasCachedTexture(key)) continue;      // already on the GPU from a previous load
             try
             {
-                var data = _readAsset!(HashAlgorithms.WadPath(key));
+                var data = _readAsset!(BinTexturePath.HashOfReference(key));
                 if (data is { Length: > 0 }) _preDecoded[key] = TextureDecoder.Decode(data);
             }
             catch { /* reported per material by the binding path below */ }
@@ -1583,7 +1584,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                     if (_preDecoded.TryGetValue(key, out var ready)) img = ready;
                     else
                     {
-                        var data = _readAsset!(HashAlgorithms.WadPath(key));
+                        var data = _readAsset!(BinTexturePath.HashOfReference(key));
                         if (data is null || data.Length == 0)
                         { sb.AppendLine($"      texture NOT FOUND  {slot.Path}"); texMissing++; continue; }
                         img = TextureDecoder.Decode(data);
@@ -1608,7 +1609,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 {
                     try
                     {
-                        byte[]? lmData = _preDecoded.ContainsKey(lmKey) ? null : _readAsset!(HashAlgorithms.WadPath(lmKey));
+                        byte[]? lmData = _preDecoded.ContainsKey(lmKey) ? null : _readAsset!(BinTexturePath.HashOfReference(lmKey));
                         if (_preDecoded.TryGetValue(lmKey, out var lmReady) || lmData is { Length: > 0 })
                         {
                             var lmImg = lmReady ?? TextureDecoder.Decode(lmData!);
@@ -1795,7 +1796,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         if (SelectedParticleSystem is null || _cache is null || _readAsset is null) return;
 
         _playback = new D3D11ParticlePlayback(_renderer, _cache,
-            path => { try { return _readAsset(HashAlgorithms.WadPath(path)); } catch { return null; } });
+            path => { try { return _readAsset(BinTexturePath.HashOfReference(path)); } catch { return null; } });
 
         if (!_playback.Load(SelectedParticleSystem.Def, out var err))
         {
@@ -1924,7 +1925,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
 
                 try
                 {
-                    var data = _readAsset(HashAlgorithms.WadPath(path.ToLowerInvariant()));
+                    var data = _readAsset(BinTexturePath.HashOfReference(path.ToLowerInvariant()));
                     if (data is null || data.Length == 0)
                     {
                         row.Source = $"shader default missing: {path}";

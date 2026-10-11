@@ -1034,7 +1034,9 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
     /// <summary>M835: the custom textures of the assigned graph.</summary>
     public ObservableCollection<GraphTextureRow> GraphTextures { get; } = new();
-    [ObservableProperty] private bool _hasGraphTextures;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasNoGraphTextures))] private bool _hasGraphTextures;
+    /// <summary>M836: the GRAPH TEXTURES header is always shown; this is its "none" line.</summary>
+    public bool HasNoGraphTextures => !HasGraphTextures;
 
     /// <summary>M835: write one of the graph's custom textures into this material as a samplerValues entry named like the texture, pointing at the graph's default image
     /// (the form the bin already uses for texturePath). One undo step.</summary>
@@ -1215,6 +1217,24 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
 
     /// <summary>Add the samplerValues entry of a graph's custom texture: a clone of the material's own DiffuseTexture entry (the shape test7 proved in game; the first sampler when it has none),
     /// pointing at the graph's default image. Null when the entry cannot be made.</summary>
+    /// <summary>M836: add a custom texture of the graph to this material as one step of a larger undo step (the caller pushes it). Null when the material already has it
+    /// or has no sampler to copy the layout from.</summary>
+    internal IEditorCommand? AddGraphTextureStep(SgCustomTexture gt)
+    {
+        if (Owner is null || Model.Slots.Any(s => s.SamplerName == gt.Name)) return null;
+        var slot = AddGraphTextureSlot(gt);
+        if (slot is null) { Owner.Warn?.Invoke($"{Model.Name}: the texture '{gt.Name}' could not be added (the material has no sampler to copy the layout from)."); return null; }
+        return new SamplerAddRemoveCommand(Owner.DocContext, Model, slot, isAdd: true, (s, present) => { OnSamplerPresenceChanged(s, present); foreach (var r in GraphTextures) r.Refresh(); });
+    }
+
+    /// <summary>M836: the opposite step (the graph's undo of "+ New texture"): drop the sampler named <paramref name="name"/> again.</summary>
+    internal IEditorCommand? RemoveGraphTextureStep(string name)
+    {
+        if (Owner is null || Model.Slots.FirstOrDefault(s => s.SamplerName == name) is not { } slot || !Model.RemoveSampler(slot)) return null;
+        Slots.Remove(Slots.FirstOrDefault(x => ReferenceEquals(x.Model, slot))!);
+        return new SamplerAddRemoveCommand(Owner.DocContext, Model, slot, isAdd: false, (s, present) => { OnSamplerPresenceChanged(s, present); foreach (var r in GraphTextures) r.Refresh(); });
+    }
+
     private TextureSlot? AddGraphTextureSlot(SgCustomTexture gt)
     {
         string path = gt.NormalizedPath.Length > 0 ? gt.NormalizedPath : (Model.Diffuse?.Path ?? "");

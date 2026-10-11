@@ -22,13 +22,26 @@ public sealed partial class SgPropRow : ObservableObject
     private bool _syncing;
 
     public SgPropRow(ShaderGraphViewModel owner, string nodeId, string key, string label, string text, string hint, IReadOnlyList<string>? choices = null,
-        Func<string, bool>? commit = null, bool multiline = false, int colorComponents = 0)
+        Func<string, bool>? commit = null, bool multiline = false, int colorComponents = 0, string? actionLabel = null, Action? action = null, bool overridden = false)
     {
+        IsOverridden = overridden;
+        ActionLabel = actionLabel ?? ""; _action = action;
         _owner = owner; _nodeId = nodeId; _key = key; Label = label; _text = _committed = text; Hint = hint;
         Choices = choices ?? Array.Empty<string>();
         _commit = commit; IsMultiline = multiline; ColorComponents = colorComponents;
         if (colorComponents > 0) { _syncing = true; _colorValue = SgColors.FromText(text); _syncing = false; }
     }
+
+    private readonly Action? _action;
+
+    /// <summary>M836: a wired pin's stored constant: shown greyed, the wire decides.</summary>
+    public bool IsOverridden { get; }
+    public double RowOpacity => IsOverridden ? 0.5 : 1.0;
+
+    /// <summary>M836: a button beside the row (the Texture row's "New texture"). Empty label = no button.</summary>
+    public string ActionLabel { get; }
+    public bool HasAction => _action is not null && ActionLabel.Length > 0;
+    [RelayCommand] private void RunAction() => _action?.Invoke();
 
     /// <summary>M834: a multi-line box (the Custom node's HLSL). Enter is a new line; leaving the box, or Ctrl+Enter, applies it.</summary>
     public bool HasAlpha => ColorComponents == 4;
@@ -301,6 +314,9 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     /// <summary>M835: the host renames a texture in the materials of the graph (their samplerValues entries). Arguments: graph file path, old name, new name.</summary>
     public Func<string?, string, string, (int Renamed, string Note)>? RenameTextureInMaterials { get; set; }
 
+    /// <summary>M836: the host adds (or, on undo, removes) a new custom texture in the materials assigned to this graph. Arguments: graph file path, the texture, add?</summary>
+    public Func<string?, SgCustomTexture, bool, (int Changed, string Note)>? AddTextureToMaterials { get; set; }
+
     /// <summary>M835: checks that a default texture path names an asset the project can read (the host knows the mounts). Null = unchecked.</summary>
     public Func<string, bool>? TextureExists { get; set; }
     public bool NoParamRows => ParamRows.Count == 0;
@@ -529,25 +545,27 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         private readonly ShaderGraphDocument _before, _after;
         private readonly (string From, string To)? _rename;
         private readonly bool _textures;
-        public SnapshotCommand(ShaderGraphViewModel owner, string name, ShaderGraphDocument before, ShaderGraphDocument after, object context, (string From, string To)? rename, bool textures)
-        { _owner = owner; Name = name; _before = before; _after = after; Context = context; _rename = rename; _textures = textures; }
+        private readonly SgCustomTexture? _added;
+        public SnapshotCommand(ShaderGraphViewModel owner, string name, ShaderGraphDocument before, ShaderGraphDocument after, object context, (string From, string To)? rename, bool textures, SgCustomTexture? added = null)
+        { _owner = owner; Name = name; _before = before; _after = after; Context = context; _rename = rename; _textures = textures; _added = added; }
         public string Name { get; }
         public object? Context { get; }
-        public void Execute() { _owner.Restore(_after); if (_rename is { } r) _owner.FollowRename(r.From, r.To, _textures); }
-        public void Undo() { _owner.Restore(_before); if (_rename is { } r) _owner.FollowRename(r.To, r.From, _textures); }
+        public void Execute() { _owner.Restore(_after); if (_rename is { } r) _owner.FollowRename(r.From, r.To, _textures); if (_added is not null) _owner.FollowTextureAdd(_added, true); }
+        public void Undo() { _owner.Restore(_before); if (_rename is { } r) _owner.FollowRename(r.To, r.From, _textures); if (_added is not null) _owner.FollowTextureAdd(_added, false); }
         public bool CanMergeWith(IEditorCommand next) => false;
         public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
     }
 
     /// <summary>Apply an edit as one undo step: <paramref name="edit"/> changes a COPY of the document; the step swaps the before and after snapshots.</summary>
-    private bool Do(string name, Action<ShaderGraphDocument> edit, (string From, string To)? rename = null, bool textures = false)
+    private bool Do(string name, Action<ShaderGraphDocument> edit, (string From, string To)? rename = null, bool textures = false, string? addedTexture = null)
     {
         if (_doc is null) return false;
         var before = _doc.Clone();
         var after = _doc.Clone();
         edit(after);
         if (Same(before, after)) return false;
-        var cmd = new SnapshotCommand(this, name, before, after, _context, rename, textures);
+        var added = addedTexture is null ? null : after.FindTexture(addedTexture)?.Clone();
+        var cmd = new SnapshotCommand(this, name, before, after, _context, rename, textures, added);
         _undo.Do(cmd);
         AfterEdit(name);
         return true;
@@ -578,6 +596,15 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     }
 
     private string _renameNote = "";
+
+    /// <summary>M836: a texture created in the graph (or its undo) reaches the materials that name this graph, through the host.</summary>
+    internal void FollowTextureAdd(SgCustomTexture texture, bool add)
+    {
+        (int Changed, string Note) r = (0, "");
+        try { r = AddTextureToMaterials?.Invoke(FilePath, texture, add) ?? (0, ""); }
+        catch (Exception ex) { _renameNote = $" (the materials could NOT follow: {ex.Message})"; return; }
+        _renameNote = r.Changed > 0 ? $" ({r.Changed} material{(r.Changed == 1 ? "" : "s")} {(add ? "got" : "lost")} the '{texture.Name}' sampler in the Material Editor; undo it there too)" : "";
+    }
 
     /// <summary>A rename (or its undo) reaches the materials that name this graph, through the host.</summary>
     internal void FollowRename(string from, string to, bool texture = false)
@@ -768,6 +795,44 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand] private void AddTextureParameter() => AddTexture();
+
+    /// <summary>The choice at the end of a Texture Sample's Texture list that makes a new custom texture.</summary>
+    public const string NewTextureChoice = "+ New texture...";
+
+    /// <summary>A valid, unused custom texture name from a node's label ("Glow texture" becomes GlowTexture); "CustomTexture" when the label gives nothing usable.</summary>
+    public string TextureNameFromLabel(string label, ShaderGraphDocument d)
+    {
+        var sb = new System.Text.StringBuilder();
+        bool up = true;
+        foreach (char c in label ?? "")
+        {
+            if (char.IsAsciiLetterOrDigit(c)) { sb.Append(up ? char.ToUpperInvariant(c) : c); up = false; }
+            else up = true;
+        }
+        while (sb.Length > 0 && char.IsAsciiDigit(sb[0])) sb.Remove(0, 1);
+        if (sb.Length > 0) sb[0] = char.ToUpperInvariant(sb[0]);
+        if (sb.Length > SgNames.MaxParamName - 4) sb.Length = SgNames.MaxParamName - 4;
+        string name = sb.Length == 0 ? "CustomTexture" : sb.ToString();
+        string unique = SgNames.UniqueTextureName(name, d, _base);
+        return SgNames.TextureProblem(unique, d, _base) is null ? unique : SgNames.UniqueTextureName("CustomTexture", d, _base);
+    }
+
+    /// <summary>
+    /// M836: "+ New texture..." on a Texture Sample node: a custom texture named after the node's label (made valid and unique), selected on the node, and added to every
+    /// material assigned to this graph. ONE undo step on the graph's stack, and ONE on the Material Editor's (undoing this step removes the samplers again).
+    /// </summary>
+    public string? NewTextureForNode(string nodeId)
+    {
+        if (_doc is null || _doc.Find(nodeId) is not { Type: "TextureSample" } n) return null;
+        if (_doc.Textures.Count >= ShaderGraphDocument.MaxCustomTextures) { Status = $"A graph has at most {ShaderGraphDocument.MaxCustomTextures} custom textures."; return null; }
+        string tn = TextureNameFromLabel(n.Label, _doc);
+        bool ok = Do("New texture " + tn, d =>
+        {
+            d.Textures.Add(new SgCustomTexture { Name = tn });
+            d.Find(nodeId)!.Props["texture"] = tn;
+        }, addedTexture: tn);
+        return ok ? tn : null;
+    }
 
     /// <summary>Rename a custom texture: every Texture Sample that reads it follows, and the materials assigned to this graph follow through the host (their samplerValues entry).</summary>
     public bool RenameTexture(string oldName, string newName)
@@ -1157,8 +1222,17 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         switch (n.Type)
         {
             case "TextureSample":
-                PropRows.Add(new SgPropRow(this, id, "texture", "Texture", n.Prop("texture"), "A texture the base shader declares in shaders.bin, or one of this graph's custom textures.",
-                    (_base?.Textures.Select(t => t.Name) ?? Enumerable.Empty<string>()).Concat(_doc.Textures.Select(t => t.Name)).ToList()));
+            {
+                string sampled = n.Prop("texture");
+                string textureHint = "A texture the base shader declares in shaders.bin, or one of this graph's custom textures. \"" + NewTextureChoice + "\" makes a new custom texture named after this node's label.";
+                // a label is only a name: a node called GlowTexture that samples DiffuseTexture is the usual mix-up
+                if (n.Label.Length > 0 && !string.Equals(n.Label, sampled, StringComparison.OrdinalIgnoreCase))
+                    textureHint = $"This node samples {sampled}, not \"{n.Label}\": a label is only a name. " + textureHint;
+                PropRows.Add(new SgPropRow(this, id, "texture", "Texture", sampled, textureHint,
+                    (_base?.Textures.Select(t => t.Name) ?? Enumerable.Empty<string>()).Concat(_doc.Textures.Select(t => t.Name)).Append(NewTextureChoice).ToList(),
+                    t => t == NewTextureChoice ? NewTextureForNode(id) is not null : SetProp(id, "texture", t),
+                    actionLabel: "New texture", action: () => NewTextureForNode(id)));
+            }
                 if (_doc.FindTexture(n.Prop("texture")) is { } ct)
                 {
                     string cname = ct.Name;
@@ -1203,8 +1277,16 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
                 break;
         }
         foreach (var pin in def.Inputs)
+        {
             if (_doc.LinkInto(id, pin.Name) is null && !SgCatalog.IsUvPin(n, pin) && !SgCatalog.IsTimePin(n, pin))
                 PropRows.Add(new SgPropRow(this, id, pin.Name, pin.Name + " (not wired)", SgHlsl.Float(SgCatalog.PinDefault(n, pin)), "The value used while nothing is wired here."));
+            else if (_doc.LinkInto(id, pin.Name) is not null && n.Props.ContainsKey(pin.Name))
+            {
+                // M836: the wire wins; the constant the pin still stores does nothing (the generated shader reads the wire)
+                string stored = n.Props[pin.Name].Trim();
+                PropRows.Add(new SgPropRow(this, id, pin.Name, pin.Name + " (wired)", stored, $"linked: constant {stored} ignored. Unwire the pin to use the constant again.", overridden: true));
+            }
+        }
     }
 
     // ============================================================================== compile

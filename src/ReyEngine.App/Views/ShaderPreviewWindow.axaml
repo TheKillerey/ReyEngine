@@ -398,7 +398,7 @@
                   <ItemsControl ItemsSource="{Binding ShaderGraph.PropRows}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate x:DataType="vm:SgPropRow">
-                        <StackPanel Spacing="2" Margin="0,3">
+                        <StackPanel Spacing="2" Margin="0,3" Opacity="{Binding RowOpacity}">
                           <TextBlock Text="{Binding Label}" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource ReyTextBrush}" />
                           <TextBox Text="{Binding Text}" FontSize="11" FontFamily="Consolas" IsVisible="{Binding ShowsTextBox}" LostFocus="OnEditLostFocus">
                             <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitCommand}" /></TextBox.KeyBindings>
@@ -408,8 +408,11 @@
                             <TextBox.KeyBindings><KeyBinding Gesture="Ctrl+Enter" Command="{Binding CommitCommand}" /></TextBox.KeyBindings>
                           </TextBox>
                           <ColorPicker Color="{Binding ColorValue, Mode=TwoWay}" IsVisible="{Binding IsColor}" IsAlphaEnabled="{Binding HasAlpha}" IsAlphaVisible="{Binding HasAlpha}" HorizontalAlignment="Left" />
-                          <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Text}" FontSize="11" IsVisible="{Binding HasChoices}"
-                                    HorizontalAlignment="Stretch" />
+                          <DockPanel IsVisible="{Binding HasChoices}">
+                            <Button DockPanel.Dock="Right" Classes="tool" Content="{Binding ActionLabel}" Command="{Binding RunActionCommand}" IsVisible="{Binding HasAction}"
+                                    FontSize="10" Margin="4,0,0,0" />
+                            <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Text}" FontSize="11" HorizontalAlignment="Stretch" />
+                          </DockPanel>
                           <TextBlock Text="{Binding Hint}" FontSize="9.5" Opacity="0.55" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
                         </StackPanel>
                       </DataTemplate>
