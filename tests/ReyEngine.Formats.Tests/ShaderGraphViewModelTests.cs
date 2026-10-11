@@ -1,4 +1,5 @@
 using ReyEngine.App.ViewModels;
+using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Materials.Graph;
 using ReyEngine.Formats.Materials.ShaderGraph;
 using ReyEngine.Rendering.D3D11;
@@ -347,5 +348,90 @@ public sealed class ShaderGraphViewModelTests : IDisposable
         vm.Close();
         Assert.Equal("", vm.Status);
         Assert.False(vm.Compiling);
+    }
+
+    // ================================================================================= M837
+
+    [Fact]
+    public void The_window_toolbar_counts_the_open_Shader_Graph_and_follows_its_edits_and_closing()
+    {
+        var vm = new ShaderPreviewViewModel("", null);
+        vm.ShaderGraph.BaseResolver = shader => SgBase.IsSupported(shader) ? (ShaderGraphTests.TestBase(), "") : (null, "not a supported base");
+        vm.ShaderGraph.CompileDelay = TimeSpan.Zero;
+        var changed = new List<string?>();
+        vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        Assert.Equal(vm.MaterialGraph.Summary, vm.ToolbarSummary);                 // no Shader Graph: the material graph's
+        Assert.True(vm.ShaderGraph.NewFromBase(Flat, out string error), error);
+        var doc = vm.ShaderGraph.Document!;
+        Assert.Equal($"{doc.Nodes.Count} nodes, {doc.Links.Count} wires", vm.ToolbarSummary);
+        Assert.Contains(nameof(ShaderPreviewViewModel.ToolbarSummary), changed);
+
+        changed.Clear();
+        Assert.NotNull(vm.ShaderGraph.AddNode(Entry(vm.ShaderGraph, "Scalar Parameter (new, custom)"), 0, 0));
+        Assert.Equal($"{vm.ShaderGraph.Document!.Nodes.Count} nodes, {vm.ShaderGraph.Document.Links.Count} wires", vm.ToolbarSummary);
+        Assert.Contains(nameof(ShaderPreviewViewModel.ToolbarSummary), changed);   // the toolbar is told on each edit
+        int withNode = vm.ShaderGraph.Document.Nodes.Count;
+        Assert.True(vm.ShaderGraph.Undo());
+        Assert.Equal(withNode - 1, vm.ShaderGraph.Document!.Nodes.Count);
+        Assert.StartsWith($"{withNode - 1} nodes", vm.ToolbarSummary);
+
+        vm.ShaderGraph.Close();
+        Assert.Equal(vm.MaterialGraph.Summary, vm.ToolbarSummary);
+    }
+
+    [Fact]
+    public void The_toolbar_binds_the_active_graphs_summary_not_the_material_graphs()
+    {
+        string? root = TestRunIsolation.RepoRoot();
+        string? path = root is null ? null : Path.Combine(root, "src", "ReyEngine.App", "Views", "ShaderPreviewWindow.axaml");
+        if (path is null || !File.Exists(path)) return;
+        string markup = File.ReadAllText(path);
+        Assert.Contains("Text=\"{Binding ToolbarSummary}\"", markup);
+        Assert.DoesNotContain("{Binding MaterialGraph.Summary}", markup);
+        Assert.NotNull(typeof(ShaderPreviewViewModel).GetProperty("ToolbarSummary"));
+    }
+
+    [Fact]
+    public async Task A_material_is_assigned_to_the_open_graph_only_when_its_macro_names_that_graphs_number()
+    {
+        var vm = new ShaderPreviewViewModel("", null, projectRoot: () => _root);
+        vm.ShaderGraph.BaseResolver = shader => SgBase.IsSupported(shader) ? (ShaderGraphTests.TestBase(), "") : (null, "not a supported base");
+        vm.ShaderGraph.CompileDelay = TimeSpan.Zero;
+        Assert.True(vm.ShaderGraph.NewFromBase(Flat, out string error, "AuthoringA"), error);
+        Assert.True(await vm.ShaderGraph.SaveAsync());
+        int number = ShaderGraphRegistry.NumberFor(_root, "AuthoringA", Flat);
+
+        var material = MaterialDocument.Parse(MaterialBytes(), n => new[] { "StaticMaterialDef", Flat }.FirstOrDefault(x => ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(x) == n)).Materials.Single();
+        Assert.False(vm.IsAssignedToOpenGraph(material));                          // no macro: the graph's defaults stand in
+        MacroPresenceCommand.Write(material, SgShip.Macro, number.ToString());
+        Assert.True(vm.IsAssignedToOpenGraph(material));                           // assigned: the game-accurate zero
+        MacroPresenceCommand.Write(material, SgShip.Macro, (number + 1).ToString());
+        Assert.False(vm.IsAssignedToOpenGraph(material));                          // another graph's number
+        vm.ShaderGraph.Close();
+        MacroPresenceCommand.Write(material, SgShip.Macro, number.ToString());
+        Assert.False(vm.IsAssignedToOpenGraph(material));                          // no graph open
+    }
+
+    private static byte[] MaterialBytes()
+    {
+        uint H(string s) => ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(s);
+        var props = new List<LeagueToolkit.Core.Meta.BinTreeProperty>
+        {
+            new LeagueToolkit.Core.Meta.Properties.BinTreeString(H("name"), "Mat"),
+            new LeagueToolkit.Core.Meta.Properties.BinTreeContainer(H("techniques"), LeagueToolkit.Core.Meta.BinPropertyType.Embedded, new LeagueToolkit.Core.Meta.BinTreeProperty[]
+            {
+                new LeagueToolkit.Core.Meta.Properties.BinTreeEmbedded(0, H("StaticMaterialTechniqueDef"), new LeagueToolkit.Core.Meta.BinTreeProperty[]
+                {
+                    new LeagueToolkit.Core.Meta.Properties.BinTreeContainer(H("passes"), LeagueToolkit.Core.Meta.BinPropertyType.Embedded, new LeagueToolkit.Core.Meta.BinTreeProperty[]
+                    {
+                        new LeagueToolkit.Core.Meta.Properties.BinTreeEmbedded(0, H("StaticMaterialPassDef"), new LeagueToolkit.Core.Meta.BinTreeProperty[] { new LeagueToolkit.Core.Meta.Properties.BinTreeObjectLink(H("shader"), H(Flat)) }),
+                    }),
+                }),
+            }),
+        };
+        using var ms = new MemoryStream();
+        new LeagueToolkit.Core.Meta.BinTree(new[] { new LeagueToolkit.Core.Meta.BinTreeObject(H("Mat"), H("StaticMaterialDef"), props) }, Array.Empty<string>()).Write(ms);
+        return ms.ToArray();
     }
 }

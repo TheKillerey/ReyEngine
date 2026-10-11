@@ -286,6 +286,9 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
 
     public bool IsOpen => _doc is not null;
     public ShaderGraphDocument? Document => _doc;
+
+    /// <summary>M837: "N nodes, M wires" of the OPEN Shader Graph (the window's toolbar showed the material graph's while this was active).</summary>
+    public string Summary => _doc is null ? "" : $"{_doc.Nodes.Count} nodes, {_doc.Links.Count} wires";
     public SgBase? Base => _base;
     public SgAnalysis? Analysis => _analysis;
     public SgBuild? LastBuild => _build;
@@ -379,7 +382,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         Graph = null; SelectedNodeId = null; SelectedCommentId = null; GraphName = ""; BaseShaderName = ""; Hlsl = ""; HlslNote = "No Shader Graph is open.";
         PropRows.Clear(); ParamRows.Clear(); TextureRows.Clear(); DiagnosticRows.Clear(); CompileState = "";
         ReleaseLive(closedPath);
-        OnPropertyChanged(nameof(IsOpen));
+        OnPropertyChanged(nameof(IsOpen)); OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo));
         StateChanged?.Invoke();
     }
@@ -469,7 +472,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         GraphName = doc.Name; BaseShaderName = doc.BaseShader;
         SelectedNodeId = null; SelectedCommentId = null;
         Hlsl = ""; HlslNote = "Compiling...";
-        OnPropertyChanged(nameof(IsOpen)); OnPropertyChanged(nameof(Palette));
+        OnPropertyChanged(nameof(IsOpen)); OnPropertyChanged(nameof(Palette)); OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo));
         Reanalyse();
         RequestCompile(immediate: true);
@@ -622,6 +625,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     {
         _editVersion++;
         IsDirty = true;
+        OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo));
         if (SelectedNodeId is not null && _doc!.Find(SelectedNodeId) is null) SelectedNodeId = null;
         if (SelectedCommentId is not null && _doc!.FindComment(SelectedCommentId) is null) SelectedCommentId = null;

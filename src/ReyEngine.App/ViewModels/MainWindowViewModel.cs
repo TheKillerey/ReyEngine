@@ -8397,6 +8397,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var bytes = editor.Serialize();
         if (bytes is null) return;
+        byte[] serialized = bytes;   // M837: what the next save's merge must diff from
         bytes = RebaseOntoCurrent(binEntry, bytes, editor.BaseBytes, "Material");   // M823: a bin the mod's GameData changes is rebased by its save instead (below), after the preview has settled
         try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
         catch (Exception ex) { _log.Error("Material", $"Edited material .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
@@ -8405,6 +8406,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // stale shadow override dissolves); only wad-backed assets go to the override workspace.
         if (!await SaveEditorBinBytesAsync(binEntry, bytes, editor.BaseBytes, "Material")) return;
         if (TakeServedAfterSave(bytes) is { } served) editor.RebaseTo(served);   // M823: a document kept as it was stands for the bin as served now
+        else if (!IsGameDataTarget(binEntry.PathHash)) editor.NoteSaved(serialized);   // M837: the base moves to what this save wrote of the editor, or a removal after an earlier save is merged back in
         applyToViewport();
         UndoService.MarkSaved();
     }

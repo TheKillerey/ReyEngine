@@ -39,7 +39,7 @@
                   ToolTip.Tip="Only materials with unsaved edits. Applied when you toggle it — the list is not re-filtered while you type, so a material does not jump out from under you as you edit it." />
         <Ellipse Width="7" Height="7" Fill="{DynamicResource ReyAccent2Brush}" VerticalAlignment="Center" IsVisible="{Binding IsDirty}" ToolTip.Tip="Unsaved edits" />
       </StackPanel>
-      <StackPanel Orientation="Horizontal" Spacing="4">
+      <WrapPanel Orientation="Horizontal" ItemSpacing="4" LineSpacing="4">
         <Button Classes="tool" Content="Apply (preview)" Command="{Binding ApplyCommand}" />
         <CheckBox Content="Live" IsChecked="{Binding LivePreview}" FontSize="11" VerticalAlignment="Center"
                   ToolTip.Tip="Push every edit to the viewport automatically (debounced)" />
@@ -47,7 +47,7 @@
         <Button Classes="tool" Content="Revert All" Command="{Binding RevertAllCommand}" />
         <Button Classes="tool" Content="Material Graph" Command="{Binding ShowMaterialGraphCommand}"
                 ToolTip.Tip="Open the selected material as a node graph: its textures, parameters and switches wired into the shader. The graph edits THIS editor's material (values, textures, switches, cull and blend), so both views always agree; Save To Override here or in the graph writes the same file." />
-      </StackPanel>
+      </WrapPanel>
 
       <!-- M351e: the selector is a ComboBox ABOVE the detail (user feedback on the
            M351b side list), and the detail is flat sections in the mockup order -

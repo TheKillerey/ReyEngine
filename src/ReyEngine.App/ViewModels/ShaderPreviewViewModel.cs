@@ -921,9 +921,17 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         sb.AppendLine();
 
         // M835: the editor is not kinder than the game: a custom texture of the graph that the material does not carry is left unbound (the game binds none)
+        // M837: while authoring (the material is NOT assigned to the open graph) the preview is not the game: the graph's own defaults fill in what the material lacks
+        bool authoring = ShaderGraph.IsOpen && ShaderGraph.PreviewEnabled && !IsAssignedToOpenGraph(b);
+        bool usedDefaults = false;
         foreach (var gt in GraphCustomTextures())
             if (!boundTargets.Contains(gt) && declared.Contains(gt))
-                sb.AppendLine($"   .  {gt,-28} not on the material: the game binds no texture");
+            {
+                var def = authoring ? GraphDefaultTextures().FirstOrDefault(d => d.Target.Equals(gt, StringComparison.OrdinalIgnoreCase)) : default;
+                if (def.Path is { Length: > 0 } && BindGraphTexture(gt, def.Path, out _))
+                { sb.AppendLine($"   +  {gt,-28} not on the material: the graph's default {def.Path}"); usedDefaults = true; }
+                else sb.AppendLine($"   .  {gt,-28} not on the material: the game binds no texture");
+            }
 
         // ---- parameters into the reflected constants
         sb.AppendLine("PARAMETERS");
@@ -958,8 +966,19 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             if (b.Parameters.Any(p => p.Name.Equals(gname, StringComparison.OrdinalIgnoreCase))) continue;
             var row = Constants.FirstOrDefault(c => c.Name.Equals(gname, StringComparison.OrdinalIgnoreCase));
             if (row is null) continue;
+            if (authoring && ShaderGraph.Document?.FindParam(gname) is { } gp)
+            {
+                row.Value = string.Join(" ", gp.DefaultValues().Take(width).Select(x => x.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                sb.AppendLine($"   +  {gname,-28} not on the material: the graph's default {row.Value}");
+                usedDefaults = true;
+                continue;
+            }
             row.Value = string.Join(" ", Enumerable.Repeat("0", width));
             sb.AppendLine($"   .  {gname,-28} not on the material: the game uses 0");
+        }
+        if (usedDefaults)
+        {
+            GraphPreviewNote = GraphPreviewNote.Length > 0 ? GraphPreviewNote + " (" + AuthoringDefaultsNote + ")" : AuthoringDefaultsNote;
         }
         if (_materialGraph is not null || GraphPreviewNote.Length > 0 && b.Macros.ContainsKey(SgShip.Macro))
         {

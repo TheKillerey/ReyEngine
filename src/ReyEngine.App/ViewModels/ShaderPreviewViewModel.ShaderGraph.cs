@@ -23,6 +23,9 @@ public sealed partial class ShaderPreviewViewModel
     public bool ShaderGraphActive => ShaderGraph.IsOpen;
     public bool MaterialGraphActive => !ShaderGraph.IsOpen;
 
+    /// <summary>M837: the toolbar's "N nodes, M wires" - of the Shader Graph while one is open, else of the material graph.</summary>
+    public string ToolbarSummary => ShaderGraph.IsOpen ? ShaderGraph.Summary : MaterialGraph.Summary;
+
     private readonly Dictionary<string, SgBase> _graphBases = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, SgCompiled> _goodBySignature = new();
     private readonly Dictionary<ulong, ReyEngine.Core.Decoding.TextureImage> _graphTextures = new();
@@ -35,20 +38,26 @@ public sealed partial class ShaderPreviewViewModel
     /// <summary>The line the window shows about what the preview is drawing with.</summary>
     [ObservableProperty] private string _graphPreviewNote = "";
 
+    private Func<string?>? _sgProjectRoot;
+
     private void InitShaderGraph(Func<string?>? projectRoot)
     {
+        _sgProjectRoot = projectRoot;
         ShaderGraph = new ShaderGraphViewModel(projectRoot ?? (() => null))
         {
             BaseResolver = ResolveShaderGraphBase,
             TextureExists = path => { try { return _readAsset?.Invoke(HashAlgorithms.WadPath(path.ToLowerInvariant())) is { Length: > 0 }; } catch { return true; } },
         };
         MaterialGraph.AttachShaderGraph(ShaderGraph);
+        MaterialGraph.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MaterialGraphViewModel.Summary)) OnPropertyChanged(nameof(ToolbarSummary)); };
         ShaderGraph.BuildCompleted += OnShaderGraphBuilt;
         ShaderGraph.PropertyChanged += (_, e) =>
         {
             // a pending "press again to discard" is only good for the graph state it was armed in
             if (e.PropertyName is nameof(ShaderGraphViewModel.IsOpen) or nameof(ShaderGraphViewModel.IsDirty) or nameof(ShaderGraphViewModel.GraphName)) _closeArmed = false;
+            if (e.PropertyName is nameof(ShaderGraphViewModel.Summary)) OnPropertyChanged(nameof(ToolbarSummary));
             if (e.PropertyName != nameof(ShaderGraphViewModel.IsOpen)) return;
+            OnPropertyChanged(nameof(ToolbarSummary));
             OnPropertyChanged(nameof(ShaderGraphActive));
             OnPropertyChanged(nameof(MaterialGraphActive));
             OnPropertyChanged(nameof(CanNewShaderGraph));
@@ -161,6 +170,25 @@ public sealed partial class ShaderPreviewViewModel
         // re-draw the open material with the new pixel shader (never over a loaded scene, like a material edit)
         if (!IsLoaded || SelectedMaterial is not { HasShader: true } || SceneSubmeshes.Count > 0 || _cache is null) return;
         ApplyMaterial();
+    }
+
+    /// <summary>M837: the note the window shows when the previewed material is not assigned to the open Shader Graph and the preview fills in the graph's defaults.</summary>
+    public const string AuthoringDefaultsNote = "preview uses the graph's defaults (material not assigned)";
+
+    /// <summary>M837: whether the previewed material is assigned to the Shader Graph that is OPEN (its REY_GRAPH number is this graph's on this base). A material that is not is previewed with the graph's defaults for the
+    /// custom parameters and textures it lacks; an assigned one keeps the game-accurate zero / no texture. False when no graph is open.</summary>
+    public bool IsAssignedToOpenGraph(MaterialBinding b)
+    {
+        if (!ShaderGraph.IsOpen || ShaderGraph.Base is not { } gb) return false;
+        if (!b.Macros.TryGetValue(SgShip.Macro, out string? value) || !SgShipValidator.TryParseNumber(value, out int n)) return false;
+        try
+        {
+            string? root = _sgProjectRoot?.Invoke();
+            if (string.IsNullOrEmpty(root) || ShaderGraph.FilePath is not { Length: > 0 } file) return false;
+            var entry = ShaderGraphRegistry.FindByFile(root, ShaderGraphRegistry.StemOf(file));
+            return entry is not null && entry.Number == n && SgBase.Normalize(entry.Base) == SgBase.Normalize(gb.Shader);
+        }
+        catch { return false; }
     }
 
     /// <summary>The custom textures with a default image the preview should bind when nothing else does: the open graph's, else the picked material's graph's.</summary>

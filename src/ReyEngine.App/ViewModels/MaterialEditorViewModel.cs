@@ -1973,14 +1973,21 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
     /// Saving then wrote the entire bin from that snapshot and discarded everything else written to the
     /// same file since - the reporter's sun settings, which live in the same materials.bin.</para>
     ///
-    /// <para>Deliberately NOT refreshed on save. Three-way merge needs the base the edits were made
-    /// against; moving it forward to the merge result would make the next save look like it had DELETED
-    /// whatever the merge just brought in.</para>
+    /// <para>After a save it moves forward to what THIS editor wrote (its own serialisation, before the
+    /// merge - see NoteSaved, M837), never to the merge result: the merge result would make the next save
+    /// look like it had DELETED whatever the merge brought in from other editors, while keeping the opening
+    /// snapshot lost deletions - a removal that left a list equal to the opening base was taken for "no
+    /// change" and the file's older value survived.</para>
     /// </summary>
     public byte[]? BaseBytes { get; private set; }
 
     /// <summary>M823: the bin it was parsed from now stands for what the document holds - the edits it has kept are part of it. Told after a save that kept the document as it was (<c>MainWindowViewModel.TakeServedAfterSave</c>): its next save is rebased from here, and the edits kept already are not the mod's changes since. A save that had to merge something in does not call this - see <see cref="BaseBytes"/>.</summary>
     public void RebaseTo(byte[] served) => BaseBytes = served;
+
+    /// <summary>M837: a save wrote this editor's own serialisation (<paramref name="written"/>, taken BEFORE it was rebased onto the file): the next save's three-way merge must diff from it. Left at the opening snapshot, an
+    /// earlier save's content looks like it was already in the file "underneath" the editor, and a later removal of it (an unassigned graph's custom parameter) is read as no change - the merge then keeps it, which
+    /// the export validator blocks. It is the editor's serialisation and not the merged result on purpose: what the merge brought in from elsewhere stays part of the file, never of the editor's own edits.</summary>
+    public void NoteSaved(byte[] written) => BaseBytes = written;
 
     /// <summary>M823: why a save of this editor is refused - the edits of its bin were reverted under it, and what it holds would put them back - or null. Reset by loading the editor again.</summary>
     public string? StaleReason { get; private set; }

@@ -6,6 +6,7 @@ using ReyEngine.Core.Assets;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Meta;
 using ReyEngine.Formats.Materials.Graph;
 using ReyEngine.Formats.Materials.ShaderGraph;
 using ReyEngine.Rendering.D3D11;
@@ -1120,5 +1121,82 @@ public sealed class ShaderGraphCustomizationTests : IDisposable
     {
         Assert.Null(ShaderGraphJson.TryDeserialize(json, out var error));
         Assert.Contains(reason, error);
+    }
+
+    // ================================================================================= M837: a removal survives the save's three-way merge after an earlier save
+
+    /// <summary>One Save To Override exactly as MainWindowViewModel.SaveMaterialOverrideFor does it: serialise, rebase onto the file when it moved from the editor's base, write, move the base.</summary>
+    private static byte[] SaveLikeTheApp(MaterialEditorViewModel editor, byte[] disk, bool moveBase = true)
+    {
+        byte[] serialized = editor.Serialize()!;
+        byte[] written = serialized;
+        if (editor.BaseBytes is { } b && !disk.AsSpan().SequenceEqual(b))
+            written = BinThreeWayMerge.Merge(b, serialized, disk, Names).Merged;
+        _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(written, false));
+        if (moveBase) editor.NoteSaved(serialized);
+        return written;
+    }
+
+    private static string[] ParamNames(byte[] bin) => MaterialDocument.Parse(bin, Names).Materials.Single().Parameters.Select(p => p.Name).ToArray();
+    private static string[] SamplerNames(byte[] bin) => MaterialDocument.Parse(bin, Names).Materials.Single().Slots.Select(p => p.SamplerName).ToArray();
+
+    private async Task<(UndoRedoService Undo, MaterialEditorViewModel Editor, MaterialBindingViewModel Binding, byte[] Disk)> OpenSaved()
+    {
+        await SaveGraphWith("GraphA", ("GlowA", "StripesA"));
+        await SaveGraphWith("GraphB", ("", "BandsB"));                       // like the report's Graph_4: textures only, so paramValues is unchanged against the opening base and ONLY the removal differs
+        var undo = new UndoRedoService();
+        var editor = new MaterialEditorViewModel { UndoService = undo, ProjectRoot = () => _root };
+        byte[] disk = MaterialWithTint();
+        editor.Load(MaterialDocument.Parse(disk, Names), new WadAssetEntry { Path = "data/maps/mapgeometry/map11/x.materials.bin" }, disk);
+        var binding = editor.Materials.Single();
+        binding.RefreshMacroStatus();
+        return (undo, editor, binding, disk);
+    }
+
+    [Fact]
+    public async Task The_chatgpt_sequence_assign_save_unassign_undo_save_switch_save_leaves_only_the_new_graphs_entries()
+    {
+        // Without editor.NoteSaved (SaveLikeTheApp's last step) the base stays the opening snapshot and the LAST save below keeps GlowA: the merge sees no change to paramValues
+        // (the switch to a textures-only graph leaves it equal to the base) and so keeps the file's copy, which still holds GlowA from the first save.
+        const bool moveBase = true;
+        var (undo, editor, binding, disk) = await OpenSaved();
+        var a = binding.GraphChoices.Single(c => c.Stem == "GraphA");
+        var b = binding.GraphChoices.Single(c => c.Stem == "GraphB");
+
+        binding.AssignGraphCommand.Execute(a);
+        disk = SaveLikeTheApp(editor, disk, moveBase);                       // the export saves the material
+        Assert.Contains("GlowA", ParamNames(disk));
+        binding.UnassignGraphCommand.Execute(null);
+        undo.Undo();                                                          // A restored
+        disk = SaveLikeTheApp(editor, disk, moveBase);                       // Save To Override
+        binding.AssignGraphCommand.Execute(b);                                // B directly over A
+        disk = SaveLikeTheApp(editor, disk, moveBase);                       // the export saves again
+
+        var p = ParamNames(disk); var s = SamplerNames(disk);
+        Assert.DoesNotContain("GlowA", p);
+        Assert.DoesNotContain("StripesA", s);
+        Assert.Contains("BandsB", s);
+        Assert.Equal(new[] { "TintColor" }, p);
+    }
+
+    [Fact]
+    public async Task Unassign_and_a_Material_tab_removal_persist_after_an_earlier_save()
+    {
+        var (undo, editor, binding, disk) = await OpenSaved();
+        binding.AssignGraphCommand.Execute(binding.GraphChoices.Single(c => c.Stem == "GraphA"));
+        disk = SaveLikeTheApp(editor, disk);
+        binding.UnassignGraphCommand.Execute(null);
+        disk = SaveLikeTheApp(editor, disk);
+        Assert.DoesNotContain("GlowA", ParamNames(disk));
+        Assert.DoesNotContain("StripesA", SamplerNames(disk));
+
+        // the Material tab: add a parameter, save, remove it, save
+        var extra = binding.Model.AddParameter("ExtraThing", "Vector4")!;
+        editor.IsDirty = true;
+        disk = SaveLikeTheApp(editor, disk);
+        Assert.Contains("ExtraThing", ParamNames(disk));
+        Assert.True(binding.Model.RemoveParameter(extra));
+        disk = SaveLikeTheApp(editor, disk);
+        Assert.DoesNotContain("ExtraThing", ParamNames(disk));
     }
 }

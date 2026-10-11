@@ -141,7 +141,7 @@
                   IsVisible="{Binding ShaderGraphActive}"
                   ToolTip.Tip="Leave the Shader Graph and go back to the material graph (the preview draws Riot's own shader again)." />
         </StackPanel>
-        <TextBlock Grid.Column="5" Text="{Binding MaterialGraph.Summary}" FontSize="11" Opacity="0.7"
+        <TextBlock Grid.Column="5" Text="{Binding ToolbarSummary}" FontSize="11" Opacity="0.7"
                    VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
       </Grid>
     </Border>
