@@ -33,10 +33,11 @@ public static class ShaderGraphShipService
 
     /// <summary>The materials of the staged bins that name a graph. A bin is parsed only when its bytes hold the macro name.</summary>
     public static IReadOnlyList<SgAssignedMaterial> FindAssigned(IEnumerable<string> stagedDirs, Func<uint, string?> resolveBinName, List<string> errors,
-        IReadOnlyDictionary<string, (string Stem, string Base)>? custom = null)
+        IReadOnlyDictionary<string, (string Stem, string Base)>? custom = null, IReadOnlyDictionary<string, (string Stem, string Base)>? customTextures = null)
     {
         var found = new List<SgAssignedMaterial>();
-        var customNeedles = (custom?.Keys ?? Enumerable.Empty<string>()).Select(k => (Name: k, Bytes: Encoding.UTF8.GetBytes(k))).ToList();
+        var customNeedles = (custom?.Keys ?? Enumerable.Empty<string>()).Concat(customTextures?.Keys ?? Enumerable.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(k => (Name: k, Bytes: Encoding.UTF8.GetBytes(k))).ToList();
         foreach (string dir in stagedDirs)
         {
             if (!Directory.Exists(dir)) continue;
@@ -71,6 +72,11 @@ public static class ShaderGraphShipService
                             foreach (var p in m.Parameters)
                                 if (custom.TryGetValue(p.Name, out var info) && SgBase.Normalize(info.Base) == SgBase.Normalize(sh))
                                     errors.Add($"Material '{m.Name}' ({rel}) carries the parameter '{p.Name}', a custom parameter of the Shader Graph '{info.Stem}', but it is not assigned to a graph that declares it, so no shaders.bin declares it and the game stops with \"Missing shader constant\". Remove the parameter from the material, or assign the graph.");
+                        // M835: the same for a custom TEXTURE: a samplerValues entry no definition declares (the graph was unassigned, or the texture renamed or deleted)
+                        if (customTextures is not null && SgBase.IsSupported(sh))
+                            foreach (var sl in m.Slots)
+                                if (customTextures.TryGetValue(sl.SamplerName, out var tinfo) && SgBase.Normalize(tinfo.Base) == SgBase.Normalize(sh))
+                                    errors.Add($"Material '{m.Name}' ({rel}) carries the texture '{sl.SamplerName}', a custom texture of the Shader Graph '{tinfo.Stem}', but it is not assigned to a graph that declares it, so no shaders.bin declares it. Remove the texture entry from the material, or assign the graph.");
                         continue;
                     }
                     found.Add(new SgAssignedMaterial(rel, m.Name, m.RenderShader ?? m.ShaderName, macro.Value, m.Parameters.Select(p => p.Name).ToList(),
@@ -102,13 +108,33 @@ public static class ShaderGraphShipService
         return map;
     }
 
+    /// <summary>M835: every custom TEXTURE name of every Shader Graph file of the project: name -> (graph file stem, base shader).</summary>
+    public static IReadOnlyDictionary<string, (string Stem, string Base)> ProjectCustomTextures(string? projectRoot)
+    {
+        var map = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
+        if (projectRoot is null) return map;
+        string dir = ShaderGraphRegistry.FolderIn(projectRoot);
+        if (!Directory.Exists(dir)) return map;
+        foreach (string file in Directory.EnumerateFiles(dir, "*" + ShaderGraphDocument.FileSuffix))
+        {
+            try
+            {
+                var doc = ShaderGraphJson.TryDeserialize(File.ReadAllText(file), out _);
+                if (doc is null) continue;
+                foreach (var t in doc.Textures) map.TryAdd(t.Name, (ShaderGraphRegistry.StemOf(file), doc.BaseShader));
+            }
+            catch { /* an unreadable graph file declares nothing; the assigned ones are reported by the validator */ }
+        }
+        return map;
+    }
+
     /// <summary>Null when no staged material names a graph (nothing to do). Throws <see cref="InvalidOperationException"/> with every problem
     /// when the export must be blocked.</summary>
     public static ShaderGraphShipResult? Prepare(string? projectRoot, string? gameFinalDir, IReadOnlyList<string> stagedDirs,
-        Func<uint, string?> resolveBinName, IHashResolver? hashes)
+        Func<uint, string?> resolveBinName, IHashResolver? hashes, Func<string, bool>? assetExists = null)
     {
         var errors = new List<string>();
-        var assigned = FindAssigned(stagedDirs, resolveBinName, errors, ProjectCustomParameters(projectRoot));
+        var assigned = FindAssigned(stagedDirs, resolveBinName, errors, ProjectCustomParameters(projectRoot), ProjectCustomTextures(projectRoot));
         if (assigned.Count == 0)
         {
             if (errors.Count > 0) throw new InvalidOperationException(Blocked(errors));
@@ -122,12 +148,12 @@ public static class ShaderGraphShipService
             ?? throw new InvalidOperationException($"Riot's installed shader cache cannot be read ({cacheError}). Refusing to ship a stale shader cache patch.");
         var perms = new ShaderPermutationIndex(gameFinalDir, h => hashes is not null && hashes.TryGetPath(h, out var p) ? p : null);
 
-        try { return PrepareCore(projectRoot, gameFinalDir, stagedDirs, assigned, errors, cache, perms); }
+        try { return PrepareCore(projectRoot, gameFinalDir, stagedDirs, assigned, errors, cache, perms, assetExists); }
         finally { perms.Dispose(); }
     }
 
     private static ShaderGraphShipResult PrepareCore(string projectRoot, string gameFinalDir, IReadOnlyList<string> stagedDirs, IReadOnlyList<SgAssignedMaterial> assigned,
-        List<string> errors, ShaderCacheReader cache, ShaderPermutationIndex perms)
+        List<string> errors, ShaderCacheReader cache, ShaderPermutationIndex perms, Func<string, bool>? assetExists)
     {
         // ---- bases, graphs, material rules
         var bases = new Dictionary<string, SgBase?>(StringComparer.Ordinal);
@@ -155,6 +181,33 @@ public static class ShaderGraphShipService
             if (resolved.Document is not null && b is not null && SgBase.Normalize(resolved.Document.BaseShader) == key)
                 graphs.TryAdd((key, n), (resolved, m.Material));
         }
+        // M835: a custom texture's default image is the link the shipped shaders.bin carries: it must name an asset the game or the project has
+        var archives = new List<ReyEngine.Core.Wad.WadArchive>();
+        bool opened = false;
+        bool Exists(string path)
+        {
+            if (assetExists?.Invoke(path) == true) return true;
+            if (stagedDirs.Any(d => File.Exists(Path.Combine(d, path.Replace('/', Path.DirectorySeparatorChar))))) return true;
+            ulong hash = HashAlgorithms.WadPath(path);
+            if (!opened)
+            {
+                opened = true;
+                // the game's own archives a default image can come from: the top-level ones (Global, DATA, ...) and the maps (not the 170 champions: name those by a project file)
+                foreach (string dir in new[] { gameFinalDir, Path.Combine(gameFinalDir, "Maps", "Shipping") })
+                    if (Directory.Exists(dir))
+                        foreach (string wad in Directory.EnumerateFiles(dir, "*.wad.client"))
+                            try { archives.Add(ReyEngine.Core.Wad.WadArchive.Open(wad)); } catch { /* an archive that does not open names nothing */ }
+            }
+            return archives.Any(a => a.TryGetEntry(hash, out _));
+        }
+        try
+        {
+            foreach (var ((_, n), (g, material)) in graphs)
+                foreach (var t in g.Document!.Textures)
+                    if (t.NormalizedPath.Length > 0 && !Exists(t.NormalizedPath))
+                        errors.Add($"Shader Graph '{g.Entry!.File}' (#{n}, used by '{material}'): the default image of custom texture '{t.Name}' is '{t.NormalizedPath}', which is not an asset of the game or of this project. Fix the path in the graph's texture settings, or clear it.");
+        }
+        finally { foreach (var a in archives) a.Dispose(); }
         if (errors.Count > 0) throw new InvalidOperationException(Blocked(errors));
 
         // ---- compile every graph for every signature
@@ -181,12 +234,18 @@ public static class ShaderGraphShipService
         // ---- M834: custom parameters -> the base shader's declarations in a shipped shaders.bin (Riot's, regenerated from the installed file, never cached)
         var globalFiles = new List<(string, byte[])>();
         var report = new List<string>();
-        var declare = new Dictionary<string, (SgBase Base, Dictionary<string, SgDeclaredParam> Params, List<string> Graphs)>(StringComparer.Ordinal);
+        var declare = new Dictionary<string, (SgBase Base, Dictionary<string, SgDeclaredParam> Params, List<string> Graphs, Dictionary<string, SgDeclaredTexture> Textures)>(StringComparer.Ordinal);
         foreach (var ((key, n), (g, material)) in graphs)
         {
-            if (g.Document!.Params.Count == 0) continue;
-            if (!declare.TryGetValue(key, out var d)) declare[key] = d = (bases[key]!, new Dictionary<string, SgDeclaredParam>(StringComparer.OrdinalIgnoreCase), new List<string>());
+            if (g.Document!.Params.Count == 0 && g.Document.Textures.Count == 0) continue;
+            if (!declare.TryGetValue(key, out var d)) declare[key] = d = (bases[key]!, new Dictionary<string, SgDeclaredParam>(StringComparer.OrdinalIgnoreCase), new List<string>(), new Dictionary<string, SgDeclaredTexture>(StringComparer.OrdinalIgnoreCase));
             d.Graphs.Add($"#{n} {g.Entry!.File}");
+            foreach (var t in SgCustomTextures.Declarations(g.Document))
+            {
+                if (d.Textures.TryGetValue(t.Name, out var otherTex) && (otherTex.Name != t.Name || otherTex.DefaultPath != t.DefaultPath))
+                    errors.Add($"Two Shader Graphs on {d.Base.Shader} declare the custom texture '{t.Name}' differently (name case or default path): rename one.");
+                d.Textures[t.Name] = t;
+            }
             foreach (var p in SgCustomParams.Declarations(g.Document))
             {
                 if (d.Params.TryGetValue(p.Name, out var other))
@@ -214,13 +273,17 @@ public static class ShaderGraphShipService
             foreach (var (_, d) in declare)
             {
                 var add = d.Params.Values.OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
+                var addTex = d.Textures.Values.OrderBy(t => t.Name, StringComparer.Ordinal).ToList();
+                if (addTex.Count > 0 && !SgShip.CustomTexturesProven)
+                    throw new InvalidOperationException(SgShip.CustomTexturesBlocked + ".");
                 byte[] next;
-                try { next = SgShadersBin.Patch(bin, d.Base.Shader, add); }
+                try { next = SgShadersBin.Patch(bin, d.Base.Shader, add, addTex); }
                 catch (InvalidDataException ex) { throw new InvalidOperationException($"The custom parameters of {string.Join(", ", d.Graphs)} cannot be declared in shaders.bin: {ex.Message}"); }
-                var problems = SgShadersBin.Verify(bin, next, d.Base.Shader, add);
+                var problems = SgShadersBin.Verify(bin, next, d.Base.Shader, add, addTex);
                 if (problems.Count > 0) throw new InvalidOperationException("The patched shaders.bin is not Riot's plus the custom parameters, so it is not shipped: " + string.Join("; ", problems));
                 bin = next;
-                report.Add($"Shader Graph: {d.Base.Shader} declares {add.Count} custom parameter(s) [{string.Join(", ", add.Select(p => p.Name + ":" + SgCatalog.TypeName(p.Components)))}] for {string.Join(", ", d.Graphs)} in {SgShadersBin.GamePath}.");
+                report.Add($"Shader Graph: {d.Base.Shader} declares {add.Count} custom parameter(s) [{string.Join(", ", add.Select(p => p.Name + ":" + SgCatalog.TypeName(p.Components)))}]"
+                    + (addTex.Count > 0 ? $" and {addTex.Count} custom texture(s) [{string.Join(", ", addTex.Select(t => t.Name))}]" : "") + $" for {string.Join(", ", d.Graphs)} in {SgShadersBin.GamePath}.");
             }
             globalFiles.Add((SgShadersBin.GamePath, bin));
             report.Add($"Shader Graph: {SgShadersBin.GamePath} {riotBin.Length:n0} -> {bin.Length:n0} bytes (the installed file with only those definitions changed; written to {SgShadersBin.WadName} in the base layer). {SgCustomParams.ShipRisk}.");

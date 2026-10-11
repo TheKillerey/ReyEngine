@@ -117,7 +117,7 @@ public static unsafe class ShaderGraphCompiler
 
         foreach (string t in hlsl.Textures)
         {
-            var decl = b.Texture(t);
+            var decl = b.Texture(t) ?? hlsl.CustomTextures.Where(c => c.Name == t).Select(c => new SgTextureDecl(c.Name)).FirstOrDefault();
             if (decl is null) continue;
             if (!ps.Resources.Any(r => r.Kind == DxbcResourceKind.Texture && r.Name == decl.Resource))
                 bad.Add($"the compiled shader lost the texture {decl.Resource}");
@@ -125,7 +125,7 @@ public static unsafe class ShaderGraphCompiler
                 bad.Add($"the compiled shader lost the sampler {decl.Sampler}");
         }
         foreach (var r in ps.Resources)
-            if (r.Kind == DxbcResourceKind.Texture && b.Textures.All(t => t.Resource != r.Name))
+            if (r.Kind == DxbcResourceKind.Texture && b.Textures.All(t => t.Resource != r.Name) && hlsl.CustomTextures.All(c => c.Resource != r.Name))
                 bad.Add($"the compiled shader binds a texture '{r.Name}' the base shader does not declare");
 
         var frame = ps.ConstantBuffers.FirstOrDefault(c => c.Name == "PerFramePixelCB");

@@ -23,6 +23,14 @@ public static class SgShip
     public const string GeneratedFolder = "ShaderCache.dx11";
     public const string ShadowDefine = "GENERATE_SHADOW_MAP=1";
 
+    /// <summary>
+    /// M835: PROVEN IN GAME by test7 (2026-10-11, the numbered squares): a new entry in the base definition's <c>textures</c> list plus a samplerValues entry on the
+    /// material binds and wraps. While false, an export with a graph that declares a custom texture is BLOCKED by <see cref="SgShipValidator"/> (the single switch).
+    /// </summary>
+    public const bool CustomTexturesProven = true;
+
+    public const string CustomTexturesBlocked = "Custom textures are waiting for in-game test7: a Shader Graph that declares a custom texture cannot be exported yet";
+
     public static bool IsGraphMacro(string name) => name.Equals(Macro, StringComparison.Ordinal);
 
     public static string Sha1Hex(byte[] data) => Convert.ToHexString(SHA1.HashData(data)).ToLowerInvariant();
@@ -269,6 +277,14 @@ public sealed record SgAssignedMaterial(string BinPath, string Material, string?
 /// <summary>A graph resolved for a material: its registry entry, file and document (any of them may be missing).</summary>
 public sealed record SgResolvedGraph(SgNumberEntry? Entry, string? FilePath, ShaderGraphDocument? Document, string? Problem);
 
+/// <summary>M835: what the export needs to know about a graph's custom textures.</summary>
+public static class SgCustomTextures
+{
+    /// <summary>Every custom texture of a graph as the declarations an export adds to its base shader (used or not, like the parameters).</summary>
+    public static IReadOnlyList<SgDeclaredTexture> Declarations(ShaderGraphDocument doc) =>
+        doc.Textures.Select(t => new SgDeclaredTexture(t.Name, t.NormalizedPath)).ToList();
+}
+
 /// <summary>
 /// M833: the export-time rules, as readable messages naming the material and the graph. Every message BLOCKS the export. The compile-time
 /// rules (a graph with errors, a signature mismatch, an undeclared $Globals variable in a compiled shader) are
@@ -302,8 +318,9 @@ public static class SgShipValidator
         int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out number) && number > 0;
 
     /// <summary>Problems of one assigned material against its resolved graph and the base shader. <paramref name="b"/> is null when the base could not be read.</summary>
-    public static IReadOnlyList<string> Validate(SgAssignedMaterial m, SgResolvedGraph graph, SgBase? b)
+    public static IReadOnlyList<string> Validate(SgAssignedMaterial m, SgResolvedGraph graph, SgBase? b, bool? customTexturesProven = null)
     {
+        bool texturesProven = customTexturesProven ?? SgShip.CustomTexturesProven;
         var bad = new List<string>();
         string who = $"Material '{m.Material}' ({m.BinPath})";
         if (!TryParseNumber(m.GraphMacroValue, out int n))
@@ -331,8 +348,17 @@ public static class SgShipValidator
         foreach (var cp in graph.Document.Params)
             if (SgNames.ParameterProblem(cp.Name, graph.Document, b, renaming: cp.Name) is { } why)
                 bad.Add($"Shader Graph {gname} (used by '{m.Material}'): the custom parameter '{cp.Name}' cannot be declared: {why}");
+        // M835: the graph's custom textures. Until the in-game probe (test7) shows the game takes a texture its definition declares, the export is blocked.
+        if (graph.Document.Textures.Count > 0 && !texturesProven)
+            bad.Add($"Shader Graph {gname} (used by '{m.Material}'): {SgShip.CustomTexturesBlocked} ({string.Join(", ", graph.Document.Textures.Select(t => t.Name))}). Remove the custom texture from the graph, or wait for the probe's result.");
+        foreach (var ct in graph.Document.Textures)
+            if (SgNames.TexturePathProblem(ct.DefaultPath) is { } pwhy)
+                bad.Add($"Shader Graph {gname} (used by '{m.Material}'): the default image of custom texture '{ct.Name}' is not usable: {pwhy}");
+        foreach (var ct in graph.Document.Textures)
+            if (SgNames.TextureProblem(ct.Name, graph.Document, b, renaming: ct.Name) is { } twhy)
+                bad.Add($"Shader Graph {gname} (used by '{m.Material}'): the custom texture '{ct.Name}' cannot be declared: {twhy}");
         foreach (string t in m.SamplerNames ?? Array.Empty<string>())
-            if (b.Texture(t) is null)
+            if (b.Texture(t) is null && graph.Document.FindTexture(t) is null)
                 bad.Add($"{who}: the sampler '{t}' is not a texture {b.Shader} declares (unverified in game; blocked to be safe). Remove it from the material or unassign the graph.");
         var analysis = SgAnalyzer.Analyze(graph.Document, b);
         foreach (var d in analysis.Diagnostics.Where(d => d.IsError))

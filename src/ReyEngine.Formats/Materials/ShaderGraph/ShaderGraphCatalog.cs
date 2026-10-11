@@ -21,7 +21,7 @@ public sealed class SgNodeDef
 }
 
 /// <summary>One line of the add-node search palette: what to create and with which settings.</summary>
-public sealed record SgPaletteEntry(string Title, string Category, string Type, IReadOnlyDictionary<string, string> Props, string Keywords = "")
+public sealed record SgPaletteEntry(string Title, string Category, string Type, IReadOnlyDictionary<string, string> Props, string Keywords = "", string Tooltip = "")
 {
     public string Display => Category + " / " + Title;
 }
@@ -39,6 +39,41 @@ public static class SgCatalog
     /// <summary>The palette entry prop that asks the editor to CREATE a custom parameter (<c>float</c>, <c>float2</c>, <c>float3</c>, <c>float4</c>, <c>color3</c>, <c>color4</c>)
     /// and name the new node after it.</summary>
     public const string NewParamKey = "newParam";
+
+    /// <summary>M835: the palette entry prop that asks the editor to CREATE a custom texture (any value) and point the new Texture Sample at it.</summary>
+    public const string NewTextureKey = "newTexture";
+
+    /// <summary>M835: one line for every node type that does not carry its own description (shown as the palette tooltip).</summary>
+    private static readonly Dictionary<string, string> Tips = new(StringComparer.Ordinal)
+    {
+        ["Add"] = "A + B per component. A scalar is added to every component of a vector.",
+        ["Subtract"] = "A - B per component.",
+        ["Multiply"] = "A * B per component. Multiply a colour by a scalar to brighten or darken it.",
+        ["Divide"] = "A / B per component.",
+        ["Power"] = "Base raised to Exp per component (contrast and falloff curves).",
+        ["Min"] = "The smaller of A and B per component.",
+        ["Max"] = "The larger of A and B per component.",
+        ["Dot"] = "The dot product of two vectors of the same width (a scalar).",
+        ["Lerp"] = "Blends A to B by Alpha: 0 gives A, 1 gives B. Alpha may be a scalar or the same width.",
+        ["Clamp"] = "Keeps Value between Min and Max.",
+        ["Saturate"] = "Clamps to 0..1.",
+        ["OneMinus"] = "1 - Value (inverts a mask or a colour).",
+        ["Abs"] = "The absolute value per component.",
+        ["Normalize"] = "Scales a vector (float2 to float4) to length 1.",
+        ["Sine"] = "sin(Value) per component, in radians. Feed it Time for a pulse.",
+        ["Cosine"] = "cos(Value) per component, in radians.",
+        ["Sqrt"] = "The square root per component.",
+        ["Floor"] = "Rounds down to a whole number per component.",
+        ["Ceil"] = "Rounds up to a whole number per component.",
+        ["Round"] = "Rounds to the nearest whole number per component.",
+        ["Frac"] = "The fractional part per component (Value - Floor(Value)): repeats a ramp.",
+        ["ComponentMask"] = "Keeps the chosen components (r g b a). The result is as wide as the mask.",
+        ["Append"] = "Joins two values into one wider vector (at most float4).",
+        ["Split"] = "Gives each component of a vector as its own scalar output.",
+        ["Parameter"] = "A named value a material can set. Choose a base-shader parameter or one of the graph's own.",
+    };
+
+    public static string TipFor(string type) => Defs.TryGetValue(type, out var d) && d.Description.Length > 0 ? d.Description : Tips.GetValueOrDefault(type, "");
 
     private static readonly Dictionary<string, SgNodeDef> Defs = Build();
 
@@ -68,12 +103,12 @@ public static class SgCatalog
     {
         var list = new List<SgNodeDef>();
         void Add(string type, string title, string cat, SgPinDef[]? ins = null, string[]? outs = null, string desc = "") =>
-            list.Add(new SgNodeDef { Type = type, Title = title, Category = cat, Inputs = ins ?? Array.Empty<SgPinDef>(), Outputs = outs ?? new[] { "Value" }, Description = desc });
+            list.Add(new SgNodeDef { Type = type, Title = title, Category = cat, Inputs = ins ?? Array.Empty<SgPinDef>(), Outputs = outs ?? new[] { "Value" }, Description = desc.Length > 0 ? desc : Tips.GetValueOrDefault(type, "") });
         SgPinDef P(string n, float d = 0f, int fixedW = 0) => new(n, fixedW, d);
 
         // ---- inputs
         Add("TextureSample", "Texture Sample", "Input", new[] { new SgPinDef("UV", 2, 0f) }, new[] { "RGBA", "RGB", "R", "G", "B", "A" },
-            "Samples one of the base shader's declared textures. UV defaults to the base shader's UV0 interpolant.");
+            "Samples a texture (one the base shader declares, or one this graph declares). UV defaults to the base shader's UV0 interpolant.");
         Add("Parameter", "Parameter", "Input", null, null, "A parameter the base shader declares in shaders.bin; a material sets it by name.");
         Add("Constant", "Constant", "Input", null, null, "A fixed float, float2, float3 or float4.");
         Add("TexCoord", "TexCoord", "Input", null, new[] { "UV" }, "The xy of a TEXCOORD interpolant the base vertex shader writes.");
@@ -183,21 +218,30 @@ public static class SgCatalog
         if (b is not null)
         {
             foreach (var t in b.Textures)
-                list.Add(new SgPaletteEntry("Texture Sample: " + t.Name, "Input", "TextureSample", Pr(("texture", t.Name)), "texture sample sampler " + t.Name));
+                list.Add(new SgPaletteEntry("Texture Sample: " + t.Name, "Input", "TextureSample", Pr(("texture", t.Name)), "texture sample sampler " + t.Name, "Samples " + t.Name + ", a texture the base shader declares; a material supplies it."));
             foreach (var p in b.Parameters)
-                list.Add(new SgPaletteEntry("Parameter: " + p.Name, "Input", "Parameter", Pr(("name", p.Name)), "parameter param constant " + p.Name));
+                list.Add(new SgPaletteEntry("Parameter: " + p.Name, "Input", "Parameter", Pr(("name", p.Name)), "parameter param constant " + p.Name, "The base shader's own parameter " + p.Name + " (" + TypeName(p.Components) + "); a material sets it."));
         }
-        list.Add(new SgPaletteEntry("Scalar Parameter (new, custom)", "Input", "Parameter", Pr((NewParamKey, "float")), "parameter param scalar float custom new unreal"));
-        list.Add(new SgPaletteEntry("Vector Parameter (new, custom float4)", "Input", "Parameter", Pr((NewParamKey, "float4")), "parameter param vector float4 custom new unreal"));
-        list.Add(new SgPaletteEntry("Colour Parameter (new, custom)", "Input", "Parameter", Pr((NewParamKey, "color4")), "parameter param colour color tint custom new"));
+        list.Add(new SgPaletteEntry("Texture Parameter (new, custom)", "Input", "TextureSample", Pr((NewTextureKey, "1")), "texture parameter sampler custom new image picture unreal",
+            "Creates a texture of your own and samples it. Pick its default image in the Details panel; a material can override it."));
+        list.Add(new SgPaletteEntry("Scalar Parameter (new, custom)", "Input", "Parameter", Pr((NewParamKey, "float")), "parameter param scalar float custom new unreal",
+            "Creates a named number a material can set (for example an amount or a speed)."));
+        list.Add(new SgPaletteEntry("Vector Parameter (new, custom float4)", "Input", "Parameter", Pr((NewParamKey, "float4")), "parameter param vector float4 custom new unreal",
+            "Creates a named float4 a material can set."));
+        list.Add(new SgPaletteEntry("Colour Parameter (new, custom)", "Input", "Parameter", Pr((NewParamKey, "color4")), "parameter param colour color tint custom new",
+            "Creates a named colour a material can set, with a colour picker."));
         if (doc is not null)
+        {
             foreach (var p in doc.Params)
-                list.Add(new SgPaletteEntry("Parameter: " + p.Name + " (custom)", "Input", "Parameter", Pr(("name", p.Name)), "parameter param custom " + p.Name));
-        list.Add(new SgPaletteEntry("Constant Color", "Input", "ConstantColor", Pr(("value", "1 1 1 1")), "constant colour color picker"));
-        list.Add(new SgPaletteEntry("Constant (float)", "Input", "Constant", Pr(("value", "1")), "constant scalar number"));
-        list.Add(new SgPaletteEntry("Constant2 (float2)", "Input", "Constant", Pr(("value", "1 1")), "constant vector2"));
-        list.Add(new SgPaletteEntry("Constant3 (float3)", "Input", "Constant", Pr(("value", "1 1 1")), "constant vector3 colour color"));
-        list.Add(new SgPaletteEntry("Constant4 (float4)", "Input", "Constant", Pr(("value", "1 1 1 1")), "constant vector4 colour color"));
+                list.Add(new SgPaletteEntry("Parameter: " + p.Name + " (custom)", "Input", "Parameter", Pr(("name", p.Name)), "parameter param custom " + p.Name, "This graph's own parameter " + p.Name + " (" + TypeName(p.Components) + ")."));
+            foreach (var t in doc.Textures)
+                list.Add(new SgPaletteEntry("Texture Sample: " + t.Name + " (custom)", "Input", "TextureSample", Pr(("texture", t.Name)), "texture sample sampler custom " + t.Name, "Samples this graph's own texture " + t.Name + "."));
+        }
+        list.Add(new SgPaletteEntry("Constant Color", "Input", "ConstantColor", Pr(("value", "1 1 1 1")), "constant colour color picker", TipFor("ConstantColor")));
+        list.Add(new SgPaletteEntry("Constant (float)", "Input", "Constant", Pr(("value", "1")), "constant scalar number", "A fixed number."));
+        list.Add(new SgPaletteEntry("Constant2 (float2)", "Input", "Constant", Pr(("value", "1 1")), "constant vector2", "A fixed float2."));
+        list.Add(new SgPaletteEntry("Constant3 (float3)", "Input", "Constant", Pr(("value", "1 1 1")), "constant vector3 colour color", "A fixed float3 (for example an rgb colour)."));
+        list.Add(new SgPaletteEntry("Constant4 (float4)", "Input", "Constant", Pr(("value", "1 1 1 1")), "constant vector4 colour color", "A fixed float4."));
         int uv = b?.UvSet ?? 1;
         var sets = new SortedSet<int> { uv };
         if (b is not null)
@@ -205,16 +249,16 @@ public static class SgCatalog
                 foreach (var e in s.Inputs)
                     if (e.Semantic.Equals("TEXCOORD", StringComparison.OrdinalIgnoreCase) && e.ComponentCount >= 2) sets.Add((int)e.Index);
         foreach (int s in sets)
-            list.Add(new SgPaletteEntry(s == uv ? $"TexCoord {s} (UV0)" : $"TexCoord {s}", "Input", "TexCoord", Pr(("set", s.ToString(CultureInfo.InvariantCulture))), "texcoord uv coordinates"));
-        if (b is null || b.HasVertexColor) list.Add(new SgPaletteEntry("Vertex Color", "Input", "VertexColor", Pr(), "vertex colour color"));
-        if (b is null || b.HasTime) list.Add(new SgPaletteEntry("Time", "Input", "Time", Pr(), "time seconds animate"));
+            list.Add(new SgPaletteEntry(s == uv ? $"TexCoord {s} (UV0)" : $"TexCoord {s}", "Input", "TexCoord", Pr(("set", s.ToString(CultureInfo.InvariantCulture))), "texcoord uv coordinates", s == uv ? "The mesh's first UV set (TEXCOORD" + s + "): where on the texture each pixel is." : "The xy of TEXCOORD" + s + " from the vertex shader."));
+        if (b is null || b.HasVertexColor) list.Add(new SgPaletteEntry("Vertex Color", "Input", "VertexColor", Pr(), "vertex colour color", TipFor("VertexColor")));
+        if (b is null || b.HasTime) list.Add(new SgPaletteEntry("Time", "Input", "Time", Pr(), "time seconds animate", TipFor("Time")));
 
         foreach (var d in Defs.Values.OrderBy(d => d.Category, StringComparer.Ordinal).ThenBy(d => d.Title, StringComparer.Ordinal))
         {
             if (d.Category is "Input" or "Output") continue;
             Dictionary<string, string> props = d.Type == "ComponentMask" ? Pr(("mask", "rgb"))
                 : d.Type == SgCustom.Type ? Pr(("inputs", SgCustom.DefaultInputs), ("out", SgCustom.DefaultOut), ("code", SgCustom.DefaultCode)) : Pr();
-            list.Add(new SgPaletteEntry(d.Title, d.Category, d.Type, props, d.Description + " " + d.Type));
+            list.Add(new SgPaletteEntry(d.Title, d.Category, d.Type, props, d.Description + " " + d.Type, d.Description));
         }
         return list;
     }

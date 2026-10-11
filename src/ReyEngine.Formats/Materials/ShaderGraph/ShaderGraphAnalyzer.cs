@@ -249,7 +249,7 @@ public static class SgAnalyzer
                     string tex = n.Prop("texture");
                     bool ok = true;
                     if (tex.Length == 0) { Err(n, null, "choose a texture"); ok = false; }
-                    else if (b is not null && b.Texture(tex) is null) { Err(n, null, $"'{tex}' is not a texture {ShortName(b)} declares: the game would not bind it"); ok = false; }
+                    else if (doc.FindTexture(tex) is null && b is not null && b.Texture(tex) is null) { Err(n, null, $"'{tex}' is neither a custom texture of this graph nor a texture {ShortName(b)} declares: the game would not bind it"); ok = false; }
                     if (anyBad) ok = false;
                     return ok ? new[] { 4, 3, 1, 1, 1, 1 } : new[] { 0, 0, 0, 0, 0, 0 };
                 }

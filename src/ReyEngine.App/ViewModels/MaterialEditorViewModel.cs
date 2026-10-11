@@ -737,12 +737,44 @@ public sealed partial class GraphParamRow : ObservableObject
     public void Refresh()
     {
         InMaterial = _binding.Model.Parameters.Any(p => p.Name == Name);
-        StatusText = InMaterial ? "set in this material (edit it under Parameters)" : "not set: the preview uses the graph's default";
+        StatusText = InMaterial ? "set in this material (edit it under Parameters)" : "not on the material: the game uses 0 (Add to material writes the graph's default)";
         OnPropertyChanged(nameof(CanAdd));
     }
 
     [RelayCommand]
     private void AddToMaterial() => _binding.AddGraphParameter(_param);
+}
+
+/// <summary>M835: one custom texture of the graph assigned to a material: whether this material sets it, and a button that adds the samplerValues entry (a copy of the
+/// material's own sampler entry, pointing at the graph's default image).</summary>
+public sealed partial class GraphTextureRow : ObservableObject
+{
+    private readonly MaterialBindingViewModel _binding;
+    private readonly SgCustomTexture _texture;
+
+    public GraphTextureRow(MaterialBindingViewModel binding, SgCustomTexture texture)
+    {
+        _binding = binding; _texture = texture;
+        Name = texture.Name;
+        DefaultText = texture.DefaultPath.Length > 0 ? texture.DefaultPath : "(no default image)";
+        Refresh();
+    }
+
+    public string Name { get; }
+    public string DefaultText { get; }
+    [ObservableProperty] private bool _inMaterial;
+    [ObservableProperty] private string _statusText = "";
+    public bool CanAdd => !InMaterial && _binding.Model.CanEditSamplers;
+
+    public void Refresh()
+    {
+        InMaterial = _binding.Model.Slots.Any(s => s.SamplerName == Name);
+        StatusText = InMaterial ? "set in this material (edit its path under Samplers)" : "not on the material: the game binds no texture (Add to material writes the graph's default image)";
+        OnPropertyChanged(nameof(CanAdd));
+    }
+
+    [RelayCommand]
+    private void AddToMaterial() => _binding.AddGraphTexture(_texture);
 }
 
 /// <summary>M833: a graph of the open project that can be assigned to a material (its base shader is the material's shader).</summary>
@@ -1000,6 +1032,23 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     public ObservableCollection<GraphParamRow> GraphParams { get; } = new();
     [ObservableProperty] private bool _hasGraphParams;
 
+    /// <summary>M835: the custom textures of the assigned graph.</summary>
+    public ObservableCollection<GraphTextureRow> GraphTextures { get; } = new();
+    [ObservableProperty] private bool _hasGraphTextures;
+
+    /// <summary>M835: write one of the graph's custom textures into this material as a samplerValues entry named like the texture, pointing at the graph's default image
+    /// (the form the bin already uses for texturePath). One undo step.</summary>
+    public void AddGraphTexture(SgCustomTexture gt)
+    {
+        if (Owner is null || Model.Slots.Any(s => s.SamplerName == gt.Name)) return;
+        var slot = AddGraphTextureSlot(gt);
+        if (slot is null) { Owner.Warn?.Invoke($"{Model.Name}: the texture '{gt.Name}' could not be added (the material has no sampler to copy the layout from)."); return; }
+        Owner.UndoService?.PushApplied(new SamplerAddRemoveCommand(Owner.DocContext, Model, slot, isAdd: true, (s, present) => { OnSamplerPresenceChanged(s, present); foreach (var r in GraphTextures) r.Refresh(); }));
+        foreach (var r in GraphTextures) r.Refresh();
+        RaiseDirty();
+        Owner.NotifyChanged();
+    }
+
     /// <summary>Write one of the graph's custom parameters into this material as a normal parameter (the graph's default value), as one undo step.
     /// The material's value is what the Shader Graph preview uses. The export declares it in a shaders.bin the mod ships, and the
     /// Material editor's own parameter rows are where its value is edited.</summary>
@@ -1039,6 +1088,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         GraphAssignmentIsError = false;
         GraphAssignmentText = "";
         GraphParams.Clear(); HasGraphParams = false;
+        GraphTextures.Clear(); HasGraphTextures = false;
         if (!HasGraphSection) { HasGraphChoices = false; return; }
 
         if (root is not null && supported)
@@ -1060,10 +1110,15 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         { GraphAssignmentIsError = true; GraphAssignmentText = $"Shader Graph '{r.Entry!.File}' (#{n}) is built for {r.Document.BaseShader}, not {shader}. The export is blocked."; return; }
         foreach (var gp in r.Document.Params) GraphParams.Add(new GraphParamRow(this, gp));
         HasGraphParams = GraphParams.Count > 0;
+        foreach (var gt in r.Document.Textures) GraphTextures.Add(new GraphTextureRow(this, gt));
+        HasGraphTextures = GraphTextures.Count > 0;
+        var vstatus = r.FilePath is null ? null : ReyEngine.App.Services.ShaderGraphViewport.StatusOf(r.FilePath);
+        if (vstatus is { Ok: false }) { GraphAssignmentIsError = true; }
         string customNote = r.Document.Params.Count > 0
             ? $" Its {r.Document.Params.Count} custom parameter(s) are declared in a shaders.bin the mod ships ({SgCustomParams.ShipRisk})."
             : "";
-        GraphAssignmentText = $"Shader Graph '{r.Entry!.File}' (#{n}) ships with the mod. It is rebuilt from the installed game on every export, so re-export after each patch. Do not rename the graph file: its number is kept under its file name. The map viewport still draws Riot's shader for this material; the Shader Graph window previews the graph." + customNote;
+        GraphAssignmentText = $"Shader Graph '{r.Entry!.File}' (#{n}) ships with the mod. It is rebuilt from the installed game on every export, so re-export after each patch. Do not rename the graph file: its number is kept under its file name. The Direct3D 11 map viewport (the default) and the Material Graph window draw this material with the graph, live in the map viewport while the graph is open in the Shader Graph window (the Character window and the thumbnails show a saved graph on their next build); the legacy OpenGL viewport has no Riot-shader path and still draws Riot's shader." + customNote
+            + (vstatus is null ? "" : vstatus.Ok ? " Viewport: the graph is drawn." : " Viewport: " + vstatus.Text);
     }
 
     private void RebuildMacros()
@@ -1085,40 +1140,87 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         var cmd = new MacroPresenceCommand(Owner.DocContext, Model, SgShip.Macro, old, newValue, RebuildMacros);
         cmd.Execute();                               // one step: the macro, the rows and the section follow it
 
-        // M834: the outgoing graph's custom parameters go with it. A material that keeps one no shaders.bin declares would crash the game, and the
-        // export only declares the parameters of the graphs materials are assigned to. All of it is ONE undo step.
+        // M834/M835: what the material carries FOR the graph follows the assignment, all of it ONE undo step.
+        //  - the outgoing graph's custom parameters AND custom textures that the incoming graph lacks go: a material that keeps one no shaders.bin declares would crash the game;
+        //  - the incoming graph's custom parameters (vec4, the graph's default) and custom textures (the graph's default image) that the material does not carry yet are ADDED:
+        //    the shipped definition declares them with no value (zero, no texture), so a material that lacks one would draw differently in the game than the editor shows.
         var steps = new List<IEditorCommand> { cmd };
-        var carried = OutgoingCustomParameters(old, newValue);
-        foreach (var p in carried)
-            if (Model.RemoveParameter(p))
-                steps.Add(new ParameterAddRemoveCommand(Owner.DocContext, Model, p, isAdd: false, () => { ResyncRows(); foreach (var r in GraphParams) r.Refresh(); }));
-        if (steps.Count > 1)
+        var removed = new List<string>();
+        var added = new List<string>();
+        Action syncParams = () => { ResyncRows(); foreach (var r in GraphParams) r.Refresh(); };
+        Action<TextureSlot, bool> syncSamplers = (slot, present) => { OnSamplerPresenceChanged(slot, present); foreach (var r in GraphTextures) r.Refresh(); };
+
+        var (oldGraph, newGraph) = ResolveGraphPair(old, newValue);
+        if (oldGraph?.Document is { } od)
+        {
+            foreach (var cp in od.Params)
+                if (newGraph?.Document?.FindParam(cp.Name) is null && Model.Parameters.FirstOrDefault(x => x.Name == cp.Name) is { } p && Model.RemoveParameter(p))
+                {
+                    steps.Add(new ParameterAddRemoveCommand(Owner.DocContext, Model, p, isAdd: false, syncParams));
+                    removed.Add(cp.Name);
+                }
+            foreach (var ct in od.Textures)
+                if (newGraph?.Document?.FindTexture(ct.Name) is null && Model.Slots.FirstOrDefault(x => x.SamplerName == ct.Name) is { } slot && Model.RemoveSampler(slot))
+                {
+                    Slots.Remove(Slots.FirstOrDefault(x => ReferenceEquals(x.Model, slot))!);
+                    steps.Add(new SamplerAddRemoveCommand(Owner.DocContext, Model, slot, isAdd: false, syncSamplers));
+                    removed.Add(ct.Name);
+                }
+        }
+        if (newGraph?.Document is { } nd)
+        {
+            foreach (var gp in nd.Params)
+            {
+                if (Model.Parameters.Any(x => x.Name == gp.Name)) continue;
+                var p = Model.AddParameter(gp.Name, "Vector4");
+                if (p is null) { Owner.Warn?.Invoke($"{Model.Name}: the parameter '{gp.Name}' could not be added (the material has no parameter to copy the layout from)."); continue; }
+                try { p.Apply(string.Join(", ", Pad4(gp.DefaultValues()).Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture)))); }
+                catch { Model.RemoveParameter(p); Owner.Warn?.Invoke($"{Model.Name}: the default of '{gp.Name}' could not be written."); continue; }
+                steps.Add(new ParameterAddRemoveCommand(Owner.DocContext, Model, p, isAdd: true, syncParams));
+                added.Add(gp.Name);
+            }
+            foreach (var gt in nd.Textures)
+            {
+                if (Model.Slots.Any(x => x.SamplerName == gt.Name)) continue;
+                var slot = AddGraphTextureSlot(gt);
+                if (slot is null) { Owner.Warn?.Invoke($"{Model.Name}: the texture '{gt.Name}' could not be added (the material has no sampler to copy the layout from)."); continue; }
+                steps.Add(new SamplerAddRemoveCommand(Owner.DocContext, Model, slot, isAdd: true, syncSamplers));
+                added.Add(gt.Name);
+            }
+        }
+        if (removed.Count > 0 || added.Count > 0)
         {
             ResyncRows();
-            Owner.Warn?.Invoke($"{Model.Name}: removed the custom parameter(s) {string.Join(", ", steps.Skip(1).Select(c => c.Name.Replace("Remove Parameter ", "")))} of the graph that is no longer assigned (undo brings them back).");
+            RefreshGraphSection();
+            if (removed.Count > 0) Owner.Warn?.Invoke($"{Model.Name}: removed {string.Join(", ", removed)} of the graph that is no longer assigned (undo brings them back).");
+            if (added.Count > 0) Owner.Warn?.Invoke($"{Model.Name}: added {string.Join(", ", added)} of the assigned graph (the graph's defaults): the game gives a custom parameter or texture the material lacks no value at all.");
         }
         Owner.UndoService?.PushApplied(steps.Count == 1 ? cmd : new CompositeCommand(cmd.Name, steps, Owner.DocContext));
         RaiseDirty();
         Owner.NotifyChanged();
     }
 
-    /// <summary>The material's parameters that only the graph named by <paramref name="old"/> declares (and the graph named by <paramref name="incoming"/> does not).</summary>
-    private List<MaterialParameter> OutgoingCustomParameters(string? old, string? incoming)
+    /// <summary>The graphs named by two REY_GRAPH values for this material's shader (null where a value names none, the project is not open, or the graph cannot be read).</summary>
+    private (SgResolvedGraph? Old, SgResolvedGraph? New) ResolveGraphPair(string? old, string? incoming)
     {
-        var result = new List<MaterialParameter>();
-        if (old is null || Owner?.ProjectRoot?.Invoke() is not { } root || !SgShipValidator.TryParseNumber(old, out int on)) return result;
+        if (Owner?.ProjectRoot?.Invoke() is not { } root) return (null, null);
         string shader = Model.RenderShader ?? "";
-        SgResolvedGraph oldGraph, newGraph = new(null, null, null, null);
-        try
+        SgResolvedGraph? One(string? value)
         {
-            oldGraph = SgShipValidator.Resolve(root, shader, on);
-            if (incoming is not null && SgShipValidator.TryParseNumber(incoming, out int nn)) newGraph = SgShipValidator.Resolve(root, shader, nn);
+            if (value is null || !SgShipValidator.TryParseNumber(value, out int n)) return null;
+            try { return SgShipValidator.Resolve(root, shader, n); } catch { return null; }
         }
-        catch { return result; }
-        if (oldGraph.Document is null) return result;
-        foreach (var cp in oldGraph.Document.Params)
-            if (newGraph.Document?.FindParam(cp.Name) is null && Model.Parameters.FirstOrDefault(x => x.Name == cp.Name) is { } p) result.Add(p);
-        return result;
+        return (One(old), One(incoming));
+    }
+
+    /// <summary>Add the samplerValues entry of a graph's custom texture: a clone of the material's own DiffuseTexture entry (the shape test7 proved in game; the first sampler when it has none),
+    /// pointing at the graph's default image. Null when the entry cannot be made.</summary>
+    private TextureSlot? AddGraphTextureSlot(SgCustomTexture gt)
+    {
+        string path = gt.NormalizedPath.Length > 0 ? gt.NormalizedPath : (Model.Diffuse?.Path ?? "");
+        var slot = Model.AddSampler(gt.Name, path, "DiffuseTexture");
+        if (slot is not null) OnSamplerPresenceChanged(slot, true);
+        return slot;
     }
 
     /// <summary>Assign a graph: REY_GRAPH=&lt;its number&gt; on this material, by the editor's own macro write (one undo step, saved by the normal Save).</summary>

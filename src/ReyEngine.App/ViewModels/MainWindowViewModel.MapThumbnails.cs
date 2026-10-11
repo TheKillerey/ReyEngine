@@ -268,6 +268,9 @@ public sealed partial class MainWindowViewModel
         string state = clientDepth ? MapThumbnailKey.StartState + "+clientdepth" : MapThumbnailKey.StartState;
         // M819: what the mod's GameData makes of the bins (the siblings and the props' skins too, which no identity above sees) is in the key when there is any, and only then: a project without it keeps every key it had
         string? gameDataIdentity = _gameData is { State: GameDataPreviewState.Ready, DocumentsFingerprint: { } documents } ? documents.ToString("x16") : null;
+        // M835: a material that names a Shader Graph is drawn with it, and the graph is not in any bin: the project's graph files are part of what the picture shows.
+        // Null for a project without graphs, so every key (and every cached picture) it had stays.
+        if (ShaderGraphViewport.ProjectFingerprint(Project.RootPath) is { } graphIdentity) gameDataIdentity = (gameDataIdentity ?? "") + "|graphs:" + graphIdentity;
         string key = MapThumbnailKey.Compute(AppInfo.Version, state,
             entry.Path, mapIdentity, materials.Path, materialsIdentity, shippingIdentity.Length == 0 ? "missing" : shippingIdentity, cacheIdentity, gameDataIdentity);
 

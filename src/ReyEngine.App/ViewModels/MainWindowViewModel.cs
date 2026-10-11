@@ -6786,6 +6786,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // in the character window, previews on both of its renderers there, and saves through the same
         // override path. See MainWindowViewModel.CharacterMaterials.cs.
         WireMaterialEditor(MaterialEditor, ApplyMaterialToViewport, SaveMaterialOverride);
+        // M835: Shader Graphs in the viewports - the service reads graphs from the open project, and an edit of a graph that materials of the open map name refreshes the D3D11 scene
+        Services.ShaderGraphViewport.ProjectRoot = () => string.IsNullOrEmpty(Project.RootPath) ? null : Project.RootPath;
+        Services.ShaderGraphViewport.GraphChanged += OnShaderGraphChangedForViewport;
         WireMaterialEditor(MeshPreview.MaterialEditor, ApplyCharacterMaterialsToPreview, SaveCharacterMaterialOverride);
         // M703/M704: the submesh row in the outliner and the offer in the Materials tab are the same step
         MeshPreview.AddSubmeshMaterial = row => AddCharacterSubmeshMaterialAsync(row.Name);
@@ -8276,6 +8279,78 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
             else { MaterialEditor.Clear(); HasMaterialData = false; }
         });
+    }
+
+    /// <summary>M835: the window is closing: stop listening to the Shader Graph hooks (static events would keep this view model alive).</summary>
+    public void DetachShaderGraphHooks()
+    {
+        Services.ShaderGraphViewport.GraphChanged -= OnShaderGraphChangedForViewport;
+        MaterialEditor.DetachGraphStatus();
+    }
+
+    private int _graphRefreshToken;
+    private DateTime _graphRefreshAt = DateTime.MinValue;
+
+    /// <summary>M835: a Shader Graph was edited, recompiled, saved or closed. When D3D11 draws a map whose materials name that graph, the scene is rebuilt through the same path a material
+    /// edit uses (<see cref="NotifyMaterialsChanged"/>) - debounced, and never more often than every two seconds, because a map rebuild is the expensive step. The GL viewport
+    /// draws Riot's pixel shader for these materials (its renderer has no Riot-shader path), and says so in the Material Editor.</summary>
+    private void OnShaderGraphChangedForViewport(string graphFile)
+    {
+        if (!UseDx11Viewport || _currentMap is null) return;
+        int token = Interlocked.Increment(ref _graphRefreshToken);
+        _ = Task.Run(async () =>
+        {
+            double wait = Math.Max(600, 2000 - (DateTime.UtcNow - _graphRefreshAt).TotalMilliseconds);
+            await Task.Delay(TimeSpan.FromMilliseconds(wait));
+            if (token != _graphRefreshToken) return;
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (token != _graphRefreshToken || !UseDx11Viewport || _currentMap is null) return;
+                // what only the UI thread may read is read here; the parse of the bin is not done here
+                var probe = SnapshotShaderGraphProbe(graphFile);
+                if (probe is null) return;
+                _ = Task.Run(() =>
+                {
+                    bool uses;
+                    try { uses = probe(); }
+                    catch (Exception ex)
+                    {
+                        _log.Warn("Shader Graph", $"Could not tell whether the open map's materials name '{Path.GetFileName(graphFile)}' ({ex.Message}); the viewport is refreshed to be safe.");
+                        uses = true;
+                    }
+                    if (!uses) return;
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        if (token != _graphRefreshToken || !UseDx11Viewport || _currentMap is null) return;
+                        _graphRefreshAt = DateTime.UtcNow;
+                        NotifyMaterialsChanged();
+                    });
+                });
+            });
+        });
+    }
+
+    /// <summary>UI thread: the inputs of "do the open map's materials name this graph?" - the graph's registry entry and either the Material Editor's materials (a snapshot of shader and
+    /// REY_GRAPH value) or the map's materials bin bytes. Returns the check to run off the UI thread (it parses the bin), or null when there is nothing to refresh (no project, the graph
+    /// has no number yet, or no materials bin).</summary>
+    private Func<bool>? SnapshotShaderGraphProbe(string graphFile)
+    {
+        if (string.IsNullOrEmpty(Project.RootPath)) return null;
+        Formats.Materials.ShaderGraph.SgNumberEntry? entry;
+        try { entry = Formats.Materials.ShaderGraph.ShaderGraphRegistry.FindByFile(Project.RootPath, Formats.Materials.ShaderGraph.ShaderGraphRegistry.StemOf(graphFile)); }
+        catch (Exception ex) { _log.Warn("Shader Graph", $"The graph registry could not be read ({ex.Message}); the viewport is refreshed to be safe."); return () => true; }
+        if (entry is null) return null;   // nothing was assigned to it yet
+        if (_currentMapEntry is not { } mapEntry || !TryResolveMaterialsBin(mapEntry.Path, out var binEntry)) return null;
+        if (MaterialEditor.Kind == MaterialSourceKind.MapMaterials && MaterialEditor.BinEntry is { } editing && editing.PathHash == binEntry.PathHash)
+        {
+            var snapshot = MaterialEditor.Materials.Select(m => (Shader: m.Model.RenderShader ?? "", Graph: m.Model.Macros.TryGetValue(Formats.Materials.ShaderGraph.SgShip.Macro, out var v) ? v : null)).ToList();
+            return () => snapshot.Any(m => m.Graph is not null && Formats.Materials.ShaderGraph.SgShipValidator.TryParseNumber(m.Graph, out int n) && n == entry.Number
+                                           && Formats.Materials.ShaderGraph.SgBase.Normalize(m.Shader) == Formats.Materials.ShaderGraph.SgBase.Normalize(entry.Base));
+        }
+        byte[] bytes = GetAssetBytes(binEntry);
+        Func<uint, string?> binName = ResolveBinName;
+        Func<ulong, string?> wadPath = ResolveWadPath;
+        return () => Services.ShaderGraphViewport.AnyUses(Formats.Materials.MaterialDocument.Parse(bytes, binName, wadPath).Materials, entry.Base, entry.Number);
     }
 
     private void ApplyMaterialToViewport()
@@ -16421,7 +16496,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 {
                     var sources = Project.ProjectFolders.Select(Project.ResolveProjectPath).Where(Directory.Exists).ToList();
                     var graphShip = Services.ShaderGraphShipService.Prepare(Project.RootPath, GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory),
-                        sources, ResolveBinName, _resolver.Database);
+                        sources, ResolveBinName, _resolver.Database, TextureExistsByPath);
                     if (graphShip is not null)
                     {
                         foreach (var line in graphShip.Report) _log.Info("LTK", line);
@@ -17724,7 +17799,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             progress?.Report((0.285, "Checking Shader Graphs…"));
             graphShip = Services.ShaderGraphShipService.Prepare(Project.RootPath, GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory),
-                stagedFolders.Select(f => f.dir).ToList(), ResolveBinName, _resolver.Database);
+                stagedFolders.Select(f => f.dir).ToList(), ResolveBinName, _resolver.Database, TextureExistsByPath);
             if (graphShip is not null)
             {
                 foreach (var line in graphShip.Report) _log.Info("Build", line);

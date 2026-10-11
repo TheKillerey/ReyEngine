@@ -609,6 +609,25 @@
                         </ItemsControl.ItemTemplate>
                       </ItemsControl>
                     </StackPanel>
+                    <StackPanel Spacing="2" IsVisible="{Binding HasGraphTextures}">
+                      <TextBlock Text="GRAPH TEXTURES (custom)" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <ItemsControl ItemsSource="{Binding GraphTextures}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:GraphTextureRow">
+                            <DockPanel Margin="0,1">
+                              <Button DockPanel.Dock="Right" Classes="tool" FontSize="9" Content="Add to material" Command="{Binding AddToMaterialCommand}"
+                                      IsVisible="{Binding CanAdd}" />
+                              <StackPanel Spacing="0">
+                                <TextBlock FontSize="9.5" FontFamily="Consolas" Foreground="{DynamicResource ReyTextBrush}">
+                                  <Run Text="{Binding Name}" /><Run Text="  " /><Run Text="{Binding DefaultText}" />
+                                </TextBlock>
+                                <TextBlock Text="{Binding StatusText}" FontSize="8.5" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                              </StackPanel>
+                            </DockPanel>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
                   </StackPanel>
                   <StackPanel Spacing="2" Margin="0,3,0,0" IsVisible="{Binding HasMacros}">
                     <TextBlock Text="SHADER MACROS" FontSize="8" FontWeight="SemiBold"

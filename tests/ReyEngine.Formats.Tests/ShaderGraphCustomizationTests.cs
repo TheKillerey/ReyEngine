@@ -370,6 +370,142 @@ public sealed class ShaderGraphCustomizationTests : IDisposable
         Assert.DoesNotContain(binding.Model.Parameters, p => p.Name == "VectorParam");
     }
 
+    // ================================================================================= M835: custom textures follow the assignment
+
+    private async Task<string> SaveGraphWith(string name, params (string Param, string Texture)[] members)
+    {
+        var g = Vm();
+        Assert.True(g.NewFromBase(Flat, out string e, name), e);
+        foreach (var (param, texture) in members)
+        {
+            if (param.Length > 0) Assert.Equal(param, g.AddParameter("float4", param));
+            if (texture.Length > 0) { Assert.Equal(texture, g.AddTexture(texture)); Assert.True(g.SetTextureDefault(texture, "assets/x/" + texture.ToLowerInvariant() + ".tex")); }
+        }
+        Assert.True(await g.SaveAsync());
+        return g.FilePath!;
+    }
+
+    [Fact]
+    public async Task Assign_adds_the_graphs_parameters_and_textures_and_unassign_or_switch_removes_them_all_in_one_undo_step()
+    {
+        await SaveGraphWith("GraphA", ("GlowA", "StripesA"));
+        await SaveGraphWith("GraphB", ("GlowB", "BandsB"));
+        var (undo, editor, binding) = EditorWithGraph(Vm());
+        var a = binding.GraphChoices.Single(c => c.Stem == "GraphA");
+        var b = binding.GraphChoices.Single(c => c.Stem == "GraphB");
+        int steps = undo.UndoHistory.Count;
+
+        // ASSIGN A: its custom parameter (a vec4 holding the default) and its custom texture (a sampler entry at the default image) are written, ONE step
+        binding.AssignGraphCommand.Execute(a);
+        Assert.Equal(steps + 1, undo.UndoHistory.Count);
+        Assert.Equal("Vector4", binding.Model.Parameters.Single(p => p.Name == "GlowA").TypeName);
+        var slot = binding.Model.Slots.Single(x => x.SamplerName == "StripesA");
+        Assert.Equal(HashAlgorithms.WadPath("assets/x/stripesa.tex"), slot.ChunkHash);          // the graph's default image, as the link the bin uses
+        Assert.Contains(binding.Slots, r => r.SamplerName == "StripesA");                    // an ordinary, editable row
+        Assert.True(binding.GraphTextures.Single().InMaterial);
+        Assert.True(binding.GraphParams.Single().InMaterial);
+
+        // SWITCH to B: A's parameter and texture go, B's come, ONE step
+        binding.AssignGraphCommand.Execute(b);
+        Assert.Equal(steps + 2, undo.UndoHistory.Count);
+        Assert.DoesNotContain(binding.Model.Parameters, p => p.Name == "GlowA");
+        Assert.DoesNotContain(binding.Model.Slots, x => x.SamplerName == "StripesA");
+        Assert.DoesNotContain(binding.Slots, r => r.SamplerName == "StripesA");
+        Assert.Contains(binding.Model.Parameters, p => p.Name == "GlowB");
+        Assert.Contains(binding.Model.Slots, x => x.SamplerName == "BandsB");
+        Assert.Contains(binding.Model.Parameters, p => p.Name == "TintColor");                // Riot's own stay
+
+        // UNASSIGN: B's go
+        binding.UnassignGraphCommand.Execute(null);
+        Assert.Equal(steps + 3, undo.UndoHistory.Count);
+        Assert.DoesNotContain(binding.Model.Parameters, p => p.Name == "GlowB");
+        Assert.DoesNotContain(binding.Model.Slots, x => x.SamplerName == "BandsB");
+
+        // and every step undoes and redoes whole
+        undo.Undo();
+        Assert.Contains(binding.Model.Slots, x => x.SamplerName == "BandsB");
+        Assert.Contains(binding.Model.Parameters, p => p.Name == "GlowB");
+        Assert.True(binding.HasGraphAssigned);
+        undo.Undo();
+        Assert.Contains(binding.Model.Slots, x => x.SamplerName == "StripesA");
+        Assert.DoesNotContain(binding.Model.Slots, x => x.SamplerName == "BandsB");
+        undo.Undo();
+        Assert.DoesNotContain(binding.Model.Slots, x => x.SamplerName == "StripesA");
+        Assert.DoesNotContain(binding.Model.Parameters, p => p.Name == "GlowA");
+        Assert.False(binding.HasGraphAssigned);
+        undo.Redo(); undo.Redo(); undo.Redo();
+        Assert.False(binding.HasGraphAssigned);
+        Assert.DoesNotContain(binding.Model.Slots, x => x.SamplerName == "BandsB");
+    }
+
+    [Fact]
+    public async Task A_material_that_keeps_a_custom_texture_after_its_graph_is_gone_blocks_the_export_and_the_editors_unassign_does_not()
+    {
+        await SaveGraphWith("GraphA", ("", "StripesA"));
+        var (undo, editor, binding) = EditorWithGraph(Vm());
+        binding.AssignGraphCommand.Execute(binding.GraphChoices.Single());
+        Assert.Contains(binding.Model.Slots, x => x.SamplerName == "StripesA");
+        Assert.Equal("StripesA", Assert.Single(ReyEngine.App.Services.ShaderGraphShipService.ProjectCustomTextures(_root)).Key);
+
+        // the ways a texture entry outlives its graph without the editor's unassign: the macro dropped by hand
+        MacroPresenceCommand.Write(binding.Model, SgShip.Macro, null);
+        string dir = Path.Combine(_root, "staged"); Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "a.materials.bin"), editor.Serialize()!);
+        var errors = new List<string>();
+        ReyEngine.App.Services.ShaderGraphShipService.FindAssigned(new[] { dir }, Names, errors,
+            ReyEngine.App.Services.ShaderGraphShipService.ProjectCustomParameters(_root), ReyEngine.App.Services.ShaderGraphShipService.ProjectCustomTextures(_root));
+        Assert.Contains(errors, m => m.Contains("carries the texture 'StripesA'") && m.Contains("GraphA") && m.Contains("not assigned to a graph that declares it"));
+
+        // the editor's own unassign takes the entry away, so nothing blocks
+        MacroPresenceCommand.Write(binding.Model, SgShip.Macro, "1");
+        binding.UnassignGraphCommand.Execute(null);
+        File.WriteAllBytes(Path.Combine(dir, "a.materials.bin"), editor.Serialize()!);
+        errors.Clear();
+        ReyEngine.App.Services.ShaderGraphShipService.FindAssigned(new[] { dir }, Names, errors,
+            ReyEngine.App.Services.ShaderGraphShipService.ProjectCustomParameters(_root), ReyEngine.App.Services.ShaderGraphShipService.ProjectCustomTextures(_root));
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task A_default_image_path_is_checked_normalised_and_hashed_the_same_by_the_material_and_the_shaders_bin()
+    {
+        Assert.Null(SgNames.TexturePathProblem(""));
+        Assert.Null(SgNames.TexturePathProblem("assets/maps/x/y.tex"));
+        Assert.Null(SgNames.TexturePathProblem("Assets\\Maps\\X\\Y.TEX"));
+        Assert.Contains("0x", SgNames.TexturePathProblem("0xb32db105d8790a47"));
+        Assert.Contains("0x", SgNames.TexturePathProblem("0XB32DB105D8790A47"));
+        Assert.Contains(".tex", SgNames.TexturePathProblem("assets/maps/x/y.png"));
+        Assert.NotNull(SgNames.TexturePathProblem("assets/x/\u00e9.tex"));
+        Assert.NotNull(SgNames.TexturePathProblem("assets/x/y\u0001.tex"));
+
+        var sg = Vm();
+        sg.NewFromBase(Flat, out _);
+        sg.AddTexture("Stripes");
+        Assert.False(sg.SetTextureDefault("Stripes", "0xb32db105d8790a47"));
+        Assert.Contains("0x", sg.Status);
+        Assert.Equal("", sg.Document!.FindTexture("Stripes")!.DefaultPath);
+        Assert.True(sg.SetTextureDefault("Stripes", "Assets\\Maps\\Particles\\X\\Y.tex"));
+        var t = sg.Document.FindTexture("Stripes")!;
+        Assert.Equal("Assets/Maps/Particles/X/Y.tex", t.DefaultPath);                          // forward slashes; the case does not matter to the hash
+
+        // the material's link and the shaders.bin's link are the same chunk
+        ulong expected = HashAlgorithms.WadPath("assets/maps/particles/x/y.tex");
+        Assert.Equal(expected, HashAlgorithms.WadPath(t.NormalizedPath));
+        Assert.Equal(expected, HashAlgorithms.WadPath(new SgCustomTexture { DefaultPath = " Assets\\Maps\\Particles\\X\\Y.tex " }.NormalizedPath));
+        Assert.Equal(expected, SgCustomTextures.Declarations(sg.Document).Select(d => HashAlgorithms.WadPath(d.DefaultPath)).Single());
+        Assert.True(await sg.SaveAsync());
+        var (_, _, binding) = EditorWithGraph(sg);
+        binding.AssignGraphCommand.Execute(Assert.Single(binding.GraphChoices));
+        Assert.Equal(expected, binding.Model.Slots.Single(x => x.SamplerName == "Stripes").ChunkHash);
+
+        // a hand-edited file with the hash form is refused at the export
+        var d = ShaderGraphDocument.CreateEmpty("g", Flat);
+        d.Textures.Add(new SgCustomTexture { Name = "Bad", DefaultPath = "0xb32db105d8790a47" });
+        var graph = new SgResolvedGraph(new SgNumberEntry { File = "g", Base = Flat, Number = 1 }, "g.json", d, null);
+        var m = new SgAssignedMaterial("a.bin", "Mat", Flat, "1", Array.Empty<string>());
+        Assert.Contains(SgShipValidator.Validate(m, graph, ShaderGraphTests.TestBase()), x => x.Contains("'Bad'") && x.Contains("0x"));
+    }
+
     [Fact]
     public async Task A_rename_that_a_material_cannot_follow_is_reported_and_a_deleted_parameter_names_the_materials_that_still_carry_it()
     {
@@ -449,12 +585,10 @@ public sealed class ShaderGraphCustomizationTests : IDisposable
         Assert.True(binding.HasGraphParams);
         var row = Assert.Single(binding.GraphParams);
         Assert.Equal("VectorParam", row.Name);
-        Assert.False(row.InMaterial);
+        Assert.True(row.InMaterial);                                              // M835: Assign writes the graph's parameters (the game declares them with no value)
         Assert.Contains("custom parameter", binding.GraphAssignmentText);          // the section says they are declared in the shipped shaders.bin
         Assert.Contains("shaders.bin", binding.GraphAssignmentText);
         Assert.False(binding.GraphAssignmentIsError);
-        row.AddToMaterialCommand.Execute(null);
-        Assert.True(row.InMaterial);
         Assert.Contains(binding.Model.Parameters, p => p.Name == "VectorParam");
         Assert.Contains(binding.Parameters, p => p.Name == "VectorParam");        // an ordinary, editable row
 
@@ -668,7 +802,7 @@ public sealed class ShaderGraphCustomizationTests : IDisposable
         string before = vm.Hlsl;
         Assert.True(vm.SetLabel("n2", "Base albedo"));
         Assert.Equal("Base albedo", vm.Graph!.Find("n2")!.Title);
-        Assert.Contains("Sample DiffuseTexture", vm.Graph.Find("n2")!.Subtitle);
+        Assert.Contains("DiffuseTexture Texture Sample", vm.Graph.Find("n2")!.Subtitle);
         Assert.Equal("Label", vm.PropRows.FirstOrDefault()?.Label ?? "Label");
         Assert.True(vm.Undo());
         Assert.Equal("", vm.Document!.Find("n2")!.Label);
@@ -959,12 +1093,12 @@ public sealed class ShaderGraphCustomizationTests : IDisposable
         Assert.False(SgAnalyzer.Analyze(doc, ShaderGraphTests.TestBase()).HasErrors);
 
         string v2 = ShaderGraphJson.Serialize(doc);
-        Assert.Contains("\"version\": 2", v2);
+        Assert.Contains("\"version\": 3", v2);
         Assert.Contains("\"params\": []", v2);
         Assert.Contains("\"comments\": []", v2);
         var back = ShaderGraphJson.TryDeserialize(v2, out _)!;
         Assert.Equal(v2, ShaderGraphJson.Serialize(back));
-        Assert.Equal(2, back.Version);
+        Assert.Equal(3, back.Version);
 
         // a v2 file with everything round-trips byte for byte
         var full = Doc();

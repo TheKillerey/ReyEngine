@@ -1,3 +1,4 @@
+using Avalonia.Threading;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -83,8 +84,16 @@ public sealed partial class BulkToggleViewModel : ObservableObject
 /// </summary>
 public sealed partial class MaterialEditorViewModel
 {
+    private readonly Action _graphStatusHandler;
+
+    /// <summary>M835: stop listening to the viewport service (the static event would keep this editor alive).</summary>
+    public void DetachGraphStatus() => ReyEngine.App.Services.ShaderGraphViewport.StatusChanged -= _graphStatusHandler;
+
     public MaterialEditorViewModel()
     {
+        // M835: the viewport service reports why a graph is not drawn (errors, a signature it was not built for): the SHADER GRAPH section of the picked material shows it
+        _graphStatusHandler = () => Dispatcher.UIThread.Post(() => SelectedMaterial?.RefreshGraphSection());
+        ReyEngine.App.Services.ShaderGraphViewport.StatusChanged += _graphStatusHandler;
         BulkSelection.CollectionChanged += (_, _) => RefreshBulk();
     }
 

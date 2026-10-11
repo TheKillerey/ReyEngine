@@ -136,7 +136,10 @@ public static class SgGraphView
         if (def is null) return "? " + n.Type;
         return n.Type switch
         {
-            "TextureSample" => n.Prop("texture").Length > 0 ? "Sample " + n.Prop("texture") : def.Title,
+            "TextureSample" => n.Prop("texture").Length > 0 ? n.Prop("texture") : def.Title,
+            "Parameter" => n.Prop("name").Length > 0 ? n.Prop("name") : def.Title,
+            "Constant" => SgCatalog.TryParseConstant(n.Prop("value"), out var cv) ? "Constant " + SgCatalog.FormatConstant(cv) : def.Title,
+            "TexCoord" => "TexCoord " + n.Prop("set", "1"),
             "ComponentMask" => "Mask (" + n.Prop("mask", "rgb") + ")",
             _ => def.Title,
         };
@@ -144,10 +147,11 @@ public static class SgGraphView
 
     private static string SubtitleOf(SgNode n, SgNodeDef? def, ShaderGraphDocument doc) => n.Type switch
     {
-        "Parameter" => doc.FindParam(n.Prop("name")) is not null ? n.Prop("name") + " (custom)" : n.Prop("name"),
+        "TextureSample" => doc.FindTexture(n.Prop("texture")) is not null ? "Texture Parameter (custom)" : "Texture Sample",
+        "Parameter" => doc.FindParam(n.Prop("name")) is not null ? "Parameter (custom)" : "Parameter (base shader)",
         "ConstantColor" => "Colour",
         "Custom" => "HLSL",
-        "TexCoord" => "TexCoord " + n.Prop("set", "1"),
+        "TexCoord" => "UV set",
         "Constant" => "Constant",
         "VertexColor" => "COLOR0",
         "Time" => "TIME.x",

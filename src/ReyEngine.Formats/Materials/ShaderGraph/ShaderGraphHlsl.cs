@@ -29,6 +29,9 @@ public sealed class SgHlslResult
 
     /// <summary>M834: the subset of <see cref="Parameters"/> the GRAPH declares (not the base shader): what the game cannot be given yet.</summary>
     public IReadOnlyList<SgCustomParam> CustomParameters { get; init; } = Array.Empty<SgCustomParam>();
+
+    /// <summary>M835: the subset of <see cref="Textures"/> the GRAPH declares.</summary>
+    public IReadOnlyList<SgCustomTexture> CustomTextures { get; init; } = Array.Empty<SgCustomTexture>();
     public bool UsesTime { get; init; }
     public bool EncodesOutput { get; init; }
     public bool Ok => Errors.Count == 0 && Source.Length > 0;
@@ -150,7 +153,12 @@ public static class SgHlsl
         if (textures.Count > 0)
         {
             L("// ---- textures, named like Riot's (the client binds <Name>__TX and <Name>__SMP by name)");
-            foreach (string t in textures) { L($"Texture2D {b.Texture(t)!.Resource};"); L($"SamplerState {b.Texture(t)!.Sampler};"); }
+            foreach (string t in textures)
+            {
+                var (res, smp) = TextureNames(doc, b, t);
+                L($"Texture2D {res};" + (doc.FindTexture(t) is not null ? "   // custom texture (the graph's own)" : ""));
+                L($"SamplerState {smp};");
+            }
             L();
         }
         if (needFrame)
@@ -249,8 +257,8 @@ public static class SgHlsl
                     break;
                 case "TextureSample":
                 {
-                    var t = b.Texture(n.Prop("texture"))!;
-                    stmt = $"float4 {v} = {t.Resource}.Sample({t.Sampler}, {Operand(n, 0, 2)});";
+                    var (tres, tsmp) = TextureNames(doc, b, n.Prop("texture"));
+                    stmt = $"float4 {v} = {tres}.Sample({tsmp}, {Operand(n, 0, 2)});";
                     outsExpr = new[] { v, v + ".rgb", v + ".r", v + ".g", v + ".b", v + ".a" };
                     break;
                 }
@@ -389,10 +397,14 @@ public static class SgHlsl
             Signature = sig, Source = source, LineNodes = lineNodes,
             Textures = textures, Parameters = parameters, UsesTime = usesTime, EncodesOutput = encode,
             CustomParameters = parameters.Select(doc.FindParam).Where(x => x is not null).Select(x => x!).ToList(),
+            CustomTextures = textures.Select(doc.FindTexture).Where(x => x is not null).Select(x => x!).ToList(),
         };
     }
 
     // ================================================================================== helpers
+
+    private static (string Resource, string Sampler) TextureNames(ShaderGraphDocument doc, SgBase b, string name) =>
+        doc.FindTexture(name) is { } c ? (c.Resource, c.Sampler) : (b.Texture(name)!.Resource, b.Texture(name)!.Sampler);
 
     private static SgHlslResult Fail(SgSignature sig, List<SgDiagnostic> errors) => new() { Signature = sig, Errors = errors };
 

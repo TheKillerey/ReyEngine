@@ -191,6 +191,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         {
             _closed = true; _dx11?.Dispose(); _dx11 = null;
             (DataContext as MainWindowViewModel)?.StopEditorAutoSave();
+            (DataContext as MainWindowViewModel)?.DetachShaderGraphHooks();   // M835
             (DataContext as MainWindowViewModel)?.ShutDownMapThumbnails();   // M807: stop the thumbnail thread, give back its device
         };
     }

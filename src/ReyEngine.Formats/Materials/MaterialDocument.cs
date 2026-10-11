@@ -1263,7 +1263,11 @@ public sealed class MaterialBinding
 
     /// <summary>Add a sampler slot by cloning an existing one when possible, or by authoring Riot's
     /// standard StaticMaterialShaderSamplerDef schema for a sampler-less material.</summary>
-    public TextureSlot? AddSampler(string samplerName, string path)
+    public TextureSlot? AddSampler(string samplerName, string path) => AddSampler(samplerName, path, null);
+
+    /// <summary>M835: <paramref name="like"/> names the sampler whose entry is cloned (a graph's custom texture copies the material's DiffuseTexture entry, the shape test7 proved);
+    /// the first sampler when it is null or absent.</summary>
+    public TextureSlot? AddSampler(string samplerName, string path, string? like)
     {
         if (MaterialObject is null) return null;
         AttachContainer(ref _samplerContainer, "samplerValues");   // M831
@@ -1280,7 +1284,8 @@ public sealed class MaterialBinding
         // M590: clone an existing sampler when there is one, so the new slot inherits the FORM this bin
         // uses for texturePath. With no sampler to copy, author the WadChunkLink form: that is what every
         // shipped material has carried since 16.17 (12,688 of 12,688).
-        var proto = _samplerContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault();
+        var proto = (like is null ? null : _slots.FirstOrDefault(s => s.SamplerName == like)?.Element as BinTreeStruct)
+                    ?? _samplerContainer.Elements.OfType<BinTreeStruct>().FirstOrDefault();
         BinTreeStruct clone;
         if (proto is not null)
             clone = (BinTreeStruct)BinTreeCloner.Clone(proto, 0);

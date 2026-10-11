@@ -122,6 +122,9 @@ public sealed partial class MaterialGraphCanvas
             return;
         }
         if (carry) { if (away > 18) se.Disconnect(dstNode!, dstPin!); return; }
+        // M835 (Unreal): a wire dropped on nothing opens the node search, filtered to what fits, and the picked node is connected
+        if (srcNode is not null && dstNode is null) { SgShowAutoPalette(cursor, srcNode, srcPin!, fromIsOutput: true); return; }
+        if (dstNode is not null && srcNode is null) { SgShowAutoPalette(cursor, dstNode, dstPin!, fromIsOutput: false); return; }
         se.Notify("No wire made: drop it on " + (srcNode is null ? "a node's output pin." : "a node's input pin."));
     }
 
@@ -261,10 +264,37 @@ public sealed partial class MaterialGraphCanvas
         return items;
     }
 
+    /// <summary>M835: the menu for a right click on an UNWIRED input pin (public for the probe): promote it to a custom parameter, or feed it a constant.</summary>
+    public IReadOnlyList<Control> BuildPinMenu(Point screen)
+    {
+        var items = new List<Control>();
+        var se = ShaderEditor;
+        if (se is null || PinAt(screen) is not { } hit || !hit.Pin.IsInput || hit.Pin.Linked) return items;
+        string node = hit.Node.Id, pin = hit.Pin.Name;
+        string? why = se.CanPromote(node, pin);
+        MenuItem Item(string header, Action act, string tip)
+        {
+            var mi = new MenuItem { Header = header, IsEnabled = why is null };
+            ToolTip.SetTip(mi, why ?? tip);
+            mi.Click += (_, _) => act();
+            return mi;
+        }
+        items.Add(Item("Promote to Parameter", () => se.PromoteToParameter(node, pin),
+            "Creates a custom parameter of this pin's type, holding its current value, and wires it in. A material can then set it."));
+        items.Add(Item("Add Constant", () => se.AddConstantTo(node, pin), "Creates a Constant node holding this pin's current value and wires it in."));
+        items.Add(new Separator());
+        var search = new MenuItem { Header = "Connect a node..." };
+        ToolTip.SetTip(search, "Opens the node search, filtered to the nodes that can feed this pin.");
+        search.Click += (_, _) => SgShowAutoPalette(screen, node, pin, fromIsOutput: false);
+        items.Add(search);
+        return items;
+    }
+
     private void SgShowMenu(Point screen)
     {
         if (ShaderEditor is null || Graph is null) return;
-        IReadOnlyList<Control> items = NodeAt(screen) is not null ? BuildNodeMenu(screen)
+        IReadOnlyList<Control> items = PinAt(screen) is { Pin.IsInput: true, Pin.Linked: false } ? BuildPinMenu(screen)
+            : NodeAt(screen) is not null ? BuildNodeMenu(screen)
             : CommentAt(screen) is not null ? BuildCommentMenu(screen)
             : BuildCanvasMenu(screen);
         if (items.Count == 0) return;
@@ -426,36 +456,85 @@ public sealed partial class MaterialGraphCanvas
         else if (CommentAt(pos) is { } c && ToGraph(pos).Y <= c.Y + CommentTitleHeight) { ShaderEditor.SelectedCommentId = c.Id; SgRenameSelected(pos); e.Handled = true; }
     }
 
+    /// <summary>One line of a palette list: the node to create and, for a wire dragged into empty space, the pin of the new node it ends at.</summary>
+    public sealed record SgPaletteRow(SgPaletteEntry Entry, string? Pin)
+    {
+        public string Text => Pin is null ? Entry.Display : Entry.Display + "   (" + Pin + ")";
+    }
+
     private void SgShowPalette(Point screen)
     {
         var se = ShaderEditor;
         if (se is null) return;
-        var box = new TextBox { Watermark = "Search nodes: texture, parameter, lerp, multiply...", MinWidth = 300 };
+        SgShowPaletteCore(screen, "Search nodes: texture, parameter, lerp, multiply...", f => PaletteEntries(f).Select(e => new SgPaletteRow(e, null)).ToList(),
+            row => AddFromPalette(row.Entry, screen));
+    }
+
+    /// <summary>The compatible lines for a wire dragged from a pin into empty space (public for the probe and the tests).</summary>
+    public IReadOnlyList<SgPaletteRow> AutoConnectRows(string fromNode, string fromPin, bool fromIsOutput, string? filter)
+    {
+        var se = ShaderEditor;
+        var g = Graph;
+        if (se?.Document is not { } doc || g?.Find(fromNode) is not { } node) return Array.Empty<SgPaletteRow>();
+        var pins = fromIsOutput ? node.Outputs : node.Inputs;
+        var pin = pins.FirstOrDefault(p => p.Name == fromPin);
+        if (pin is null) return Array.Empty<SgPaletteRow>();
+        var matches = fromIsOutput
+            ? SgAutoConnect.ForOutput(se.Palette, doc, se.Base, Math.Max(1, pin.Components))
+            : SgAutoConnect.ForInput(se.Palette, doc, se.Base, pin.Components);
+        return SgAutoConnect.Filter(matches, filter).Select(m => new SgPaletteRow(m.Entry, m.Pin)).ToList();
+    }
+
+    /// <summary>Add the picked line at the drop point and wire it to the pin the wire came from (ONE undo step). Public for the probe.</summary>
+    public string? AddAutoConnected(SgPaletteRow row, Point screen, string fromNode, string fromPin, bool fromIsOutput)
+    {
+        var p = ToGraph(screen);
+        // the new node sits to the right of an output it is fed by, to the left of an input it feeds
+        double x = fromIsOutput ? p.X : p.X - SgGraphView.NodeWidth;
+        return ShaderEditor?.AddNodeAndConnect(row.Entry, x, p.Y, fromNode, fromPin, fromIsOutput, row.Pin ?? "");
+    }
+
+    private void SgShowAutoPalette(Point screen, string fromNode, string fromPin, bool fromIsOutput)
+    {
+        if (ShaderEditor is null) return;
+        SgShowPaletteCore(screen, fromIsOutput ? "Nodes that take this wire - type to filter" : "Nodes that can feed this input - type to filter",
+            f => AutoConnectRows(fromNode, fromPin, fromIsOutput, f), row => AddAutoConnected(row, screen, fromNode, fromPin, fromIsOutput));
+    }
+
+    private void SgShowPaletteCore(Point screen, string watermark, Func<string?, IReadOnlyList<SgPaletteRow>> source, Action<SgPaletteRow> pick)
+    {
+        var box = new TextBox { Watermark = watermark, MinWidth = 300 };
         var list = new ListBox
         {
             MaxHeight = 320, MinWidth = 300,
-            ItemsSource = PaletteEntries(null),
-            ItemTemplate = new FuncDataTemplate<SgPaletteEntry>((entry, _) => new TextBlock { Text = entry?.Display ?? "", FontSize = 11.5 }),
+            ItemsSource = source(null),
+            ItemTemplate = new FuncDataTemplate<SgPaletteRow>((row, _) =>
+            {
+                var tb = new TextBlock { Text = row?.Text ?? "", FontSize = 11.5 };
+                if (row is not null && row.Entry.Tooltip.Length > 0) ToolTip.SetTip(tb, row.Entry.Tooltip);
+                return tb;
+            }),
         };
         var panel = new StackPanel { Spacing = 4, MinWidth = 300 };
         panel.Children.Add(box);
         panel.Children.Add(list);
         var flyout = new Flyout { Content = panel, Placement = PlacementMode.Pointer };
-        void Pick(SgPaletteEntry? entry)
+        void Pick(SgPaletteRow? row)
         {
-            if (entry is null) return;
-            AddFromPalette(entry, screen);
+            if (row is null) return;
+            pick(row);
             flyout.Hide();
         }
-        box.TextChanged += (_, _) => { list.ItemsSource = PaletteEntries(box.Text); if (list.ItemCount > 0) list.SelectedIndex = 0; };
+        box.TextChanged += (_, _) => { list.ItemsSource = source(box.Text); if (list.ItemCount > 0) list.SelectedIndex = 0; };
         box.KeyDown += (_, k) =>
         {
-            if (k.Key == Key.Enter) { Pick(list.SelectedItem as SgPaletteEntry ?? PaletteEntries(box.Text).FirstOrDefault()); k.Handled = true; }
+            if (k.Key == Key.Enter) { Pick(list.SelectedItem as SgPaletteRow ?? source(box.Text).FirstOrDefault()); k.Handled = true; }
             else if (k.Key == Key.Down && list.ItemCount > 0) { list.SelectedIndex = Math.Min(list.ItemCount - 1, list.SelectedIndex + 1); k.Handled = true; }
             else if (k.Key == Key.Up && list.ItemCount > 0) { list.SelectedIndex = Math.Max(0, list.SelectedIndex - 1); k.Handled = true; }
+            else if (k.Key == Key.Escape) { flyout.Hide(); k.Handled = true; }
         };
-        list.DoubleTapped += (_, _) => Pick(list.SelectedItem as SgPaletteEntry);
-        list.KeyDown += (_, k) => { if (k.Key == Key.Enter) { Pick(list.SelectedItem as SgPaletteEntry); k.Handled = true; } };
+        list.DoubleTapped += (_, _) => Pick(list.SelectedItem as SgPaletteRow);
+        list.KeyDown += (_, k) => { if (k.Key == Key.Enter) { Pick(list.SelectedItem as SgPaletteRow); k.Handled = true; } };
         flyout.Opened += (_, _) => box.Focus();
         flyout.ShowAt(this);
     }

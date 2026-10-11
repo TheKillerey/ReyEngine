@@ -91,6 +91,13 @@ public partial class ShaderPreviewWindow : Window
     /// <summary>M832: the Open list is read from the project folder each time it is shown.</summary>
     private void OnOpenShaderGraphClick(object? sender, RoutedEventArgs e) => Vm?.ShaderGraph.RefreshSavedGraphs();
 
+    private void OnTemplateClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: ReyEngine.Formats.Materials.ShaderGraph.SgTemplate template }) return;
+        this.FindControl<Button>("NewShaderGraphButton")?.Flyout?.Hide();
+        Vm?.NewShaderGraphFromTemplateCommand.Execute(template);
+    }
+
     private void OnSavedGraphClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: SgFileRow row }) return;
@@ -210,6 +217,7 @@ public partial class ShaderPreviewWindow : Window
         {
             case SgPropRow sg: sg.Commit(); break;
             case SgParamRow pr: if ((sender as Control)?.Tag as string == "default") pr.CommitDefault(); else pr.CommitName(); break;
+            case SgTextureRow tr: if ((sender as Control)?.Tag as string == "path") tr.CommitPath(); else tr.CommitName(); break;
             case GraphComponentField f: f.CommitCommand.Execute(null); break;
             case GraphEditRow row: row.Commit(); break;
         }

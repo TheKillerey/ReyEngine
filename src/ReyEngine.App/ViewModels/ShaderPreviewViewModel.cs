@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.Input;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Materials.ShaderGraph;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meshes;
 using ReyEngine.Formats.Shaders;
@@ -870,6 +871,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         // ---- textures, from the game's own .tex files
         sb.AppendLine("TEXTURES");
         int bound = 0, missing = 0;
+        var boundTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var declared = TextureSlots.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var slot in b.Slots)
         {
@@ -906,6 +908,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                     }
                 }
                 _renderer.SetTexture(target, img.Rgba, img.Width, img.Height);
+                boundTargets.Add(target);
                 var row = TextureSlots.FirstOrDefault(t => t.Name.Equals(target, StringComparison.OrdinalIgnoreCase));
                 if (row is not null) row.Source = $"{System.IO.Path.GetFileName(slot.Path)} ({img.Width}x{img.Height})";
                 sb.AppendLine($"   +  {slot.SamplerName,-28} {img.Width}x{img.Height}  {slot.Path}");
@@ -915,6 +918,11 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             { sb.AppendLine($"   !  {slot.SamplerName,-28} {slot.Path}  {ex.Message}"); missing++; }
         }
         sb.AppendLine();
+
+        // M835: the editor is not kinder than the game: a custom texture of the graph that the material does not carry is left unbound (the game binds none)
+        foreach (var gt in GraphCustomTextures())
+            if (!boundTargets.Contains(gt) && declared.Contains(gt))
+                sb.AppendLine($"   .  {gt,-28} not on the material: the game binds no texture");
 
         // ---- parameters into the reflected constants
         sb.AppendLine("PARAMETERS");
@@ -940,6 +948,23 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             if (!prm.TryGetVector4(out var cv)) continue;
             var row = Constants.FirstOrDefault(c => c.Name.Equals(cp.Name, StringComparison.OrdinalIgnoreCase));
             if (row is not null) row.Value = string.Join(" ", new[] { cv.X, cv.Y, cv.Z, cv.W }.Take(cp.Components).Select(x => x.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        // M835: a custom parameter of the Shader Graph that the material does not carry is ZERO, as in the game (the shipped definition declares it with no value).
+        // Assign writes the graph's default into the material; the Shader Graph window with NO material picked shows the defaults.
+        foreach (var (gname, width) in GraphCustomParameters())
+        {
+            if (b.Parameters.Any(p => p.Name.Equals(gname, StringComparison.OrdinalIgnoreCase))) continue;
+            var row = Constants.FirstOrDefault(c => c.Name.Equals(gname, StringComparison.OrdinalIgnoreCase));
+            if (row is null) continue;
+            row.Value = string.Join(" ", Enumerable.Repeat("0", width));
+            sb.AppendLine($"   .  {gname,-28} not on the material: the game uses 0");
+        }
+        if (_materialGraph is not null || GraphPreviewNote.Length > 0 && b.Macros.ContainsKey(SgShip.Macro))
+        {
+            sb.AppendLine();
+            sb.AppendLine("SHADER GRAPH");
+            sb.AppendLine("   " + (GraphPreviewNote.Length > 0 ? GraphPreviewNote : "(no note)"));
         }
 
         MaterialReport = sb.ToString();
@@ -1664,6 +1689,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         BuildSlots();
         _appliedDefaults = ApplyShaderDefinitionDefaults();
         ApplyGraphParameterDefaults();   // M834
+        ApplyGraphTextureDefaults();     // M835
         BuildMetadata(vsPath, psPath, report);
 
         if (!_renderer.BuildComparisonShader(_vs, out var cerr))
@@ -1695,6 +1721,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
     /// so the preview works with no material and a parameter edited in the Material Editor (or renamed) shows at once.</summary>
     private void ApplyGraphParameterDefaults()
     {
+        if (_loadingMaterial) return;   // a material is the subject: ApplyMaterial sets what it carries and zeroes the rest, as the game does
         if (!ShaderGraph.IsOpen || !ShaderGraph.PreviewEnabled || ShaderGraph.Document is not { } doc) return;
         foreach (var p in doc.Params)
         {

@@ -70,6 +70,32 @@ public sealed class SgCustomParam
     }
 }
 
+/// <summary>
+/// M835: a texture the GRAPH declares (Unreal's Texture Parameter). The generated HLSL declares <c>Texture2D Name__TX; SamplerState Name__SMP;</c>; a material
+/// supplies it as a samplerValues entry named <see cref="Name"/>; the preview binds <see cref="DefaultPath"/> until a material sets one. The export would declare it in
+/// the base definition's <c>textures</c> list (a copy of Riot's DiffuseTexture entry) - gated behind <see cref="SgShip.CustomTexturesProven"/>.
+/// <see cref="AddressU"/> / <see cref="AddressV"/> are editor data for the preview: the game takes the address mode from the material pass, not from the shader.
+/// </summary>
+public sealed class SgCustomTexture
+{
+    public static readonly string[] AddressModes = { "wrap", "clamp", "mirror" };
+    public const int MaxPathLength = 260;
+
+    public string Name { get; set; } = "";
+    public string DefaultPath { get; set; } = "";
+    public string AddressU { get; set; } = "wrap";
+    public string AddressV { get; set; } = "wrap";
+
+    /// <summary>The default path as every consumer writes it: forward slashes. The material's texture link and the shaders.bin link both hash THIS string
+    /// (<c>HashAlgorithms.WadPath</c> lower-cases it), so the two can never name different chunks.</summary>
+    public string NormalizedPath => DefaultPath.Trim().Replace('\\', '/');
+
+    public string Resource => Name + "__TX";
+    public string Sampler => Name + "__SMP";
+
+    public SgCustomTexture Clone() => new() { Name = Name, DefaultPath = DefaultPath, AddressU = AddressU, AddressV = AddressV };
+}
+
 /// <summary>M834: a comment box (Unreal's): a titled rectangle around nodes. Editor data only; it moves with the nodes inside it.</summary>
 public sealed class SgComment
 {
@@ -98,8 +124,8 @@ public sealed class SgComment
 /// </summary>
 public sealed class ShaderGraphDocument
 {
-    /// <summary>2 (M834): custom parameters, comment boxes, node labels and the Custom / colour nodes. Version 1 files load unchanged (the new lists are empty).</summary>
-    public const int CurrentVersion = 2;
+    /// <summary>3 (M835): custom textures. 2 (M834): custom parameters, comment boxes, node labels and the Custom / colour nodes. Version 1 files load unchanged (the new lists are empty).</summary>
+    public const int CurrentVersion = 3;
     public const int MaxNodes = 4096;
     public const int MaxLinks = 16384;
     public const int MaxFileBytes = 8 * 1024 * 1024;
@@ -107,6 +133,7 @@ public sealed class ShaderGraphDocument
     public const int MaxCodeLength = 4096;
     public const int MaxCustomParams = 64;
     public const int MaxComments = 256;
+    public const int MaxCustomTextures = 16;
     public const int MaxLabelLength = 64;
     public const string FileSuffix = ".shadergraph.json";
     public const string FolderName = "shadergraphs";
@@ -126,6 +153,11 @@ public sealed class ShaderGraphDocument
 
     /// <summary>M834: the comment boxes.</summary>
     public List<SgComment> Comments { get; set; } = new();
+
+    /// <summary>M835: the textures this graph declares itself (see <see cref="SgCustomTexture"/>).</summary>
+    public List<SgCustomTexture> Textures { get; set; } = new();
+
+    public SgCustomTexture? FindTexture(string name) => Textures.FirstOrDefault(t => t.Name.Equals(name, StringComparison.Ordinal));
 
     public SgCustomParam? FindParam(string name) => Params.FirstOrDefault(p => p.Name.Equals(name, StringComparison.Ordinal));
 
@@ -161,6 +193,7 @@ public sealed class ShaderGraphDocument
         Links = Links.Select(l => l.Clone()).ToList(),
         Params = Params.Select(p => p.Clone()).ToList(),
         Comments = Comments.Select(c => c.Clone()).ToList(),
+        Textures = Textures.Select(t => t.Clone()).ToList(),
     };
 
     /// <summary>A graph with the output node and nothing else.</summary>
@@ -261,6 +294,17 @@ public static class ShaderGraphJson
             if (!paramNames.Add(p.Name)) { error = $"the custom parameter '{p.Name}' is declared twice"; return null; }
             if (p.Components is < 1 or > 4) { error = $"the custom parameter '{p.Name}' has {p.Components} components (1 to 4)"; return null; }
             if (p.Default.Length > 128) { error = $"the default of custom parameter '{p.Name}' is too long"; return null; }
+        }
+        doc.Textures ??= new List<SgCustomTexture>();
+        if (doc.Textures.Count > ShaderGraphDocument.MaxCustomTextures) { error = $"more than {ShaderGraphDocument.MaxCustomTextures} custom textures"; return null; }
+        foreach (var t in doc.Textures)
+        {
+            if (t is null) { error = "a custom texture entry is null"; return null; }
+            t.Name ??= ""; t.DefaultPath ??= ""; t.AddressU ??= "wrap"; t.AddressV ??= "wrap";
+            if (!SgNames.IsIdentifier(t.Name, SgNames.MaxParamName)) { error = $"the custom texture name '{(t.Name.Length > 40 ? t.Name[..40] : t.Name)}' is not a valid name"; return null; }
+            if (!paramNames.Add(t.Name)) { error = $"the name '{t.Name}' is used twice (custom parameters and textures share one namespace)"; return null; }
+            if (t.DefaultPath.Length > SgCustomTexture.MaxPathLength || t.DefaultPath.Any(c => c < ' ')) { error = $"the default path of custom texture '{t.Name}' is not a path"; return null; }
+            if (!SgCustomTexture.AddressModes.Contains(t.AddressU) || !SgCustomTexture.AddressModes.Contains(t.AddressV)) { error = $"custom texture '{t.Name}' has an unknown address mode"; return null; }
         }
         var commentIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var c in doc.Comments)

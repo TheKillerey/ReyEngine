@@ -4,6 +4,9 @@ using ReyEngine.Formats.Materials;
 using ReyEngine.Formats.Materials.ShaderGraph;
 using ReyEngine.Formats.Shaders;
 using ReyEngine.Rendering.D3D11;
+using ReyEngine.App.Services;
+using ReyEngine.Core.Hashing;
+using ReyEngine.Core.Decoding;
 
 namespace ReyEngine.App.ViewModels;
 
@@ -26,12 +29,19 @@ public sealed partial class ShaderPreviewViewModel
     private string _graphLog = "";
     private bool _closeArmed;
 
+    /// <summary>M835: the compiled graph of the picked material (REY_GRAPH) while it is drawn with the viewport service rather than the open editor; else null.</summary>
+    private SgViewportOverride? _materialGraph;
+
     /// <summary>The line the window shows about what the preview is drawing with.</summary>
     [ObservableProperty] private string _graphPreviewNote = "";
 
     private void InitShaderGraph(Func<string?>? projectRoot)
     {
-        ShaderGraph = new ShaderGraphViewModel(projectRoot ?? (() => null)) { BaseResolver = ResolveShaderGraphBase };
+        ShaderGraph = new ShaderGraphViewModel(projectRoot ?? (() => null))
+        {
+            BaseResolver = ResolveShaderGraphBase,
+            TextureExists = path => { try { return _readAsset?.Invoke(HashAlgorithms.WadPath(path.ToLowerInvariant())) is { Length: > 0 }; } catch { return true; } },
+        };
         MaterialGraph.AttachShaderGraph(ShaderGraph);
         ShaderGraph.BuildCompleted += OnShaderGraphBuilt;
         ShaderGraph.PropertyChanged += (_, e) =>
@@ -60,9 +70,21 @@ public sealed partial class ShaderPreviewViewModel
     /// <summary>True when the picked material's shader is a base this build supports.</summary>
     public bool CanNewShaderGraph => SelectedMaterial?.Binding.RenderShader is { } s && SgBase.IsSupported(s) && _cache is not null;
 
+    /// <summary>M835: the templates "New Shader Graph" offers.</summary>
+    public IReadOnlyList<SgTemplate> ShaderGraphTemplates => SgTemplates.All;
+
+    [RelayCommand]
+    private void NewShaderGraphFromTemplate(SgTemplate? template)
+    {
+        if (template is null) return;
+        NewShaderGraphCore(template.Id);
+    }
+
     /// <summary>"New Shader Graph from this shader": a graph on the picked material's shader.</summary>
     [RelayCommand]
-    private void NewShaderGraph()
+    private void NewShaderGraph() => NewShaderGraphCore(null);
+
+    private void NewShaderGraphCore(string? templateId)
     {
         string? shader = SelectedMaterial?.Binding.RenderShader;
         if (string.IsNullOrWhiteSpace(shader)) { Status = "Pick a material whose shader is a supported base first."; return; }
@@ -74,7 +96,7 @@ public sealed partial class ShaderPreviewViewModel
         }
         if (ShaderGraph.IsOpen && ShaderGraph.IsDirty && !_closeArmed) { _closeArmed = true; Status = "The open Shader Graph has unsaved edits. Press again to start a new graph and discard them, or save first (Ctrl+S)."; return; }
         _closeArmed = false;
-        if (!ShaderGraph.NewFromBase(shader, out string error)) { Status = error; HasError = true; return; }
+        if (!ShaderGraph.NewFromTemplate(shader, templateId, out string error)) { Status = error; HasError = true; return; }
         HasError = false;
         AfterGraphOpened();
     }
@@ -141,11 +163,80 @@ public sealed partial class ShaderPreviewViewModel
         ApplyMaterial();
     }
 
+    /// <summary>The custom textures with a default image the preview should bind when nothing else does: the open graph's, else the picked material's graph's.</summary>
+    private IEnumerable<(string Target, string Path)> GraphDefaultTextures()
+    {
+        if (ShaderGraph.IsOpen && ShaderGraph.PreviewEnabled && ShaderGraph.Document is { } doc)
+            return doc.Textures.Where(t => t.DefaultPath.Length > 0).Select(t => (t.Resource, t.DefaultPath.Replace('\\', '/').ToLowerInvariant())).ToList();
+        return _materialGraph?.DefaultTextures ?? Array.Empty<(string, string)>();
+    }
+
+    /// <summary>The graph's custom texture resources (<c>Name__TX</c>) of the graph being drawn: the open editor's, else the picked material's.</summary>
+    private IEnumerable<string> GraphCustomTextures()
+    {
+        if (ShaderGraph.IsOpen && ShaderGraph.PreviewEnabled && ShaderGraph.Document is { } doc) return doc.Textures.Select(t => t.Resource).ToList();
+        return _materialGraph?.DefaultTextures.Select(t => t.Target).ToList() ?? new List<string>();
+    }
+
+    /// <summary>The graph's custom parameters (name, width) of the graph being drawn.</summary>
+    private IEnumerable<(string Name, int Width)> GraphCustomParameters()
+    {
+        if (ShaderGraph.IsOpen && ShaderGraph.PreviewEnabled && ShaderGraph.Document is { } doc) return doc.Params.Select(p => (p.Name, Math.Clamp(p.Components, 1, 4))).ToList();
+        return _materialGraph?.CustomParameters.Select(n => (n, 4)).ToList() ?? new List<(string, int)>();
+    }
+
+    private void ApplyGraphTextureDefaults()
+    {
+        if (_loadingMaterial) return;   // a material is the subject: what it does not carry stays unbound, as in the game
+        var declared = TextureSlots.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (target, path) in GraphDefaultTextures())
+            if (declared.Contains(target)) BindGraphTexture(target, path, out _);
+    }
+
+    /// <summary>Decode a graph's default image and bind it to a texture slot of the previewed shader.</summary>
+    private bool BindGraphTexture(string target, string path, out string why)
+    {
+        why = "";
+        if (_readAsset is null) { why = "no asset mounts"; return false; }
+        try
+        {
+            ulong chunk = HashAlgorithms.WadPath(path);
+            TextureImage? img = null;
+            if (!(ShaderGraph.IsOpen && _graphTextures.TryGetValue(chunk, out img)))
+            {
+                var data = _readAsset(chunk);
+                if (data is null || data.Length == 0) { why = "NOT FOUND"; return false; }
+                img = TextureDecoder.Decode(data);
+                if (ShaderGraph.IsOpen) { if (_graphTextures.Count > 24) _graphTextures.Clear(); _graphTextures[chunk] = img; }
+            }
+            _renderer.SetTexture(target, img!.Rgba, img.Width, img.Height);
+            return true;
+        }
+        catch (Exception ex) { why = ex.Message; return false; }
+    }
+
     /// <summary>Called by Load with the Riot pixel shader just read for <paramref name="shaderFull"/>: returns the Shader Graph's compiled
     /// pixel shader for the same input signature when one exists (and the preview is on), else Riot's own.</summary>
     private DxbcShader ApplyShaderGraphPixelOverride(string shaderFull, DxbcShader riotPixel)
     {
-        if (!ShaderGraph.IsOpen || ShaderGraph.Base is not { } b) { GraphPreviewNote = ""; return riotPixel; }
+        _materialGraph = null;
+        if (!ShaderGraph.IsOpen || ShaderGraph.Base is not { } b)
+        {
+            GraphPreviewNote = "";
+            // M835: a material that names a graph is drawn with it, with or without the editor open - the same service the map viewport uses
+            if (_loadingMaterial && SelectedMaterial?.Binding is { } mb && mb.Macros.ContainsKey(SgShip.Macro) && _cache is not null && !string.IsNullOrEmpty(mb.RenderShader))
+            {
+                var ov = ShaderGraphViewport.TryOverride(mb.RenderShader!, mb.Macros, riotPixel, _cache, _perms, out string why);
+                if (ov is not null)
+                {
+                    _materialGraph = ov;
+                    GraphPreviewNote = $"Preview: this material's Shader Graph '{ov.GraphName}' (#{ov.Number}) replaces Riot's pixel shader, as in the viewport.";
+                    return ov.Shader;
+                }
+                if (why.Length > 0) GraphPreviewNote = why;
+            }
+            return riotPixel;
+        }
         if (!ShaderGraph.PreviewEnabled) return riotPixel;
 
         string shaderName = ShaderPermutationIndex.DefinitionPathForCacheShader(shaderFull);
@@ -170,8 +261,8 @@ public sealed partial class ShaderPreviewViewModel
         ShaderGraph.SignatureIndex = sig.Index;
         bool stale = ShaderGraph.LastBuild is { } last && (last.Analysis.HasErrors || last.For(sig) is { Ok: false });
         GraphPreviewNote = stale
-            ? $"Preview: the Shader Graph '{ShaderGraph.GraphName}' - LAST GOOD compile (the graph has errors now). Shipped when a material is assigned to it. The map viewport still draws Riot's shader."
-            : $"Preview: the Shader Graph '{ShaderGraph.GraphName}' replaces Riot's pixel shader (signature #{sig.Index}). Shipped when a material is assigned to it. The map viewport still draws Riot's shader.";
+            ? $"Preview: the Shader Graph '{ShaderGraph.GraphName}' - LAST GOOD compile (the graph has errors now). Shipped when a material is assigned to it. The map viewport draws the SAVED graph of each assigned material."
+            : $"Preview: the Shader Graph '{ShaderGraph.GraphName}' replaces Riot's pixel shader (signature #{sig.Index}). Shipped when a material is assigned to it. A material assigned to it draws it in the map viewport too (live as you edit).";
         return good.Shader;
     }
 }

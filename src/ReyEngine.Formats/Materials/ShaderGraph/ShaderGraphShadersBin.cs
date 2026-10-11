@@ -11,6 +11,10 @@ public sealed record SgDeclaredParam(string Name, int Components)
     public uint FieldsMask => (1u << Math.Clamp(Components, 1, 4)) - 1u;
 }
 
+/// <summary>M835: one texture a Shader Graph asks the base shader's definition to declare. <see cref="DefaultPath"/> may be empty (the entry then keeps the default
+/// Riot's own DiffuseTexture entry has).</summary>
+public sealed record SgDeclaredTexture(string Name, string DefaultPath);
+
 /// <summary>
 /// M834: the shaders.bin patch that makes a Shader Graph's custom parameter names legal. Proven in game (test4, 2026-10-11): a mod-shipped
 /// <c>data/shaders/shaders.bin</c> (Global.wad.client) whose DefaultEnv_Flat definition declares extra parameters lets a material carry them and
@@ -26,7 +30,7 @@ public static class SgShadersBin
     public const string WadName = "Global.wad.client";
 
     private static readonly uint FName = HashAlgorithms.Fnv1a("name"), FParameters = HashAlgorithms.Fnv1a("parameters"), FData = HashAlgorithms.Fnv1a("data"),
-        FLogical = HashAlgorithms.Fnv1a("logicalParameters"), FFields = HashAlgorithms.Fnv1a("fields"), ClassCustomShaderDef = HashAlgorithms.Fnv1a("CustomShaderDef");
+        FLogical = HashAlgorithms.Fnv1a("logicalParameters"), FFields = HashAlgorithms.Fnv1a("fields"), FTextures = HashAlgorithms.Fnv1a("textures"), FDefaultTexturePath = HashAlgorithms.Fnv1a("defaultTexturePath"), ClassCustomShaderDef = HashAlgorithms.Fnv1a("CustomShaderDef");
 
     // ---------------------------------------------------------------- bin walking (the same rules as the proven build.py)
 
@@ -205,14 +209,66 @@ public static class SgShadersBin
         return list;
     }
 
+    /// <summary>M835: the names of the textures a shader definition declares, in file order.</summary>
+    public static IReadOnlyList<string> DeclaredTextures(byte[] bin, string shaderDef)
+    {
+        var ents = Entries(bin);
+        if (!ents.TryGetValue(HashAlgorithms.Fnv1a(shaderDef), out var e) || e.Class != ClassCustomShaderDef)
+            throw new InvalidDataException($"shaders.bin has no CustomShaderDef '{shaderDef}'");
+        var list = new List<string>();
+        foreach (var f in ObjectFields(bin, e))
+        {
+            if (f.Hash != FTextures) continue;
+            if (f.Type != 0x80 || bin[f.Start] != 0x83) throw new InvalidDataException("the 'textures' of the definition are not a list of embedded values");
+            int count = (int)Read32(bin, f.Start + 5), q = f.Start + 9;
+            for (int i = 0; i < count; i++)
+            {
+                var (_, fl, q2) = StructFields(bin, q);
+                foreach (var pf in fl)
+                    if (pf.Hash == FName && pf.Type == 16) list.Add(StringAt(bin, pf.Start));
+                q = q2;
+            }
+        }
+        return list;
+    }
+
+    /// <summary>M835: the raw bytes of every element of a definition's <c>textures</c> list (class hash, size, fields), by texture name - for the check that a declared custom
+    /// texture has the shape of Riot's DiffuseTexture entry.</summary>
+    public static IReadOnlyDictionary<string, byte[]> TextureEntryBytes(byte[] bin, string shaderDef)
+    {
+        var ents = Entries(bin);
+        if (!ents.TryGetValue(HashAlgorithms.Fnv1a(shaderDef), out var e) || e.Class != ClassCustomShaderDef)
+            throw new InvalidDataException($"shaders.bin has no CustomShaderDef '{shaderDef}'");
+        var map = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var f in ObjectFields(bin, e))
+        {
+            if (f.Hash != FTextures) continue;
+            if (f.Type != 0x80 || bin[f.Start] != 0x83) throw new InvalidDataException("the 'textures' of the definition are not a list of embedded values");
+            int count = (int)Read32(bin, f.Start + 5), q = f.Start + 9;
+            for (int i = 0; i < count; i++)
+            {
+                var (_, fl, q2) = StructFields(bin, q);
+                foreach (var pf in fl)
+                    if (pf.Hash == FName && pf.Type == 16) map[StringAt(bin, pf.Start)] = bin.AsSpan(q, q2 - q).ToArray();
+                q = q2;
+            }
+        }
+        return map;
+    }
+
     // ---------------------------------------------------------------- the patch
 
     /// <summary>Riot's <paramref name="riot"/> bytes with <paramref name="add"/> appended to the parameters of <paramref name="shaderDef"/> and NOTHING else changed.
     /// Throws <see cref="InvalidDataException"/> (with the reason) for a file it does not understand, a name already declared, or a definition shaped differently from
     /// what was proven in game (no <c>TintColor</c> element to copy).</summary>
-    public static byte[] Patch(byte[] riot, string shaderDef, IReadOnlyList<SgDeclaredParam> add)
+    public static byte[] Patch(byte[] riot, string shaderDef, IReadOnlyList<SgDeclaredParam> add) => Patch(riot, shaderDef, add, Array.Empty<SgDeclaredTexture>());
+
+    /// <summary>M835: the same, also appending <paramref name="addTextures"/> to the definition's <c>textures</c> list. Each new entry is a copy of Riot's own
+    /// <c>DiffuseTexture</c> entry (exactly two fields: <c>name</c> and <c>defaultTexturePath</c>, a WadChunkLink); only the name - and the default link, when the graph
+    /// names a default path - change. The caller decides WHETHER to ship them (<see cref="SgShip.CustomTexturesProven"/>).</summary>
+    public static byte[] Patch(byte[] riot, string shaderDef, IReadOnlyList<SgDeclaredParam> add, IReadOnlyList<SgDeclaredTexture> addTextures)
     {
-        if (add.Count == 0) return riot;
+        if (add.Count == 0 && addTextures.Count == 0) return riot;
         var ents = Entries(riot);
         uint key = HashAlgorithms.Fnv1a(shaderDef);
         if (!ents.TryGetValue(key, out var e) || e.Class != ClassCustomShaderDef) throw new InvalidDataException($"shaders.bin has no CustomShaderDef '{shaderDef}'");
@@ -225,12 +281,64 @@ public static class SgShadersBin
             if (!taken.Add(a.Name)) throw new InvalidDataException($"'{a.Name}' is added twice");
         }
 
+        var takenTex = DeclaredTextures(riot, shaderDef).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in addTextures)
+        {
+            if (!SgNames.IsIdentifier(t.Name, SgNames.MaxParamName)) throw new InvalidDataException($"'{t.Name}' is not a valid texture name");
+            if (takenTex.Contains(t.Name)) throw new InvalidDataException($"the texture '{t.Name}' is already declared by {shaderDef}");
+            if (!takenTex.Add(t.Name) || taken.Contains(t.Name)) throw new InvalidDataException($"the texture name '{t.Name}' is added twice or is also a parameter");
+        }
+
         var outFields = new List<byte[]>();
-        bool done = false;
+        bool done = add.Count == 0, doneTex = addTextures.Count == 0;
         foreach (var f in ObjectFields(riot, e))
         {
             byte[] val = riot.AsSpan(f.Start, f.End - f.Start).ToArray();
-            if (f.Hash == FParameters)
+            if (f.Hash == FTextures && addTextures.Count > 0)
+            {
+                if (f.Type != 0x80 || riot[f.Start] != 0x83) throw new InvalidDataException("the 'textures' of the definition are not a list of embedded values");
+                int count = (int)Read32(riot, f.Start + 5), q = f.Start + 9;
+                var elems = new List<byte[]>();
+                (uint Class, List<Field> Fields)? diffuse = null;
+                for (int i = 0; i < count; i++)
+                {
+                    var (ch, fl, q2) = StructFields(riot, q);
+                    if (fl.Any(x => x.Hash == FName && x.Type == 16 && StringAt(riot, x.Start) == "DiffuseTexture")) diffuse = (ch, fl);
+                    elems.Add(riot.AsSpan(q, q2 - q).ToArray());
+                    q = q2;
+                }
+                if (q != f.End) throw new InvalidDataException("the texture list did not parse to its length");
+                if (diffuse is null) throw new InvalidDataException($"{shaderDef} has no DiffuseTexture entry to copy the texture entry shape from");
+                if (!diffuse.Value.Fields.Select(x => x.Hash).ToHashSet().SetEquals(new[] { FName, FDefaultTexturePath }))
+                    throw new InvalidDataException("DiffuseTexture's entry has fields this patch does not know (expected name and defaultTexturePath)");
+                foreach (var a in addTextures)
+                {
+                    var nf = new List<(uint, int, byte[])>();
+                    foreach (var x in diffuse.Value.Fields)
+                    {
+                        if (x.Hash == FName) nf.Add((x.Hash, x.Type, EncStr(a.Name)));
+                        else if (x.Hash == FDefaultTexturePath && a.DefaultPath.Length > 0)
+                        {
+                            if (x.Type != 18) throw new InvalidDataException("DiffuseTexture's defaultTexturePath is not a WadChunkLink");
+                            var link = new byte[8];
+                            BinaryPrimitives.WriteUInt64LittleEndian(link, HashAlgorithms.WadPath(a.DefaultPath.Trim().Replace('\\', '/')));
+                            nf.Add((x.Hash, x.Type, link));
+                        }
+                        else nf.Add((x.Hash, x.Type, riot.AsSpan(x.Start, x.End - x.Start).ToArray()));
+                    }
+                    elems.Add(EncEmbed(diffuse.Value.Class, nf));
+                }
+                int bodyLen = elems.Sum(x => x.Length);
+                var nv = new byte[9 + bodyLen];
+                nv[0] = 0x83;
+                BinaryPrimitives.WriteUInt32LittleEndian(nv.AsSpan(1), (uint)(4 + bodyLen));
+                BinaryPrimitives.WriteUInt32LittleEndian(nv.AsSpan(5), (uint)(count + addTextures.Count));
+                int at = 9;
+                foreach (var x in elems) { x.CopyTo(nv, at); at += x.Length; }
+                val = nv;
+                doneTex = true;
+            }
+            else if (f.Hash == FParameters && add.Count > 0)
             {
                 if (f.Type != 0x80 || riot[f.Start] != 0x83) throw new InvalidDataException("the 'parameters' of the definition are not a list of embedded values");
                 int count = (int)Read32(riot, f.Start + 5), q = f.Start + 9;
@@ -293,6 +401,7 @@ public static class SgShadersBin
             outFields.Add(field);
         }
         if (!done) throw new InvalidDataException($"{shaderDef} has no 'parameters' list");
+        if (!doneTex) throw new InvalidDataException($"{shaderDef} has no 'textures' list");
 
         int bodySize = 4 + 2 + outFields.Sum(x => x.Length);
         var entry = new byte[4 + bodySize];
@@ -311,7 +420,10 @@ public static class SgShadersBin
 
     /// <summary>The bindiff-style check, in code: the patched file has the same objects in the same order with the same header, only
     /// <paramref name="shaderDef"/> differs, and it now declares Riot's parameters unchanged followed by exactly <paramref name="added"/>. Empty = fine.</summary>
-    public static IReadOnlyList<string> Verify(byte[] riot, byte[] patched, string shaderDef, IReadOnlyList<SgDeclaredParam> added)
+    public static IReadOnlyList<string> Verify(byte[] riot, byte[] patched, string shaderDef, IReadOnlyList<SgDeclaredParam> added) =>
+        Verify(riot, patched, shaderDef, added, Array.Empty<SgDeclaredTexture>());
+
+    public static IReadOnlyList<string> Verify(byte[] riot, byte[] patched, string shaderDef, IReadOnlyList<SgDeclaredParam> added, IReadOnlyList<SgDeclaredTexture> addedTextures)
     {
         var bad = new List<string>();
         try
@@ -323,11 +435,14 @@ public static class SgShadersBin
             foreach (var h in a.Keys)
             {
                 bool same = riot.AsSpan(a[h].Start, a[h].End - a[h].Start).SequenceEqual(patched.AsSpan(b[h].Start, b[h].End - b[h].Start));
-                if (h == key ? same && added.Count > 0 : !same) bad.Add(h == key ? "the shader definition was not changed" : $"object 0x{h:x8} differs from Riot's");
+                if (h == key ? same && (added.Count > 0 || addedTextures.Count > 0) : !same) bad.Add(h == key ? "the shader definition was not changed" : $"object 0x{h:x8} differs from Riot's");
             }
             var before = Declared(riot, shaderDef); var after = Declared(patched, shaderDef);
             if (!after.Take(before.Count).SequenceEqual(before)) bad.Add("Riot's own parameters of the definition changed");
             if (!after.Skip(before.Count).SequenceEqual(added)) bad.Add("the declared parameters are not Riot's followed by the added ones");
+            var tb = DeclaredTextures(riot, shaderDef); var ta = DeclaredTextures(patched, shaderDef);
+            if (!ta.Take(tb.Count).SequenceEqual(tb)) bad.Add("Riot's own textures of the definition changed");
+            if (!ta.Skip(tb.Count).SequenceEqual(addedTextures.Select(t => t.Name))) bad.Add("the declared textures are not Riot's followed by the added ones");
         }
         catch (InvalidDataException ex) { bad.Add(ex.Message); }
         return bad;

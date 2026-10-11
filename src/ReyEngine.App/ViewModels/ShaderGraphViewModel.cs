@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ReyEngine.App.Services;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.Materials.Graph;
 using ReyEngine.Formats.Materials.ShaderGraph;
@@ -168,6 +169,38 @@ public sealed partial class SgParamRow : ObservableObject
     }
 }
 
+/// <summary>M835: one custom texture of the graph in the Details panel: rename, default image, address modes, delete.</summary>
+public sealed partial class SgTextureRow : ObservableObject
+{
+    private readonly ShaderGraphViewModel _owner;
+    private readonly string _name;
+    private bool _syncing;
+
+    public static IReadOnlyList<string> AddressChoices { get; } = SgCustomTexture.AddressModes;
+
+    public SgTextureRow(ShaderGraphViewModel owner, SgCustomTexture t, int usedBy)
+    {
+        _owner = owner; _name = t.Name;
+        _syncing = true;
+        _nameText = t.Name; _pathText = t.DefaultPath; _addressU = t.AddressU; _addressV = t.AddressV;
+        _syncing = false;
+        UsedText = usedBy == 0 ? "not used by any node" : usedBy == 1 ? "used by 1 node" : $"used by {usedBy} nodes";
+    }
+
+    public string Name => _name;
+    public string UsedText { get; }
+    [ObservableProperty] private string _nameText;
+    [ObservableProperty] private string _pathText;
+    [ObservableProperty] private string _addressU;
+    [ObservableProperty] private string _addressV;
+
+    [RelayCommand] public void CommitName() { if (!_syncing && NameText != _name && !_owner.RenameTexture(_name, NameText)) NameText = _name; }
+    [RelayCommand] public void CommitPath() { if (!_syncing && !_owner.SetTextureDefault(_name, PathText)) PathText = _owner.Document?.FindTexture(_name)?.DefaultPath ?? PathText; }
+    [RelayCommand] public void Delete() => _owner.DeleteTexture(_name);
+    partial void OnAddressUChanged(string value) { if (!_syncing && value is not null) _owner.SetTextureAddress(_name, value, null); }
+    partial void OnAddressVChanged(string value) { if (!_syncing && value is not null) _owner.SetTextureAddress(_name, null, value); }
+}
+
 /// <summary>One line of the diagnostics list: a node's error or warning (selecting it selects the node).</summary>
 public sealed record SgDiagnosticRow(string NodeId, bool IsError, string Text);
 
@@ -214,6 +247,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         _projectRoot = projectRoot;
         PropRows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoPropRows));
         ParamRows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoParamRows));
+        TextureRows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoTextureRows));
         DiagnosticRows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoDiagnosticRows));
         SavedGraphs.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoSavedGraphs));
     }
@@ -261,6 +295,14 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<SgPropRow> PropRows { get; } = new();
     public ObservableCollection<SgParamRow> ParamRows { get; } = new();
+    public ObservableCollection<SgTextureRow> TextureRows { get; } = new();
+    public bool NoTextureRows => TextureRows.Count == 0;
+
+    /// <summary>M835: the host renames a texture in the materials of the graph (their samplerValues entries). Arguments: graph file path, old name, new name.</summary>
+    public Func<string?, string, string, (int Renamed, string Note)>? RenameTextureInMaterials { get; set; }
+
+    /// <summary>M835: checks that a default texture path names an asset the project can read (the host knows the mounts). Null = unchecked.</summary>
+    public Func<string, bool>? TextureExists { get; set; }
     public bool NoParamRows => ParamRows.Count == 0;
 
     /// <summary>M834: the host renames a parameter in the materials of the graph (the Material Editor's own commands, one undo step there).
@@ -299,6 +341,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        ReleaseLive(FilePath);
         _disposed = true;
         _debounce?.Cancel();
         _debounce?.Dispose();
@@ -310,6 +353,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     /// <summary>Close the open graph (the window goes back to the material graph). Unsaved edits are the caller's to ask about.</summary>
     public void Close()
     {
+        string? closedPath = FilePath;
         _debounce?.Cancel();
         Interlocked.Increment(ref _compileVersion);   // a compile still running is dropped
         Compiling = false;
@@ -317,7 +361,8 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         _undo.Clear(); _moved = false; IsDirty = false; _editVersion++;
         Status = "";
         Graph = null; SelectedNodeId = null; SelectedCommentId = null; GraphName = ""; BaseShaderName = ""; Hlsl = ""; HlslNote = "No Shader Graph is open.";
-        PropRows.Clear(); ParamRows.Clear(); DiagnosticRows.Clear(); CompileState = "";
+        PropRows.Clear(); ParamRows.Clear(); TextureRows.Clear(); DiagnosticRows.Clear(); CompileState = "";
+        ReleaseLive(closedPath);
         OnPropertyChanged(nameof(IsOpen));
         OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo));
         StateChanged?.Invoke();
@@ -325,7 +370,10 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
 
     /// <summary>Make a new graph on <paramref name="baseShader"/> (the material's renderShader) with the starter wiring
     /// texture RGB -> Base Color, texture A -> Opacity. The name is made unique among the project's saved graphs.</summary>
-    public bool NewFromBase(string baseShader, out string error, string? suggestedName = null)
+    public bool NewFromBase(string baseShader, out string error, string? suggestedName = null) => NewFromTemplate(baseShader, null, out error, suggestedName);
+
+    /// <summary>M835: a new graph from one of the <see cref="SgTemplates"/> (null = the original starter: texture RGB to Base Color, texture A to Opacity).</summary>
+    public bool NewFromTemplate(string baseShader, string? templateId, out string error, string? suggestedName = null)
     {
         error = "";
         if (BaseResolver is null) { error = "No shader cache is available to read the base shader from."; Status = error; return false; }
@@ -334,8 +382,15 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
 
         string leaf = baseShader.Trim('/').Split('/').Last();
         string name = UniqueName(suggestedName is { Length: > 0 } ? suggestedName : leaf + "_Graph");
-        var doc = ShaderGraphDocument.CreateEmpty(name, b.Shader);
-        var tex = b.Textures.FirstOrDefault();
+        ShaderGraphDocument doc;
+        if (templateId is not null)
+        {
+            if (SgTemplates.Problem(templateId, b) is { } why2) { error = $"The '{templateId}' template cannot be built on {leaf}: {why2}."; Status = error; return false; }
+            try { doc = SgTemplates.Build(templateId, name, b); }
+            catch (Exception ex) { error = ex.Message; Status = error; return false; }
+        }
+        else doc = ShaderGraphDocument.CreateEmpty(name, b.Shader);
+        var tex = templateId is null ? b.Textures.FirstOrDefault() : null;
         if (tex is not null)
         {
             doc.Nodes.Add(new SgNode { Id = "n2", Type = "TextureSample", X = 300, Y = 120, Props = { ["texture"] = tex.Name } });
@@ -345,7 +400,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         try { Load(doc, b, null); }
         catch (Exception ex) { Close(); error = "The new Shader Graph could not be set up: " + ex.Message; Status = error; return false; }
         IsDirty = true;   // not on disk yet
-        Status = $"New Shader Graph '{name}' on {leaf}. Save (Ctrl+S) writes it to the project.";
+        Status = $"New Shader Graph '{name}' on {leaf}{(templateId is null ? "" : " from the '" + (SgTemplates.All.FirstOrDefault(t => t.Id == templateId)?.Title ?? templateId) + "' template")}. Save (Ctrl+S) writes it to the project.";
         return true;
     }
 
@@ -380,8 +435,18 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         return true;
     }
 
+    /// <summary>M835: the viewport service must stop drawing this editor's document for <paramref name="path"/> (the graph was closed, replaced by another, or the editor went away):
+    /// back to the saved file, and the main window is told so it can refresh.</summary>
+    private static void ReleaseLive(string? path)
+    {
+        if (path is null) return;
+        ShaderGraphViewport.SetLive(path, null);
+        ShaderGraphViewport.NotifyGraphChanged(path);
+    }
+
     private void Load(ShaderGraphDocument doc, SgBase b, string? path)
     {
+        if (FilePath is not null && !string.Equals(FilePath, path, StringComparison.OrdinalIgnoreCase)) ReleaseLive(FilePath);   // Open B / a new graph while A is open
         _debounce?.Cancel();
         _doc = doc; _base = b; FilePath = path; _build = null;
         _undo.Clear(); _moved = false; IsDirty = false;
@@ -463,25 +528,26 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         private readonly ShaderGraphViewModel _owner;
         private readonly ShaderGraphDocument _before, _after;
         private readonly (string From, string To)? _rename;
-        public SnapshotCommand(ShaderGraphViewModel owner, string name, ShaderGraphDocument before, ShaderGraphDocument after, object context, (string From, string To)? rename)
-        { _owner = owner; Name = name; _before = before; _after = after; Context = context; _rename = rename; }
+        private readonly bool _textures;
+        public SnapshotCommand(ShaderGraphViewModel owner, string name, ShaderGraphDocument before, ShaderGraphDocument after, object context, (string From, string To)? rename, bool textures)
+        { _owner = owner; Name = name; _before = before; _after = after; Context = context; _rename = rename; _textures = textures; }
         public string Name { get; }
         public object? Context { get; }
-        public void Execute() { _owner.Restore(_after); if (_rename is { } r) _owner.FollowRename(r.From, r.To); }
-        public void Undo() { _owner.Restore(_before); if (_rename is { } r) _owner.FollowRename(r.To, r.From); }
+        public void Execute() { _owner.Restore(_after); if (_rename is { } r) _owner.FollowRename(r.From, r.To, _textures); }
+        public void Undo() { _owner.Restore(_before); if (_rename is { } r) _owner.FollowRename(r.To, r.From, _textures); }
         public bool CanMergeWith(IEditorCommand next) => false;
         public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
     }
 
     /// <summary>Apply an edit as one undo step: <paramref name="edit"/> changes a COPY of the document; the step swaps the before and after snapshots.</summary>
-    private bool Do(string name, Action<ShaderGraphDocument> edit, (string From, string To)? rename = null)
+    private bool Do(string name, Action<ShaderGraphDocument> edit, (string From, string To)? rename = null, bool textures = false)
     {
         if (_doc is null) return false;
         var before = _doc.Clone();
         var after = _doc.Clone();
         edit(after);
         if (Same(before, after)) return false;
-        var cmd = new SnapshotCommand(this, name, before, after, _context, rename);
+        var cmd = new SnapshotCommand(this, name, before, after, _context, rename, textures);
         _undo.Do(cmd);
         AfterEdit(name);
         return true;
@@ -505,6 +571,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
             _doc.Nodes = copy.Nodes;
             _doc.Links = copy.Links;
             _doc.Params = copy.Params;
+            _doc.Textures = copy.Textures;
             _doc.Comments = copy.Comments;
         }
         finally { _restoring = false; }
@@ -513,10 +580,10 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     private string _renameNote = "";
 
     /// <summary>A rename (or its undo) reaches the materials that name this graph, through the host.</summary>
-    internal void FollowRename(string from, string to)
+    internal void FollowRename(string from, string to, bool texture = false)
     {
         (int Renamed, string Note) r = (0, "");
-        try { r = RenameParameterInMaterials?.Invoke(FilePath, from, to) ?? (0, ""); }
+        try { r = (texture ? RenameTextureInMaterials : RenameParameterInMaterials)?.Invoke(FilePath, from, to) ?? (0, ""); }
         catch (Exception ex) { _renameNote = $" (the materials could NOT follow: {ex.Message}. A material that still carries '{from}' blocks the export: rename or remove it in the Material Editor)"; return; }
         _renameNote = r.Renamed > 0 ? $" ({r.Renamed} material parameter{(r.Renamed == 1 ? "" : "s")} renamed in the Material Editor; undo it there too)" : "";
         if (r.Note.Length > 0) _renameNote += " " + r.Note;
@@ -565,22 +632,183 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     public string? AddNode(SgPaletteEntry entry, double x, double y)
     {
         string? id = null;
-        bool ok = Do("Add " + entry.Title, d =>
+        bool ok = Do("Add " + entry.Title, d => id = ApplyEntry(d, entry, x, y));
+        if (ok) SelectedNodeId = id;
+        return ok ? id : null;
+    }
+
+    /// <summary>Create the node of a palette line in <paramref name="d"/> (and the custom parameter or texture a "new" line asks for); returns its id.</summary>
+    private string ApplyEntry(ShaderGraphDocument d, SgPaletteEntry entry, double x, double y)
+    {
+        string id = d.NewId();
+        var n = new SgNode { Id = id, Type = entry.Type, X = Math.Round(x), Y = Math.Round(y) };
+        foreach (var (k, v) in entry.Props) if (k != SgCatalog.NewParamKey && k != SgCatalog.NewTextureKey) n.Props[k] = v;
+        if (entry.Props.TryGetValue(SgCatalog.NewParamKey, out var kind) && SgCustomParams.ParseKind(kind) is { } pk)
         {
-            id = d.NewId();
-            var n = new SgNode { Id = id, Type = entry.Type, X = Math.Round(x), Y = Math.Round(y) };
-            foreach (var (k, v) in entry.Props) if (k != SgCatalog.NewParamKey) n.Props[k] = v;
-            if (entry.Props.TryGetValue(SgCatalog.NewParamKey, out var kind) && SgCustomParams.ParseKind(kind) is { } pk)
-            {
-                // "new parameter": the parameter and the node that reads it are ONE undo step
-                string pn = SgNames.UniqueParameterName(pk.IsColor ? "ColorParam" : pk.Components == 1 ? "ScalarParam" : "VectorParam", d, _base);
-                d.Params.Add(new SgCustomParam { Name = pn, Components = pk.Components, IsColor = pk.IsColor, Default = SgCustomParams.NewDefault(pk.Components, pk.IsColor) });
-                n.Props["name"] = pn;
-            }
-            d.Nodes.Add(n);
+            // "new parameter": the parameter and the node that reads it are ONE undo step
+            string pn = SgNames.UniqueParameterName(pk.IsColor ? "ColorParam" : pk.Components == 1 ? "ScalarParam" : "VectorParam", d, _base);
+            d.Params.Add(new SgCustomParam { Name = pn, Components = pk.Components, IsColor = pk.IsColor, Default = SgCustomParams.NewDefault(pk.Components, pk.IsColor) });
+            n.Props["name"] = pn;
+        }
+        if (entry.Props.ContainsKey(SgCatalog.NewTextureKey))
+        {
+            string tn = SgNames.UniqueTextureName("CustomTexture", d, _base);
+            d.Textures.Add(new SgCustomTexture { Name = tn });
+            n.Props["texture"] = tn;
+        }
+        d.Nodes.Add(n);
+        return id;
+    }
+
+    /// <summary>
+    /// M835 (Unreal's drag-a-wire-into-empty-space): create the node of <paramref name="entry"/> at a point and wire it to the pin the wire was dragged from, as ONE undo step.
+    /// <paramref name="fromIsOutput"/>: the wire started at an output pin (<paramref name="fromNode"/>.<paramref name="fromPin"/>) and ends at the new node's input <paramref name="newPin"/>;
+    /// otherwise it started at an unwired input and the new node's output <paramref name="newPin"/> feeds it.
+    /// </summary>
+    public string? AddNodeAndConnect(SgPaletteEntry entry, double x, double y, string fromNode, string fromPin, bool fromIsOutput, string newPin)
+    {
+        if (_doc is null || _doc.Find(fromNode) is not { } from) return null;
+        // the pins are checked on a throw-away node BEFORE anything is recorded: a refusal changes nothing and costs no undo step
+        var probe = new SgNode { Id = "probe", Type = entry.Type };
+        foreach (var (k, v) in entry.Props) probe.Props[k] = v;
+        var newDef = SgCatalog.DefFor(probe);
+        var fromDef = SgCatalog.DefFor(from);
+        bool pinsOk = newDef is not null && fromDef is not null
+            && (fromIsOutput ? fromDef.OutputIndex(fromPin) >= 0 && newDef.InputIndex(newPin) >= 0 : newDef.OutputIndex(newPin) >= 0 && fromDef.InputIndex(fromPin) >= 0);
+        if (!pinsOk) { Status = "That node has no such pin."; return null; }
+        string? id = null;
+        bool ok = Do("Add " + entry.Title + " and connect", d =>
+        {
+            id = ApplyEntry(d, entry, x, y);
+            string srcNode = fromIsOutput ? fromNode : id, srcPin = fromIsOutput ? fromPin : newPin;
+            string dstNode = fromIsOutput ? id : fromNode, dstPin = fromIsOutput ? newPin : fromPin;
+            d.Links.RemoveAll(l => l.ToNode == dstNode && l.ToPin == dstPin);
+            d.Links.Add(new SgLink { FromNode = srcNode, FromPin = srcPin, ToNode = dstNode, ToPin = dstPin });
         });
         if (ok) SelectedNodeId = id;
         return ok ? id : null;
+    }
+
+    /// <summary>The width a pin of a node takes (its fixed width, or 1 when it takes any: the pin's current default is a scalar).</summary>
+    private int PinWidth(SgNode n, string pin) => SgCatalog.DefFor(n)?.Inputs.FirstOrDefault(p => p.Name == pin) is { } pd ? (pd.Fixed > 0 ? pd.Fixed : 1) : 1;
+
+    /// <summary>Why "Promote to Parameter" / "Add Constant" cannot be used on this pin, or null.</summary>
+    public string? CanPromote(string nodeId, string pin)
+    {
+        var n = _doc?.Find(nodeId);
+        if (n is null) return "That node no longer exists.";
+        var def = SgCatalog.DefFor(n);
+        if (def is null || def.InputIndex(pin) < 0) return "That pin does not exist.";
+        if (_doc!.LinkInto(nodeId, pin) is not null) return "That pin is already wired.";
+        return null;
+    }
+
+    /// <summary>The current default of an unwired pin, as the text a parameter or constant of its width holds.</summary>
+    private string PinValueText(SgNode n, SgPinDef pd, int width)
+    {
+        float v = SgCatalog.IsUvPin(n, pd) || SgCatalog.IsTimePin(n, pd) ? 0f : SgCatalog.PinDefault(n, pd);
+        return SgCatalog.FormatConstant(Enumerable.Repeat(v, width));
+    }
+
+    /// <summary>M835: right-click an unwired input &gt; Promote to Parameter: a custom parameter of the pin's type, holding the pin's current value, wired into it. One undo step.
+    /// A Base Color pin becomes a colour. A UV or Time pin has no number as its default (the engine supplies it): the parameter starts at zero.</summary>
+    public string? PromoteToParameter(string nodeId, string pin)
+    {
+        if (CanPromote(nodeId, pin) is { } why) { Status = why; return null; }
+        if (_doc!.Params.Count >= ShaderGraphDocument.MaxCustomParams) { Status = $"A graph has at most {ShaderGraphDocument.MaxCustomParams} custom parameters."; return null; }
+        var n = _doc.Find(nodeId)!;
+        var pd = SgCatalog.DefFor(n)!.Inputs.First(p => p.Name == pin);
+        int w = PinWidth(n, pin);
+        string? created = null;
+        bool ok = Do("Promote " + pin + " to parameter", d =>
+        {
+            string name = SgNames.ParameterNameFrom(pin, d, _base);
+            created = name;
+            d.Params.Add(new SgCustomParam { Name = name, Components = w, IsColor = pin == SgCatalog.BaseColorPin && w >= 3, Default = PinValueText(n, pd, w) });
+            string id = d.NewId();
+            var target = d.Find(nodeId)!;
+            d.Nodes.Add(new SgNode { Id = id, Type = "Parameter", X = Math.Round(target.X - 260), Y = Math.Round(target.Y + 40 + 24 * (SgCatalog.DefFor(target)!.InputIndex(pin))), Props = { ["name"] = name } });
+            d.Links.Add(new SgLink { FromNode = id, FromPin = "Value", ToNode = nodeId, ToPin = pin });
+        });
+        if (ok) Status = $"Promoted {pin} to the custom parameter '{created}' ({SgCatalog.TypeName(w)}). A material can now set it.";
+        return ok ? created : null;
+    }
+
+    /// <summary>M835: right-click an unwired input &gt; Add Constant: a Constant node of the pin's width holding the pin's current value, wired into it. One undo step.</summary>
+    public string? AddConstantTo(string nodeId, string pin)
+    {
+        if (CanPromote(nodeId, pin) is { } why) { Status = why; return null; }
+        var n = _doc!.Find(nodeId)!;
+        var pd = SgCatalog.DefFor(n)!.Inputs.First(p => p.Name == pin);
+        int w = PinWidth(n, pin);
+        string? id = null;
+        bool ok = Do("Add constant to " + pin, d =>
+        {
+            id = d.NewId();
+            var target = d.Find(nodeId)!;
+            d.Nodes.Add(new SgNode { Id = id, Type = "Constant", X = Math.Round(target.X - 260), Y = Math.Round(target.Y + 40 + 24 * (SgCatalog.DefFor(target)!.InputIndex(pin))), Props = { ["value"] = PinValueText(n, pd, w) } });
+            d.Links.Add(new SgLink { FromNode = id, FromPin = "Value", ToNode = nodeId, ToPin = pin });
+        });
+        if (ok) SelectedNodeId = id;
+        return ok ? id : null;
+    }
+
+    // ============================================================================== custom textures (M835)
+
+    public string? TextureProblem(string name, string? renaming = null) => _doc is null ? "No Shader Graph is open." : SgNames.TextureProblem(name, _doc, _base, renaming);
+
+    /// <summary>Create a custom texture without a node (the Details panel's button).</summary>
+    public string? AddTexture(string? name = null)
+    {
+        if (_doc is null) return null;
+        string tn = name ?? SgNames.UniqueTextureName("CustomTexture", _doc, _base);
+        if (TextureProblem(tn) is { } why) { Status = why; return null; }
+        if (_doc.Textures.Count >= ShaderGraphDocument.MaxCustomTextures) { Status = $"A graph has at most {ShaderGraphDocument.MaxCustomTextures} custom textures."; return null; }
+        return Do("Add texture " + tn, d => d.Textures.Add(new SgCustomTexture { Name = tn })) ? tn : null;
+    }
+
+    [RelayCommand] private void AddTextureParameter() => AddTexture();
+
+    /// <summary>Rename a custom texture: every Texture Sample that reads it follows, and the materials assigned to this graph follow through the host (their samplerValues entry).</summary>
+    public bool RenameTexture(string oldName, string newName)
+    {
+        if (_doc is null) return false;
+        newName = (newName ?? "").Trim();
+        if (_doc.FindTexture(oldName) is null) { Status = $"'{oldName}' is not a custom texture of this graph."; return false; }
+        if (newName == oldName) return false;
+        if (TextureProblem(newName, oldName) is { } why) { Status = why; return false; }
+        return Do($"Rename texture {oldName} to {newName}", d =>
+        {
+            d.FindTexture(oldName)!.Name = newName;
+            foreach (var n in d.Nodes)
+                if (n.Type == "TextureSample" && n.Prop("texture") == oldName) n.Props["texture"] = newName;
+        }, (oldName, newName), textures: true);
+    }
+
+    public bool SetTextureDefault(string name, string path)
+    {
+        var t = _doc?.FindTexture(name);
+        if (t is null) return false;
+        path = (path ?? "").Trim().Replace('\\', '/');
+        if (SgNames.TexturePathProblem(path) is { } pathWhy) { Status = pathWhy; return false; }
+        if (path.Length > 0 && TextureExists is { } exists && !exists(path)) Status = $"Note: '{path}' is not an asset the project can read; the preview shows no default image.";
+        return Do("Edit texture " + name, d => d.FindTexture(name)!.DefaultPath = path);
+    }
+
+    public bool SetTextureAddress(string name, string? u, string? v)
+    {
+        var t = _doc?.FindTexture(name);
+        if (t is null) return false;
+        if (u is not null && !SgCustomTexture.AddressModes.Contains(u) || v is not null && !SgCustomTexture.AddressModes.Contains(v)) return false;
+        return Do("Edit texture " + name, d => { var q = d.FindTexture(name)!; if (u is not null) q.AddressU = u; if (v is not null) q.AddressV = v; });
+    }
+
+    public bool DeleteTexture(string name)
+    {
+        if (_doc is null || _doc.FindTexture(name) is null) return false;
+        int uses = _doc.Nodes.Count(n => n.Type == "TextureSample" && n.Prop("texture") == name);
+        if (uses > 0) { Status = $"'{name}' is still read by {uses} node(s): delete them first."; return false; }
+        return Do("Delete texture " + name, d => d.Textures.RemoveAll(q => q.Name == name));
     }
 
     public bool DeleteNode(string id)
@@ -904,7 +1132,10 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     private void RefreshParams()
     {
         ParamRows.Clear();
+        TextureRows.Clear();
         if (_doc is null) return;
+        foreach (var t in _doc.Textures)
+            TextureRows.Add(new SgTextureRow(this, t, _doc.Nodes.Count(n => n.Type == "TextureSample" && n.Prop("texture") == t.Name)));
         foreach (var p in _doc.Params)
             ParamRows.Add(new SgParamRow(this, p, _doc.Nodes.Count(n => n.Type == "Parameter" && n.Prop("name") == p.Name)));
     }
@@ -926,7 +1157,16 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         switch (n.Type)
         {
             case "TextureSample":
-                PropRows.Add(new SgPropRow(this, id, "texture", "Texture", n.Prop("texture"), "A texture the base shader declares in shaders.bin.", _base?.Textures.Select(t => t.Name).ToList()));
+                PropRows.Add(new SgPropRow(this, id, "texture", "Texture", n.Prop("texture"), "A texture the base shader declares in shaders.bin, or one of this graph's custom textures.",
+                    (_base?.Textures.Select(t => t.Name) ?? Enumerable.Empty<string>()).Concat(_doc.Textures.Select(t => t.Name)).ToList()));
+                if (_doc.FindTexture(n.Prop("texture")) is { } ct)
+                {
+                    string cname = ct.Name;
+                    PropRows.Add(new SgPropRow(this, id, "renameTexture", "Rename texture", ct.Name, "Renames the custom texture everywhere in the graph and in the materials assigned to it.", null, t => RenameTexture(cname, t)));
+                    PropRows.Add(new SgPropRow(this, id, "defaultImage", "Default image", ct.DefaultPath, "Asset path of the image used until a material sets this texture, for example assets/maps/.../x.tex. The preview and the viewport show it.", null, t => SetTextureDefault(cname, t)));
+                    PropRows.Add(new SgPropRow(this, id, "addressU", "Address U", ct.AddressU, "How the preview samples outside 0..1 along U (the game takes the address mode from the material).", SgCustomTexture.AddressModes, t => SetTextureAddress(cname, t, null)));
+                    PropRows.Add(new SgPropRow(this, id, "addressV", "Address V", ct.AddressV, "How the preview samples outside 0..1 along V.", SgCustomTexture.AddressModes, t => SetTextureAddress(cname, null, t)));
+                }
                 break;
             case "Parameter":
             {
@@ -1025,8 +1265,28 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
             : $"{build.Compiled.Count - ok} of {build.Compiled.Count} pixel input signatures failed to compile or verify.";
         Project();   // errors from the compiler land on their nodes
         ShowHlsl();
+        PublishToViewport(build);
         BuildCompleted?.Invoke(build);
         StateChanged?.Invoke();
+    }
+
+    /// <summary>M835: a saved graph that materials are assigned to shows in the viewports as it is edited: the open document replaces the file's for the viewport service, its compiled
+    /// signatures are handed over (so the viewport does not compile them again), and the main window is told to refresh, debounced.</summary>
+    private void PublishToViewport(SgBuild build)
+    {
+        if (FilePath is not { } path || _doc is null || _base is null) return;
+        try
+        {
+            ShaderGraphViewport.SetLive(path, build.Document);
+            if (!build.Analysis.HasErrors) ShaderGraphViewport.Prime(build.Document, _base, build);
+            string stem = ShaderGraphRegistry.StemOf(path);
+            ShaderGraphViewport.Report(path, build.Ok,
+                build.Analysis.HasErrors ? ShaderGraphViewport.ErrorsText(stem, build.Analysis.Errors.First().Message) :
+                build.Ok ? ShaderGraphViewport.DrawnText(stem) :
+                $"Shader Graph '{stem}' does not compile for every pixel input signature: Riot's shader is drawn where it fails.");
+            ShaderGraphViewport.NotifyGraphChanged(path);
+        }
+        catch (Exception ex) { _ = ex; /* the viewport hook must never break the editor */ }
     }
 
     private void ShowHlsl()

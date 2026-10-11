@@ -3,6 +3,7 @@
         xmlns:views="clr-namespace:ReyEngine.App.Views"
         xmlns:vm="clr-namespace:ReyEngine.App.ViewModels"
         xmlns:gm="clr-namespace:ReyEngine.Formats.Materials.Graph;assembly=ReyEngine.Formats"
+        xmlns:fmt="clr-namespace:ReyEngine.Formats.Materials.ShaderGraph;assembly=ReyEngine.Formats"
         x:Class="ReyEngine.App.Views.ShaderPreviewWindow"
         x:DataType="vm:ShaderPreviewViewModel"
         Title="ReyEngine — Material Graph" Width="1560" Height="940"
@@ -93,9 +94,29 @@
                   ToolTip.Tip="Reload the loaded shader permutation from the shader cache." />
           <!-- M832: Shader Graph entry points -->
           <Border Width="1" Height="20" Background="{DynamicResource ReyBorderAccentBrush}" Margin="4,0" />
-          <Button Classes="tool" Content="New Shader Graph" Command="{Binding NewShaderGraphCommand}"
+          <Button x:Name="NewShaderGraphButton" Classes="tool" Content="New Shader Graph"
                   IsEnabled="{Binding CanNewShaderGraph}"
-                  ToolTip.Tip="Start a custom shader graph on the shader of the picked material (supported base: DefaultEnv_Flat). Graphs ship when assigned to a material (Material Editor). The map viewport shows Riot's shader." />
+                  ToolTip.Tip="Start a custom shader graph on the shader of the picked material (supported base: DefaultEnv_Flat): pick a template. Graphs ship when assigned to a material (Material Editor); the viewports draw them.">
+            <Button.Flyout>
+              <Flyout Placement="BottomEdgeAlignedLeft">
+                <StackPanel MinWidth="340" MaxWidth="460" Spacing="4">
+                  <TextBlock Text="NEW SHADER GRAPH FROM A TEMPLATE" FontSize="10" FontWeight="Bold" LetterSpacing="1.2" Foreground="{DynamicResource ReyAccentBrush}" />
+                  <ItemsControl ItemsSource="{Binding ShaderGraphTemplates}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="fmt:SgTemplate">
+                        <Button Classes="tool" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Click="OnTemplateClick" Tag="{Binding}" ToolTip.Tip="{Binding Description}">
+                          <StackPanel Spacing="1">
+                            <TextBlock Text="{Binding Title}" FontSize="11" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Description}" FontSize="9.5" Opacity="0.6" TextWrapping="Wrap" />
+                          </StackPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
           <Button x:Name="OpenShaderGraphButton" Classes="tool" Content="Open Shader Graph"
                   ToolTip.Tip="Open a Shader Graph saved in this project (.reyengine/shadergraphs)." Click="OnOpenShaderGraphClick">
             <Button.Flyout>
@@ -424,6 +445,41 @@
                               <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitDefaultCommand}" /></TextBox.KeyBindings>
                             </TextBox>
                             <ColorPicker Color="{Binding ColorValue, Mode=TwoWay}" IsVisible="{Binding ShowsColor}" IsAlphaEnabled="{Binding HasAlpha}" IsAlphaVisible="{Binding HasAlpha}" HorizontalAlignment="Left" />
+                            <TextBlock Text="{Binding UsedText}" FontSize="9.5" Opacity="0.55" Foreground="{DynamicResource ReyTextBrush}" />
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,2" />
+                  <TextBlock Classes="cap" Text="CUSTOM TEXTURES" />
+                  <TextBlock Text="The graph's own textures. Each has a default image the preview and the viewport show until a material sets one; a material carries it as a texture entry named like the texture, and the export declares it in the shaders.bin the mod ships."
+                             FontSize="9.5" Opacity="0.65" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                  <WrapPanel>
+                    <Button Classes="tool" Content="+ Texture" Command="{Binding ShaderGraph.AddTextureParameterCommand}" Margin="0,0,4,4" FontSize="10.5"
+                            ToolTip.Tip="Create a texture parameter of your own. Drop a Texture Sample on it from the node palette." />
+                  </WrapPanel>
+                  <TextBlock Text="No custom textures." FontSize="10.5" Opacity="0.6" Foreground="{DynamicResource ReyTextBrush}" IsVisible="{Binding ShaderGraph.NoTextureRows}" />
+                  <ItemsControl ItemsSource="{Binding ShaderGraph.TextureRows}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SgTextureRow">
+                        <Border BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,3">
+                          <StackPanel Spacing="3">
+                            <DockPanel>
+                              <Button DockPanel.Dock="Right" Classes="tool" Content="Delete" Command="{Binding DeleteCommand}" FontSize="10" Margin="4,0,0,0" />
+                              <TextBox Text="{Binding NameText}" Tag="name" FontSize="11" FontFamily="Consolas" LostFocus="OnEditLostFocus">
+                                <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitNameCommand}" /></TextBox.KeyBindings>
+                              </TextBox>
+                            </DockPanel>
+                            <TextBox Text="{Binding PathText}" Tag="path" FontSize="11" FontFamily="Consolas" LostFocus="OnEditLostFocus" PlaceholderText="default image: assets/.../name.tex">
+                              <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitPathCommand}" /></TextBox.KeyBindings>
+                            </TextBox>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                              <TextBlock Text="U" FontSize="10.5" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
+                              <ComboBox ItemsSource="{x:Static vm:SgTextureRow.AddressChoices}" SelectedItem="{Binding AddressU}" FontSize="11" MinWidth="80" />
+                              <TextBlock Text="V" FontSize="10.5" VerticalAlignment="Center" Foreground="{DynamicResource ReyTextBrush}" />
+                              <ComboBox ItemsSource="{x:Static vm:SgTextureRow.AddressChoices}" SelectedItem="{Binding AddressV}" FontSize="11" MinWidth="80" />
+                            </StackPanel>
                             <TextBlock Text="{Binding UsedText}" FontSize="9.5" Opacity="0.55" Foreground="{DynamicResource ReyTextBrush}" />
                           </StackPanel>
                         </Border>

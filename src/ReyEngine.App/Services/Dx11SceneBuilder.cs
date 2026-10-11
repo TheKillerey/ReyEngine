@@ -7,6 +7,7 @@ using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Materials.ShaderGraph;
 using ReyEngine.Formats.Shaders;
 using ReyEngine.Rendering.D3D11;
 
@@ -109,6 +110,11 @@ public static class Dx11SceneBuilder
         /// entries had all been renamed underneath us read exactly like a scene bug - and was chased as one
         /// for an afternoon. A categorical failure should name itself.</summary>
         public Dictionary<string, string> FailureReasons { get; } = new();
+
+        /// <summary>M835: slices whose pixel shader is a Shader Graph's compiled shader (a material with REY_GRAPH), and why graph materials that
+        /// could not be drawn with theirs fell back to Riot's shader (first example per distinct reason).</summary>
+        public int GraphSlices { get; set; }
+        public Dictionary<string, string> GraphNotes { get; } = new();
 
         public void Fail(string kind, string detail)
         {
@@ -259,6 +265,17 @@ public static class Dx11SceneBuilder
             if (vs is null || ps is null)
             { scene.Fail("bytecode would not load", (vs is null ? vsErr : psErr) ?? "(no reason given)"); continue; }
 
+            // M835: a material that names a Shader Graph (REY_GRAPH=n) is drawn with the graph's compiled pixel shader for this signature, bound by name to the
+            // material's own parameters and textures. The permutation resolver above ignores the macro (no cooked table lists it), so without this Riot's shader
+            // was drawn. Any problem keeps Riot's shader and the reason goes to the report and the Material Editor.
+            SgViewportOverride? graph = null;
+            if (b.Macros.ContainsKey(SgShip.Macro))
+            {
+                graph = ShaderGraphViewport.TryOverride(b.RenderShader!, b.Macros, ps, cache, perms, out string graphWhy);
+                if (graph is not null) { ps = graph.Shader; scene.GraphSlices++; }
+                else if (graphWhy.Length > 0) scene.GraphNotes.TryAdd(graphWhy, b.Name);
+            }
+
             // M790: one texture per slot, the FIRST copy of a repeated sampler - see MaterialTextures.
             var wanted = MaterialTextures(b, sampler => ResolveTextureTarget(sampler, ps, vs));
             // Mapgeo v17+ texture overrides are per mesh and supersede the shared material binding.
@@ -305,6 +322,12 @@ public static class Dx11SceneBuilder
             // M790: one value per name, the FIRST copy of a repeated parameter - see MaterialParameters.
             var parameters = MaterialParameters(b);
             var authored = new HashSet<string>(parameters.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+            // M835: the editor must not be kinder than the game. The shipped definition declares a custom parameter with NO default, so one the material does not carry is ZERO
+            // in the game; it is zero here (the Material Editor says so, and Assign writes the graph's default into the material). A custom texture the material does not
+            // carry is left unbound for the same reason.
+            if (graph is not null)
+                foreach (string gname in graph.CustomParameters)
+                    if (authored.Add(gname)) parameters.Add((gname, new float[4]));
 
             // M257: fall back to the SHADER's declared default for anything the material leaves out.
             // shaders.bin records these on 343 of its 347 definitions, as parameters[].name + .data.
@@ -717,6 +740,10 @@ public static class Dx11SceneBuilder
             sb.AppendLine($"{transparent} transparent slice(s): no depth write, drawn after the solid pass in authored order");
         if (clamped > 0)
             sb.AppendLine($"{clamped} slice(s) use authored per-axis UV clamp addressing");
+        if (scene.GraphSlices > 0)
+            sb.AppendLine($"{scene.GraphSlices} slice(s) drawn with a Shader Graph's compiled pixel shader (REY_GRAPH)");
+        foreach (var (note, material) in scene.GraphNotes)
+            sb.AppendLine($"   Shader Graph - Riot's shader drawn for '{material}': {Trim(note)}");
         // M788: a pass whose writeMask narrows the colour channels it writes (0 for a stencil-only mask
         // mesh, up to 15 for the schema default/absent case this never fires for).
         if (colorMasked > 0)

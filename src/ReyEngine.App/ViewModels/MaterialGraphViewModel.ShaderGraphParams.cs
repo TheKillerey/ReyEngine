@@ -77,4 +77,41 @@ public sealed partial class MaterialGraphViewModel
         if (applied.Count == 0 && skipped.Count == 0) note = $"No assigned material carries '{from}'.";
         return (applied.Count, note);
     }
+
+    /// <summary>M835: the samplerValues entries of the materials assigned to the graph follow a custom texture's rename (one composite undo step on the editor's stack).</summary>
+    internal (int Renamed, string Note) RenameCustomTextureInMaterials(string? graphPath, string from, string to)
+    {
+        var editor = _editor;
+        var mats = MaterialsOfGraph(graphPath, out string? problem);
+        if (editor is null || mats.Count == 0) return (0, problem is null ? "No material of the open Material Editor document is assigned to this graph." : "(" + problem + ")");
+
+        var applied = new List<(MaterialBindingViewModel Mb, TextureSlot S)>();
+        var skipped = new List<string>();
+        var commands = new List<IEditorCommand>();
+        try
+        {
+            foreach (var mb in mats)
+            {
+                var s = mb.Model.Slots.FirstOrDefault(x => x.SamplerName == from);
+                if (s is null) continue;
+                if (mb.Model.Slots.Any(x => x.SamplerName == to)) { skipped.Add($"'{mb.Name}' (it already has a '{to}')"); continue; }
+                if (!mb.Model.RenameSampler(s, to)) { skipped.Add($"'{mb.Name}' (the rename was refused)"); continue; }
+                applied.Add((mb, s));
+                var binding = mb;
+                commands.Add(new SamplerRenameCommand(editor.DocContext, mb.Model, s, from, to, () => SyncRows(editor, binding)));
+            }
+            if (commands.Count > 0)
+                editor.UndoService?.PushApplied(commands.Count == 1 ? commands[0] : new CompositeCommand($"Rename texture {from} to {to}", commands, editor.DocContext));
+        }
+        catch
+        {
+            foreach (var (mb, s) in applied) { try { mb.Model.RenameSampler(s, from); } catch { } }
+            foreach (var (mb, _) in applied) SyncRows(editor, mb);
+            throw;
+        }
+        foreach (var (mb, _) in applied) SyncRows(editor, mb);
+        string note = skipped.Count > 0 ? $"Not renamed: {string.Join(", ", skipped)}." : "";
+        if (applied.Count == 0 && skipped.Count == 0) note = $"No assigned material carries a '{from}' texture.";
+        return (applied.Count, note);
+    }
 }

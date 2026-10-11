@@ -77,6 +77,22 @@ public static class SgNames
         return null;
     }
 
+    private static readonly Regex HexForm = new(@"^0x[0-9a-fA-F]+$", RegexOptions.Compiled);
+
+    /// <summary>M835: the reason <paramref name="path"/> cannot be a custom texture's default image, or null (an empty path is fine: the entry keeps Riot's default).
+    /// A "0x..." hash is what the editor shows for a path it could not name; hashing that text would name another chunk.</summary>
+    public static string? TexturePathProblem(string path)
+    {
+        path = (path ?? "").Trim();
+        if (path.Length == 0) return null;
+        if (path.Length > SgCustomTexture.MaxPathLength || path.Any(c => c < ' ' || c > '~')) return "That is not a texture path (ASCII, up to 260 characters).";
+        string slashes = path.Replace('\\', '/');
+        if (HexForm.IsMatch(slashes) || slashes.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && !slashes.Contains('/'))
+            return "A 0x... hash is not a path: type the asset's real path, for example assets/maps/.../name.tex.";
+        if (!slashes.EndsWith(".tex", StringComparison.OrdinalIgnoreCase)) return "A texture path ends in .tex (the game reads no other format).";
+        return null;
+    }
+
     /// <summary>The reason <paramref name="name"/> is not allowed for a custom parameter of <paramref name="doc"/> on <paramref name="b"/>, or null.
     /// <paramref name="renaming"/> is the parameter being renamed (its own current name is not a clash).</summary>
     public static string? ParameterProblem(string name, ShaderGraphDocument doc, SgBase? b, string? renaming = null)
@@ -102,7 +118,58 @@ public static class SgNames
         }
         if (doc.Params.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && !string.Equals(p.Name, renaming, StringComparison.Ordinal)))
             return $"The graph already has a parameter called '{name}' (names are compared without regard to case).";
+        if (doc.Textures.Any(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return $"The graph already has a texture called '{name}' (parameters and textures share one namespace).";
         return null;
+    }
+
+    /// <summary>M835: the reason <paramref name="name"/> may not name a custom texture, or null. Same rules as a parameter, and a texture
+    /// cannot share a name with a parameter either (a material finds both by name).</summary>
+    public static string? TextureProblem(string name, ShaderGraphDocument doc, SgBase? b, string? renaming = null)
+    {
+        if (string.IsNullOrEmpty(name)) return "Type a name.";
+        if (name.Length > MaxParamName) return $"A texture name has at most {MaxParamName} characters.";
+        if (!IsIdentifier(name, MaxParamName)) return char.IsAsciiDigit(name[0]) ? "A texture name cannot start with a digit." : "A texture name uses ASCII letters, digits and underscores only.";
+        if (ReservedReason(name) is { } why) return char.ToUpperInvariant(why[0]) + why[1..] + ".";
+        if (Engine.Contains(name)) return $"'{name}' is a constant the engine fills; choose another name.";
+        if (b is not null)
+        {
+            if (b.Frame is { } frame && (frame.Name.Equals(name, StringComparison.OrdinalIgnoreCase) || frame.Variables.Any(v => v.Name.Equals(name, StringComparison.OrdinalIgnoreCase))))
+                return $"'{name}' is a constant of the engine's {frame.Name}; choose another name.";
+            if (b.Textures.Any(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                return $"'{name}' is a texture {b.Shader} already declares; use the declared texture instead.";
+            if (b.Parameters.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                return $"'{name}' is a parameter {b.Shader} declares; choose another name.";
+        }
+        if (doc.Params.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return $"The graph already has a parameter called '{name}'.";
+        if (doc.Textures.Any(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && !string.Equals(t.Name, renaming, StringComparison.Ordinal)))
+            return $"The graph already has a texture called '{name}' (names are compared without regard to case).";
+        return null;
+    }
+
+    public static string UniqueTextureName(string baseName, ShaderGraphDocument doc, SgBase? b)
+    {
+        string name = baseName;
+        for (int i = 2; TextureProblem(name, doc, b) is not null && i < 1000; i++) name = baseName + i;
+        return name;
+    }
+
+    /// <summary>A valid, unused parameter name made from free text (a pin's name): letters and digits kept, the rest dropped.</summary>
+    public static string ParameterNameFrom(string text, ShaderGraphDocument doc, SgBase? b, string fallback = "Value")
+    {
+        var sb = new StringBuilder();
+        bool up = true;
+        foreach (char c in text)
+        {
+            if (char.IsAsciiLetterOrDigit(c)) { sb.Append(up ? char.ToUpperInvariant(c) : c); up = false; }
+            else up = true;
+        }
+        string name = sb.Length == 0 ? fallback : sb.ToString();
+        if (char.IsAsciiDigit(name[0])) name = "P" + name;
+        if (name.Length > 32) name = name[..32];
+        if (ParameterProblem(name, doc, b) is not null) name += "Param";
+        return UniqueParameterName(name, doc, b);
     }
 
     /// <summary>The first free name of the form <c>Base</c>, <c>Base2</c>, ... that passes <see cref="ParameterProblem"/>.</summary>

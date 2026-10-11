@@ -57,6 +57,7 @@ public sealed partial class MaterialGraphViewModel
     {
         _sg = sg;
         sg.RenameParameterInMaterials = RenameCustomParameterInMaterials;
+        sg.RenameTextureInMaterials = RenameCustomTextureInMaterials;
         sg.MaterialsCarryingParameter = MaterialsCarryingCustomParameter;
         sg.StateChanged += OnShaderGraphState;
         sg.PropertyChanged += (_, e) =>

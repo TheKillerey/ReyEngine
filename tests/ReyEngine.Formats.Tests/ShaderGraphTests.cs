@@ -212,7 +212,7 @@ public sealed class ShaderGraphTests
         Link(d, "t", "RGB", "n1", SgCatalog.BaseColorPin);
         Link(d, "p", "Value", "n1", SgCatalog.OpacityPin);
         var r = SgAnalyzer.Analyze(d, b);
-        Assert.Contains(r.Errors, e => e.NodeId == "t" && e.Message.Contains("not a texture"));
+        Assert.Contains(r.Errors, e => e.NodeId == "t" && e.Message.Contains("neither a custom texture"));
         Assert.Contains(r.Errors, e => e.NodeId == "p" && e.Message.Contains("neither a custom parameter"));
         // a node that nothing reads is only a warning
         Assert.DoesNotContain(r.Errors, e => e.NodeId == "t0");
@@ -436,8 +436,8 @@ public sealed class ShaderGraphTests
         Assert.Equal(12.5, back.Find("n2")!.X);
         Assert.Equal("0.75", back.Find("n4")!.Prop("A"));
         Assert.Equal("Shaders/StaticMesh/DefaultEnv_Flat", back.BaseShader);
-        Assert.Equal(ShaderGraphDocument.CurrentVersion, back.Version);   // M834: a save writes the current version (2)
-        Assert.Contains("\"version\": 2", json);
+        Assert.Equal(ShaderGraphDocument.CurrentVersion, back.Version);   // M834: a save writes the current version (3)
+        Assert.Contains("\"version\": 3", json);
     }
 
     [Fact]
@@ -452,7 +452,7 @@ public sealed class ShaderGraphTests
     }
 
     [Theory]
-    [InlineData("{ \"version\": 3, \"nodes\": [], \"links\": [] }", "version 3")]
+    [InlineData("{ \"version\": 4, \"nodes\": [], \"links\": [] }", "version 4")]
     [InlineData("{ \"version\": 1, \"nodes\": [ { \"id\": \"a\", \"type\": \"Add\" }, { \"id\": \"a\", \"type\": \"Add\" } ], \"links\": [] }", "repeated")]
     [InlineData("not json", "not a Shader Graph file")]
     [InlineData("{ \"version\": 1, \"nodes\": [ { \"id\": \"\", \"type\": \"Add\" } ], \"links\": [] }", "empty or repeated")]
@@ -583,7 +583,8 @@ public sealed class ShaderGraphTests
 
         foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(xaml, @"\{Binding !?ShaderGraph\.([A-Za-z]+)"))
             Assert.True(typeof(ReyEngine.App.ViewModels.ShaderGraphViewModel).GetProperty(m.Groups[1].Value, pub) is not null, "ShaderGraphViewModel has no " + m.Groups[1].Value);
-        foreach (string name in new[] { "NewShaderGraphCommand", "CloseShaderGraphCommand", "CanNewShaderGraph", "ShaderGraphActive", "MaterialGraphActive", "GraphPreviewNote", "ShaderGraph" })
+        Assert.Contains("NewShaderGraphFromTemplateCommand", code);
+        foreach (string name in new[] { "ShaderGraphTemplates", "CloseShaderGraphCommand", "CanNewShaderGraph", "ShaderGraphActive", "MaterialGraphActive", "GraphPreviewNote", "ShaderGraph" })
         {
             Assert.Contains("{Binding " + name, xaml);
             Assert.True(typeof(ReyEngine.App.ViewModels.ShaderPreviewViewModel).GetProperty(name, pub) is not null, "ShaderPreviewViewModel has no " + name);

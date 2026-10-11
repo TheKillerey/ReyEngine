@@ -505,6 +505,7 @@ public static class Dx11CharacterScene
         string vsFull, psFull, vsPath, psPath;
         ShaderPermutation vsPerm, psPerm;
         DxbcShader vs, ps;
+        SgViewportOverride? graph = null;
         IReadOnlyDictionary<string, string> vsDefines, psDefines;
 
         if (usedFallback)
@@ -587,6 +588,14 @@ public static class Dx11CharacterScene
             }
             vs = loadedVs;
             ps = loadedPs;
+
+            // M835: REY_GRAPH on a material of a base shader Shader Graphs support (static-mesh props): the graph's pixel shader stands in, like the map builder
+            if (b.Macros.ContainsKey(ReyEngine.Formats.Materials.ShaderGraph.SgShip.Macro))
+            {
+                graph = ShaderGraphViewport.TryOverride(shader!, b.Macros, ps, cache, perms, out string graphWhy);
+                if (graph is not null) ps = graph.Shader;
+                else if (graphWhy.Length > 0) sb.AppendLine($"   Shader Graph - Riot's shader drawn for '{b.Name}': {graphWhy}");
+            }
         }
 
         // M790: one texture per slot, and a repeated sampler's FIRST copy takes it (the map path's rule, from
@@ -611,6 +620,9 @@ public static class Dx11CharacterScene
         // M790: likewise one value per name, the FIRST copy.
         var parameters = Dx11SceneBuilder.MaterialParameters(b);
         var authored = new HashSet<string>(parameters.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+        // M835: a custom parameter the material does not carry is zero, as in the game (see Dx11SceneBuilder); a custom texture it does not carry stays unbound
+        if (graph is not null)
+            foreach (string gname in graph.CustomParameters) if (authored.Add(gname)) parameters.Add((gname, new float[4]));
 
         // The shader's own declared defaults for anything the material leaves out. Unwritten is not
         // "unspecified" - it is zero, and zero is a value the shader multiplies by.
