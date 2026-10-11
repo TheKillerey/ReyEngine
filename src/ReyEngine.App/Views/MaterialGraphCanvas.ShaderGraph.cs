@@ -154,10 +154,11 @@ public sealed partial class MaterialGraphCanvas
             gc.CubicBezierTo(new Point(x0 + dx, y0), new Point(x1 - dx, y1), new Point(x1, y1));
             gc.EndFigure(false);
         }
-        ctx.DrawGeometry(null, new Pen(color, Math.Max(2.8, 3.0 / _zoom), lineCap: PenLineCap.Round), geo);
+        DrawLiveStroke(ctx, pal, geo, color, bad, _sgHover is not null && _sgCheck.Ok);
         if (_sgHover is { } hh && g.Find(hh.Node) is { } hnode && hnode.Pins(hh.IsInput).FirstOrDefault(p => p.Name == hh.Pin) is { } hpin)
         {
             var (hx, hy) = hnode.PinPosition(hpin);
+            if (bad) ctx.DrawEllipse(null, new Pen(WithOpacity(color, 0.30), 7), new Point(hx, hy), 8, 8);
             ctx.DrawEllipse(null, new Pen(bad ? color : pal.Accent, 2.2), new Point(hx, hy), 8, 8);
         }
     }
@@ -203,21 +204,226 @@ public sealed partial class MaterialGraphCanvas
         }
         items.Add(Item($"Delete {node.Title}", () => se.DeleteNode(id), node.Kind != GraphNodeKind.Output));
         items.Add(Item("Break all wires of this node", () => se.BreakNodeLinks(id)));
+        items.Add(Item("Rename node (F2)", () => { SelectedNodeId = id; SgRenameSelected(screen); }));
+        items.Add(Item("Comment around this node", () => se.AddCommentAround(_multi.Contains(id) ? _multi.ToList() : new List<string> { id })));
         items.Add(new Separator());
         items.Add(Item("Add node...", () => SgShowPalette(screen)));
+        return items;
+    }
+
+    /// <summary>The menu for a right click on empty canvas (public for the probe): add a node, add a comment, comment the selection.</summary>
+    public IReadOnlyList<Control> BuildCanvasMenu(Point screen)
+    {
+        var items = new List<Control>();
+        var se = ShaderEditor;
+        if (se is null) return items;
+        MenuItem Item(string header, Action act, bool enabled = true)
+        {
+            var mi = new MenuItem { Header = header, IsEnabled = enabled };
+            mi.Click += (_, _) => act();
+            return mi;
+        }
+        var at = ToGraph(screen);
+        items.Add(Item("Add node...", () => SgShowPalette(screen)));
+        items.Add(new Separator());
+        items.Add(Item("Add comment here", () => se.AddComment(at.X, at.Y)));
+        var sel = SelectionIds();
+        items.Add(Item("Comment around selection", () => se.AddCommentAround(sel), sel.Count > 0));
+        return items;
+    }
+
+    /// <summary>The menu for a right click on a comment box (public for the probe).</summary>
+    public IReadOnlyList<Control> BuildCommentMenu(Point screen)
+    {
+        var items = new List<Control>();
+        var se = ShaderEditor;
+        if (se is null || CommentAt(screen) is not { } c) return items;
+        string id = c.Id;
+        var rename = new MenuItem { Header = "Rename comment (F2)" };
+        rename.Click += (_, _) => { se.SelectedCommentId = id; SgRenameSelected(screen); };
+        items.Add(rename);
+        var colour = new MenuItem { Header = "Colour" };
+        foreach (string key in SgComment.ColorKeys)
+        {
+            string k = key;
+            var mi = new MenuItem { Header = k == "Comment" ? "Default" : k };
+            mi.Click += (_, _) => se.SetCommentColor(id, k);
+            colour.Items.Add(mi);
+        }
+        items.Add(colour);
+        var del = new MenuItem { Header = "Delete comment" };
+        del.Click += (_, _) => { se.DeleteComment(id); se.SelectedCommentId = null; };
+        items.Add(del);
+        items.Add(new Separator());
+        var add = new MenuItem { Header = "Add node..." };
+        add.Click += (_, _) => SgShowPalette(screen);
+        items.Add(add);
         return items;
     }
 
     private void SgShowMenu(Point screen)
     {
         if (ShaderEditor is null || Graph is null) return;
-        if (NodeAt(screen) is not null)
+        IReadOnlyList<Control> items = NodeAt(screen) is not null ? BuildNodeMenu(screen)
+            : CommentAt(screen) is not null ? BuildCommentMenu(screen)
+            : BuildCanvasMenu(screen);
+        if (items.Count == 0) return;
+        new ContextMenu { ItemsSource = items }.Open(this);
+    }
+
+    // =============================================================================== M834: comment boxes, multi-select, renaming
+
+    private readonly HashSet<string> _multi = new(StringComparer.Ordinal);
+    private string? _cmId;
+    private Point _cmDown;
+    private (double X, double Y) _cmOrigin;
+    private (double W, double H) _cmSize;
+    private readonly Dictionary<string, (double X, double Y)> _cmNodes = new(StringComparer.Ordinal);
+
+    public const double CommentTitleHeight = 34;
+
+    /// <summary>A new projection arrived (every edit and every compile makes one): ids of nodes that are gone leave the selection, and a comment drag whose comment is gone ends.</summary>
+    private void SgGraphChanged(MaterialGraph? g)
+    {
+        if (g is null) { _multi.Clear(); _cmNodes.Clear(); _cmId = null; return; }
+        _multi.RemoveWhere(id => g.Find(id) is null);
+        foreach (string id in _cmNodes.Keys.Where(id => g.Find(id) is null).ToList()) _cmNodes.Remove(id);
+        if (_cmId is not null && g.Comments.All(c => c.Id != _cmId))
         {
-            var menu = new ContextMenu { ItemsSource = BuildNodeMenu(screen) };
-            menu.Open(this);
-            return;
+            _cmId = null; _cmNodes.Clear();
+            if (_gesture is Gesture.CommentMove or Gesture.CommentResize) { _gesture = Gesture.None; Cursor = null; }
         }
-        SgShowPalette(screen);
+    }
+
+    /// <summary>The nodes a comment would go around: the Ctrl+click selection plus the selected node.</summary>
+    public IReadOnlyList<string> SelectionIds()
+    {
+        var ids = new List<string>(_multi);
+        if (SelectedNodeId is { } s && !ids.Contains(s)) ids.Add(s);
+        return ids;
+    }
+
+    private GraphComment? CommentAt(Point screen)
+    {
+        var g = Graph;
+        if (g is null) return null;
+        var p = ToGraph(screen);
+        for (int i = g.Comments.Count - 1; i >= 0; i--)
+            if (g.Comments[i].Contains(p.X, p.Y)) return g.Comments[i];
+        return null;
+    }
+
+    /// <summary>A left press on a node or on empty canvas, Shader Graph mode. True when it was handled here (Ctrl+click selection, or a comment gesture).</summary>
+    private bool SgNodeOrCommentPressed(PointerPressedEventArgs e, PointerPoint pt, GraphNode? node)
+    {
+        var se = ShaderEditor!;
+        bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        if (node is not null)
+        {
+            if (ctrl)
+            {
+                if (SelectedNodeId is { } prim) _multi.Add(prim);
+                if (!_multi.Remove(node.Id)) _multi.Add(node.Id);
+                SelectedNodeId = node.Id;
+                InvalidateVisual();
+                return true;
+            }
+            _multi.Clear();
+            se.SelectedCommentId = null;
+            return false;   // the ordinary node drag
+        }
+        if (!ctrl) _multi.Clear();
+        var c = CommentAt(pt.Position);
+        if (c is null) { se.SelectedCommentId = null; return false; }
+
+        SelectedNodeId = null;
+        se.SelectedCommentId = c.Id;
+        var gp = ToGraph(pt.Position);
+        double grip = 20 / Math.Max(_zoom, 0.3);
+        bool resize = gp.X >= c.Right - grip && gp.Y >= c.Bottom - grip;
+        bool title = gp.Y <= c.Y + CommentTitleHeight;
+        InvalidateVisual();
+        if (!resize && !title) return false;   // inside the box: an empty-canvas press (pans)
+
+        _cmId = c.Id; _cmDown = pt.Position; _cmOrigin = (c.X, c.Y); _cmSize = (c.Width, c.Height);
+        _cmNodes.Clear();
+        if (!resize)
+            foreach (string id in se.NodesInside(c.Id))
+                if (Graph!.Find(id) is { } n) _cmNodes[id] = (n.X, n.Y);
+        _gesture = resize ? Gesture.CommentResize : Gesture.CommentMove;
+        Cursor = new Cursor(resize ? StandardCursorType.BottomRightCorner : StandardCursorType.SizeAll);
+        e.Pointer.Capture(this);
+        return true;
+    }
+
+    private void SgUpdateComment(Point pos)
+    {
+        var se = ShaderEditor;
+        if (se is null || _cmId is null) return;
+        double dx = (pos.X - _cmDown.X) / _zoom, dy = (pos.Y - _cmDown.Y) / _zoom;
+        if (_gesture == Gesture.CommentResize) se.ResizeComment(_cmId, _cmSize.W + dx, _cmSize.H + dy);
+        else se.MoveComment(_cmId, _cmOrigin.X + dx, _cmOrigin.Y + dy, _cmNodes.ToDictionary(k => k.Key, k => (k.Value.X + dx, k.Value.Y + dy)));
+        InvalidateVisual();
+    }
+
+    private IBrush CommentKeyBrush(Palette pal, string key) => key switch
+    {
+        "Texture" => pal.Texture, "Param" => pal.Param, "Switch" => pal.Switch, "Macro" => pal.Macro, "Shader" => pal.Shader, "Output" => pal.Output,
+        _ => pal.CommentBorder,
+    };
+
+    private void DrawComment(DrawingContext ctx, Palette pal, GraphComment c, bool titles)
+    {
+        var rect = new Rect(c.X, c.Y, c.Width, c.Height);
+        bool selected = ShaderEditor?.SelectedCommentId == c.Id;
+        var key = CommentKeyBrush(pal, c.ColorKey);
+        bool plain = c.ColorKey == "Comment";
+        ctx.DrawRectangle(plain ? pal.Comment : WithOpacity(key, 0.16), new Pen(selected ? pal.Accent : plain ? pal.CommentBorder : WithOpacity(key, 0.85), selected ? 2.4 : 1.4), rect, 8, 8);
+        using (ctx.PushClip(new Rect(c.X, c.Y, c.Width, CommentTitleHeight)))
+            ctx.DrawRectangle(WithOpacity(key, plain ? 0.35 : 0.30), null, new Rect(c.X, c.Y, c.Width, CommentTitleHeight + 10), 8, 8);
+        if (titles)
+            ctx.DrawText(Text(c.Title.Length > 0 ? c.Title : "Comment", 15, pal.TextBright, bold: true, maxWidth: Math.Max(20, c.Width - 28)), new Point(c.X + 12, c.Y + 6));
+        // the resize grip, bottom right
+        var grip = new Pen(WithOpacity(pal.TextDim, 0.8), 1.5);
+        ctx.DrawLine(grip, new Point(c.Right - 6, c.Bottom - 16), new Point(c.Right - 16, c.Bottom - 6));
+        ctx.DrawLine(grip, new Point(c.Right - 6, c.Bottom - 10), new Point(c.Right - 10, c.Bottom - 6));
+    }
+
+    /// <summary>F2 / double-click: rename the selected comment, else the selected node (a label, shown in its title bar).</summary>
+    private void SgRenameSelected(Point? at = null)
+    {
+        var se = ShaderEditor;
+        if (se is null || Graph is null) return;
+        var where = at ?? new Point(Bounds.Width / 2, Bounds.Height / 3);
+        if (se.SelectedCommentId is { } cid && Graph.Comments.FirstOrDefault(k => k.Id == cid) is { } c)
+            SgShowTextEditor(where, "Comment title", c.Title, t => se.SetCommentTitle(cid, t));
+        else if (SelectedNodeId is { } nid && se.Document?.Find(nid) is { } n)
+            SgShowTextEditor(where, "Node name (empty = the type's own title)", n.Label, t => se.SetLabel(nid, t));
+    }
+
+    private void SgShowTextEditor(Point screen, string header, string initial, Func<string, bool> commit)
+    {
+        var box = new TextBox { Text = initial, MinWidth = 260, MaxLength = 128 };
+        var panel = new StackPanel { Spacing = 4, MinWidth = 260 };
+        panel.Children.Add(new TextBlock { Text = header + " - Enter applies, Esc cancels", FontSize = 11 });
+        panel.Children.Add(box);
+        var flyout = new Flyout { Content = panel, Placement = PlacementMode.Pointer };
+        box.KeyDown += (_, k) =>
+        {
+            if (k.Key == Key.Enter) { commit(box.Text ?? ""); flyout.Hide(); k.Handled = true; }
+            else if (k.Key == Key.Escape) { flyout.Hide(); k.Handled = true; }
+        };
+        flyout.Opened += (_, _) => { box.Focus(); box.SelectAll(); };
+        flyout.ShowAt(this);
+    }
+
+    private void SgOnDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (ShaderEditor is null || Graph is null) return;
+        var pos = e.GetPosition(this);
+        if (PinAt(pos) is not null) return;
+        if (NodeAt(pos) is { } n) { SelectedNodeId = n.Id; ShaderEditor.SelectedCommentId = null; SgRenameSelected(pos); e.Handled = true; }
+        else if (CommentAt(pos) is { } c && ToGraph(pos).Y <= c.Y + CommentTitleHeight) { ShaderEditor.SelectedCommentId = c.Id; SgRenameSelected(pos); e.Handled = true; }
     }
 
     private void SgShowPalette(Point screen)

@@ -711,6 +711,40 @@ public sealed partial class MaterialSwitchViewModel : ViewModelBase
     private void Remove() => _binding.RemoveSwitch(this);
 }
 
+/// <summary>M834: one custom parameter of the graph assigned to a material, as the Material tab shows it: what it is, whether this material sets it, and a button that adds it
+/// (with the graph's default) as a normal, editable parameter row.</summary>
+public sealed partial class GraphParamRow : ObservableObject
+{
+    private readonly MaterialBindingViewModel _binding;
+    private readonly SgCustomParam _param;
+
+    public GraphParamRow(MaterialBindingViewModel binding, SgCustomParam param)
+    {
+        _binding = binding; _param = param;
+        Name = param.Name;
+        TypeText = SgCatalog.TypeName(param.Components) + (param.IsColor ? " colour" : "");
+        DefaultText = param.Default;
+        Refresh();
+    }
+
+    public string Name { get; }
+    public string TypeText { get; }
+    public string DefaultText { get; }
+    [ObservableProperty] private bool _inMaterial;
+    [ObservableProperty] private string _statusText = "";
+    public bool CanAdd => !InMaterial && _binding.Model.CanEditParameters;
+
+    public void Refresh()
+    {
+        InMaterial = _binding.Model.Parameters.Any(p => p.Name == Name);
+        StatusText = InMaterial ? "set in this material (edit it under Parameters)" : "not set: the preview uses the graph's default";
+        OnPropertyChanged(nameof(CanAdd));
+    }
+
+    [RelayCommand]
+    private void AddToMaterial() => _binding.AddGraphParameter(_param);
+}
+
 /// <summary>M833: a graph of the open project that can be assigned to a material (its base shader is the material's shader).</summary>
 public sealed record SgGraphChoice(string Stem, string Name, string BaseShader)
 {
@@ -962,6 +996,32 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
     [ObservableProperty] private bool _graphAssignmentIsError;
     [ObservableProperty] private string _graphAssignmentText = "";
 
+    /// <summary>M834: the custom parameters of the assigned graph (empty when the graph declares none).</summary>
+    public ObservableCollection<GraphParamRow> GraphParams { get; } = new();
+    [ObservableProperty] private bool _hasGraphParams;
+
+    /// <summary>Write one of the graph's custom parameters into this material as a normal parameter (the graph's default value), as one undo step.
+    /// The material's value is what the Shader Graph preview uses. The export declares it in a shaders.bin the mod ships, and the
+    /// Material editor's own parameter rows are where its value is edited.</summary>
+    internal static float[] Pad4(float[] v) { var r = new float[4]; for (int i = 0; i < 4 && i < v.Length; i++) r[i] = v[i]; return r; }
+
+    public void AddGraphParameter(SgCustomParam gp)
+    {
+        if (Owner is null || Model.Parameters.Any(p => p.Name == gp.Name)) return;
+        // Riot's paramValues `value` is ALWAYS a Vector4 (a float or float3 custom parameter is written as one, padded with 0): LTK's health check
+        // flags any other type as FATAL (test5, StripeAmount written as f32), and the game reads the first components by the declared width.
+        var p = Model.AddParameter(gp.Name, "Vector4");
+        if (p is null) { Owner.Warn?.Invoke($"{Model.Name}: the parameter '{gp.Name}' could not be added (the material has no parameter to copy the layout from)."); return; }
+        try { p.Apply(string.Join(", ", Pad4(gp.DefaultValues()).Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture)))); }
+        catch { Model.RemoveParameter(p); Owner.Warn?.Invoke($"{Model.Name}: the default of '{gp.Name}' could not be written."); return; }
+        AddParameterRow(p);
+        OnPropertyChanged(nameof(HasParameters));
+        Owner.UndoService?.PushApplied(new ParameterAddRemoveCommand(Owner.DocContext, Model, p, isAdd: true, () => { ResyncRows(); foreach (var r in GraphParams) r.Refresh(); }));
+        foreach (var r in GraphParams) r.Refresh();
+        RaiseDirty();
+        Owner.NotifyChanged();
+    }
+
     private string? GraphMacroValue() =>
         Model.AllMacros.FirstOrDefault(m => SgShip.IsGraphMacro(m.Name))?.Value;
 
@@ -978,6 +1038,7 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         HasGraphSection = supported || assigned is not null;
         GraphAssignmentIsError = false;
         GraphAssignmentText = "";
+        GraphParams.Clear(); HasGraphParams = false;
         if (!HasGraphSection) { HasGraphChoices = false; return; }
 
         if (root is not null && supported)
@@ -997,7 +1058,12 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         if (r.Document is null) { GraphAssignmentIsError = true; GraphAssignmentText = $"Shader Graph #{n}: {r.Problem}. The export is blocked until it is fixed or unassigned."; return; }
         if (SgBase.Normalize(r.Document.BaseShader) != SgBase.Normalize(shader))
         { GraphAssignmentIsError = true; GraphAssignmentText = $"Shader Graph '{r.Entry!.File}' (#{n}) is built for {r.Document.BaseShader}, not {shader}. The export is blocked."; return; }
-        GraphAssignmentText = $"Shader Graph '{r.Entry!.File}' (#{n}) ships with the mod. It is rebuilt from the installed game on every export, so re-export after each patch. Do not rename the graph file: its number is kept under its file name. The map viewport still draws Riot's shader for this material; the Shader Graph window previews the graph.";
+        foreach (var gp in r.Document.Params) GraphParams.Add(new GraphParamRow(this, gp));
+        HasGraphParams = GraphParams.Count > 0;
+        string customNote = r.Document.Params.Count > 0
+            ? $" Its {r.Document.Params.Count} custom parameter(s) are declared in a shaders.bin the mod ships ({SgCustomParams.ShipRisk})."
+            : "";
+        GraphAssignmentText = $"Shader Graph '{r.Entry!.File}' (#{n}) ships with the mod. It is rebuilt from the installed game on every export, so re-export after each patch. Do not rename the graph file: its number is kept under its file name. The map viewport still draws Riot's shader for this material; the Shader Graph window previews the graph." + customNote;
     }
 
     private void RebuildMacros()
@@ -1018,7 +1084,41 @@ public sealed partial class MaterialBindingViewModel : ViewModelBase
         if (old == newValue) return;
         var cmd = new MacroPresenceCommand(Owner.DocContext, Model, SgShip.Macro, old, newValue, RebuildMacros);
         cmd.Execute();                               // one step: the macro, the rows and the section follow it
-        Owner.UndoService?.PushApplied(cmd);
+
+        // M834: the outgoing graph's custom parameters go with it. A material that keeps one no shaders.bin declares would crash the game, and the
+        // export only declares the parameters of the graphs materials are assigned to. All of it is ONE undo step.
+        var steps = new List<IEditorCommand> { cmd };
+        var carried = OutgoingCustomParameters(old, newValue);
+        foreach (var p in carried)
+            if (Model.RemoveParameter(p))
+                steps.Add(new ParameterAddRemoveCommand(Owner.DocContext, Model, p, isAdd: false, () => { ResyncRows(); foreach (var r in GraphParams) r.Refresh(); }));
+        if (steps.Count > 1)
+        {
+            ResyncRows();
+            Owner.Warn?.Invoke($"{Model.Name}: removed the custom parameter(s) {string.Join(", ", steps.Skip(1).Select(c => c.Name.Replace("Remove Parameter ", "")))} of the graph that is no longer assigned (undo brings them back).");
+        }
+        Owner.UndoService?.PushApplied(steps.Count == 1 ? cmd : new CompositeCommand(cmd.Name, steps, Owner.DocContext));
+        RaiseDirty();
+        Owner.NotifyChanged();
+    }
+
+    /// <summary>The material's parameters that only the graph named by <paramref name="old"/> declares (and the graph named by <paramref name="incoming"/> does not).</summary>
+    private List<MaterialParameter> OutgoingCustomParameters(string? old, string? incoming)
+    {
+        var result = new List<MaterialParameter>();
+        if (old is null || Owner?.ProjectRoot?.Invoke() is not { } root || !SgShipValidator.TryParseNumber(old, out int on)) return result;
+        string shader = Model.RenderShader ?? "";
+        SgResolvedGraph oldGraph, newGraph = new(null, null, null, null);
+        try
+        {
+            oldGraph = SgShipValidator.Resolve(root, shader, on);
+            if (incoming is not null && SgShipValidator.TryParseNumber(incoming, out int nn)) newGraph = SgShipValidator.Resolve(root, shader, nn);
+        }
+        catch { return result; }
+        if (oldGraph.Document is null) return result;
+        foreach (var cp in oldGraph.Document.Params)
+            if (newGraph.Document?.FindParam(cp.Name) is null && Model.Parameters.FirstOrDefault(x => x.Name == cp.Name) is { } p) result.Add(p);
+        return result;
     }
 
     /// <summary>Assign a graph: REY_GRAPH=&lt;its number&gt; on this material, by the editor's own macro write (one undo step, saved by the normal Save).</summary>

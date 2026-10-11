@@ -209,6 +209,7 @@ public partial class ShaderPreviewWindow : Window
         switch ((sender as Control)?.DataContext)
         {
             case SgPropRow sg: sg.Commit(); break;
+            case SgParamRow pr: if ((sender as Control)?.Tag as string == "default") pr.CommitDefault(); else pr.CommitName(); break;
             case GraphComponentField f: f.CommitCommand.Execute(null); break;
             case GraphEditRow row: row.Commit(); break;
         }

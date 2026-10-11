@@ -56,6 +56,8 @@ public sealed partial class MaterialGraphViewModel
     public void AttachShaderGraph(ShaderGraphViewModel sg)
     {
         _sg = sg;
+        sg.RenameParameterInMaterials = RenameCustomParameterInMaterials;
+        sg.MaterialsCarryingParameter = MaterialsCarryingCustomParameter;
         sg.StateChanged += OnShaderGraphState;
         sg.PropertyChanged += (_, e) =>
         {
@@ -79,6 +81,9 @@ public sealed partial class MaterialGraphViewModel
         UndoCommand.NotifyCanExecuteChanged();
         RedoCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(DirtyTip));
+        // M834: a graph just saved (not dirty) may have gained or lost custom parameters: the Material tab's "Graph parameters" of its materials follow
+        if (SgActive && !_sg!.IsDirty && _editor is not null)
+            foreach (var mb in _editor.Materials) if (mb.HasGraphAssigned) mb.RefreshGraphSection(rescan: true);
         if (SgActive) { EditStatus = _sg!.Status; _sgWasActive = true; }
         else if (_sgWasActive) { _sgWasActive = false; EditStatus = ""; }   // the last Shader Graph line does not outlive the graph
     }

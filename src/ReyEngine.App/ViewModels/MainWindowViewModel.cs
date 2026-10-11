@@ -16416,6 +16416,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // M833: Shader Graphs ride a send exactly like an export: a material that names one is checked, and Riot's installed pixel table and
                 // last container are rebuilt with the graph's blobs. They are written to a temporary folder (never the project, the game or data/).
                 string? graphTemp = null;
+                var globalExtra = new List<(string Layer, string WadFolder, string RelPath, string AbsPath)>();
                 try
                 {
                     var sources = Project.ProjectFolders.Select(Project.ResolveProjectPath).Where(Directory.Exists).ToList();
@@ -16433,6 +16434,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                             File.WriteAllBytes(dest, bytes);
                             files.Add((homeLayer, "ShaderCache.dx11", rel, dest));
                         }
+                        // M834: the shaders.bin that declares the graphs' custom parameters rides the Global WAD of the BASE layer. It is added AFTER the
+                        // declaration step below (a generated bin is never a declaration against the game's copy).
+                        if (graphShip.GlobalFiles.Count > 0 && files.Any(f => IsGlobalFolder(f.WadFolder) && !string.IsNullOrEmpty(f.Layer) && f.Layer != homeLayer))
+                            throw new InvalidOperationException("The project has a Global folder in an optional layer. The generated shaders.bin of the Shader Graph custom parameters must be in the base layer, so the export is refused: move that folder to the base layer or remove the custom parameters.");
+                        foreach (var (rel, bytes) in graphShip.GlobalFiles)
+                        {
+                            string dest = Path.Combine(graphTemp, "Global", rel.Replace('/', Path.DirectorySeparatorChar));
+                            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                            File.WriteAllBytes(dest, bytes);
+                            globalExtra.Add((homeLayer, "Global", rel, dest));
+                        }
                     }
                 if (files.Count == 0 && !layerContent)
                     throw new InvalidOperationException("The project has no packable content to send.");
@@ -16440,11 +16452,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var manifests = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 if (declare)
                 {
-                    var declared = DeclareGameBins(files);
-                    files = declared.Files;
+                    // a bin that names a Shader Graph ships whole, never as a declaration (as the Build path does)
+                    var held = files.Where(f => f.RelPath.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) && Core.Build.ShaderGraphShipGuard.Mentions(File.ReadAllBytes(f.AbsPath))).ToList();
+                    var declared = DeclareGameBins(files.Except(held).ToList());
+                    files = declared.Files.Concat(held).ToList();
                     manifests = declared.GameData;
                     declarationReport = declared.Report;
                 }
+                files.AddRange(globalExtra);
                 // M816: a layer with imported declarations and no declarations of this project's own still gets its manifest, the
                 // override files ride their layers, and mod.config.json names the license, tags, champions and maps
                 var sendOptions = Core.Build.LtkProjectLayers.ForSend(options, Project, imported,
@@ -17761,6 +17776,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 File.WriteAllBytes(dest, bytes);
                 files++;
             }
+
+            // M834: custom parameters: Riot's shaders.bin with the graphs' parameters declared, in the Global WAD of the base layer (the project's own
+            // Global folder when it has one - already checked not to hold a shaders.bin - else a staging folder of its own)
+            if (graphShip.GlobalFiles.Count > 0)
+            {
+                const string GlobalLeaf = "Global";
+                int gat = stagedFolders.FindIndex(f => IsGlobalFolder(f.leaf));
+                string globalDir;
+                if (gat >= 0 && stagedFolders[gat].layer != graphLayer)
+                    throw new InvalidOperationException("The project has a Global folder in an optional layer. The generated shaders.bin of the Shader Graph custom parameters must be in the base layer, so the export is refused: move that folder to the base layer or remove the custom parameters.");
+                if (gat >= 0) globalDir = stagedFolders[gat].dir;
+                else
+                {
+                    globalDir = Path.Combine(stagingRoot, GlobalLeaf);
+                    stagedFolders.Add((GlobalLeaf, globalDir, graphLayer, GlobalLeaf, false));
+                    staged++;
+                }
+                foreach (var (path, bytes) in graphShip.GlobalFiles)
+                {
+                    string dest = Path.Combine(globalDir, path.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                    File.WriteAllBytes(dest, bytes);
+                    files++;
+                }
+            }
         }
 
         // Pack each staged folder into a distributable .wad.client.
@@ -17887,6 +17927,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         foreach (var mesh in _selection.Items)
             renderer.UpdateMeshVertices(map.Positions, map.Normals, mesh.VertexStart, mesh.VertexCount);
     }
+
+    /// <summary>The project folder that becomes Global.wad.client: named "Global" or "Global.wad.client".</summary>
+    private static bool IsGlobalFolder(string leaf) =>
+        leaf.Equals("Global", StringComparison.OrdinalIgnoreCase) || leaf.Equals("Global.wad.client", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSameOrChild(string path, string root)
     {

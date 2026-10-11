@@ -21,7 +21,7 @@ public static class SgGraphView
         var index = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
         foreach (var n in doc.Nodes)
         {
-            var def = SgCatalog.Get(n.Type);
+            var def = SgCatalog.DefFor(n);
             var errors = diags.Where(d => d.IsError && d.NodeId == n.Id).ToList();
             var warn = diags.Where(d => !d.IsError && d.NodeId == n.Id).ToList();
             string message = string.Join("\n", errors.Concat(warn).Select(d => (d.IsError ? "" : "(warning) ") + d.Message));
@@ -38,7 +38,8 @@ public static class SgGraphView
                     bool linked = doc.LinkInto(n.Id, pd.Name) is not null;
                     int w = i < inW.Length ? inW[i] : 0;
                     string detail = linked ? (w > 0 ? SgCatalog.TypeName(w) : "?")
-                        : n.Type == "TextureSample" && pd.Name == "UV" ? "UV" + (b?.UvSet ?? 1)
+                        : SgCatalog.IsUvPin(n, pd) ? "UV" + (b?.UvSet ?? 1)
+                        : SgCatalog.IsTimePin(n, pd) ? (b is null || b.HasTime ? "TIME" : "0")
                         : SgHlsl.Float(SgCatalog.PinDefault(n, pd));
                     inputs.Add(new GraphPin
                     {
@@ -67,19 +68,21 @@ public static class SgGraphView
                 Kind = n.Type switch
                 {
                     "TextureSample" => GraphNodeKind.Sample,
-                    "Parameter" or "Constant" or "TexCoord" or "VertexColor" or "Time" => GraphNodeKind.Input,
+                    "Parameter" or "Constant" or "ConstantColor" or "TexCoord" or "VertexColor" or "Time" => GraphNodeKind.Input,
                     SgCatalog.OutputType => GraphNodeKind.Output,
                     _ => GraphNodeKind.Math,
                 },
                 Group = n.Type switch
                 {
                     "TextureSample" => GraphGroup.Textures,
-                    "Parameter" or "Constant" or "TexCoord" or "VertexColor" or "Time" => GraphGroup.Parameters,
+                    "Parameter" or "Constant" or "ConstantColor" or "TexCoord" or "VertexColor" or "Time" => GraphGroup.Parameters,
                     SgCatalog.OutputType => GraphGroup.Output,
                     _ => GraphGroup.Switches,
                 },
-                Title = TitleOf(n, def),
-                Subtitle = SubtitleOf(n, def),
+                Title = n.Label.Length > 0 ? n.Label : TitleOf(n, def),
+                Subtitle = n.Label.Length > 0 ? (TitleOf(n, def) + " " + SubtitleOf(n, def, doc)).Trim() : SubtitleOf(n, def, doc),
+                Swatch = n.Type == "ConstantColor" && SgCatalog.TryParseConstant(n.Prop("value", "1 1 1 1"), out var sw) && sw.Length == 4 ? new System.Numerics.Vector4(sw[0], sw[1], sw[2], sw[3])
+                    : n.Type == "Parameter" && doc.FindParam(n.Prop("name")) is { IsColor: true } cp && cp.DefaultValues() is { Length: >= 3 } dv ? new System.Numerics.Vector4(dv[0], dv[1], dv[2], dv.Length > 3 ? dv[3] : 1f) : null,
                 State = errors.Count > 0 ? GraphNodeState.Error
                     : analysis.Reachable.Count > 0 && !analysis.Reachable.Contains(n.Id) ? GraphNodeState.Unused
                     : GraphNodeState.Authored,
@@ -113,8 +116,16 @@ public static class SgGraphView
             Nodes = nodes,
             Wires = wires,
             Notes = diags.Where(d => d.NodeId.Length == 0).Select(d => d.Message).ToList(),
+            Comments = doc.Comments.Select(c => new GraphComment { Id = c.Id, Title = c.Title, ColorKey = c.Color, X = c.X, Y = c.Y, Width = c.Width, Height = c.Height }).ToList(),
         };
         graph.UpdateBounds();
+        if (graph.Comments.Count > 0)
+        {
+            var (bx, by, bw, bh) = graph.Bounds;
+            double x0 = bw > 0 ? bx : double.MaxValue, y0 = bh > 0 ? by : double.MaxValue, x1 = bw > 0 ? bx + bw : double.MinValue, y1 = bh > 0 ? by + bh : double.MinValue;
+            foreach (var c in graph.Comments) { x0 = Math.Min(x0, c.X); y0 = Math.Min(y0, c.Y); x1 = Math.Max(x1, c.Right); y1 = Math.Max(y1, c.Bottom); }
+            graph.Bounds = (x0, y0, x1 - x0, y1 - y0);
+        }
         return graph;
     }
 
@@ -131,9 +142,11 @@ public static class SgGraphView
         };
     }
 
-    private static string SubtitleOf(SgNode n, SgNodeDef? def) => n.Type switch
+    private static string SubtitleOf(SgNode n, SgNodeDef? def, ShaderGraphDocument doc) => n.Type switch
     {
-        "Parameter" => n.Prop("name"),
+        "Parameter" => doc.FindParam(n.Prop("name")) is not null ? n.Prop("name") + " (custom)" : n.Prop("name"),
+        "ConstantColor" => "Colour",
+        "Custom" => "HLSL",
         "TexCoord" => "TexCoord " + n.Prop("set", "1"),
         "Constant" => "Constant",
         "VertexColor" => "COLOR0",
@@ -143,7 +156,7 @@ public static class SgGraphView
 
     private static string ValueText(SgNode n, SgNodeDef def, int width) => n.Type switch
     {
-        "Constant" => SgCatalog.TryParseConstant(n.Prop("value"), out var v) ? SgCatalog.FormatConstant(v) : "?",
+        "Constant" or "ConstantColor" => SgCatalog.TryParseConstant(n.Prop("value"), out var v) ? SgCatalog.FormatConstant(v) : "?",
         "Parameter" or "TexCoord" or "VertexColor" or "Time" => width > 0 ? SgCatalog.TypeName(width) : "?",
         _ => width > 0 && def.Outputs.Count == 1 ? SgCatalog.TypeName(width) : "",
     };

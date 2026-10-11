@@ -88,7 +88,7 @@ public static class SgAnalyzer
 
         void Eval(SgNode n)
         {
-            var def = SgCatalog.Get(n.Type);
+            var def = SgCatalog.DefFor(n);
             int[] result;
             if (def is null)
             {
@@ -117,7 +117,7 @@ public static class SgAnalyzer
                     if (!nodeById.TryGetValue(l.FromNode, out var src)) { Err(n, pin.Name, $"the wire comes from a node that does not exist ({l.FromNode})"); w = 0; }
                     else
                     {
-                        var sdef = SgCatalog.Get(src.Type);
+                        var sdef = SgCatalog.DefFor(src);
                         int sp = sdef?.OutputIndex(l.FromPin) ?? -1;
                         var sw = outW.TryGetValue(src.Id, out var known) ? known : Array.Empty<int>();
                         if (sdef is not null && sp < 0) { Err(n, pin.Name, $"{src.Type} has no output '{l.FromPin}'"); w = 0; }
@@ -161,11 +161,66 @@ public static class SgAnalyzer
                 {
                     string name = n.Prop("name");
                     if (name.Length == 0) { Err(n, null, "choose a parameter"); return One(0); }
+                    // a parameter the graph declares itself (M834) comes first: its name cannot clash with a declared one
+                    if (doc.FindParam(name) is { } custom) return One(Math.Clamp(custom.Components, 1, 4));
                     if (b is null) return One(4);
                     var p = b.Parameter(name);
-                    if (p is null) { Err(n, null, $"'{name}' is not a parameter {ShortName(b)} declares in shaders.bin: the game would not fill it"); return One(0); }
+                    if (p is null) { Err(n, null, $"'{name}' is neither a custom parameter of this graph nor a parameter {ShortName(b)} declares in shaders.bin: the game would not fill it"); return One(0); }
                     return One(p.Components);
                 }
+
+                case "ConstantColor":
+                {
+                    if (!SgCatalog.TryParseConstant(n.Prop("value", "1 1 1 1"), out var cc) || cc.Length != 4) { Err(n, null, "a colour is 4 numbers (r g b a)"); return One(0); }
+                    return One(4);
+                }
+
+                case "Panner" or "Rotator" or "TilingOffset":
+                    return One(ins.Any(x => x == 0) ? 0 : 2);
+
+                case "Custom":
+                {
+                    if (!SgCustom.TryParseInputs(n.Prop("inputs", SgCustom.DefaultInputs), out _, out string inputError)) { Err(n, null, inputError); return One(0); }
+                    int ow = SgCustom.OutWidth(n.Prop("out", SgCustom.DefaultOut));
+                    if (ow == 0) { Err(n, null, "the output type must be float, float2, float3 or float4"); return One(0); }
+                    if (SgCustom.CodeProblem(n.Prop("code", SgCustom.DefaultCode), out _) is { } codeError) { Err(n, null, codeError); return One(0); }
+                    return One(anyBad ? 0 : ow);
+                }
+
+                case "Length":
+                    return One(A == 0 ? 0 : 1);
+
+                case "Distance":
+                {
+                    int u = Unify(A, B, "A", "B");
+                    return One(u == 0 ? 0 : 1);
+                }
+
+                case "Reflect":
+                {
+                    int u = Unify(A, B, "Incident", "Normal");
+                    if (u == 1) { Err(n, null, "Reflect needs vectors (float2 to float4), not scalars"); return One(0); }
+                    return One(u);
+                }
+
+                case "Cross":
+                    return One(A == 0 || B == 0 ? 0 : 3);
+
+                case "Fmod":
+                    return One(Unify(A, B, "A", "B"));
+
+                case "Desaturation":
+                    return One(A == 0 || B == 0 ? 0 : 3);
+
+                case "If":
+                {
+                    // A, B and Tolerance are scalars (a fixed-width pin takes a scalar only here); the three results mix like Lerp's operands
+                    int u = Unify(ins[2], ins[3], "A > B", "A == B");
+                    return One(Unify(u, ins[4], "A > B", "A < B"));
+                }
+
+                case "Ceil" or "Round" or "Sign":
+                    return One(A);
 
                 case "TexCoord":
                 {

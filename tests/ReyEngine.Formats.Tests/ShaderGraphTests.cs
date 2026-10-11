@@ -213,7 +213,7 @@ public sealed class ShaderGraphTests
         Link(d, "p", "Value", "n1", SgCatalog.OpacityPin);
         var r = SgAnalyzer.Analyze(d, b);
         Assert.Contains(r.Errors, e => e.NodeId == "t" && e.Message.Contains("not a texture"));
-        Assert.Contains(r.Errors, e => e.NodeId == "p" && e.Message.Contains("not a parameter"));
+        Assert.Contains(r.Errors, e => e.NodeId == "p" && e.Message.Contains("neither a custom parameter"));
         // a node that nothing reads is only a warning
         Assert.DoesNotContain(r.Errors, e => e.NodeId == "t0");
         Assert.Contains(r.Diagnostics, e => e.NodeId == "t0" && !e.IsError);
@@ -436,8 +436,8 @@ public sealed class ShaderGraphTests
         Assert.Equal(12.5, back.Find("n2")!.X);
         Assert.Equal("0.75", back.Find("n4")!.Prop("A"));
         Assert.Equal("Shaders/StaticMesh/DefaultEnv_Flat", back.BaseShader);
-        Assert.Equal(1, back.Version);
-        Assert.Contains("\"version\": 1", json);
+        Assert.Equal(ShaderGraphDocument.CurrentVersion, back.Version);   // M834: a save writes the current version (2)
+        Assert.Contains("\"version\": 2", json);
     }
 
     [Fact]
@@ -452,7 +452,7 @@ public sealed class ShaderGraphTests
     }
 
     [Theory]
-    [InlineData("{ \"version\": 2, \"nodes\": [], \"links\": [] }", "version 2")]
+    [InlineData("{ \"version\": 3, \"nodes\": [], \"links\": [] }", "version 3")]
     [InlineData("{ \"version\": 1, \"nodes\": [ { \"id\": \"a\", \"type\": \"Add\" }, { \"id\": \"a\", \"type\": \"Add\" } ], \"links\": [] }", "repeated")]
     [InlineData("not json", "not a Shader Graph file")]
     [InlineData("{ \"version\": 1, \"nodes\": [ { \"id\": \"\", \"type\": \"Add\" } ], \"links\": [] }", "empty or repeated")]

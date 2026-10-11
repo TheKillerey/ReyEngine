@@ -261,7 +261,7 @@ public static class ShaderGraphRegistry
 
 /// <summary>An assigned material, as read from a bin at export time.</summary>
 public sealed record SgAssignedMaterial(string BinPath, string Material, string? Shader, string GraphMacroValue, IReadOnlyList<string> ParameterNames,
-    IReadOnlyList<string>? SamplerNames = null)
+    IReadOnlyList<string>? SamplerNames = null, IReadOnlyList<string>? NonVec4Parameters = null)
 {
     public string Label => $"{Material} ({BinPath})";
 }
@@ -318,9 +318,19 @@ public static class SgShipValidator
             return bad;
         }
         if (b is null) { bad.Add($"{who}: Shader Graph {gname} - the base shader {graph.Document.BaseShader} could not be read from the installed game."); return bad; }
+        // a material parameter must be declared in shaders.bin: by Riot for the base shader, or by the graph's custom parameters (M834: the export
+        // adds those to the shipped shaders.bin). Anything else is the test1 crash ("Missing shader constant").
         foreach (string p in m.ParameterNames)
-            if (b.Parameter(p) is null)
-                bad.Add($"{who}: the parameter '{p}' is not declared by {b.Shader} in shaders.bin. The game stops with \"Missing shader constant\" on a material with a Shader Graph and a parameter its shader does not declare. Remove the parameter from the material.");
+            if (b.Parameter(p) is null && graph.Document.FindParam(p) is null)
+                bad.Add($"{who}: the parameter '{p}' is not declared by {b.Shader} in shaders.bin and is not a custom parameter of the Shader Graph. The game stops with \"Missing shader constant\" on a material with a Shader Graph and a parameter its shader does not declare. Remove the parameter from the material, or add it to the graph as a custom parameter.");
+        // Riot's paramValues `value` is ALWAYS a Vector4: LTK Manager's health check calls any other type FATAL (rule bin/property-type, test5), and the game
+        // would not read it either. (The fix: remove the parameter and add it again from the material tab's graph parameters, which writes a Vector4.)
+        foreach (string p in m.NonVec4Parameters ?? Array.Empty<string>())
+            bad.Add($"{who}: the parameter '{p}' has a value that is not a vec4. A material's paramValues value is always a vec4 (LTK Manager rejects anything else as FATAL, rule bin/property-type): remove the parameter and add it again.");
+        // the custom parameters themselves: names the installed base shader does not already use
+        foreach (var cp in graph.Document.Params)
+            if (SgNames.ParameterProblem(cp.Name, graph.Document, b, renaming: cp.Name) is { } why)
+                bad.Add($"Shader Graph {gname} (used by '{m.Material}'): the custom parameter '{cp.Name}' cannot be declared: {why}");
         foreach (string t in m.SamplerNames ?? Array.Empty<string>())
             if (b.Texture(t) is null)
                 bad.Add($"{who}: the sampler '{t}' is not a texture {b.Shader} declares (unverified in game; blocked to be safe). Remove it from the material or unassign the graph.");

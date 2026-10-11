@@ -149,6 +149,23 @@ public sealed class GraphFrame
     public double Height { get; internal set; }
 }
 
+/// <summary>M834 (Shader Graph): a comment box the person drew - a titled rectangle painted behind the nodes in a theme palette colour. A projection of
+/// <c>SgComment</c>; the canvas asks the Shader Graph view model to move, resize and retitle it.</summary>
+public sealed class GraphComment
+{
+    public required string Id { get; init; }
+    public required string Title { get; init; }
+    /// <summary>A theme palette key: Comment, Texture, Param, Switch, Macro, Shader or Output.</summary>
+    public required string ColorKey { get; init; }
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double Width { get; set; }
+    public double Height { get; set; }
+    public double Right => X + Width;
+    public double Bottom => Y + Height;
+    public bool Contains(double x, double y) => x >= X && x <= Right && y >= Y && y <= Bottom;
+}
+
 /// <summary>Sizes shared by the layout and the drawing, so a wire ends exactly where a pin is painted.</summary>
 public static class GraphMetrics
 {
@@ -176,6 +193,9 @@ public sealed class MaterialGraph
     public IReadOnlyList<GraphNode> Nodes { get; init; } = Array.Empty<GraphNode>();
     public IReadOnlyList<GraphWire> Wires { get; init; } = Array.Empty<GraphWire>();
     public IReadOnlyList<GraphFrame> Frames { get; init; } = Array.Empty<GraphFrame>();
+
+    /// <summary>M834: the Shader Graph's comment boxes (empty for a material graph).</summary>
+    public IReadOnlyList<GraphComment> Comments { get; init; } = Array.Empty<GraphComment>();
 
     /// <summary>Anything the builder could not show faithfully (no shader reflection, unmapped samplers...).</summary>
     public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();

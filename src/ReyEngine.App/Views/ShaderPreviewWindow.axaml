@@ -379,13 +379,54 @@
                       <DataTemplate x:DataType="vm:SgPropRow">
                         <StackPanel Spacing="2" Margin="0,3">
                           <TextBlock Text="{Binding Label}" FontSize="10.5" FontFamily="Consolas" Foreground="{DynamicResource ReyTextBrush}" />
-                          <TextBox Text="{Binding Text}" FontSize="11" FontFamily="Consolas" IsVisible="{Binding !HasChoices}" LostFocus="OnEditLostFocus">
+                          <TextBox Text="{Binding Text}" FontSize="11" FontFamily="Consolas" IsVisible="{Binding ShowsTextBox}" LostFocus="OnEditLostFocus">
                             <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitCommand}" /></TextBox.KeyBindings>
                           </TextBox>
+                          <TextBox Text="{Binding Text}" FontSize="11" FontFamily="Consolas" AcceptsReturn="True" AcceptsTab="False" TextWrapping="Wrap" MinHeight="130"
+                                   IsVisible="{Binding ShowsMultiline}" LostFocus="OnEditLostFocus">
+                            <TextBox.KeyBindings><KeyBinding Gesture="Ctrl+Enter" Command="{Binding CommitCommand}" /></TextBox.KeyBindings>
+                          </TextBox>
+                          <ColorPicker Color="{Binding ColorValue, Mode=TwoWay}" IsVisible="{Binding IsColor}" IsAlphaEnabled="{Binding HasAlpha}" IsAlphaVisible="{Binding HasAlpha}" HorizontalAlignment="Left" />
                           <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Text}" FontSize="11" IsVisible="{Binding HasChoices}"
                                     HorizontalAlignment="Stretch" />
                           <TextBlock Text="{Binding Hint}" FontSize="9.5" Opacity="0.55" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
                         </StackPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Border Height="1" Background="{DynamicResource ReyBorderBrush}" Margin="0,2" />
+                  <TextBlock Classes="cap" Text="CUSTOM PARAMETERS" />
+                  <TextBlock Text="The graph's own parameters (name, type, default). They work in this preview and ship: the export declares them in a shaders.bin the mod carries (Global WAD), and a material carries each one as a normal parameter."
+                             FontSize="9.5" Opacity="0.65" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextBrush}" />
+                  <WrapPanel>
+                    <Button Classes="tool" Content="+ Scalar" Command="{Binding ShaderGraph.AddScalarParameterCommand}" Margin="0,0,4,4" FontSize="10.5" />
+                    <Button Classes="tool" Content="+ Vector" Command="{Binding ShaderGraph.AddVectorParameterCommand}" Margin="0,0,4,4" FontSize="10.5" />
+                    <Button Classes="tool" Content="+ Colour" Command="{Binding ShaderGraph.AddColourParameterCommand}" Margin="0,0,4,4" FontSize="10.5" />
+                  </WrapPanel>
+                  <TextBlock Text="No custom parameters." FontSize="10.5" Opacity="0.6" Foreground="{DynamicResource ReyTextBrush}" IsVisible="{Binding ShaderGraph.NoParamRows}" />
+                  <ItemsControl ItemsSource="{Binding ShaderGraph.ParamRows}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SgParamRow">
+                        <Border BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,3">
+                          <StackPanel Spacing="3">
+                            <DockPanel>
+                              <Button DockPanel.Dock="Right" Classes="tool" Content="Delete" Command="{Binding DeleteCommand}" FontSize="10" Margin="4,0,0,0" />
+                              <TextBox Text="{Binding NameText}" Tag="name" FontSize="11" FontFamily="Consolas" LostFocus="OnEditLostFocus">
+                                <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitNameCommand}" /></TextBox.KeyBindings>
+                              </TextBox>
+                            </DockPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                              <ComboBox ItemsSource="{x:Static vm:SgParamRow.KindChoices}" SelectedItem="{Binding Kind}" FontSize="11" MinWidth="86" />
+                              <CheckBox Content="Colour" IsChecked="{Binding IsColor}" IsVisible="{Binding CanBeColor}" FontSize="11" />
+                            </StackPanel>
+                            <TextBox Text="{Binding DefaultText}" Tag="default" FontSize="11" FontFamily="Consolas" IsVisible="{Binding ShowsNumbers}" LostFocus="OnEditLostFocus"
+                                     PlaceholderText="default value">
+                              <TextBox.KeyBindings><KeyBinding Gesture="Enter" Command="{Binding CommitDefaultCommand}" /></TextBox.KeyBindings>
+                            </TextBox>
+                            <ColorPicker Color="{Binding ColorValue, Mode=TwoWay}" IsVisible="{Binding ShowsColor}" IsAlphaEnabled="{Binding HasAlpha}" IsAlphaVisible="{Binding HasAlpha}" HorizontalAlignment="Left" />
+                            <TextBlock Text="{Binding UsedText}" FontSize="9.5" Opacity="0.55" Foreground="{DynamicResource ReyTextBrush}" />
+                          </StackPanel>
+                        </Border>
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>

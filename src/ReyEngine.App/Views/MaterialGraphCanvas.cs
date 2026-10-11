@@ -75,6 +75,8 @@ public sealed partial class MaterialGraphCanvas : Control
         ClipToBoundsProperty.OverrideDefaultValue<MaterialGraphCanvas>(true);
     }
 
+    public MaterialGraphCanvas() { DoubleTapped += SgOnDoubleTapped; }
+
     public MaterialGraph? Graph { get => GetValue(GraphProperty); set => SetValue(GraphProperty, value); }
     public string? SelectedNodeId { get => GetValue(SelectedNodeIdProperty); set => SetValue(SelectedNodeIdProperty, value); }
     public bool HideUnrelated { get => GetValue(HideUnrelatedProperty); set => SetValue(HideUnrelatedProperty, value); }
@@ -116,6 +118,7 @@ public sealed partial class MaterialGraphCanvas : Control
                                 && before.MaterialName == after.MaterialName && !_needFit;
             if (!sameMaterial) _needFit = true;
             _hoverId = null;
+            SgGraphChanged(change.NewValue as MaterialGraph);   // M834: stale ids of the selection and of a comment drag
             // M832: a Shader Graph is re-projected when its compile finishes; that must not drop a wire the person is dragging
             if (!(sameMaterial && ShaderEditor is not null)) CancelGesture();
             InvalidateVisual();
@@ -184,7 +187,7 @@ public sealed partial class MaterialGraphCanvas : Control
 
     // =============================================================================== input
 
-    private enum Gesture { None, Pan, Node, Wire, SgWire }
+    private enum Gesture { None, Pan, Node, Wire, SgWire, CommentMove, CommentResize }
 
     private Gesture _gesture;
     private bool _rightPan;
@@ -272,6 +275,7 @@ public sealed partial class MaterialGraphCanvas : Control
                 return;
             }
             var node = NodeAt(pt.Position);
+            if (ShaderEditor is not null && SgNodeOrCommentPressed(e, pt, node)) return;
             SelectedNodeId = node?.Id;
             if (node is null) { BeginPan(pt.Position, e); return; }
             _gesture = Gesture.Node;
@@ -365,6 +369,9 @@ public sealed partial class MaterialGraphCanvas : Control
             case Gesture.SgWire:
                 SgUpdateWire(pos);
                 return;
+            case Gesture.CommentMove or Gesture.CommentResize:
+                SgUpdateComment(pos);
+                return;
         }
 
         var hit = NodeAt(pos);
@@ -419,6 +426,7 @@ public sealed partial class MaterialGraphCanvas : Control
 
         if (gesture == Gesture.Wire) { FinishWire(); ReleaseCapture(e); return; }
         if (gesture == Gesture.SgWire) { SgFinishWire(); ReleaseCapture(e); return; }
+        if (gesture is Gesture.CommentMove or Gesture.CommentResize) { _gesture = Gesture.None; _cmId = null; ReleaseCapture(e); Graph?.UpdateBounds(); InvalidateVisual(); return; }
         ReleaseCapture(e);
         if (gesture == Gesture.Node)
         {
@@ -521,7 +529,9 @@ public sealed partial class MaterialGraphCanvas : Control
         else if (e.Key == Key.F && SelectedNodeId is { } id) { FocusNode(id); e.Handled = true; }
         else if (e.Key == Key.Escape && _gesture == Gesture.Wire) { CancelGesture(); InvalidateVisual(); e.Handled = true; }
         else if (e.Key == Key.Escape && _gesture == Gesture.SgWire) { CancelGesture(); InvalidateVisual(); e.Handled = true; }
+        else if (e.Key == Key.Delete && ShaderEditor is { SelectedCommentId: { } cdel } sec) { sec.DeleteComment(cdel); sec.SelectedCommentId = null; e.Handled = true; }
         else if (e.Key == Key.Delete && SelectedNodeId is { } sdel && ShaderEditor is { } sed) { sed.DeleteNode(sdel); e.Handled = true; }
+        else if (e.Key == Key.F2 && ShaderEditor is not null) { SgRenameSelected(); e.Handled = true; }
         else if (e.Key == Key.Delete && SelectedNodeId is { } del && Wiring is { } w) { w.DeleteNode(del); e.Handled = true; }
     }
 
@@ -783,6 +793,10 @@ public sealed partial class MaterialGraphCanvas : Control
                         new Point(f.X + 14, f.Y + 6));
             }
 
+            // M834: comment boxes sit behind the wires and the nodes
+            foreach (var c in g.Comments)
+                if (new Rect(c.X, c.Y, c.Width, c.Height).Intersects(view)) DrawComment(ctx, pal, c, titles);
+
             // wires first, nodes over them
             foreach (var w in g.Wires)
             {
@@ -818,7 +832,7 @@ public sealed partial class MaterialGraphCanvas : Control
                 bool dim = related is not null && !related.Contains(n.Id);
                 double alpha = dim ? 0.18 : n.State switch { GraphNodeState.Unused => 0.55, GraphNodeState.ShaderDefault => 0.72, _ => 1.0 };
                 using (ctx.PushOpacity(alpha))
-                    DrawNode(ctx, pal, n, n.Id == SelectedNodeId, n.Id == _hoverId, detail, titles);
+                    DrawNode(ctx, pal, n, n.Id == SelectedNodeId || _multi.Contains(n.Id), n.Id == _hoverId, detail, titles);
             }
 
             if (_gesture == Gesture.Wire) DrawLiveWire(ctx, pal, g);
@@ -866,14 +880,35 @@ public sealed partial class MaterialGraphCanvas : Control
             gc.CubicBezierTo(new Point(x0 + dx, y0), new Point(x1 - dx, y1), new Point(x1, y1));
             gc.EndFigure(false);
         }
-        ctx.DrawGeometry(null, new Pen(color, Math.Max(2.8, 3.0 / _zoom), lineCap: PenLineCap.Round), geo);
+        DrawLiveStroke(ctx, pal, geo, color, bad, _wireHover is not null && _wireCheck.Ok);
 
         if (_wireHover is { } h)
         {
             var (hx, hy) = h.Node.PinPosition(h.Pin);
+            if (bad) ctx.DrawEllipse(null, new Pen(WithOpacity(color, 0.30), 7), new Point(hx, hy), 8, 8);
             ctx.DrawEllipse(null, new Pen(bad ? color : pal.Accent, 2.2), new Point(hx, hy), 8, 8);
         }
 
+    }
+
+    /// <summary>M834: the live wire's stroke. A connection that is NOT allowed glows RED: a wide soft halo in <c>ReyErrorBrush</c> under a solid red core (the reason
+    /// is written beside the pointer). A valid target gets a softer halo in the accent colour; a wire still looking for a target is the plain kind colour. Shared by the
+    /// Material Graph and the Shader Graph, so both canvases read the same.</summary>
+    private void DrawLiveStroke(DrawingContext ctx, Palette pal, Geometry geo, IBrush color, bool refused, bool allowed)
+    {
+        double core = Math.Max(2.8, 3.0 / _zoom);
+        if (refused)
+        {
+            ctx.DrawGeometry(null, new Pen(WithOpacity(color, 0.14), core + 16 / Math.Min(_zoom, 1.0), lineCap: PenLineCap.Round), geo);   // outer glow
+            ctx.DrawGeometry(null, new Pen(WithOpacity(color, 0.28), core + 9 / Math.Min(_zoom, 1.0), lineCap: PenLineCap.Round), geo);    // inner glow
+            ctx.DrawGeometry(null, new Pen(color, core + 0.6, lineCap: PenLineCap.Round), geo);
+        }
+        else if (allowed)
+        {
+            ctx.DrawGeometry(null, new Pen(WithOpacity(pal.Accent, 0.22), core + 8 / Math.Min(_zoom, 1.0), lineCap: PenLineCap.Round), geo);
+            ctx.DrawGeometry(null, new Pen(color, core, lineCap: PenLineCap.Round), geo);
+        }
+        else ctx.DrawGeometry(null, new Pen(color, core, lineCap: PenLineCap.Round), geo);
     }
 
     /// <summary>The line beside the pointer while a wire is dragged: why it may not land here (red) or that it will connect. Drawn in screen

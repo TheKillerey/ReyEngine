@@ -150,7 +150,7 @@ public sealed class ShaderGraphShipRealDataTests(ITestOutputHelper output) : IDi
         return d;
     }
 
-    private static unsafe int[] CreatePixelShaders(IReadOnlyList<byte[]> blobs)
+    internal static unsafe int[] CreatePixelShaders(IReadOnlyList<byte[]> blobs)
     {
         // a throwaway process-lifetime device; the Silk api is deliberately NOT disposed (see ShaderPreviewRenderer.PinD3D11Library, M809)
         var d3d = SilkD3D11.GetApi(null);
@@ -172,9 +172,9 @@ public sealed class ShaderGraphShipRealDataTests(ITestOutputHelper output) : IDi
         return result;
     }
 
-    private sealed class NoProgress : IProgress<(double Frac, string Stage)> { public void Report((double Frac, string Stage) value) { } }
+    internal sealed class NoProgress : IProgress<(double Frac, string Stage)> { public void Report((double Frac, string Stage) value) { } }
 
-    private static byte[] ReadFromZip(ZipArchive zip, string entry)
+    internal static byte[] ReadFromZip(ZipArchive zip, string entry)
     {
         using var s = zip.GetEntry(entry)!.Open();
         using var ms = new MemoryStream();

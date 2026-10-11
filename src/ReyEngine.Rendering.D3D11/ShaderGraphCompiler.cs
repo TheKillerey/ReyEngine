@@ -99,12 +99,19 @@ public static unsafe class ShaderGraphCompiler
         if (!SgSignature.SameList(sig.Outputs, ps.Outputs))
             bad.Add($"the compiled output signature differs from Riot's: [{SgSignature.Describe(ps.Outputs)}] vs Riot [{SgSignature.Describe(sig.Outputs)}]");
 
+        // nothing but the two buffers a graph may use, and nothing but textures and samplers besides them
+        foreach (var cb in ps.ConstantBuffers)
+            if (cb.Name is not ("$Globals" or "PerFramePixelCB")) bad.Add($"the compiled shader declares the constant buffer '{cb.Name}'; only $Globals and PerFramePixelCB are allowed");
+        foreach (var r in ps.Resources)
+            if (r.Kind is not (DxbcResourceKind.Texture or DxbcResourceKind.Sampler or DxbcResourceKind.ConstantBuffer))
+                bad.Add($"the compiled shader binds a {r.Kind} resource '{r.Name}'; only textures and samplers are allowed");
         var globals = ps.ConstantBuffers.FirstOrDefault(c => c.Name == "$Globals");
         if (globals is not null)
         {
             if (globals.BindPoint != 0) bad.Add($"$Globals is at b{globals.BindPoint}; the client expects b0");
             foreach (var v in globals.Variables)
-                if (b.Parameter(v.Name) is null) bad.Add($"$Globals declares '{v.Name}', which the base shader does not declare");
+                if (b.Parameter(v.Name) is null && !hlsl.CustomParameters.Any(c => c.Name == v.Name))
+                    bad.Add($"$Globals declares '{v.Name}', which the base shader does not declare");
         }
         else if (hlsl.Parameters.Count > 0) bad.Add("the graph reads parameters but the compiled shader has no $Globals");
 

@@ -26,6 +26,9 @@ public sealed class SgHlslResult
     /// <summary>The declared textures and parameters the shader reads - what the game must bind for it.</summary>
     public IReadOnlyList<string> Textures { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> Parameters { get; init; } = Array.Empty<string>();
+
+    /// <summary>M834: the subset of <see cref="Parameters"/> the GRAPH declares (not the base shader): what the game cannot be given yet.</summary>
+    public IReadOnlyList<SgCustomParam> CustomParameters { get; init; } = Array.Empty<SgCustomParam>();
     public bool UsesTime { get; init; }
     public bool EncodesOutput { get; init; }
     public bool Ok => Errors.Count == 0 && Source.Length > 0;
@@ -71,18 +74,29 @@ public static class SgHlsl
         var textures = new List<string>();
         var parameters = new List<string>();
         bool usesTime = false;
+        var customFns = new Dictionary<string, (string Name, SgCustomInput[] Inputs, int Out)>(StringComparer.Ordinal);
         foreach (string id in analysis.Order)
         {
             var n = byId[id];
+            var ndef = SgCatalog.DefFor(n);
+            if (ndef is not null)
+                foreach (var pin in ndef.Inputs)
+                {
+                    bool wired = doc.Links.Any(l => l.ToNode == id && l.ToPin == pin.Name);
+                    if (!wired && SgCatalog.IsUvPin(n, pin) && !HasUv(sig, b.UvSet))
+                        errors.Add(new SgDiagnostic(id, pin.Name, true, $"this signature has no TEXCOORD{b.UvSet} to default the UV to"));
+                    if (!wired && SgCatalog.IsTimePin(n, pin) && b.HasTime) usesTime = true;
+                }
             switch (n.Type)
             {
                 case "TextureSample":
                     if (!textures.Contains(n.Prop("texture"))) textures.Add(n.Prop("texture"));
-                    if (!doc.Links.Any(l => l.ToNode == id && l.ToPin == "UV") && !HasUv(sig, b.UvSet))
-                        errors.Add(new SgDiagnostic(id, "UV", true, $"this signature has no TEXCOORD{b.UvSet} to default the UV to"));
                     break;
                 case "Parameter":
                     if (!parameters.Contains(n.Prop("name"))) parameters.Add(n.Prop("name"));
+                    break;
+                case "Custom":
+                    customFns[id] = ("sg_custom_" + customFns.Count, SgCustom.Inputs(n).ToArray(), SgCustom.OutWidth(n.Prop("out", SgCustom.DefaultOut)));
                     break;
                 case "TexCoord":
                     int.TryParse(n.Prop("set", b.UvSet.ToString(CultureInfo.InvariantCulture)), out int set);
@@ -129,7 +143,8 @@ public static class SgHlsl
         if (parameters.Count > 0)
         {
             L("// ---- $Globals: base shader parameters the graph reads (the client fills them by name)");
-            foreach (string p in parameters) L($"{SgCatalog.TypeName(b.Parameter(p)!.Components)} {p};");
+            foreach (string p in parameters)
+                L($"{SgCatalog.TypeName(doc.FindParam(p)?.Components ?? b.Parameter(p)!.Components)} {p};" + (doc.FindParam(p) is not null ? "   // custom parameter (the graph's own)" : ""));
             L();
         }
         if (textures.Count > 0)
@@ -142,6 +157,20 @@ public static class SgHlsl
         {
             L("// ---- the engine's per-frame cbuffer, redeclared with Riot's exact layout");
             foreach (string s in frameDecl!.Split('\n')) L(s);
+            L();
+        }
+
+        // ---- Custom nodes: each body in its own function, so it can see only its inputs
+        foreach (string id in analysis.Order)
+        {
+            if (!customFns.TryGetValue(id, out var fn)) continue;
+            var node = byId[id];
+            L($"// ---- Custom node {Ascii(id)}{(node.Label.Length > 0 ? " \"" + Ascii(node.Label) + "\"" : "")}", id);
+            L($"{SgCatalog.TypeName(fn.Out)} {fn.Name}({string.Join(", ", fn.Inputs.Select(i => SgCatalog.TypeName(i.Components) + " " + i.Name))})", id);
+            L("{", id);
+            foreach (string line in SgCustom.BodyLines(node.Prop("code", SgCustom.DefaultCode)))
+                L("    " + line, id);
+            L("}", id);
             L();
         }
 
@@ -162,7 +191,7 @@ public static class SgHlsl
 
         string Operand(SgNode n, int pin, int width)
         {
-            var def = SgCatalog.Get(n.Type)!;
+            var def = SgCatalog.DefFor(n)!;
             var pd = def.Inputs[pin];
             var link = doc.LinkInto(n.Id, pd.Name);
             if (link is not null)
@@ -173,19 +202,20 @@ public static class SgHlsl
                 int sw = analysis.OutputWidth(src.Id, sp);
                 return Broadcast(expr, sw, width);
             }
-            if (n.Type == "TextureSample" && pd.Name == "UV") return uvDefault;
+            if (SgCatalog.IsUvPin(n, pd)) return uvDefault;
+            if (SgCatalog.IsTimePin(n, pd)) return b.HasTime ? "TIME.x" : "0.0";
             return Literal(SgCatalog.PinDefault(n, pd), width);
         }
 
         foreach (string id in analysis.Order)
         {
             var n = byId[id];
-            var def = SgCatalog.Get(n.Type)!;
+            var def = SgCatalog.DefFor(n)!;
             if (n.Type == SgCatalog.OutputType) continue;
             string v = "v" + counter++;
             int W = analysis.OutputWidth(id, 0);
             var inW = analysis.InputWidths[id];
-            string title = Ascii(def.Title);
+            string title = Ascii(n.Label.Length > 0 ? n.Label + " (" + def.Title + ")" : def.Title);
             string[] outsExpr;
             string stmt;
 
@@ -222,6 +252,56 @@ public static class SgHlsl
                     var t = b.Texture(n.Prop("texture"))!;
                     stmt = $"float4 {v} = {t.Resource}.Sample({t.Sampler}, {Operand(n, 0, 2)});";
                     outsExpr = new[] { v, v + ".rgb", v + ".r", v + ".g", v + ".b", v + ".a" };
+                    break;
+                }
+                case "ConstantColor":
+                {
+                    SgCatalog.TryParseConstant(n.Prop("value", "1 1 1 1"), out var cc);
+                    stmt = $"float4 {v} = float4({string.Join(", ", cc.Select(Float))});";
+                    outsExpr = new[] { v };
+                    break;
+                }
+                case "Panner":
+                    stmt = Assign(v, 2, $"({Operand(n, 0, 2)} + ({Operand(n, 2, 1)} * {Operand(n, 1, 2)}))");
+                    outsExpr = new[] { v };
+                    break;
+                case "Rotator":
+                    stmt = $"float {v}a = {Operand(n, 3, 1)} * {Operand(n, 2, 1)} * 6.28318530718;\n"
+                         + $"float2 {v}d = {Operand(n, 0, 2)} - {Operand(n, 1, 2)};\n"
+                         + $"float2 {v} = float2({v}d.x * cos({v}a) - {v}d.y * sin({v}a), {v}d.x * sin({v}a) + {v}d.y * cos({v}a)) + {Operand(n, 1, 2)};";
+                    outsExpr = new[] { v };
+                    break;
+                case "TilingOffset":
+                    stmt = Assign(v, 2, $"({Operand(n, 0, 2)} * {Operand(n, 1, 2)} + {Operand(n, 2, 2)})");
+                    outsExpr = new[] { v };
+                    break;
+                case "Length": stmt = Assign(v, 1, inW[0] == 1 ? $"abs({Operand(n, 0, 1)})" : $"length({Operand(n, 0, inW[0])})"); outsExpr = new[] { v }; break;
+                case "Distance":
+                {
+                    int u = Math.Max(inW[0], inW[1]);
+                    stmt = Assign(v, 1, u == 1 ? $"abs({Operand(n, 0, 1)} - {Operand(n, 1, 1)})" : $"distance({Operand(n, 0, u)}, {Operand(n, 1, u)})");
+                    outsExpr = new[] { v };
+                    break;
+                }
+                case "Cross": stmt = Assign(v, 3, $"cross({Operand(n, 0, 3)}, {Operand(n, 1, 3)})"); outsExpr = new[] { v }; break;
+                case "Reflect": stmt = Assign(v, W, $"reflect({Operand(n, 0, W)}, {Operand(n, 1, W)})"); outsExpr = new[] { v }; break;
+                case "Fmod": stmt = Assign(v, W, $"fmod({Operand(n, 0, W)}, {Operand(n, 1, W)})"); outsExpr = new[] { v }; break;
+                case "Ceil": stmt = Assign(v, W, $"ceil({Operand(n, 0, W)})"); outsExpr = new[] { v }; break;
+                case "Round": stmt = Assign(v, W, $"round({Operand(n, 0, W)})"); outsExpr = new[] { v }; break;
+                case "Sign": stmt = Assign(v, W, $"sign({Operand(n, 0, W)})"); outsExpr = new[] { v }; break;
+                case "Desaturation":
+                    stmt = Assign(v, 3, $"lerp({Operand(n, 0, 3)}, (float3)dot({Operand(n, 0, 3)}, float3(0.299, 0.587, 0.114)), {Operand(n, 1, 1)})");
+                    outsExpr = new[] { v };
+                    break;
+                case "If":
+                    stmt = Assign(v, W, $"(abs({Operand(n, 0, 1)} - {Operand(n, 1, 1)}) <= {Operand(n, 5, 1)}) ? {Operand(n, 3, W)} : (({Operand(n, 0, 1)} > {Operand(n, 1, 1)}) ? {Operand(n, 2, W)} : {Operand(n, 4, W)})");
+                    outsExpr = new[] { v };
+                    break;
+                case "Custom":
+                {
+                    var fn = customFns[id];
+                    stmt = Assign(v, W, $"{fn.Name}({string.Join(", ", fn.Inputs.Select((inp, k) => Operand(n, k, inp.Components)))})");
+                    outsExpr = new[] { v };
                     break;
                 }
                 case "Add": stmt = Assign(v, W, $"({Operand(n, 0, W)} + {Operand(n, 1, W)})"); outsExpr = new[] { v }; break;
@@ -275,7 +355,9 @@ public static class SgHlsl
                     continue;
             }
             vars[id] = outsExpr;
-            L($"    {stmt}   // {title}", id);
+            var stmtLines = stmt.Split('\n');
+            for (int k = 0; k < stmtLines.Length; k++)
+                L($"    {stmtLines[k]}" + (k == 0 ? $"   // {title}" : ""), id);
         }
         if (errors.Count > 0) return Fail(sig, errors);
 
@@ -306,6 +388,7 @@ public static class SgHlsl
         {
             Signature = sig, Source = source, LineNodes = lineNodes,
             Textures = textures, Parameters = parameters, UsesTime = usesTime, EncodesOutput = encode,
+            CustomParameters = parameters.Select(doc.FindParam).Where(x => x is not null).Select(x => x!).ToList(),
         };
     }
 

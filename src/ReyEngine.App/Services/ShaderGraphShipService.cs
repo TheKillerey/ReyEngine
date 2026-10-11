@@ -12,6 +12,10 @@ public sealed class ShaderGraphShipResult
 {
     /// <summary>(path inside the ShaderCache.dx11 WAD, bytes). Written to the STAGING folder of the build only.</summary>
     public required IReadOnlyList<(string Path, byte[] Bytes)> Files { get; init; }
+
+    /// <summary>M834: files for the GLOBAL WAD (Global.wad.client): <c>data/shaders/shaders.bin</c> with the graphs' custom parameters declared, when any graph has some.
+    /// Empty otherwise. Written to the staging folder of the build only, in the base layer, like <see cref="Files"/>.</summary>
+    public IReadOnlyList<(string Path, byte[] Bytes)> GlobalFiles { get; init; } = Array.Empty<(string, byte[])>();
     public required IReadOnlyList<string> Report { get; init; }
     public required IReadOnlyList<SgAssignedMaterial> Materials { get; init; }
 }
@@ -28,9 +32,11 @@ public static class ShaderGraphShipService
     private static readonly byte[] Needle = Encoding.ASCII.GetBytes(SgShip.Macro);
 
     /// <summary>The materials of the staged bins that name a graph. A bin is parsed only when its bytes hold the macro name.</summary>
-    public static IReadOnlyList<SgAssignedMaterial> FindAssigned(IEnumerable<string> stagedDirs, Func<uint, string?> resolveBinName, List<string> errors)
+    public static IReadOnlyList<SgAssignedMaterial> FindAssigned(IEnumerable<string> stagedDirs, Func<uint, string?> resolveBinName, List<string> errors,
+        IReadOnlyDictionary<string, (string Stem, string Base)>? custom = null)
     {
         var found = new List<SgAssignedMaterial>();
+        var customNeedles = (custom?.Keys ?? Enumerable.Empty<string>()).Select(k => (Name: k, Bytes: Encoding.UTF8.GetBytes(k))).ToList();
         foreach (string dir in stagedDirs)
         {
             if (!Directory.Exists(dir)) continue;
@@ -39,23 +45,61 @@ public static class ShaderGraphShipService
                 string rel = Path.GetRelativePath(dir, file).Replace('\\', '/');
                 byte[] bytes;
                 try { bytes = File.ReadAllBytes(file); } catch (Exception ex) { errors.Add($"{rel}: cannot be read to check it for Shader Graphs: {ex.Message}"); continue; }
-                if (bytes.AsSpan().IndexOf(Needle) < 0) continue;
+                bool mentionsGraph = bytes.AsSpan().IndexOf(Needle) >= 0;
+                bool mentionsCustom = customNeedles.Any(n => bytes.AsSpan().IndexOf(n.Bytes) >= 0);
+                if (!mentionsGraph && !mentionsCustom) continue;
                 int before = found.Count;
                 MaterialDocument doc;
                 try { doc = MaterialDocument.Parse(bytes, resolveBinName); }
-                catch (Exception ex) { errors.Add($"{rel}: mentions {SgShip.Macro} but cannot be read as a materials bin: {ex.Message}"); continue; }
+                catch (Exception ex)
+                {
+                    // a bin that only happens to hold a custom parameter's name is not necessarily a materials bin
+                    if (mentionsGraph) errors.Add($"{rel}: mentions {SgShip.Macro} but cannot be read as a materials bin: {ex.Message}");
+                    continue;
+                }
                 foreach (var m in doc.Materials)
                 {
                     if (m.IsLinked) continue;
                     var macro = m.AllMacros.FirstOrDefault(x => SgShip.IsGraphMacro(x.Name));
-                    if (macro is null) continue;
+                    if (macro is null)
+                    {
+                        // M834: a material that is NOT assigned to a graph but carries one of the project's custom parameters on a base shader Shader Graphs support:
+                        // no shaders.bin declares it for this material (the mod only declares the parameters of ASSIGNED graphs) - the game stops with
+                        // "Missing shader constant". Typical causes: the graph was unassigned, the parameter was renamed or deleted in the graph, or an editor-only undo.
+                        string sh = m.RenderShader ?? m.ShaderName ?? "";
+                        if (custom is not null && SgBase.IsSupported(sh))
+                            foreach (var p in m.Parameters)
+                                if (custom.TryGetValue(p.Name, out var info) && SgBase.Normalize(info.Base) == SgBase.Normalize(sh))
+                                    errors.Add($"Material '{m.Name}' ({rel}) carries the parameter '{p.Name}', a custom parameter of the Shader Graph '{info.Stem}', but it is not assigned to a graph that declares it, so no shaders.bin declares it and the game stops with \"Missing shader constant\". Remove the parameter from the material, or assign the graph.");
+                        continue;
+                    }
                     found.Add(new SgAssignedMaterial(rel, m.Name, m.RenderShader ?? m.ShaderName, macro.Value, m.Parameters.Select(p => p.Name).ToList(),
-                        m.Slots.Select(sl => sl.SamplerName).ToList()));
+                        m.Slots.Select(sl => sl.SamplerName).ToList(), m.Parameters.Where(p => p.TypeName != "Vector4").Select(p => p.Name).ToList()));
                 }
-                if (found.Count == before) errors.Add($"{rel}: mentions {SgShip.Macro} but no material was recognised (it is not a StaticMaterialDef macro, or the bin did not parse as materials). Blocked rather than shipped without its shader.");
+                if (mentionsGraph && found.Count == before) errors.Add($"{rel}: mentions {SgShip.Macro} but no material was recognised (it is not a StaticMaterialDef macro, or the bin did not parse as materials). Blocked rather than shipped without its shader.");
             }
         }
         return found;
+    }
+
+    /// <summary>Every custom parameter name of every Shader Graph file of the project (whether or not any material is assigned to it): name -> (graph file stem, base shader).</summary>
+    public static IReadOnlyDictionary<string, (string Stem, string Base)> ProjectCustomParameters(string? projectRoot)
+    {
+        var map = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
+        if (projectRoot is null) return map;
+        string dir = ShaderGraphRegistry.FolderIn(projectRoot);
+        if (!Directory.Exists(dir)) return map;
+        foreach (string file in Directory.EnumerateFiles(dir, "*" + ShaderGraphDocument.FileSuffix))
+        {
+            try
+            {
+                var doc = ShaderGraphJson.TryDeserialize(File.ReadAllText(file), out _);
+                if (doc is null) continue;
+                foreach (var p in doc.Params) map.TryAdd(p.Name, (ShaderGraphRegistry.StemOf(file), doc.BaseShader));
+            }
+            catch { /* an unreadable graph file declares nothing; the assigned ones are reported by the validator */ }
+        }
+        return map;
     }
 
     /// <summary>Null when no staged material names a graph (nothing to do). Throws <see cref="InvalidOperationException"/> with every problem
@@ -64,7 +108,7 @@ public static class ShaderGraphShipService
         Func<uint, string?> resolveBinName, IHashResolver? hashes)
     {
         var errors = new List<string>();
-        var assigned = FindAssigned(stagedDirs, resolveBinName, errors);
+        var assigned = FindAssigned(stagedDirs, resolveBinName, errors, ProjectCustomParameters(projectRoot));
         if (assigned.Count == 0)
         {
             if (errors.Count > 0) throw new InvalidOperationException(Blocked(errors));
@@ -78,11 +122,11 @@ public static class ShaderGraphShipService
             ?? throw new InvalidOperationException($"Riot's installed shader cache cannot be read ({cacheError}). Refusing to ship a stale shader cache patch.");
         var perms = new ShaderPermutationIndex(gameFinalDir, h => hashes is not null && hashes.TryGetPath(h, out var p) ? p : null);
 
-        try { return PrepareCore(projectRoot, stagedDirs, assigned, errors, cache, perms); }
+        try { return PrepareCore(projectRoot, gameFinalDir, stagedDirs, assigned, errors, cache, perms); }
         finally { perms.Dispose(); }
     }
 
-    private static ShaderGraphShipResult PrepareCore(string projectRoot, IReadOnlyList<string> stagedDirs, IReadOnlyList<SgAssignedMaterial> assigned,
+    private static ShaderGraphShipResult PrepareCore(string projectRoot, string gameFinalDir, IReadOnlyList<string> stagedDirs, IReadOnlyList<SgAssignedMaterial> assigned,
         List<string> errors, ShaderCacheReader cache, ShaderPermutationIndex perms)
     {
         // ---- bases, graphs, material rules
@@ -134,9 +178,56 @@ public static class ShaderGraphShipService
         }
         if (errors.Count > 0) throw new InvalidOperationException(Blocked(errors));
 
+        // ---- M834: custom parameters -> the base shader's declarations in a shipped shaders.bin (Riot's, regenerated from the installed file, never cached)
+        var globalFiles = new List<(string, byte[])>();
+        var report = new List<string>();
+        var declare = new Dictionary<string, (SgBase Base, Dictionary<string, SgDeclaredParam> Params, List<string> Graphs)>(StringComparer.Ordinal);
+        foreach (var ((key, n), (g, material)) in graphs)
+        {
+            if (g.Document!.Params.Count == 0) continue;
+            if (!declare.TryGetValue(key, out var d)) declare[key] = d = (bases[key]!, new Dictionary<string, SgDeclaredParam>(StringComparer.OrdinalIgnoreCase), new List<string>());
+            d.Graphs.Add($"#{n} {g.Entry!.File}");
+            foreach (var p in SgCustomParams.Declarations(g.Document))
+            {
+                if (d.Params.TryGetValue(p.Name, out var other))
+                {
+                    if (!string.Equals(other.Name, p.Name, StringComparison.Ordinal))
+                        errors.Add($"Two Shader Graphs on {d.Base.Shader} declare custom parameters that differ only in case ('{other.Name}' and '{p.Name}'): the game and the editor compare names without regard to case. Rename one.");
+                    else if (other.Components != p.Components)
+                        errors.Add($"Two Shader Graphs on {d.Base.Shader} declare the custom parameter '{p.Name}' with different types ({SgCatalog.TypeName(other.Components)} and {SgCatalog.TypeName(p.Components)}): rename one.");
+                }
+                d.Params[p.Name] = p;
+            }
+        }
+        if (declare.Count > 0)
+        {
+            // merging with a project's own shaders.bin is not supported: refuse rather than guess
+            ulong shadersHash = HashAlgorithms.WadPath(SgShadersBin.GamePath);
+            foreach (string dir in stagedDirs)
+                if (Directory.Exists(dir) && ReyEngine.Core.Build.WadPackService.EnumerateChunkFiles(dir).Any(f => f.hash == shadersHash))   // the named file AND the hash-named 0x....bin form
+                    errors.Add($"The project already ships its own {SgShadersBin.GamePath}, and Shader Graph custom parameters need to add to it (merging is not supported). Remove that file from the project, or remove the custom parameters from the graphs.");
+            if (errors.Count > 0) throw new InvalidOperationException(Blocked(errors));
+            byte[] riotBin;
+            try { riotBin = ReadInstalledShadersBin(gameFinalDir); }
+            catch (Exception ex) { throw new InvalidOperationException($"The installed {SgShadersBin.GamePath} cannot be read ({ex.Message}). Refusing to ship custom parameters without it."); }
+            byte[] bin = riotBin;
+            foreach (var (_, d) in declare)
+            {
+                var add = d.Params.Values.OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
+                byte[] next;
+                try { next = SgShadersBin.Patch(bin, d.Base.Shader, add); }
+                catch (InvalidDataException ex) { throw new InvalidOperationException($"The custom parameters of {string.Join(", ", d.Graphs)} cannot be declared in shaders.bin: {ex.Message}"); }
+                var problems = SgShadersBin.Verify(bin, next, d.Base.Shader, add);
+                if (problems.Count > 0) throw new InvalidOperationException("The patched shaders.bin is not Riot's plus the custom parameters, so it is not shipped: " + string.Join("; ", problems));
+                bin = next;
+                report.Add($"Shader Graph: {d.Base.Shader} declares {add.Count} custom parameter(s) [{string.Join(", ", add.Select(p => p.Name + ":" + SgCatalog.TypeName(p.Components)))}] for {string.Join(", ", d.Graphs)} in {SgShadersBin.GamePath}.");
+            }
+            globalFiles.Add((SgShadersBin.GamePath, bin));
+            report.Add($"Shader Graph: {SgShadersBin.GamePath} {riotBin.Length:n0} -> {bin.Length:n0} bytes (the installed file with only those definitions changed; written to {SgShadersBin.WadName} in the base layer). {SgCustomParams.ShipRisk}.");
+        }
+
         // ---- one patch per base shader
         var files = new List<(string, byte[])>();
-        var report = new List<string>();
         foreach (var (key, list) in blobsByShader)
         {
             var b = bases[key]!;
@@ -165,7 +256,18 @@ public static class ShaderGraphShipService
         report.Add("Shader Graph: this mod replaces Riot's pixel table of each base shader above; two mods that ship Shader Graphs on the same base overwrite each other, so enable only one.");
         foreach (var m in assigned)
             report.Add($"Shader Graph: material '{m.Material}' ({m.BinPath}) uses graph #{m.GraphMacroValue}.");
-        return new ShaderGraphShipResult { Files = files, Report = report, Materials = assigned };
+        return new ShaderGraphShipResult { Files = files, GlobalFiles = globalFiles, Report = report, Materials = assigned };
+    }
+
+    /// <summary>Riot's shaders.bin from the installed game's Global WAD (read fresh each time).</summary>
+    private static byte[] ReadInstalledShadersBin(string gameFinalDir)
+    {
+        string wad = Path.Combine(gameFinalDir, SgShadersBin.WadName);
+        if (!File.Exists(wad)) throw new FileNotFoundException(wad + " does not exist");
+        using var archive = ReyEngine.Core.Wad.WadArchive.Open(wad);
+        ulong h = HashAlgorithms.WadPath(SgShadersBin.GamePath);
+        if (!archive.TryGetEntry(h, out _)) throw new InvalidDataException(SgShadersBin.GamePath + " is not in " + SgShadersBin.WadName);
+        return archive.Extract(h);
     }
 
     private static string Blocked(IReadOnlyList<string> errors) =>

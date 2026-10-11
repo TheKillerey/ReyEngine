@@ -17,10 +17,35 @@ public sealed partial class SgPropRow : ObservableObject
     private readonly string _key;
     private string _committed;
 
-    public SgPropRow(ShaderGraphViewModel owner, string nodeId, string key, string label, string text, string hint, IReadOnlyList<string>? choices = null)
+    private readonly Func<string, bool>? _commit;
+    private bool _syncing;
+
+    public SgPropRow(ShaderGraphViewModel owner, string nodeId, string key, string label, string text, string hint, IReadOnlyList<string>? choices = null,
+        Func<string, bool>? commit = null, bool multiline = false, int colorComponents = 0)
     {
         _owner = owner; _nodeId = nodeId; _key = key; Label = label; _text = _committed = text; Hint = hint;
         Choices = choices ?? Array.Empty<string>();
+        _commit = commit; IsMultiline = multiline; ColorComponents = colorComponents;
+        if (colorComponents > 0) { _syncing = true; _colorValue = SgColors.FromText(text); _syncing = false; }
+    }
+
+    /// <summary>M834: a multi-line box (the Custom node's HLSL). Enter is a new line; leaving the box, or Ctrl+Enter, applies it.</summary>
+    public bool HasAlpha => ColorComponents == 4;
+    public bool IsMultiline { get; }
+    public bool IsSingleLine => !IsMultiline;
+    public bool ShowsTextBox => !HasChoices && !IsMultiline;
+    public bool ShowsMultiline => IsMultiline;
+
+    /// <summary>M834: 3 or 4 when this row edits a colour (a picker next to the numbers), else 0.</summary>
+    public int ColorComponents { get; }
+    public bool IsColor => ColorComponents > 0;
+    [ObservableProperty] private Avalonia.Media.Color _colorValue;
+
+    partial void OnColorValueChanged(Avalonia.Media.Color value)
+    {
+        if (_syncing || !IsColor) return;
+        Text = SgColors.ToText(value, ColorComponents);
+        Commit();
     }
 
     public string Label { get; }
@@ -34,14 +59,112 @@ public sealed partial class SgPropRow : ObservableObject
     public void Commit()
     {
         if (Text == _committed) return;
-        if (_owner.SetProp(_nodeId, _key, Text)) _committed = Text;
-        else Text = _committed;
+        bool ok = _commit is not null ? _commit(Text) : _owner.SetProp(_nodeId, _key, Text);
+        if (ok) _committed = Text;
+        else
+        {
+            Text = _committed;
+            if (IsColor) { _syncing = true; ColorValue = SgColors.FromText(_committed); _syncing = false; }
+        }
     }
 
     partial void OnTextChanged(string value)
     {
         // a choice picked from the list commits at once
         if (HasChoices && value != _committed && Choices.Contains(value)) Commit();
+    }
+}
+
+/// <summary>M834: the colour text of a Shader Graph value (floats 0..1, space separated) and the picker's colour, both ways.</summary>
+public static class SgColors
+{
+    public static Avalonia.Media.Color FromText(string text)
+    {
+        SgCatalog.TryParseConstant(text, out var v);
+        byte B(int i) => (byte)Math.Clamp((int)Math.Round((i < v.Length ? v[i] : (i == 3 ? 1f : 0f)) * 255f), 0, 255);
+        return Avalonia.Media.Color.FromArgb(B(3), B(0), B(1), B(2));
+    }
+
+    public static string ToText(Avalonia.Media.Color c, int components)
+    {
+        var all = new[] { c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f };
+        return SgCatalog.FormatConstant(all.Take(Math.Clamp(components, 3, 4)));
+    }
+}
+
+/// <summary>M834: one custom parameter of the graph in the Details panel: rename, type, colour flag, default.</summary>
+public sealed partial class SgParamRow : ObservableObject
+{
+    private readonly ShaderGraphViewModel _owner;
+    private readonly string _name;
+    private bool _syncing;
+
+    public static IReadOnlyList<string> KindChoices { get; } = new[] { "float", "float2", "float3", "float4" };
+
+    public SgParamRow(ShaderGraphViewModel owner, SgCustomParam p, int usedBy)
+    {
+        _owner = owner; _name = p.Name;
+        _syncing = true;
+        _nameText = p.Name;
+        _kind = SgCatalog.TypeName(p.Components);
+        _isColor = p.IsColor;
+        _defaultText = p.Default;
+        _colorValue = SgColors.FromText(p.Default);
+        _syncing = false;
+        Components = p.Components;
+        UsedText = usedBy == 0 ? "not used by any node" : usedBy == 1 ? "used by 1 node" : $"used by {usedBy} nodes";
+    }
+
+    public string Name => _name;
+    public int Components { get; }
+    public string UsedText { get; }
+    public bool CanBeColor => Components >= 3;
+    public bool HasAlpha => Components == 4;
+    public bool ShowsColor => IsColor && CanBeColor;
+    public bool ShowsNumbers => !ShowsColor;
+
+    [ObservableProperty] private string _nameText;
+    [ObservableProperty] private string _kind;
+    [ObservableProperty] private bool _isColor;
+    [ObservableProperty] private string _defaultText;
+    [ObservableProperty] private Avalonia.Media.Color _colorValue;
+
+    /// <summary>Enter, or the box losing focus: rename (every node that reads it follows).</summary>
+    [RelayCommand]
+    public void CommitName()
+    {
+        if (_syncing || NameText == _name) return;
+        if (!_owner.RenameParameter(_name, NameText)) NameText = _name;
+    }
+
+    [RelayCommand]
+    public void CommitDefault()
+    {
+        if (_syncing) return;
+        if (!_owner.SetParameterDefault(_name, DefaultText)) DefaultText = _owner.Document?.FindParam(_name)?.Default ?? DefaultText;
+    }
+
+    [RelayCommand]
+    public void Delete() => _owner.DeleteParameter(_name);
+
+    partial void OnKindChanged(string value)
+    {
+        if (_syncing || value is null) return;
+        int w = SgCustom.OutWidth(value);
+        if (w > 0 && w != Components) _owner.SetParameterKind(_name, w);
+    }
+
+    partial void OnIsColorChanged(bool value)
+    {
+        if (_syncing) return;
+        _owner.SetParameterColor(_name, value);
+    }
+
+    partial void OnColorValueChanged(Avalonia.Media.Color value)
+    {
+        if (_syncing || !IsColor) return;
+        DefaultText = SgColors.ToText(value, Components);
+        CommitDefault();
     }
 }
 
@@ -90,6 +213,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     {
         _projectRoot = projectRoot;
         PropRows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoPropRows));
+        ParamRows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoParamRows));
         DiagnosticRows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoDiagnosticRows));
         SavedGraphs.CollectionChanged += (_, _) => OnPropertyChanged(nameof(NoSavedGraphs));
     }
@@ -136,6 +260,15 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     [ObservableProperty] private int _signatureIndex;
 
     public ObservableCollection<SgPropRow> PropRows { get; } = new();
+    public ObservableCollection<SgParamRow> ParamRows { get; } = new();
+    public bool NoParamRows => ParamRows.Count == 0;
+
+    /// <summary>M834: the host renames a parameter in the materials of the graph (the Material Editor's own commands, one undo step there).
+    /// Arguments: this graph's file path (null while unsaved), the old name, the new name. Returns how many material parameters were renamed.</summary>
+    public Func<string?, string, string, (int Renamed, string Note)>? RenameParameterInMaterials { get; set; }
+
+    /// <summary>M834: the names of the materials (of the document the Material Editor holds) that are assigned to this graph and still carry a parameter of this name.</summary>
+    public Func<string?, string, IReadOnlyList<string>>? MaterialsCarryingParameter { get; set; }
     public ObservableCollection<SgDiagnosticRow> DiagnosticRows { get; } = new();
     public ObservableCollection<SgFileRow> SavedGraphs { get; } = new();
 
@@ -145,11 +278,24 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
 
     partial void OnIsDirtyChanged(bool value) => StateChanged?.Invoke();
     partial void OnStatusChanged(string value) => StateChanged?.Invoke();
-    partial void OnSelectedNodeIdChanged(string? value) => RefreshProps();
+    /// <summary>M834: the selected comment box (a node and a comment are never both selected).</summary>
+    [ObservableProperty] private string? _selectedCommentId;
+
+    partial void OnSelectedNodeIdChanged(string? value)
+    {
+        if (value is not null && SelectedCommentId is not null) { SelectedCommentId = null; return; }
+        RefreshProps();
+    }
+
+    partial void OnSelectedCommentIdChanged(string? value)
+    {
+        if (value is not null && SelectedNodeId is not null) { SelectedNodeId = null; return; }
+        RefreshProps();
+    }
     partial void OnSignatureIndexChanged(int value) => ShowHlsl();
     partial void OnPreviewEnabledChanged(bool value) { if (_build is not null) BuildCompleted?.Invoke(_build); }
 
-    public IReadOnlyList<SgPaletteEntry> Palette => SgCatalog.Palette(_base);
+    public IReadOnlyList<SgPaletteEntry> Palette => SgCatalog.Palette(_base, _doc);
 
     public void Dispose()
     {
@@ -170,8 +316,8 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         _doc = null; _base = null; _analysis = null; _build = null; FilePath = null;
         _undo.Clear(); _moved = false; IsDirty = false; _editVersion++;
         Status = "";
-        Graph = null; SelectedNodeId = null; GraphName = ""; BaseShaderName = ""; Hlsl = ""; HlslNote = "No Shader Graph is open.";
-        PropRows.Clear(); DiagnosticRows.Clear(); CompileState = "";
+        Graph = null; SelectedNodeId = null; SelectedCommentId = null; GraphName = ""; BaseShaderName = ""; Hlsl = ""; HlslNote = "No Shader Graph is open.";
+        PropRows.Clear(); ParamRows.Clear(); DiagnosticRows.Clear(); CompileState = "";
         OnPropertyChanged(nameof(IsOpen));
         OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo));
         StateChanged?.Invoke();
@@ -240,7 +386,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         _doc = doc; _base = b; FilePath = path; _build = null;
         _undo.Clear(); _moved = false; IsDirty = false;
         GraphName = doc.Name; BaseShaderName = doc.BaseShader;
-        SelectedNodeId = null;
+        SelectedNodeId = null; SelectedCommentId = null;
         Hlsl = ""; HlslNote = "Compiling...";
         OnPropertyChanged(nameof(IsOpen)); OnPropertyChanged(nameof(Palette));
         OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo));
@@ -316,25 +462,26 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     {
         private readonly ShaderGraphViewModel _owner;
         private readonly ShaderGraphDocument _before, _after;
-        public SnapshotCommand(ShaderGraphViewModel owner, string name, ShaderGraphDocument before, ShaderGraphDocument after, object context)
-        { _owner = owner; Name = name; _before = before; _after = after; Context = context; }
+        private readonly (string From, string To)? _rename;
+        public SnapshotCommand(ShaderGraphViewModel owner, string name, ShaderGraphDocument before, ShaderGraphDocument after, object context, (string From, string To)? rename)
+        { _owner = owner; Name = name; _before = before; _after = after; Context = context; _rename = rename; }
         public string Name { get; }
         public object? Context { get; }
-        public void Execute() => _owner.Restore(_after);
-        public void Undo() => _owner.Restore(_before);
+        public void Execute() { _owner.Restore(_after); if (_rename is { } r) _owner.FollowRename(r.From, r.To); }
+        public void Undo() { _owner.Restore(_before); if (_rename is { } r) _owner.FollowRename(r.To, r.From); }
         public bool CanMergeWith(IEditorCommand next) => false;
         public void MergeWith(IEditorCommand next) => throw new NotSupportedException();
     }
 
     /// <summary>Apply an edit as one undo step: <paramref name="edit"/> changes a COPY of the document; the step swaps the before and after snapshots.</summary>
-    private bool Do(string name, Action<ShaderGraphDocument> edit)
+    private bool Do(string name, Action<ShaderGraphDocument> edit, (string From, string To)? rename = null)
     {
         if (_doc is null) return false;
         var before = _doc.Clone();
         var after = _doc.Clone();
         edit(after);
         if (Same(before, after)) return false;
-        var cmd = new SnapshotCommand(this, name, before, after, _context);
+        var cmd = new SnapshotCommand(this, name, before, after, _context, rename);
         _undo.Do(cmd);
         AfterEdit(name);
         return true;
@@ -353,10 +500,26 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
             // topology and settings come from the snapshot; where the person put a node is layout and stays where it is now
             foreach (var n in copy.Nodes)
                 if (_doc.Find(n.Id) is { } now) { n.X = now.X; n.Y = now.Y; }
+            foreach (var c in copy.Comments)
+                if (_doc.FindComment(c.Id) is { } now) { c.X = now.X; c.Y = now.Y; c.Width = now.Width; c.Height = now.Height; }
             _doc.Nodes = copy.Nodes;
             _doc.Links = copy.Links;
+            _doc.Params = copy.Params;
+            _doc.Comments = copy.Comments;
         }
         finally { _restoring = false; }
+    }
+
+    private string _renameNote = "";
+
+    /// <summary>A rename (or its undo) reaches the materials that name this graph, through the host.</summary>
+    internal void FollowRename(string from, string to)
+    {
+        (int Renamed, string Note) r = (0, "");
+        try { r = RenameParameterInMaterials?.Invoke(FilePath, from, to) ?? (0, ""); }
+        catch (Exception ex) { _renameNote = $" (the materials could NOT follow: {ex.Message}. A material that still carries '{from}' blocks the export: rename or remove it in the Material Editor)"; return; }
+        _renameNote = r.Renamed > 0 ? $" ({r.Renamed} material parameter{(r.Renamed == 1 ? "" : "s")} renamed in the Material Editor; undo it there too)" : "";
+        if (r.Note.Length > 0) _renameNote += " " + r.Note;
     }
 
     private bool ComputeDirty() => _undo.IsDirty || _moved || FilePath is null;   // a graph never saved stays dirty whatever is undone
@@ -367,10 +530,12 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         IsDirty = true;
         OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo));
         if (SelectedNodeId is not null && _doc!.Find(SelectedNodeId) is null) SelectedNodeId = null;
+        if (SelectedCommentId is not null && _doc!.FindComment(SelectedCommentId) is null) SelectedCommentId = null;
         Reanalyse();
         RefreshProps();
         RequestCompile();
-        Status = what;
+        Status = what + _renameNote;
+        _renameNote = "";
     }
 
     public bool Undo()
@@ -404,7 +569,14 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         {
             id = d.NewId();
             var n = new SgNode { Id = id, Type = entry.Type, X = Math.Round(x), Y = Math.Round(y) };
-            foreach (var (k, v) in entry.Props) n.Props[k] = v;
+            foreach (var (k, v) in entry.Props) if (k != SgCatalog.NewParamKey) n.Props[k] = v;
+            if (entry.Props.TryGetValue(SgCatalog.NewParamKey, out var kind) && SgCustomParams.ParseKind(kind) is { } pk)
+            {
+                // "new parameter": the parameter and the node that reads it are ONE undo step
+                string pn = SgNames.UniqueParameterName(pk.IsColor ? "ColorParam" : pk.Components == 1 ? "ScalarParam" : "VectorParam", d, _base);
+                d.Params.Add(new SgCustomParam { Name = pn, Components = pk.Components, IsColor = pk.IsColor, Default = SgCustomParams.NewDefault(pk.Components, pk.IsColor) });
+                n.Props["name"] = pn;
+            }
             d.Nodes.Add(n);
         });
         if (ok) SelectedNodeId = id;
@@ -416,7 +588,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         var n = _doc?.Find(id);
         if (n is null) return false;
         if (n.Type == SgCatalog.OutputType) { Status = "The Shader Output node cannot be deleted."; return false; }
-        string title = SgCatalog.Get(n.Type)?.Title ?? n.Type;
+        string title = n.Label.Length > 0 ? n.Label : SgCatalog.Get(n.Type)?.Title ?? n.Type;
         return Do("Delete " + title, d =>
         {
             d.Nodes.RemoveAll(x => x.Id == id);
@@ -432,7 +604,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         var a = _doc.Find(fromNode); var b = _doc.Find(toNode);
         if (a is null || b is null) return new(false, "That node no longer exists.");
         if (fromNode == toNode) return new(false, "A node cannot feed itself.");
-        var adef = SgCatalog.Get(a.Type); var bdef = SgCatalog.Get(b.Type);
+        var adef = SgCatalog.DefFor(a); var bdef = SgCatalog.DefFor(b);
         if (adef is null || bdef is null) return new(false, "An unknown node type cannot be wired.");
         if (adef.OutputIndex(fromPin) < 0) return new(false, $"{adef.Title} has no output '{fromPin}'.");
         if (bdef.InputIndex(toPin) < 0) return new(false, $"{bdef.Title} has no input '{toPin}'.");
@@ -499,12 +671,193 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
     {
         var n = _doc?.Find(nodeId);
         if (n is null) return false;
-        if (value.Length > 256) { Status = "That value is too long."; return false; }
+        bool isCode = n.Type == SgCustom.Type && key == "code";
+        if (value.Length > (isCode ? ShaderGraphDocument.MaxCodeLength : 256)) { Status = "That value is too long."; return false; }
         // a pin's own value (A, B, Alpha...) is a number
-        if (SgCatalog.Get(n.Type) is { } d && d.InputIndex(key) >= 0
+        if (SgCatalog.DefFor(n) is { } d && d.InputIndex(key) >= 0
             && !(float.TryParse(value.Trim(), System.Globalization.NumberStyles.Float, CultureInfo.InvariantCulture, out float num) && float.IsFinite(num)))
         { Status = $"'{value}' is not a number."; return false; }
-        return Do("Edit " + (SgCatalog.Get(n.Type)?.Title ?? n.Type), d => d.Find(nodeId)!.Props[key] = value.Trim());
+        string stored = isCode ? value.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd() : value.Trim();
+        return Do("Edit " + (n.Label.Length > 0 ? n.Label : SgCatalog.Get(n.Type)?.Title ?? n.Type), doc =>
+        {
+            var node = doc.Find(nodeId)!;
+            node.Props[key] = stored;
+            if (node.Type == SgCustom.Type && key == "inputs")
+            {
+                // a wire into an input that no longer exists goes with it
+                var pins = SgCatalog.DefFor(node)!.Inputs.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+                doc.Links.RemoveAll(l => l.ToNode == nodeId && !pins.Contains(l.ToPin));
+            }
+        });
+    }
+
+    // ============================================================================== labels, custom parameters, comments (M834)
+
+    private const int MaxLabel = ShaderGraphDocument.MaxLabelLength;
+
+    /// <summary>Name a node (Unreal's node comment): shown in its title bar. Empty puts the type's own title back. One undo step.</summary>
+    public bool SetLabel(string nodeId, string text)
+    {
+        var n = _doc?.Find(nodeId);
+        if (n is null) return false;
+        var clean = new string((text ?? "").Where(c => c >= ' ' && c != '\u007f').ToArray()).Trim();
+        if (clean.Length > MaxLabel) { Status = $"A label has at most {MaxLabel} characters."; return false; }
+        return Do(clean.Length == 0 ? "Clear node label" : "Name node " + clean, d => d.Find(nodeId)!.Label = clean);
+    }
+
+    public string? ParameterProblem(string name, string? renaming = null) => _doc is null ? "No Shader Graph is open." : SgNames.ParameterProblem(name, _doc, _base, renaming);
+
+    /// <summary>Create a custom parameter without a node (the Details panel's buttons). <paramref name="kind"/>: float, float2, float3, float4, color3, color4.</summary>
+    public string? AddParameter(string kind, string? name = null)
+    {
+        if (_doc is null || SgCustomParams.ParseKind(kind) is not { } pk) return null;
+        string pn = name ?? SgNames.UniqueParameterName(pk.IsColor ? "ColorParam" : pk.Components == 1 ? "ScalarParam" : "VectorParam", _doc, _base);
+        if (ParameterProblem(pn) is { } why) { Status = why; return null; }
+        if (_doc.Params.Count >= ShaderGraphDocument.MaxCustomParams) { Status = $"A graph has at most {ShaderGraphDocument.MaxCustomParams} custom parameters."; return null; }
+        bool ok = Do("Add parameter " + pn, d => d.Params.Add(new SgCustomParam { Name = pn, Components = pk.Components, IsColor = pk.IsColor, Default = SgCustomParams.NewDefault(pk.Components, pk.IsColor) }));
+        return ok ? pn : null;
+    }
+
+    [RelayCommand] private void AddScalarParameter() => AddParameter("float");
+    [RelayCommand] private void AddVectorParameter() => AddParameter("float4");
+    [RelayCommand] private void AddColourParameter() => AddParameter("color4");
+
+    /// <summary>Rename a custom parameter: every node that reads it follows, and the materials assigned to this graph follow through the host (the Material
+    /// Editor's own rename command, one undo step there).</summary>
+    public bool RenameParameter(string oldName, string newName)
+    {
+        if (_doc is null) return false;
+        newName = (newName ?? "").Trim();
+        if (_doc.FindParam(oldName) is null) { Status = $"'{oldName}' is not a custom parameter of this graph."; return false; }
+        if (newName == oldName) return false;
+        if (ParameterProblem(newName, oldName) is { } why) { Status = why; return false; }
+        return Do($"Rename parameter {oldName} to {newName}", d =>
+        {
+            d.FindParam(oldName)!.Name = newName;
+            foreach (var n in d.Nodes)
+                if (n.Type == "Parameter" && n.Prop("name") == oldName) n.Props["name"] = newName;
+        }, (oldName, newName));
+    }
+
+    public bool SetParameterDefault(string name, string text)
+    {
+        var p = _doc?.FindParam(name);
+        if (p is null) return false;
+        if (!SgCatalog.TryParseConstant(text, out var v) || v.Length != p.Components)
+        { Status = $"'{text}' is not {p.Components} number(s) (a {SgCatalog.TypeName(p.Components)})."; return false; }
+        string canon = SgCatalog.FormatConstant(v);
+        return Do("Edit parameter " + name, d => d.FindParam(name)!.Default = canon);
+    }
+
+    public bool SetParameterKind(string name, int components)
+    {
+        var p = _doc?.FindParam(name);
+        if (p is null || components is < 1 or > 4 || components == p.Components) return false;
+        return Do($"Change parameter {name} to {SgCatalog.TypeName(components)}", d =>
+        {
+            var q = d.FindParam(name)!;
+            q.Components = components;
+            q.Default = SgCustomParams.ResizeDefault(q.Default, components);
+            if (components < 3) q.IsColor = false;
+        });
+    }
+
+    public bool SetParameterColor(string name, bool isColor)
+    {
+        var p = _doc?.FindParam(name);
+        if (p is null || p.IsColor == isColor) return false;
+        if (isColor && p.Components < 3) { Status = "Only a float3 or float4 can be a colour."; return false; }
+        return Do((isColor ? "Make parameter a colour: " : "Make parameter plain numbers: ") + name, d => d.FindParam(name)!.IsColor = isColor);
+    }
+
+    public bool DeleteParameter(string name)
+    {
+        if (_doc is null || _doc.FindParam(name) is null) return false;
+        int uses = _doc.Nodes.Count(n => n.Type == "Parameter" && n.Prop("name") == name);
+        if (uses > 0) { Status = $"'{name}' is still read by {uses} node(s): delete them first."; return false; }
+        bool deleted = Do("Delete parameter " + name, d => d.Params.RemoveAll(q => q.Name == name));
+        if (deleted)
+        {
+            var carrying = MaterialsCarryingParameter?.Invoke(FilePath, name) ?? Array.Empty<string>();
+            if (carrying.Count > 0)
+                Status = $"Deleted '{name}', but material(s) {string.Join(", ", carrying.Take(6))}{(carrying.Count > 6 ? "..." : "")} still carry it: no shaders.bin declares it any more, so the export is blocked until you remove it there.";
+        }
+        return deleted;
+    }
+
+    public string? AddComment(double x, double y, double w = 360, double h = 220, string title = "Comment")
+    {
+        if (_doc is null) return null;
+        if (_doc.Comments.Count >= ShaderGraphDocument.MaxComments) { Status = "Too many comment boxes."; return null; }
+        string? id = null;
+        bool ok = Do("Add comment", d =>
+        {
+            id = d.NewCommentId();
+            d.Comments.Add(new SgComment { Id = id, Title = title, X = Math.Round(x), Y = Math.Round(y), Width = Math.Round(w), Height = Math.Round(h) });
+        });
+        return ok ? id : null;
+    }
+
+    /// <summary>A comment box around the given nodes (the selection), with room for its title.</summary>
+    public string? AddCommentAround(IEnumerable<string> nodeIds)
+    {
+        var g = Graph;
+        var ns = nodeIds.Select(i => g?.Find(i)).Where(n => n is not null).Select(n => n!).ToList();
+        if (ns.Count == 0) { Status = "Select a node (Ctrl+click adds more) to put a comment around."; return null; }
+        const double pad = 28, titleH = 44;
+        double x0 = ns.Min(n => n.X) - pad, y0 = ns.Min(n => n.Y) - pad - titleH, x1 = ns.Max(n => n.Right) + pad, y1 = ns.Max(n => n.Bottom) + pad;
+        return AddComment(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    public bool SetCommentTitle(string id, string title)
+    {
+        if (_doc?.FindComment(id) is null) return false;
+        title = new string((title ?? "").Where(c => c >= ' ' && c != '\u007f').ToArray()).Trim();
+        if (title.Length > 128) { Status = "A comment title has at most 128 characters."; return false; }
+        return Do("Edit comment title", d => d.FindComment(id)!.Title = title);
+    }
+
+    public bool SetCommentColor(string id, string key)
+    {
+        if (_doc?.FindComment(id) is null || !SgComment.ColorKeys.Contains(key)) return false;
+        return Do("Colour comment", d => d.FindComment(id)!.Color = key);
+    }
+
+    public bool DeleteComment(string id) => _doc?.FindComment(id) is not null && Do("Delete comment", d => d.Comments.RemoveAll(c => c.Id == id));
+
+    /// <summary>The nodes whose boxes lie fully inside a comment: what moves with it.</summary>
+    public IReadOnlyList<string> NodesInside(string commentId)
+    {
+        var c = _doc?.FindComment(commentId);
+        var g = Graph;
+        if (c is null || g is null) return Array.Empty<string>();
+        return g.Nodes.Where(n => n.X >= c.X && n.Y >= c.Y && n.Right <= c.X + c.Width && n.Bottom <= c.Y + c.Height).Select(n => n.Id).ToList();
+    }
+
+    /// <summary>Layout only (no undo step, like moving a node): the comment and the nodes in it go to new positions.</summary>
+    public void MoveComment(string id, double x, double y, IReadOnlyDictionary<string, (double X, double Y)>? nodes = null)
+    {
+        var c = _doc?.FindComment(id);
+        if (c is null) return;
+        c.X = Math.Round(x); c.Y = Math.Round(y);
+        if (Graph?.Comments.FirstOrDefault(k => k.Id == id) is { } gc) { gc.X = c.X; gc.Y = c.Y; }
+        if (nodes is not null)
+            foreach (var (nid, pos) in nodes)
+                if (_doc!.Find(nid) is { } n)
+                {
+                    n.X = Math.Round(pos.X); n.Y = Math.Round(pos.Y);
+                    if (Graph?.Find(nid) is { } gn) gn.SetPosition(n.X, n.Y);
+                }
+        _moved = true; _editVersion++; IsDirty = true;
+    }
+
+    public void ResizeComment(string id, double w, double h)
+    {
+        var c = _doc?.FindComment(id);
+        if (c is null) return;
+        c.Width = Math.Round(Math.Clamp(w, SgComment.MinSize, SgComment.MaxSize)); c.Height = Math.Round(Math.Clamp(h, SgComment.MinSize, SgComment.MaxSize));
+        if (Graph?.Comments.FirstOrDefault(k => k.Id == id) is { } gc) { gc.Width = c.Width; gc.Height = c.Height; }
+        _moved = true; _editVersion++; IsDirty = true;
     }
 
     /// <summary>The canvas dragged a node. Layout only: no undo step (like the material graph's), the document is marked changed.</summary>
@@ -527,6 +880,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         _analysis = SgAnalyzer.Analyze(_doc, _base);
         _buildStale = true;
         Project();
+        RefreshParams();
     }
 
     private void Project()
@@ -542,25 +896,58 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
         DiagnosticRows.Clear();
         foreach (var d in all.OrderByDescending(d => d.IsError))
         {
-            string where = d.NodeId.Length == 0 ? "" : (_doc?.Find(d.NodeId) is { } n ? (SgCatalog.Get(n.Type)?.Title ?? n.Type) + " " + d.NodeId : d.NodeId) + ": ";
+            string where = d.NodeId.Length == 0 ? "" : (_doc?.Find(d.NodeId) is { } n ? (n.Label.Length > 0 ? n.Label : SgCatalog.Get(n.Type)?.Title ?? n.Type) + " " + d.NodeId : d.NodeId) + ": ";
             DiagnosticRows.Add(new SgDiagnosticRow(d.NodeId, d.IsError, (d.IsError ? "Error  " : "Warning  ") + where + d.Message));
         }
+    }
+
+    private void RefreshParams()
+    {
+        ParamRows.Clear();
+        if (_doc is null) return;
+        foreach (var p in _doc.Params)
+            ParamRows.Add(new SgParamRow(this, p, _doc.Nodes.Count(n => n.Type == "Parameter" && n.Prop("name") == p.Name)));
     }
 
     public void RefreshProps()
     {
         PropRows.Clear();
+        if (_doc is not null && SelectedCommentId is { } cid && _doc.FindComment(cid) is { } cm)
+        {
+            PropRows.Add(new SgPropRow(this, cid, "title", "Comment title", cm.Title, "Shown in the box's title bar (F2 or double-click the title on the canvas).", null, t => SetCommentTitle(cid, t)));
+            PropRows.Add(new SgPropRow(this, cid, "color", "Colour", cm.Color, "A palette colour: it follows the theme. Default is the neutral grey.", SgComment.ColorKeys, t => SetCommentColor(cid, t)));
+            return;
+        }
         if (_doc is null || SelectedNodeId is null || _doc.Find(SelectedNodeId) is not { } n) return;
-        var def = SgCatalog.Get(n.Type);
+        var def = SgCatalog.DefFor(n);
         if (def is null) return;
         string id = n.Id;
+        PropRows.Add(new SgPropRow(this, id, "label", "Label", n.Label, "A name for this node (F2 or double-click it on the canvas). Empty = the type's own title.", null, t => SetLabel(id, t)));
         switch (n.Type)
         {
             case "TextureSample":
                 PropRows.Add(new SgPropRow(this, id, "texture", "Texture", n.Prop("texture"), "A texture the base shader declares in shaders.bin.", _base?.Textures.Select(t => t.Name).ToList()));
                 break;
             case "Parameter":
-                PropRows.Add(new SgPropRow(this, id, "name", "Parameter", n.Prop("name"), "A parameter the base shader declares in shaders.bin.", _base?.Parameters.Select(p => p.Name).ToList()));
+            {
+                var names = (_base?.Parameters.Select(p => p.Name) ?? Enumerable.Empty<string>()).Concat(_doc.Params.Select(p => p.Name)).ToList();
+                PropRows.Add(new SgPropRow(this, id, "name", "Parameter", n.Prop("name"), "A parameter the base shader declares in shaders.bin, or one of this graph's custom parameters.", names));
+                if (_doc.FindParam(n.Prop("name")) is { } cp)
+                {
+                    string cname = cp.Name;
+                    PropRows.Add(new SgPropRow(this, id, "rename", "Rename parameter", cp.Name, "Renames the custom parameter everywhere in the graph and in the materials assigned to it.", null, t => RenameParameter(cname, t)));
+                    PropRows.Add(new SgPropRow(this, id, "default", "Default value", cp.Default, "Used by the preview until a material sets it.", null, t => SetParameterDefault(cname, t),
+                        colorComponents: cp.IsColor && cp.Components >= 3 ? cp.Components : 0));
+                }
+                break;
+            }
+            case "ConstantColor":
+                PropRows.Add(new SgPropRow(this, id, "value", "Colour", n.Prop("value", "1 1 1 1"), "r g b a, 0 to 1 and beyond. The picker sets the four numbers; they are used as they are (no sRGB conversion).", colorComponents: 4));
+                break;
+            case "Custom":
+                PropRows.Add(new SgPropRow(this, id, "inputs", "Inputs", n.Prop("inputs", SgCustom.DefaultInputs), "name:type separated by ; (float, float2, float3 or float4). Up to 8. The names are the variables your code reads."));
+                PropRows.Add(new SgPropRow(this, id, "out", "Output type", n.Prop("out", SgCustom.DefaultOut), "What the code returns.", new[] { "float", "float2", "float3", "float4" }));
+                PropRows.Add(new SgPropRow(this, id, "code", "HLSL", n.Prop("code", SgCustom.DefaultCode), "An expression (In * 2.0), or a body that returns a value. ASCII only; no #, cbuffer, Texture2D, SamplerState or register. It runs in its own function.", multiline: true));
                 break;
             case "Constant":
                 PropRows.Add(new SgPropRow(this, id, "value", "Value", n.Prop("value", "0"), "1 to 4 numbers separated by spaces (float, float2, float3, float4)."));
@@ -576,7 +963,7 @@ public sealed partial class ShaderGraphViewModel : ObservableObject, IDisposable
                 break;
         }
         foreach (var pin in def.Inputs)
-            if (_doc.LinkInto(id, pin.Name) is null && !(n.Type == "TextureSample" && pin.Name == "UV"))
+            if (_doc.LinkInto(id, pin.Name) is null && !SgCatalog.IsUvPin(n, pin) && !SgCatalog.IsTimePin(n, pin))
                 PropRows.Add(new SgPropRow(this, id, pin.Name, pin.Name + " (not wired)", SgHlsl.Float(SgCatalog.PinDefault(n, pin)), "The value used while nothing is wired here."));
     }
 

@@ -36,10 +36,33 @@ public static class SgCatalog
     public const string BaseColorPin = "Base Color";
     public const string OpacityPin = "Opacity";
 
+    /// <summary>The palette entry prop that asks the editor to CREATE a custom parameter (<c>float</c>, <c>float2</c>, <c>float3</c>, <c>float4</c>, <c>color3</c>, <c>color4</c>)
+    /// and name the new node after it.</summary>
+    public const string NewParamKey = "newParam";
+
     private static readonly Dictionary<string, SgNodeDef> Defs = Build();
 
     public static IReadOnlyCollection<SgNodeDef> All => Defs.Values;
     public static SgNodeDef? Get(string type) => Defs.TryGetValue(type, out var d) ? d : null;
+
+    /// <summary>The definition of THIS node: the type's own, except a Custom node, whose pins are the inputs and the output type its settings name.</summary>
+    public static SgNodeDef? DefFor(SgNode node)
+    {
+        var def = Get(node.Type);
+        if (def is null || node.Type != SgCustom.Type) return def;
+        SgCustom.TryParseInputs(node.Prop("inputs", SgCustom.DefaultInputs), out var inputs, out _);
+        return new SgNodeDef
+        {
+            Type = def.Type, Title = def.Title, Category = def.Category, Description = def.Description, Outputs = def.Outputs,
+            Inputs = inputs.Select(i => new SgPinDef(i.Name, i.Components, 0f)).ToList(),
+        };
+    }
+
+    /// <summary>A "UV" input of fixed width 2: unwired it takes the base shader's UV0 (a Texture Sample, Panner, Rotator, Tiling / Offset).</summary>
+    public static bool IsUvPin(SgNode node, SgPinDef pin) => pin.Name == "UV" && pin.Fixed == 2 && node.Type is "TextureSample" or "Panner" or "Rotator" or "TilingOffset";
+
+    /// <summary>The "Time" input of a Panner or Rotator: unwired it is the engine's TIME.x when the base provides it, else 0.</summary>
+    public static bool IsTimePin(SgNode node, SgPinDef pin) => pin.Name == "Time" && node.Type is "Panner" or "Rotator";
 
     private static Dictionary<string, SgNodeDef> Build()
     {
@@ -57,6 +80,14 @@ public static class SgCatalog
         Add("VertexColor", "Vertex Color", "Input", null, new[] { "RGBA" }, "COLOR0 of the vertex stage, when the base shader writes it.");
         Add("Time", "Time", "Input", null, new[] { "Seconds" }, "TIME.x of the engine's per-frame cbuffer.");
 
+        Add("ConstantColor", "Constant Color", "Input", null, null, "A fixed colour (float4) chosen with a colour picker. The values are used as they are: no sRGB conversion.");
+        Add("Panner", "Panner", "Texture", new[] { new SgPinDef("UV", 2, 0f), new SgPinDef("Speed", 2, 0.1f), new SgPinDef("Time", 1, 0f) }, new[] { "UV" },
+            "UV + Time * Speed. UV defaults to the base shader's UV0; Time, left unwired, is the engine time when the base provides it.");
+        Add("Rotator", "Rotator", "Texture", new[] { new SgPinDef("UV", 2, 0f), new SgPinDef("Center", 2, 0.5f), new SgPinDef("Speed", 1, 0.25f), new SgPinDef("Time", 1, 0f) }, new[] { "UV" },
+            "Rotates UV about Center by Time * Speed revolutions. UV defaults to the base shader's UV0; Time, left unwired, is the engine time when the base provides it.");
+        Add("TilingOffset", "Tiling / Offset", "Texture", new[] { new SgPinDef("UV", 2, 0f), new SgPinDef("Tiling", 2, 1f), new SgPinDef("Offset", 2, 0f) }, new[] { "UV" },
+            "UV * Tiling + Offset. UV defaults to the base shader's UV0.");
+
         // ---- math, binary
         Add("Add", "Add", "Math", new[] { P("A"), P("B") });
         Add("Subtract", "Subtract", "Math", new[] { P("A"), P("B") });
@@ -69,6 +100,12 @@ public static class SgCatalog
         Add("Dot", "Dot", "Math", new[] { P("A"), P("B") });
         Add("Lerp", "Lerp", "Math", new[] { P("A"), P("B", 1), P("Alpha", 0.5f) });
         Add("Clamp", "Clamp", "Math", new[] { P("Value"), P("Min"), P("Max", 1) });
+        Add("Fmod", "Fmod", "Math", new[] { P("A"), P("B", 1) }, null, "The floating-point remainder of A / B (the sign of A).");
+        Add("Distance", "Distance", "Math", new[] { P("A"), P("B") }, null, "The distance between two points of the same width.");
+        Add("Reflect", "Reflect", "Math", new[] { P("Incident"), P("Normal") }, null, "Reflects Incident about Normal (vectors of the same width, float2 to float4).");
+        Add("If", "If", "Math", new[] { P("A", 0f, 1), P("B", 0f, 1), P("A > B", 1f), P("A == B", 0.5f), P("A < B"), P("Tolerance", 0f, 1) }, null,
+            "Picks one of three values by comparing the scalars A and B; A == B holds when they differ by at most Tolerance.");
+        Add("Desaturation", "Desaturation", "Math", new[] { P("Color", 0f, 3), P("Fraction", 1f, 1) }, null, "Mixes a colour towards its luminance (0.299 R + 0.587 G + 0.114 B): Fraction 1 is grey, 0 is unchanged.");
         // ---- math, unary
         Add("Saturate", "Saturate", "Math", new[] { P("Value") });
         Add("OneMinus", "One Minus", "Math", new[] { P("Value") });
@@ -79,10 +116,17 @@ public static class SgCatalog
         Add("Sqrt", "Square Root", "Math", new[] { P("Value", 1) });
         Add("Floor", "Floor", "Math", new[] { P("Value") });
         Add("Frac", "Frac", "Math", new[] { P("Value") });
+        Add("Ceil", "Ceil", "Math", new[] { P("Value") });
+        Add("Round", "Round", "Math", new[] { P("Value") });
+        Add("Sign", "Sign", "Math", new[] { P("Value") }, null, "-1, 0 or 1 per component.");
+        Add("Length", "Length", "Math", new[] { P("Value") }, null, "The length of a vector (the absolute value of a scalar).");
+        Add("Cross", "Cross", "Vector", new[] { P("A", 0f, 3), P("B", 0f, 3) }, null, "The cross product of two float3 values.");
         // ---- vector
         Add("ComponentMask", "Component Mask", "Vector", new[] { P("Value") }, null, "Keeps the chosen components (r g b a).");
         Add("Append", "Append", "Vector", new[] { P("A"), P("B") }, null, "Joins two values into one wider vector (at most float4).");
         Add("Split", "Split", "Vector", new[] { P("Value") }, new[] { "R", "G", "B", "A" });
+        // ---- custom HLSL
+        Add(SgCustom.Type, "Custom", "Custom", null, null, "Your own HLSL: an expression, or a body that returns a value, over named inputs. It is compiled inside its own function.");
         // ---- output
         Add(OutputType, "Shader Output", "Output", new[] { P(BaseColorPin, 0f, 3), P(OpacityPin, 1f, 1) }, new string[0],
             "The pixel stage result: Base Color (rgb) and Opacity (a).");
@@ -131,7 +175,7 @@ public static class SgCatalog
 
     /// <summary>The palette for a base: one line per declared texture and parameter, every math node, the constants, the UV sets the
     /// base's signatures carry. Time and Vertex Color appear only when the base provides them.</summary>
-    public static IReadOnlyList<SgPaletteEntry> Palette(SgBase? b)
+    public static IReadOnlyList<SgPaletteEntry> Palette(SgBase? b, ShaderGraphDocument? doc = null)
     {
         var list = new List<SgPaletteEntry>();
         static Dictionary<string, string> Pr(params (string, string)[] kv) => kv.ToDictionary(x => x.Item1, x => x.Item2);
@@ -143,6 +187,13 @@ public static class SgCatalog
             foreach (var p in b.Parameters)
                 list.Add(new SgPaletteEntry("Parameter: " + p.Name, "Input", "Parameter", Pr(("name", p.Name)), "parameter param constant " + p.Name));
         }
+        list.Add(new SgPaletteEntry("Scalar Parameter (new, custom)", "Input", "Parameter", Pr((NewParamKey, "float")), "parameter param scalar float custom new unreal"));
+        list.Add(new SgPaletteEntry("Vector Parameter (new, custom float4)", "Input", "Parameter", Pr((NewParamKey, "float4")), "parameter param vector float4 custom new unreal"));
+        list.Add(new SgPaletteEntry("Colour Parameter (new, custom)", "Input", "Parameter", Pr((NewParamKey, "color4")), "parameter param colour color tint custom new"));
+        if (doc is not null)
+            foreach (var p in doc.Params)
+                list.Add(new SgPaletteEntry("Parameter: " + p.Name + " (custom)", "Input", "Parameter", Pr(("name", p.Name)), "parameter param custom " + p.Name));
+        list.Add(new SgPaletteEntry("Constant Color", "Input", "ConstantColor", Pr(("value", "1 1 1 1")), "constant colour color picker"));
         list.Add(new SgPaletteEntry("Constant (float)", "Input", "Constant", Pr(("value", "1")), "constant scalar number"));
         list.Add(new SgPaletteEntry("Constant2 (float2)", "Input", "Constant", Pr(("value", "1 1")), "constant vector2"));
         list.Add(new SgPaletteEntry("Constant3 (float3)", "Input", "Constant", Pr(("value", "1 1 1")), "constant vector3 colour color"));
@@ -158,10 +209,11 @@ public static class SgCatalog
         if (b is null || b.HasVertexColor) list.Add(new SgPaletteEntry("Vertex Color", "Input", "VertexColor", Pr(), "vertex colour color"));
         if (b is null || b.HasTime) list.Add(new SgPaletteEntry("Time", "Input", "Time", Pr(), "time seconds animate"));
 
-        foreach (var d in Defs.Values)
+        foreach (var d in Defs.Values.OrderBy(d => d.Category, StringComparer.Ordinal).ThenBy(d => d.Title, StringComparer.Ordinal))
         {
             if (d.Category is "Input" or "Output") continue;
-            Dictionary<string, string> props = d.Type == "ComponentMask" ? Pr(("mask", "rgb")) : Pr();
+            Dictionary<string, string> props = d.Type == "ComponentMask" ? Pr(("mask", "rgb"))
+                : d.Type == SgCustom.Type ? Pr(("inputs", SgCustom.DefaultInputs), ("out", SgCustom.DefaultOut), ("code", SgCustom.DefaultCode)) : Pr();
             list.Add(new SgPaletteEntry(d.Title, d.Category, d.Type, props, d.Description + " " + d.Type));
         }
         return list;

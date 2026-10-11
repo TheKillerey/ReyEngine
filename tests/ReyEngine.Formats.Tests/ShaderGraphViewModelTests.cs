@@ -221,9 +221,9 @@ public sealed class ShaderGraphViewModelTests : IDisposable
         // an unwired input is editable on the node; a wired one is not (the wire decides)
         string add = vm.AddNode(Entry(vm, "Add"), 0, 0)!;
         vm.SelectedNodeId = add;
-        Assert.Equal(new[] { "A (not wired)", "B (not wired)" }, vm.PropRows.Select(r => r.Label));
+        Assert.Equal(new[] { "Label", "A (not wired)", "B (not wired)" }, vm.PropRows.Select(r => r.Label));
         vm.Connect("n2", "R", add, "A");
-        Assert.Equal(new[] { "B (not wired)" }, vm.PropRows.Select(r => r.Label));
+        Assert.Equal(new[] { "Label", "B (not wired)" }, vm.PropRows.Select(r => r.Label));
     }
 
     [Fact]

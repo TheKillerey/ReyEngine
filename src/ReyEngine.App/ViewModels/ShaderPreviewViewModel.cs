@@ -933,6 +933,15 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
             applied++;
         }
 
+        // M834: a custom parameter of the open graph the material does not set keeps the graph's default (Load applied it); one it sets wins
+        foreach (var prm in b.Parameters)
+        {
+            if (ShaderGraph.Document?.FindParam(prm.Name) is not { } cp) continue;
+            if (!prm.TryGetVector4(out var cv)) continue;
+            var row = Constants.FirstOrDefault(c => c.Name.Equals(cp.Name, StringComparison.OrdinalIgnoreCase));
+            if (row is not null) row.Value = string.Join(" ", new[] { cv.X, cv.Y, cv.Z, cv.W }.Take(cp.Components).Select(x => x.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
         MaterialReport = sb.ToString();
         RebuildBindings();
         Status = $"'{b.Name}' loaded: {bound} texture(s) bound, {applied} parameter(s) applied"
@@ -1654,6 +1663,7 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
         FocusCamera();
         BuildSlots();
         _appliedDefaults = ApplyShaderDefinitionDefaults();
+        ApplyGraphParameterDefaults();   // M834
         BuildMetadata(vsPath, psPath, report);
 
         if (!_renderer.BuildComparisonShader(_vs, out var cerr))
@@ -1679,6 +1689,19 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                      ? $", {_appliedDefaults.MissingTextures} default texture(s) missing."
                      : report.Warnings.Count > 0 ? $", {report.Warnings.Count} warning(s)." : ".");
         AppendLog();
+    }
+
+    /// <summary>M834: the open Shader Graph's custom parameters are constants of its compiled pixel shader; until a material sets one it holds the graph's default,
+    /// so the preview works with no material and a parameter edited in the Material Editor (or renamed) shows at once.</summary>
+    private void ApplyGraphParameterDefaults()
+    {
+        if (!ShaderGraph.IsOpen || !ShaderGraph.PreviewEnabled || ShaderGraph.Document is not { } doc) return;
+        foreach (var p in doc.Params)
+        {
+            var row = Constants.FirstOrDefault(c => c.Name.Equals(p.Name, StringComparison.OrdinalIgnoreCase));
+            if (row is null) continue;   // the graph does not read it (the compiler dropped the constant)
+            row.Value = string.Join(" ", p.DefaultValues().Select(x => x.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
     }
 
     private void Fail(string msg)
