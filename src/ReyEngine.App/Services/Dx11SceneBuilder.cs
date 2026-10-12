@@ -182,6 +182,10 @@ public static class Dx11SceneBuilder
             "viewport", map.Positions.Length / 3,
             map.Positions, map.Normals, map.Uvs, map.Colors, map.RawLightmapUvs ?? map.LightmapUvs, map.Indices,
             grassPivots: map.GrassPivots,
+            // M840: Texcoord6 as authored. A map with none passes explicit ZEROS rather than the +X placeholder:
+            // the game's Mantis / tft_env_rain vertex shaders read an absent stream as zero, and the viewport
+            // does not get to be kinder than the game.
+            tangents: map.Tangents, zeroTangents: true,
             // M253: authored world coordinates, NOT recentred. The editor camera is shared with the GL
             // viewport, which draws the map where the data puts it.
             recentre: false);

@@ -259,7 +259,7 @@ public static class PreviewGeometry
         string name, int vertexCount,
         float[] positions, float[]? normals, float[]? uvs, float[]? colors, float[]? lightmapUvs,
         uint[] indices, int[]? blendIndices = null, float[]? blendWeights = null,
-        float[]? grassPivots = null, bool recentre = true)
+        float[]? grassPivots = null, bool recentre = true, float[]? tangents = null, bool zeroTangents = false)
     {
         var verts = new PreviewVertex[vertexCount];
 
@@ -302,6 +302,14 @@ public static class PreviewGeometry
             verts[i].GrassPivot = grassPivots is not null && grassPivots.Length >= (i + 1) * 3
                 ? new Vector3(grassPivots[i * 3], grassPivots[i * 3 + 1], grassPivots[i * 3 + 2]) - centre
                 : pos;
+
+            // M840: the authored tangent frame (Texcoord6), 4 floats / vertex, used AS GIVEN - zeros stay zeros,
+            // because that is what the game's shader reads from a mesh without the stream. Callers that pass
+            // nothing keep Make's +X placeholder (the shader-preview shapes and champion scenes).
+            if (tangents is not null && tangents.Length >= (i + 1) * 4)
+                verts[i].Tangent = new Vector4(tangents[i * 4], tangents[i * 4 + 1], tangents[i * 4 + 2], tangents[i * 4 + 3]);
+            else if (zeroTangents)
+                verts[i].Tangent = Vector4.Zero;       // no array: a map without Texcoord6 must not allocate 16 B per vertex for zeros
 
             // M320: onto RAW TEXCOORD7, which is the common source Riot's shader independently transforms
             // for BAKED_LIGHT_SCALE_AND_BIAS and BAKED_PAINT_UV_SCALE_BIAS. Non-map callers may still pass

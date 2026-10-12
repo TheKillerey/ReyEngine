@@ -37,8 +37,13 @@ public class LightRegionInfoBuilderTests
     [Fact]
     public void The_record_is_the_stride_the_shader_declares()
     {
+        // M840: 112 is the pre-16.20 struct; 16.20 appended RimLightColor + padding for 128. The renderer takes
+        // the stride from the shader's reflection (see Mantis840Tests); the packer serves both.
         Assert.Equal(112, LightRegionInfoBuilder.Stride);
+        Assert.Equal(128, LightRegionInfoBuilder.CurrentStride);
         Assert.Equal(112, LightRegionInfoBuilder.Pack(new MapSunProperties()).Length);
+        Assert.Equal(112, LightRegionInfoBuilder.Pack(new MapSunProperties(), 112).Length);
+        Assert.Equal(128, LightRegionInfoBuilder.Pack(new MapSunProperties(), 128).Length);
     }
 
     // ------------------------------------------------------------------ +0, the field that was zero

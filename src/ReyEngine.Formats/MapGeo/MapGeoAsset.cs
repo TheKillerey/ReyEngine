@@ -25,6 +25,10 @@ public sealed class MapGeoAsset
     /// by every blade in a clump. Only VertexDeform meshes author it; null when no mesh in the file does.</summary>
     public float[]? GrassPivots { get; init; }
     public bool HasGrassPivot { get; init; }
+    /// <summary>M840: Texcoord6 - the tangent frame (xyz, handedness in w), 4 floats / vertex, xyz already
+    /// carried through the mesh transform. A mesh that does not author it contributes ZEROS (what the game's
+    /// shader reads from an absent stream); null when no mesh in the file carries it.</summary>
+    public float[]? Tangents { get; init; }
     public required uint[] Indices { get; init; }
     public required IReadOnlyList<MapGeoGroup> Groups { get; init; }
     public IReadOnlyList<MapGeoMesh> Meshes { get; init; } = Array.Empty<MapGeoMesh>();

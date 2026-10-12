@@ -1055,7 +1055,8 @@ public sealed partial class ShaderPreviewViewModel : ObservableObject, IDisposab
                 var map = MapGeoDecoder.Decode(bytes);
                 decodedMesh = PreviewGeometry.FromLeagueArrays(asset.Display, map.Positions.Length / 3,
                     map.Positions, map.Normals, map.Uvs, map.Colors, map.LightmapUvs, map.Indices,
-                    grassPivots: map.GrassPivots);
+                    grassPivots: map.GrassPivots,
+                    tangents: map.Tangents, zeroTangents: true);
                 // M226: the lightmap atlas travels WITH THE GROUP. It is a per-mesh property, and keying
                 // it by material name (taking the first group's) handed 71.5% of Map12's lit groups another
                 // mesh's atlas page - 3,171 of 4,434 groups, 59.4% of triangles. The UVs were always right;

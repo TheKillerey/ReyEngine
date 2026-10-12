@@ -1146,6 +1146,7 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
         // entry even when the mesh has no data for it. Unknown semantics alias the zero pad.
         var elems = new List<InputElementDesc>();
         var names = new List<GCHandle>();
+        bool skinnedVs = vsRefl.Inputs.Any(i => i.Semantic.Equals("BLENDINDICES", StringComparison.OrdinalIgnoreCase));
         try
         {
             foreach (var e in vsRefl.Inputs)
@@ -1156,7 +1157,7 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
                 var h = GCHandle.Alloc(nameBytes, GCHandleType.Pinned);
                 names.Add(h);
 
-                (uint offset, int comps, bool known) = MapSemantic(e.Semantic, (int)e.Index, e.ComponentCount);
+                (uint offset, int comps, bool known) = MapSemantic(e.Semantic, (int)e.Index, e.ComponentCount, !skinnedVs);
                 if (!known) r.UnmatchedInputs.Add(e.FullSemantic);
 
                 elems.Add(new InputElementDesc
@@ -1242,9 +1243,17 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     }
 
     /// <summary>Semantic → byte offset inside <see cref="PreviewVertex"/>.</summary>
-    private static (uint Offset, int Components, bool Known) MapSemantic(string semantic, int index, int declared)
+    /// <summary>M840: <paramref name="texcoord6IsTangent"/> maps TEXCOORD6 onto the tangent. Census of the
+    /// installed 16.20 ShaderCache.dx11: the vertex shaders that READ TEXCOORD6 are mantis_env_baked_pbr and
+    /// tft_env_rain (static meshes) and the skinned lit_uber_vs - in all three it is dp3(v, worldMatrixRow) for
+    /// xyz and a multiply by .w, i.e. a tangent. vfx_uber_staticmesh_unlit lists it in its signature but never
+    /// declares it. Skinned shaders are left on the zero pad (the champion path carries no tangent stream and
+    /// their look is calibrated against that), hence the flag.</summary>
+    public static (uint Offset, int Components, bool Known) MapSemantic(string semantic, int index, int declared,
+        bool texcoord6IsTangent = false)
         => (semantic.ToUpperInvariant(), index) switch
         {
+            ("TEXCOORD", 6) when texcoord6IsTangent => (24u, 4, true),
             ("POSITION", 0) => (0u, 3, true),
             ("NORMAL", 0) => (12u, 3, true),
             ("TANGENT", 0) => (24u, 4, true),
@@ -6176,6 +6185,13 @@ float4 psmain(VOut i) : SV_Target
     private ComPtr<ID3D11ShaderResourceView> StandIn(DxbcResource resource)
     {
         if (resource.Name.Contains("REMAP_RAMP", StringComparison.OrdinalIgnoreCase)) return _identityRamp;
+
+        // M840: the two shared map textures the game's shaders read as (1 - x). See StandInPolicy.
+        if (resource.Dimension == 4 && StandInPolicy.ReadsAsZero(resource.Name))
+        {
+            EnsureClusterStandIns();
+            if (_zeroFloat4Srv.Handle is not null) return _zeroFloat4Srv;
+        }
 
         // M465: the SUN shadow map, when this frame rendered one. StartsWith, not Contains, and this arm
         // must stay above the stand-in below: SPOT_SHADOW_MAP_DEPTH_PCF and POINT_SHADOW_MAP_DEPTH_PCF both

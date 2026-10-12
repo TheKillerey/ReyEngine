@@ -45,6 +45,10 @@ public static class MapGeoDecoder
         // position, which makes the deform a no-op rather than a divide by zero.
         var grassPivots = new List<float>();
         bool anyGrassPivot = false;
+        // M840: Texcoord6 - the tangent frame Mantis_Env_Baked_PBR's vertex shader reads as TEXCOORD6. See the
+        // read below. Meshes without it contribute ZEROS, not a guess: that is what the game's own shader sees.
+        var tangents = new List<float>();
+        bool anyTangent = false;
         var indices = new List<uint>();
         var groups = new List<MapGeoGroup>();
         var meshes = new List<MapGeoMesh>();
@@ -114,6 +118,23 @@ public static class MapGeoDecoder
                 Vector3[]? meshPivot = meshHasPivot ? ReadVector3(pvAcc, vc) : null;
                 if (meshHasPivot) anyGrassPivot = true;
 
+                // M840: Texcoord6 is the TANGENT (xyz) and handedness (w) - measured from the DXBC input
+                // signature of Mantis_Env_Baked_PBR / tft_env_rain / skinned lit_uber, where every use is
+                // dp3(v, worldMatrixRow) for xyz and a multiply by .w. Riot's own mapgeos almost never carry it
+                // (1 mesh of 40,512); a Mantis-authored map does (RTX Rift: 330 of 586). The shipped example
+                // stores XYZ_Packed161616 with no w, which reads as +1 (see MeshTangentBuilder).
+                bool meshHasTangent = view.TryGetAccessor(ElementName.Texcoord6, out var tgAcc);
+                Vector4[]? meshTangent = meshHasTangent ? ReadTangent(tgAcc, vc) : null;
+                if (meshHasTangent && meshTangent is null)
+                    warnings.Add($"mesh '{mesh.Name}': Texcoord6 is in a format the viewport cannot read; tangents left zero");
+                if (meshTangent is not null && !anyTangent)
+                {
+                    // The first mesh to carry Texcoord6: back-fill zeros for every vertex before it. Maps with none
+                    // never allocate the list's contents at all (Map12 has millions of vertices).
+                    anyTangent = true;
+                    tangents.AddRange(new float[baseVertex * 4]);
+                }
+
                 var meshMin = new Vector3(float.MaxValue);
                 var meshMax = new Vector3(float.MinValue);
 
@@ -161,6 +182,20 @@ public static class MapGeoDecoder
                         bakedPaintUvs.Add(meshRawUv7[i].Y * mesh.BakedPaintScale.Y + mesh.BakedPaintBias.Y);
                     }
                     else { bakedPaintUvs.Add(0f); bakedPaintUvs.Add(0f); }
+
+                    // The tangent is a DIRECTION: it takes the linear part of the mesh transform (the world matrix
+                    // the game's vertex shader would apply), not the inverse transpose a normal takes. w is kept
+                    // as authored - the game does not correct the handedness for a mirrored transform either.
+                    // A mesh with no Texcoord6 writes zeros: the shader gets exactly what an absent stream gives it.
+                    if (meshTangent is not null)
+                    {
+                        var tv = meshTangent[i];
+                        var tw = Vector3.TransformNormal(new Vector3(tv.X, tv.Y, tv.Z), transform);
+                        float tl = tw.Length();
+                        if (tl > 1e-6f) tw /= tl;
+                        tangents.Add(tw.X); tangents.Add(tw.Y); tangents.Add(tw.Z); tangents.Add(tv.W);
+                    }
+                    else if (anyTangent) { tangents.Add(0f); tangents.Add(0f); tangents.Add(0f); tangents.Add(0f); }
 
                     // Same transform as the position, because it IS a position in that space.
                     if (meshPivot is not null)
@@ -324,6 +359,7 @@ public static class MapGeoDecoder
             BakedPaintUvs = anyBakedPaintUv ? bakedPaintUvs.ToArray() : null,
             GrassPivots = anyGrassPivot ? grassPivots.ToArray() : null,
             HasGrassPivot = anyGrassPivot,
+            Tangents = anyTangent ? tangents.ToArray() : null,
             Indices = indices.ToArray(),
             Groups = groups,
             Meshes = meshes,
@@ -356,6 +392,31 @@ public static class MapGeoDecoder
             }
         }
         return result;
+    }
+
+    /// <summary>M840: Texcoord6 as (x, y, z, w). XYZW_Float32 is what MeshTangentBuilder writes; the one shipped
+    /// example is XYZ_Packed161616, which has no w and so reads as handedness +1.</summary>
+    private static Vector4[]? ReadTangent(VertexElementAccessor acc, int count)
+    {
+        var result = new Vector4[count];
+        try
+        {
+            var arr = acc.AsVector4Array();
+            for (int i = 0; i < count; i++) result[i] = arr[i];
+            return result;
+        }
+        catch { /* not float32 xyzw - try the packed form */ }
+        try
+        {
+            var arr = acc.AsXyzF16Array();
+            for (int i = 0; i < count; i++)
+            {
+                var h = arr[i];
+                result[i] = new Vector4((float)h.Item1, (float)h.Item2, (float)h.Item3, 1f);
+            }
+            return result;
+        }
+        catch { return null; }
     }
 
     // PrimaryColor is BGRA_Packed8888 (bytes) — normalize to RGBA 0..1. Falls back to Vector4 float colors.

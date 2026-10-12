@@ -76,8 +76,13 @@ public sealed record DxbcConstantBuffer(
 /// <summary>A texture, sampler or cbuffer bind point.</summary>
 public sealed record DxbcResource(
     string Name, DxbcResourceKind Kind, uint BindPoint, uint BindCount, uint Dimension, uint ReturnType,
-    uint Flags = 0)
+    uint Flags = 0, uint NumSamples = 0)
 {
+    /// <summary>M840: the RDEF bind desc's NumSamples (+16). For a STRUCTURED buffer this is the element
+    /// stride in bytes - the size the shader's own struct declares (LightRegionInfo_SharedDataBuffer is 112
+    /// before 16.20 and 128 after). For textures it is 0xFFFFFFFF or a sample count and means nothing here.</summary>
+    public uint StructStride => Kind == DxbcResourceKind.Structured ? NumSamples : 0;
+
     /// <summary>M254: D3D_SIF_COMPARISON_SAMPLER, which is <b>0x2</b> - not 0x20. The neighbouring bits are
     /// USERPACKED (0x1) and the TEXTURE_COMPONENT pair (0x4/0x8), so a wrong mask here silently matches
     /// nothing: League'+chr(39)+'s shadow samplers carry 0x02 and Clamp_No_Mip_SharedSampler carries 0x01.
@@ -251,7 +256,8 @@ public static class DxbcReflection
                 // M254: uFlags, at +28 of the 32-byte bind desc. Never read before, and it is the only
                 // place RDEF says whether a sampler is a COMPARISON sampler - the distinction that decides
                 // whether sample_c can succeed at all.
-                Flags: U32(d, o + 28)));
+                Flags: U32(d, o + 28),
+                NumSamples: U32(d, o + 16)));
         }
 
         // SM5 grew the variable record from 24 to 40 bytes; reading the wrong stride yields garbage names.

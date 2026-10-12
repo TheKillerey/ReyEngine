@@ -61,9 +61,24 @@ namespace ReyEngine.Formats.Lighting;
 /// </summary>
 public static class LightRegionInfoBuilder
 {
-    /// <summary>Element stride, from the <c>ld_structured_indexable(structured_buffer, stride=112)</c> that
-    /// every consumer issues (Mantis blob 27 line 492; <c>lit_uber_ps</c> blob 400 lines 298/305/306).</summary>
+    /// <summary>Element stride of the PRE-16.20 struct, from the <c>ld_structured_indexable(structured_buffer,
+    /// stride=112)</c> that every consumer issued (Mantis blob 27 line 492; <c>lit_uber_ps</c> blob 400 lines
+    /// 298/305/306). Also the smallest stride that holds every field this packer writes.</summary>
     public const int Stride = 112;
+
+    /// <summary>M840: the 16.20 stride. The struct gained <c>float3 RimLightColor</c> at +112 and
+    /// <c>mUnusedPadding0</c> at +124. Measured on the installed ShaderCache.dx11: all 42,394 pixel permutations
+    /// that declare LightRegionInfo_SharedDataBuffer (mantis_env_baked_pbr, skinned lit_uber, environment,
+    /// gamma) report 128 in their RDEF. A 112-byte buffer made every read at +112 fall outside the element.
+    /// The renderer takes the stride from the REFLECTED size; this is only its starting value.</summary>
+    public const int CurrentStride = 128;
+
+    /// <summary>The widest stride accepted from a shader's reflection: a corrupt RDEF must not size a buffer.</summary>
+    public const int MaxStride = 1024;
+
+    /// <summary>Is <paramref name="stride"/> a plausible element size for this record: at least the fields we
+    /// write, a whole number of floats, and bounded.</summary>
+    public static bool IsValidStride(long stride) => stride >= Stride && stride <= MaxStride && stride % 4 == 0;
 
     /// <summary>The IBL cubemap slot this record points every lookup at.
     ///
@@ -77,10 +92,16 @@ public static class LightRegionInfoBuilder
 
     /// <summary>Pack the one element the shader reads. Never throws; a null sun packs the record's own
     /// defaults, which is what an unauthored or unparseable map should look like.</summary>
-    public static byte[] Pack(MapSunProperties? sun)
+    public static byte[] Pack(MapSunProperties? sun) => Pack(sun, Stride);
+
+    /// <summary>Pack at an explicit element <paramref name="stride"/> (112 before 16.20, 128 after). Every field
+    /// we author lives below +112, so the layouts agree and anything past it - RimLightColor, the padding - stays
+    /// ZERO: the map authors no rim light, and a zero rim is the neutral value.</summary>
+    public static byte[] Pack(MapSunProperties? sun, int stride)
     {
+        if (!IsValidStride(stride)) throw new ArgumentOutOfRangeException(nameof(stride), stride, "not a LightRegionInfo stride");
         var s = sun ?? new MapSunProperties();
-        var buf = new byte[Stride];
+        var buf = new byte[stride];
 
         // THE RENDER FORM, folded. M451 split the authored sun into a hue (sunColor) and a strength
         // (SunIntensityScale) because the SAVE path has to keep them apart — the bin carries two fields and

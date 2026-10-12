@@ -1,5 +1,6 @@
 using System.Numerics;
 using ReyEngine.Formats.Lighting;
+using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Shaders;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
@@ -342,43 +343,7 @@ public sealed unsafe partial class ShaderPreviewRenderer
         if (_clusterStandInsTried) return;
         _clusterStandInsTried = true;
 
-        // Dynamic + CPU write, because M463 makes these 112 bytes editable from the Lighting panel. The
-        // stride is the shader's own: every consumer issues ld_structured_indexable(..., stride=112).
-        var lrDesc = new BufferDesc
-        {
-            ByteWidth = LightRegionInfoBuilder.Stride,
-            Usage = Usage.Dynamic,
-            BindFlags = (uint)BindFlag.ShaderResource,
-            CPUAccessFlags = (uint)CpuAccessFlag.Write,
-            MiscFlags = (uint)ResourceMiscFlag.BufferStructured,
-            StructureByteStride = LightRegionInfoBuilder.Stride,
-        };
-        var zeros = stackalloc byte[LightRegionInfoBuilder.Stride];
-        for (int i = 0; i < LightRegionInfoBuilder.Stride; i++) zeros[i] = 0;
-        var init = new SubresourceData { PSysMem = zeros };
-        ComPtr<ID3D11Buffer> lrBuf = default;
-        if (_device.CreateBuffer(ref lrDesc, ref init, ref lrBuf) >= 0)
-        {
-            _lightRegionBuf = lrBuf;
-            var srvDesc = new ShaderResourceViewDesc
-            {
-                Format = Format.FormatUnknown,
-                ViewDimension = D3DSrvDimension.D3D11SrvDimensionBuffer,
-                Anonymous = new ShaderResourceViewDescUnion
-                {
-                    Buffer = new BufferSrv
-                    {
-                        Anonymous1 = new BufferSrvUnion1 { FirstElement = 0 },
-                        Anonymous2 = new BufferSrvUnion2 { NumElements = 1 },
-                    },
-                },
-            };
-            ComPtr<ID3D11ShaderResourceView> srv = default;
-            if (_device.CreateShaderResourceView(_lightRegionBuf, in srvDesc, ref srv) >= 0)
-                _lightRegionSrv = srv;
-            else Log("cluster: LightRegionInfo view failed");
-        }
-        else Log("cluster: LightRegionInfo buffer failed");
+        CreateLightRegionBuffer(_lightRegionStride);
 
         // RGBA8 zero, which MakeTexture handles: it assumes 4 bytes per texel throughout.
         if (MakeTexture(new byte[] { 0, 0, 0, 0 }, 1, 1) is { } zf) _zeroFloat4Srv = zf;
@@ -410,6 +375,78 @@ public sealed unsafe partial class ShaderPreviewRenderer
 
     // ---------------------------------------------------------------- the light region
 
+    /// <summary>M840: the element stride of <c>_lightRegionBuf</c>. Starts at the 16.20 value and only GROWS, to
+    /// the largest stride any bound shader's own RDEF declares for LightRegionInfo_SharedDataBuffer (see
+    /// <see cref="NoteLightRegionStride"/>). Only element 0 is ever read and every field we author sits below
+    /// +112, so a buffer wide enough for the widest shader serves every narrower one unchanged.</summary>
+    private int _lightRegionStride = LightRegionInfoBuilder.CurrentStride;
+    private MapSunProperties? _lightRegionSun;
+
+    /// <summary>Dynamic + CPU write, because M463 makes this record editable from the Lighting panel. One
+    /// element, zero-filled. Replaces any earlier buffer; the old view stays alive in whatever slot still
+    /// holds it until that slot is rebound, which D3D11 reference-counts.</summary>
+    private void CreateLightRegionBuffer(int stride)
+    {
+        var lrDesc = new BufferDesc
+        {
+            ByteWidth = (uint)stride,
+            Usage = Usage.Dynamic,
+            BindFlags = (uint)BindFlag.ShaderResource,
+            CPUAccessFlags = (uint)CpuAccessFlag.Write,
+            MiscFlags = (uint)ResourceMiscFlag.BufferStructured,
+            StructureByteStride = (uint)stride,
+        };
+        var zeros = new byte[stride];
+        ComPtr<ID3D11Buffer> lrBuf = default;
+        int hr;
+        fixed (byte* pz = zeros)
+        {
+            var init = new SubresourceData { PSysMem = pz };
+            hr = _device.CreateBuffer(ref lrDesc, ref init, ref lrBuf);
+        }
+        if (hr < 0) { Log("cluster: LightRegionInfo buffer failed"); return; }
+
+        var srvDesc = new ShaderResourceViewDesc
+        {
+            Format = Format.FormatUnknown,
+            ViewDimension = D3DSrvDimension.D3D11SrvDimensionBuffer,
+            Anonymous = new ShaderResourceViewDescUnion
+            {
+                Buffer = new BufferSrv
+                {
+                    Anonymous1 = new BufferSrvUnion1 { FirstElement = 0 },
+                    Anonymous2 = new BufferSrvUnion2 { NumElements = 1 },
+                },
+            },
+        };
+        ComPtr<ID3D11ShaderResourceView> srv = default;
+        if (_device.CreateShaderResourceView(lrBuf, in srvDesc, ref srv) < 0)
+        {
+            Log("cluster: LightRegionInfo view failed");
+            lrBuf.Dispose();
+            return;
+        }
+        _lightRegionSrv.Dispose();
+        _lightRegionBuf.Dispose();
+        _lightRegionBuf = lrBuf;
+        _lightRegionSrv = srv;
+        _lightRegionPacked = null;      // the new buffer is zero: the next upload must not be skipped as unchanged
+        _lightRegionStride = stride;
+    }
+
+    /// <summary>M840: a shader declared LightRegionInfo_SharedDataBuffer with <paramref name="reflectedStride"/>
+    /// bytes per element. If that is wider than the buffer, rebuild it at that size and re-upload the sun - a
+    /// narrower buffer makes every field past its end read zero (16.20 added RimLightColor at +112). A stride
+    /// that is not a plausible record size is ignored, never trusted to size an allocation.</summary>
+    private void NoteLightRegionStride(DxbcResource r)
+    {
+        long stride = r.StructStride;
+        if (!LightRegionInfoBuilder.IsValidStride(stride) || stride <= _lightRegionStride) return;
+        Log($"light region: shader declares a {stride}-byte element (buffer was {_lightRegionStride}); resizing");
+        CreateLightRegionBuffer((int)stride);
+        UploadLightRegion(_lightRegionSun);
+    }
+
     /// <summary>M463: pack the map's authored sun into <c>LightRegionInfo[0]</c> and upload it.
     ///
     /// <para>This is the whole fix for "the sun does not work on Mantis materials". Mantis's sun radiance is
@@ -430,7 +467,14 @@ public sealed unsafe partial class ShaderPreviewRenderer
         UpdateSkyAmbient(s);
         if (_lightRegionBuf.Handle is null) return;
 
-        byte[] packed = LightRegionInfoBuilder.Pack(s.MapSun);
+        UploadLightRegion(s.MapSun);
+    }
+
+    private void UploadLightRegion(MapSunProperties? sun)
+    {
+        _lightRegionSun = sun;
+        if (_lightRegionBuf.Handle is null) return;
+        byte[] packed = LightRegionInfoBuilder.Pack(sun, _lightRegionStride);
 
         // Sequence equality rather than a cached MapSunProperties reference: the view-model rebuilds the
         // record on EVERY slider tick (RebuildSun does `_baseSun with { ... }`), so reference equality would
@@ -440,7 +484,7 @@ public sealed unsafe partial class ShaderPreviewRenderer
 
         MappedSubresource m = default;
         if (_ctx.Map(_lightRegionBuf, 0, Map.WriteDiscard, 0, ref m) < 0) return;
-        packed.AsSpan().CopyTo(new Span<byte>(m.PData, LightRegionInfoBuilder.Stride));
+        packed.AsSpan().CopyTo(new Span<byte>(m.PData, packed.Length));
         _ctx.Unmap(_lightRegionBuf, 0);
         _lightRegionPacked = packed;
 
@@ -564,6 +608,11 @@ public sealed unsafe partial class ShaderPreviewRenderer
         foreach (var r in refl.Resources)
         {
             if (r.Kind != DxbcResourceKind.Structured) continue;
+            if (r.Name.Equals("LightRegionInfo_SharedDataBuffer", StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureClusterStandIns();
+                NoteLightRegionStride(r);
+            }
             var srv = ClusterResourceFor(r.Name);
             if (srv.Handle is null) continue;
             if (pixel) _ctx.PSSetShaderResources(r.BindPoint, 1, ref srv);
