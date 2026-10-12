@@ -515,7 +515,7 @@ public sealed partial class MaterialMacroViewModel : ViewModelBase
     {
         Model = model;
         _binding = binding;
-        _isOn = model.On;
+        _isOn = DisplayOn(model);
         _initializing = false;
     }
 
@@ -523,10 +523,15 @@ public sealed partial class MaterialMacroViewModel : ViewModelBase
     internal void SyncFromModel()
     {
         _initializing = true;
-        IsOn = Model.On;
+        IsOn = DisplayOn(Model);
         _initializing = false;
         RaiseDirty();
     }
+
+    /// <summary>M839: REY_GRAPH holds the graph's NUMBER ("8"), never "1"/"true", so <see cref="MaterialMacro.On"/> is false for every graph but #1 and the row showed
+    /// an assigned, valid macro UNCHECKED (as if disabled). For it the box means "names a valid graph number"; the value written to the bin is not touched.</summary>
+    internal static bool DisplayOn(MaterialMacro m) =>
+        SgShip.IsGraphMacro(m.Name) ? SgShipValidator.TryParseNumber(m.Value, out _) : m.On;
 
     public string Name => Model.Name;
     public bool IsDirty => Model.IsDirty;

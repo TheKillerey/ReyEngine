@@ -183,6 +183,8 @@ public static class MaterialBulkEdit
         object? context, Action? onApplied)
     {
         var commands = new List<IEditorCommand>();
+        // M839: REY_GRAPH holds a graph NUMBER; "0"/"1" would unassign or re-point the graph. Assign / Unassign change it.
+        if (ReyEngine.Formats.Materials.ShaderGraph.SgShip.IsGraphMacro(name)) materials = Array.Empty<MaterialBinding>();
         foreach (var m in materials)
         {
             var macro = m.AllMacros.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));

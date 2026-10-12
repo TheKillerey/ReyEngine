@@ -33,7 +33,7 @@ public static class ShaderGraphShipService
 
     /// <summary>The materials of the staged bins that name a graph. A bin is parsed only when its bytes hold the macro name.</summary>
     public static IReadOnlyList<SgAssignedMaterial> FindAssigned(IEnumerable<string> stagedDirs, Func<uint, string?> resolveBinName, List<string> errors,
-        IReadOnlyDictionary<string, (string Stem, string Base)>? custom = null, IReadOnlyDictionary<string, (string Stem, string Base)>? customTextures = null)
+        IReadOnlyDictionary<string, List<(string Stem, string Base)>>? custom = null, IReadOnlyDictionary<string, List<(string Stem, string Base)>>? customTextures = null)
     {
         var found = new List<SgAssignedMaterial>();
         var customNeedles = (custom?.Keys ?? Enumerable.Empty<string>()).Concat(customTextures?.Keys ?? Enumerable.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase)
@@ -70,13 +70,13 @@ public static class ShaderGraphShipService
                         string sh = m.RenderShader ?? m.ShaderName ?? "";
                         if (custom is not null && SgBase.IsSupported(sh))
                             foreach (var p in m.Parameters)
-                                if (custom.TryGetValue(p.Name, out var info) && SgBase.Normalize(info.Base) == SgBase.Normalize(sh))
-                                    errors.Add($"Material '{m.Name}' ({rel}) carries the parameter '{p.Name}', a custom parameter of the Shader Graph '{info.Stem}', but it is not assigned to a graph that declares it, so no shaders.bin declares it and the game stops with \"Missing shader constant\". Remove the parameter from the material, or assign the graph.");
+                                if (custom.TryGetValue(p.Name, out var info) && DeclaringGraphs(info, sh) is { Length: > 0 } graphs)
+                                    errors.Add($"Material '{m.Name}' ({rel}) carries the parameter '{p.Name}', a custom parameter of the {graphs}, but it is not assigned to a graph that declares it, so no shaders.bin declares it and the game stops with \"Missing shader constant\". Remove the parameter from the material, or assign the graph.");
                         // M835: the same for a custom TEXTURE: a samplerValues entry no definition declares (the graph was unassigned, or the texture renamed or deleted)
                         if (customTextures is not null && SgBase.IsSupported(sh))
                             foreach (var sl in m.Slots)
-                                if (customTextures.TryGetValue(sl.SamplerName, out var tinfo) && SgBase.Normalize(tinfo.Base) == SgBase.Normalize(sh))
-                                    errors.Add($"Material '{m.Name}' ({rel}) carries the texture '{sl.SamplerName}', a custom texture of the Shader Graph '{tinfo.Stem}', but it is not assigned to a graph that declares it, so no shaders.bin declares it. Remove the texture entry from the material, or assign the graph.");
+                                if (customTextures.TryGetValue(sl.SamplerName, out var tinfo) && DeclaringGraphs(tinfo, sh) is { Length: > 0 } tgraphs)
+                                    errors.Add($"Material '{m.Name}' ({rel}) carries the texture '{sl.SamplerName}', a custom texture of the {tgraphs}, but it is not assigned to a graph that declares it, so no shaders.bin declares it. Remove the texture entry from the material, or assign the graph.");
                         continue;
                     }
                     found.Add(new SgAssignedMaterial(rel, m.Name, m.RenderShader ?? m.ShaderName, macro.Value, m.Parameters.Select(p => p.Name).ToList(),
@@ -88,10 +88,26 @@ public static class ShaderGraphShipService
         return found;
     }
 
-    /// <summary>Every custom parameter name of every Shader Graph file of the project (whether or not any material is assigned to it): name -> (graph file stem, base shader).</summary>
-    public static IReadOnlyDictionary<string, (string Stem, string Base)> ProjectCustomParameters(string? projectRoot)
+    private static void AddDeclaring(Dictionary<string, List<(string Stem, string Base)>> map, string name, string stem, string baseShader)
     {
-        var map = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
+        if (!map.TryGetValue(name, out var list)) map[name] = list = new List<(string Stem, string Base)>();
+        list.Add((stem, baseShader));
+    }
+
+    /// <summary>M839: "Shader Graph 'A'" / "Shader Graphs 'A', 'B'" - EVERY graph built for the material's base shader that declares the name (the first one alone
+    /// could be a graph the material was never assigned to). Empty when none is built for that base.</summary>
+    internal static string DeclaringGraphs(IReadOnlyList<(string Stem, string Base)> declaring, string shader)
+    {
+        var stems = declaring.Where(g => SgBase.Normalize(g.Base) == SgBase.Normalize(shader)).Select(g => g.Stem)
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        if (stems.Count == 0) return "";
+        return (stems.Count == 1 ? "Shader Graph " : "Shader Graphs ") + string.Join(", ", stems.Select(x => $"'{x}'"));
+    }
+
+    /// <summary>Every custom parameter name of every Shader Graph file of the project (whether or not any material is assigned to it): name -> (graph file stem, base shader).</summary>
+    public static IReadOnlyDictionary<string, List<(string Stem, string Base)>> ProjectCustomParameters(string? projectRoot)
+    {
+        var map = new Dictionary<string, List<(string Stem, string Base)>>(StringComparer.OrdinalIgnoreCase);
         if (projectRoot is null) return map;
         string dir = ShaderGraphRegistry.FolderIn(projectRoot);
         if (!Directory.Exists(dir)) return map;
@@ -101,7 +117,7 @@ public static class ShaderGraphShipService
             {
                 var doc = ShaderGraphJson.TryDeserialize(File.ReadAllText(file), out _);
                 if (doc is null) continue;
-                foreach (var p in doc.Params) map.TryAdd(p.Name, (ShaderGraphRegistry.StemOf(file), doc.BaseShader));
+                foreach (var p in doc.Params) AddDeclaring(map, p.Name, ShaderGraphRegistry.StemOf(file), doc.BaseShader);
             }
             catch { /* an unreadable graph file declares nothing; the assigned ones are reported by the validator */ }
         }
@@ -109,9 +125,9 @@ public static class ShaderGraphShipService
     }
 
     /// <summary>M835: every custom TEXTURE name of every Shader Graph file of the project: name -> (graph file stem, base shader).</summary>
-    public static IReadOnlyDictionary<string, (string Stem, string Base)> ProjectCustomTextures(string? projectRoot)
+    public static IReadOnlyDictionary<string, List<(string Stem, string Base)>> ProjectCustomTextures(string? projectRoot)
     {
-        var map = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
+        var map = new Dictionary<string, List<(string Stem, string Base)>>(StringComparer.OrdinalIgnoreCase);
         if (projectRoot is null) return map;
         string dir = ShaderGraphRegistry.FolderIn(projectRoot);
         if (!Directory.Exists(dir)) return map;
@@ -121,7 +137,7 @@ public static class ShaderGraphShipService
             {
                 var doc = ShaderGraphJson.TryDeserialize(File.ReadAllText(file), out _);
                 if (doc is null) continue;
-                foreach (var t in doc.Textures) map.TryAdd(t.Name, (ShaderGraphRegistry.StemOf(file), doc.BaseShader));
+                foreach (var t in doc.Textures) AddDeclaring(map, t.Name, ShaderGraphRegistry.StemOf(file), doc.BaseShader);
             }
             catch { /* an unreadable graph file declares nothing; the assigned ones are reported by the validator */ }
         }

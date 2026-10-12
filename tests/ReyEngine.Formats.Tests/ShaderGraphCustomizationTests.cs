@@ -468,6 +468,73 @@ public sealed class ShaderGraphCustomizationTests : IDisposable
     }
 
     [Fact]
+    public async Task A_stray_parameter_or_texture_names_every_graph_that_declares_it()
+    {
+        await SaveGraphWith("Graph_2", ("Tint", "Bands"));
+        await SaveGraphWith("Graph_8", ("Tint", "Bands"));
+        var (undo, editor, binding) = EditorWithGraph(Vm());
+        binding.AssignGraphCommand.Execute(binding.GraphChoices.Single(c => c.Stem == "Graph_8"));
+        Assert.Contains(binding.Model.Parameters, p => p.Name == "Tint");
+        MacroPresenceCommand.Write(binding.Model, SgShip.Macro, null);       // the macro dropped by hand: the parameter and the texture stay behind
+        string dir = Path.Combine(_root, "staged-m839"); Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "a.materials.bin"), editor.Serialize()!);
+        var errors = new List<string>();
+        ReyEngine.App.Services.ShaderGraphShipService.FindAssigned(new[] { dir }, Names, errors,
+            ReyEngine.App.Services.ShaderGraphShipService.ProjectCustomParameters(_root), ReyEngine.App.Services.ShaderGraphShipService.ProjectCustomTextures(_root));
+        Assert.Contains(errors, m => m.Contains("the parameter 'Tint'") && m.Contains("custom parameter of the Shader Graphs 'Graph_2', 'Graph_8'"));
+        Assert.Contains(errors, m => m.Contains("the texture 'Bands'") && m.Contains("custom texture of the Shader Graphs 'Graph_2', 'Graph_8'"));
+        Assert.All(errors, m => Assert.Contains("assign the graph", m));
+    }
+
+    [Fact]
+    public async Task A_graph_macro_removed_by_hand_and_assigned_again_is_persisted_and_shown_enabled_after_save_and_reload()
+    {
+        await SaveGraphWith("GraphA", ("", ""));
+        await SaveGraphWith("GraphB", ("", ""));
+        Assert.Equal(1, ShaderGraphRegistry.NumberFor(_root, "GraphA", Flat));          // numbers are handed out on first use: B becomes #2
+        var (undo, editor, binding) = EditorWithGraph(Vm());
+        var b = binding.GraphChoices.Single(c => c.Stem == "GraphB");
+        binding.AssignGraphCommand.Execute(b);
+        string first = binding.Model.AllMacros.Single(m => SgShip.IsGraphMacro(m.Name)).Value;
+        Assert.NotEqual("1", first);                                                     // a number other than 1: MaterialMacro.On is false for it
+        Assert.True(binding.Macros.Single(m => SgShip.IsGraphMacro(m.Name)).IsOn);
+
+        // save + reload, then the Material tab's Remove on the row, save + reload
+        MaterialEditorViewModel Reload(MaterialEditorViewModel e)
+        {
+            var e2 = new MaterialEditorViewModel { UndoService = new UndoRedoService(), ProjectRoot = () => _root };
+            e2.Load(MaterialDocument.Parse(e.Serialize()!, Names), new WadAssetEntry { Path = "data/maps/mapgeometry/map11/x.materials.bin" });
+            e2.Materials.Single().RefreshMacroStatus();
+            return e2;
+        }
+        var e1 = Reload(editor);
+        var b1 = e1.Materials.Single();
+        Assert.True(b1.Macros.Single(m => SgShip.IsGraphMacro(m.Name)).IsOn);            // a reloaded valid number is shown enabled
+        b1.Macros.Single(m => SgShip.IsGraphMacro(m.Name)).RemoveCommand.Execute(null);
+        var e2 = Reload(e1);
+        var b2 = e2.Materials.Single();
+        Assert.DoesNotContain(b2.Model.AllMacros, m => SgShip.IsGraphMacro(m.Name));
+
+        // Assign again through the graph section, save + reload
+        b2.AssignGraphCommand.Execute(b2.GraphChoices.Single(c => c.Stem == "GraphB"));
+        Assert.True(b2.Macros.Single(m => SgShip.IsGraphMacro(m.Name)).IsOn);
+        var e3 = Reload(e2);
+        var b3 = e3.Materials.Single();
+        var macro = b3.Model.AllMacros.Single(m => SgShip.IsGraphMacro(m.Name));
+        Assert.Equal(first, macro.Value);                                                // the bin holds the graph number, enabled
+        Assert.True(b3.Macros.Single(m => SgShip.IsGraphMacro(m.Name)).IsOn);
+        Assert.True(b3.HasGraphAssigned);
+
+        // a hand-edited disabled / invalid value is an export error, never a silent ship without the graph
+        foreach (string bad in new[] { "0", "false", "", "-3" })
+        {
+            var m = new SgAssignedMaterial("data/x.materials.bin", "Mat", Flat, bad, new string[0], null, new string[0]);
+            var errs = SgShipValidator.Validate(m, SgShipValidator.Resolve(_root, Flat, 2), ShaderGraphTests.TestBase());
+            Assert.Contains(errs, e => e.Contains("is not a graph number"));
+        }
+    }
+
+    [Fact]
     public async Task A_default_image_path_is_checked_normalised_and_hashed_the_same_by_the_material_and_the_shaders_bin()
     {
         Assert.Null(SgNames.TexturePathProblem(""));
