@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -9,17 +11,18 @@ using ReyEngine.Core.Settings;
 
 namespace ReyEngine.App.ViewModels;
 
-/// <summary>M682: one Blender version in Settings ▸ Blender, with the add-on's state there.</summary>
+/// <summary>M682: one Blender version in Settings ▸ Blender, with the add-on's state there. M841: the add-on
+/// is MapgeoAddon; an old reyengine_bridge.py beside it is called out, because installing replaces it.</summary>
 public sealed partial class BlenderInstallRowViewModel : ObservableObject
 {
     private readonly Func<BlenderInstallRowViewModel, Task> _install;
 
-    public BlenderInstallRowViewModel(BlenderAddonInstaller.BlenderInstall install, string? shipped,
+    public BlenderInstallRowViewModel(BlenderAddonInstaller.BlenderInstall install, Version? available,
         Func<BlenderInstallRowViewModel, Task> installAction)
     {
         Install = install;
         _install = installAction;
-        Refresh(shipped);
+        Refresh(available);
     }
 
     public BlenderAddonInstaller.BlenderInstall Install { get; }
@@ -28,13 +31,19 @@ public sealed partial class BlenderInstallRowViewModel : ObservableObject
     [ObservableProperty] private string _actionLabel = "Install";
     [ObservableProperty] private bool _busy;
 
-    public void Refresh(string? shipped)
+    public void Refresh(Version? available)
     {
         bool installed = Install.AddonInstalled;
-        bool current = Install.AddonCurrent(shipped);
-        Detail = (installed ? (current ? "add-on installed, up to date" : "add-on installed, older copy") : "add-on not installed")
+        bool? current = Install.AddonCurrent(available);
+        string state = !installed ? "MapgeoAddon not installed"
+            : $"MapgeoAddon {Install.InstalledVersion?.ToString(3) ?? "(version unknown)"} installed"
+              + (current switch { true => ", up to date", false => $", {available?.ToString(3)} available", _ => "" });
+        string? byHand = BlenderAddonInstaller.ManagedByHand(Install.AddonDir);
+        Detail = state
+                 + (byHand is not null ? $" · {byHand}: ReyEngine leaves it alone" : "")
+                 + (Install.LegacyBridgeInstalled ? " · old ReyEngine Bridge present (installing removes it)" : "")
                  + (Install.Executable is null ? " · blender.exe not found, enable by hand" : "");
-        ActionLabel = installed ? (current ? "Reinstall" : "Update") : "Install";
+        ActionLabel = byHand is not null ? "Managed by hand" : !installed ? "Install" : current == true ? "Reinstall" : "Update";
     }
 
     [RelayCommand]
@@ -215,44 +224,79 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public ObservableCollection<BlenderInstallRowViewModel> BlenderInstalls { get; } = new();
     [ObservableProperty] private string _blenderStatus = "";
-    /// <summary>The add-on this build ships, or a plain statement that it is missing.</summary>
-    public string BlenderAddonSource => BlenderAddonInstaller.ShippedAddonPath() ?? "(the add-on file is missing from this build)";
+
+    /// <summary>M841: the add-on source as typed - a folder, a .zip or a URL; empty = the latest GitHub
+    /// release. Saved with the other settings.</summary>
+    [ObservableProperty] private string _blenderAddonSourceSetting = "";
+    partial void OnBlenderAddonSourceSettingChanged(string value)
+    {
+        OnPropertyChanged(nameof(BlenderAddonSource));
+        if (ShowBlender) RefreshBlender();
+    }
+
+    /// <summary>What Install will copy from, with its version when it is a local folder.</summary>
+    public string BlenderAddonSource
+    {
+        get
+        {
+            string source = BlenderAddonInstaller.EffectiveSource(BlenderAddonSourceSetting);
+            var version = BlenderAddonInstaller.SourceVersion(source);
+            return source + (version is not null ? $"  (MapgeoAddon {version.ToString(3)})"
+                : BlenderAddonInstaller.IsUrl(source) ? "  (downloaded when you install)" : "");
+        }
+    }
     public bool HasBlenderInstalls => BlenderInstalls.Count > 0;
 
     public void RefreshBlender()
     {
-        string? shipped = BlenderAddonInstaller.ShippedAddonPath();
+        string source = BlenderAddonInstaller.EffectiveSource(BlenderAddonSourceSetting);
+        var available = BlenderAddonInstaller.SourceVersion(source);
         BlenderInstalls.Clear();
         foreach (var install in BlenderAddonInstaller.Discover())
-            BlenderInstalls.Add(new BlenderInstallRowViewModel(install, shipped, InstallBlenderAsync));
+            BlenderInstalls.Add(new BlenderInstallRowViewModel(install, available, InstallBlenderAsync));
         OnPropertyChanged(nameof(HasBlenderInstalls));
         OnPropertyChanged(nameof(BlenderAddonSource));
         BlenderStatus = BlenderInstalls.Count == 0
-            ? "No Blender found: it creates %AppData%\\Blender Foundation\\Blender\\<version> on its first start."
-            : shipped is null ? "The add-on file is missing from this build - reinstall ReyEngine." : "";
+            ? @"No Blender found: it creates %AppData%\Blender Foundation\Blender\<version> on its first start."
+            : !BlenderAddonInstaller.IsUrl(source) && !Directory.Exists(source) && !File.Exists(source)
+                ? $"The add-on source {source} does not exist."
+                : "";
     }
 
-    private async Task InstallBlenderAsync(BlenderInstallRowViewModel row)
+    private async Task InstallBlenderAsync(BlenderInstallRowViewModel row) => await InstallBlenderAsync(new[] { row });
+
+    /// <summary>One download (or extraction) for every row, then a copy per Blender.</summary>
+    private async Task InstallBlenderAsync(IReadOnlyList<BlenderInstallRowViewModel> rows)
     {
-        string? shipped = BlenderAddonInstaller.ShippedAddonPath();
-        if (shipped is null) { BlenderStatus = "The add-on file is missing from this build."; return; }
-        row.Busy = true;
+        if (rows.Count == 0) return;
+        foreach (var row in rows) row.Busy = true;
+        string source = BlenderAddonInstaller.EffectiveSource(BlenderAddonSourceSetting);
         try
         {
-            var result = await BlenderAddonInstaller.InstallAsync(row.Install, shipped, enable: true);
-            row.Refresh(shipped);
-            BlenderStatus = result.Message;
+            BlenderStatus = BlenderAddonInstaller.IsUrl(source) ? $"Downloading MapgeoAddon from {source}…" : $"Reading {source}…";
+            (string folder, Action cleanup) prepared;
+            try { prepared = await BlenderAddonInstaller.PrepareSourceAsync(source); }
+            catch (Exception ex) { BlenderStatus = $"The add-on could not be prepared: {ex.Message}"; return; }
+            try
+            {
+                var available = BlenderAddonInstaller.ReadVersion(prepared.folder);
+                string last = "";
+                foreach (var row in rows)
+                {
+                    var result = await BlenderAddonInstaller.InstallAsync(row.Install, prepared.folder, enable: true);
+                    row.Refresh(available);
+                    last = result.Message;
+                }
+                BlenderStatus = rows.Count == 1 ? last
+                    : $"MapgeoAddon installed for {rows.Count(r => r.Install.AddonInstalled)} of {rows.Count} Blender version(s).";
+            }
+            finally { prepared.cleanup(); }
         }
-        finally { row.Busy = false; }
+        finally { foreach (var row in rows) row.Busy = false; }
     }
 
     [RelayCommand]
-    private async Task InstallBlenderEverywhere()
-    {
-        foreach (var row in BlenderInstalls.ToList()) await InstallBlenderAsync(row);
-        if (BlenderInstalls.Count > 0)
-            BlenderStatus = $"Installed for {BlenderInstalls.Count(r => r.Install.AddonInstalled)} of {BlenderInstalls.Count} Blender version(s).";
-    }
+    private Task InstallBlenderEverywhere() => InstallBlenderAsync(BlenderInstalls.ToList());
 
     // ---- M683: the user's own layer - accent, picture, glass - applied LIVE like the palette ----------
 
@@ -382,6 +426,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         ProjectsDirectory = s.ProjectsDirectory;
         WwiseConsolePath = s.WwiseConsolePath;
         WwiseProjectPath = s.WwiseProjectPath;
+        BlenderAddonSourceSetting = s.BlenderAddonSource;   // M841
         PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder;
         PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
         BuildMapPacks();   // M142.8: downloadable/selectable legacy map packs (reflects the folder above)
@@ -421,6 +466,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
             ProjectsDirectory = ProjectsDirectory.Trim(),
             WwiseConsolePath = WwiseConsolePath.Trim(), WwiseProjectPath = WwiseProjectPath.Trim(),
+            BlenderAddonSource = BlenderAddonSourceSetting.Trim(),   // M841
             // Carried through unchanged - the dialog does not edit these.
             FirstRunCompleted = _source.FirstRunCompleted,
             LastSeenFeatureVersion = _source.LastSeenFeatureVersion,

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ReyEngine.Core.Undo;
 using ReyEngine.Formats.MapGeo;
 
@@ -17,22 +18,32 @@ public sealed class MeshMaterialCommand : IEditorCommand
     private readonly string? _before;
     private readonly string? _after;
     private readonly Action? _onApplied;
+    private readonly IReadOnlyDictionary<int, string>? _submeshesBefore;
 
-    public MeshMaterialCommand(object? context, MapGeoMesh mesh, string? before, string? after, Action? onApplied)
+    /// <param name="submeshesBefore">M841: the per-submesh edits (from the Blender link) the mesh had before. The picker
+    /// assigns the WHOLE mesh, so applying clears them and undo puts them back.</param>
+    public MeshMaterialCommand(object? context, MapGeoMesh mesh, string? before, string? after, Action? onApplied,
+        IReadOnlyDictionary<int, string>? submeshesBefore = null)
     {
         Context = context;
         _mesh = mesh;
         _before = before;
         _after = after;
         _onApplied = onApplied;
+        _submeshesBefore = submeshesBefore is { Count: > 0 } b ? new Dictionary<int, string>(b) : null;
         Name = after is null ? "Revert Mesh Material" : "Change Mesh Material";
     }
 
     public string Name { get; }
     public object? Context { get; }
 
-    public void Execute() { _mesh.MaterialEdit = _after; _onApplied?.Invoke(); }
-    public void Undo() { _mesh.MaterialEdit = _before; _onApplied?.Invoke(); }
+    public void Execute() { _mesh.MaterialEdit = _after; _mesh.SubmeshMaterialEdits = null; _onApplied?.Invoke(); }
+    public void Undo()
+    {
+        _mesh.MaterialEdit = _before;
+        _mesh.SubmeshMaterialEdits = _submeshesBefore is null ? null : new Dictionary<int, string>(_submeshesBefore);
+        _onApplied?.Invoke();
+    }
 
     public bool CanMergeWith(IEditorCommand next) => false;
     public void MergeWith(IEditorCommand next) => throw new NotSupportedException();

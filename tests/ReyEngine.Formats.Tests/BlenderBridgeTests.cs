@@ -362,28 +362,154 @@ public sealed class BlenderBridgeTests
         Assert.True(Vector3.Distance(turned, expected) < 1e-3f, $"{turned} vs {expected}");
     }
 
-    // ---- the add-on ------------------------------------------------------------------------------
+    // ---- M841: protocol 3 ----------------------------------------------------------------------
 
     [Fact]
-    public void TheAddOnAgreesWithTheProtocolVersion()
+    public void ProtocolThreeCarriesTheLightmapChannelTheColourAndTheSubmeshTable()
     {
-        // A version skew decodes into plausible nonsense rather than failing, so the two halves are
-        // checked against each other here as well as at connect time.
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ReyEngine.slnx"))) dir = dir.Parent;
-        if (dir is null) return;
-        string addon = Path.Combine(dir.FullName, "tools", "blender", "reyengine_bridge.py");
-        if (!File.Exists(addon)) return;
+        var sent = new BridgeMesh(9, "sru_floor", new Vector3(1, 2, 3),
+            new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0 }, null,
+            new float[] { 0, 0, 1, 0, 0, 1, 1, 1 },
+            new uint[] { 0, 1, 2, 2, 1, 3 },
+            new Vector3(1, 2, 3), Vector3.Zero, Vector3.One)
+        {
+            LightmapUvs = new float[] { 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f },
+            Colors = Enumerable.Range(0, 16).Select(i => i / 16f).ToArray(),
+            Submeshes = new[] { new BridgeSubmesh("Grass_MAT", 0, 3), new BridgeSubmesh("Rock_MAT", 3, 3) },
+        };
 
-        string source = File.ReadAllText(addon);
-        Assert.Contains($"PROTOCOL = {BlenderBridgeProtocol.Version}", source, StringComparison.Ordinal);
-        Assert.Contains($"default={BlenderBridgeProtocol.DefaultPort}", source, StringComparison.Ordinal);
-        // and it reads the fields in the order the encoder writes them
-        int pivot = source.IndexOf("pivot = floats(3)", StringComparison.Ordinal);
-        int location = source.IndexOf("location = floats(3)", StringComparison.Ordinal);
-        int positions = source.IndexOf("positions = floats(u32())", StringComparison.Ordinal);
-        int indices = source.IndexOf("index_count = u32()", StringComparison.Ordinal);
-        Assert.True(pivot > 0 && pivot < location && location < positions && positions < indices,
-            "the add-on decodes the mesh block in a different order than the encoder writes it");
+        var back = Assert.Single(BlenderBridgeProtocol.DecodeMeshes(BlenderBridgeProtocol.EncodeMeshes(new[] { sent })));
+        Assert.Equal(sent.LightmapUvs, back.LightmapUvs);
+        Assert.Equal(sent.Colors, back.Colors);
+        Assert.Equal(sent.Submeshes, back.Submeshes);
+        Assert.Equal(3, BlenderBridgeProtocol.Version);
+    }
+
+    [Fact]
+    public void ASubmeshRangePastTheIndexListOrTrailingBytesAreRefused()
+    {
+        var bad = new BridgeMesh(1, "m", Vector3.Zero, new float[] { 0, 0, 0, 1, 0, 0, 0, 1, 0 }, null, null,
+            new uint[] { 0, 1, 2 }, Vector3.Zero, Vector3.Zero, Vector3.One)
+        { Submeshes = new[] { new BridgeSubmesh("x", 0, 6) } };
+        Assert.ThrowsAny<InvalidDataException>(() => BlenderBridgeProtocol.DecodeMeshes(BlenderBridgeProtocol.EncodeMeshes(new[] { bad })));
+
+        // a block with bytes left over is another protocol's block, not this one's
+        var good = BlenderBridgeProtocol.EncodeMeshes(new[] { bad with { Submeshes = Array.Empty<BridgeSubmesh>() } });
+        Assert.ThrowsAny<InvalidDataException>(() => BlenderBridgeProtocol.DecodeMeshes(good.Concat(new byte[] { 0, 0, 0, 0 }).ToArray()));
+    }
+
+    [Fact]
+    public void ASnapshotNamesEachSubmeshWithTheMaterialItWillBeDrawnWith()
+    {
+        var map = TwoMeshMap();
+        map.Meshes[0].Materials = new[] { "mat/a" };
+        map.Meshes[1].Materials = new[] { "mat/b" };
+        var before = MapGeoBlenderBridge.Snapshot(map);
+        Assert.Equal(new[] { new BridgeSubmesh("mat/a", 0, 3) }, before.Meshes[0].Submeshes);
+        Assert.Equal(2, before.MeshInfo.Count);
+        Assert.Equal(1, before.MeshInfo[1]["i"]);
+
+        // a pending assignment is what Blender is shown, so a push names the submesh the editor knows
+        map.Meshes[1].MaterialEdit = "mat/a";
+        var after = MapGeoBlenderBridge.Snapshot(map);
+        Assert.Equal("mat/a", after.Meshes[1].Submeshes[0].Material);
+    }
+
+    [Fact]
+    public void AGroupWithoutAMeshDoesNotLeakTrianglesIntoAnotherMesh()
+    {
+        var map = TwoMeshMap();
+        var withStray = new MapGeoAsset
+        {
+            Positions = map.Positions, Normals = map.Normals, Uvs = map.Uvs, Indices = map.Indices,
+            Groups = map.Groups.Append(new MapGeoGroup("stray", 0, 3, "added", MeshIndex: -1)).ToList(),
+            Meshes = map.Meshes,
+        };
+        var snapshot = MapGeoBlenderBridge.Snapshot(withStray);
+        Assert.Equal(3, snapshot.Meshes[0].Indices.Length);
+        Assert.Single(snapshot.Meshes[0].Submeshes);
+    }
+
+    [Fact]
+    public void ASubmeshEditOverridesTheWholeMeshEditAndOnlyARealChangeCounts()
+    {
+        var mesh = new MapGeoMesh
+        {
+            Index = 0, Name = "m", VertexStart = 0, VertexCount = 3, Transform = Matrix4x4.Identity, Pivot = Vector3.Zero,
+            Materials = new[] { "A", "B" },
+        };
+        Assert.False(mesh.HasMaterialEdit);
+        mesh.SubmeshMaterialEdits = new Dictionary<int, string> { [1] = "B" };   // the file's own value
+        Assert.False(mesh.HasMaterialEdit);
+        mesh.SubmeshMaterialEdits[1] = "C";
+        Assert.True(mesh.HasMaterialEdit);
+        Assert.Equal("A", mesh.EffectiveSubmeshMaterial(0));
+        Assert.Equal("C", mesh.EffectiveSubmeshMaterial(1));
+        mesh.MaterialEdit = "D";
+        Assert.Equal("D", mesh.EffectiveSubmeshMaterial(0));
+        Assert.Equal("C", mesh.EffectiveSubmeshMaterial(1));
+    }
+
+    [Fact]
+    public void AnAssignmentNormalisesToTheSimplestPendingEdit()
+    {
+        var mesh = new MapGeoMesh
+        {
+            Index = 0, Name = "m", VertexStart = 0, VertexCount = 3, Transform = Matrix4x4.Identity, Pivot = Vector3.Zero,
+            Materials = new[] { "A", "B" },
+        };
+        var none = ReyEngine.App.ViewModels.MeshMaterialAssignmentCommand.Normalize(mesh, new[] { "A", "B" });
+        Assert.Null(none.Whole);
+        Assert.Null(none.Submeshes);
+        var whole = ReyEngine.App.ViewModels.MeshMaterialAssignmentCommand.Normalize(mesh, new[] { "C", "C" });
+        Assert.Equal("C", whole.Whole);
+        var one = ReyEngine.App.ViewModels.MeshMaterialAssignmentCommand.Normalize(mesh, new[] { "A", "C" });
+        Assert.Null(one.Whole);
+        Assert.Equal("C", one.Submeshes![1]);
+        Assert.False(one.Submeshes.ContainsKey(0));
+
+        // and the command puts back exactly what was there
+        var before = ReyEngine.App.ViewModels.MeshMaterialAssignmentCommand.Capture(mesh);
+        var cmd = new ReyEngine.App.ViewModels.MeshMaterialAssignmentCommand(null, mesh, before, one, null);
+        cmd.Execute();
+        Assert.Equal("C", mesh.EffectiveSubmeshMaterial(1));
+        cmd.Undo();
+        Assert.Equal("B", mesh.EffectiveSubmeshMaterial(1));
+        Assert.False(mesh.HasMaterialEdit);
+    }
+
+    [Fact]
+    public void EditRequestsAreReadTolerantly()
+    {
+        var json = System.Text.Json.JsonDocument.Parse("""
+        {"op":"edit_material","edits":[
+          {"material":"M","kind":"param","name":"Tint","value":[1,0.5,0,1]},
+          {"material":"M","kind":"sampler","name":"Diffuse_Texture","path":"ASSETS/x.tex"},
+          {"material":"M","kind":"address","name":"Diffuse_Texture","u":1,"w":null},
+          {"material":"M","kind":"switch","name":"S","on":false},
+          {"material":"M","kind":"macro","name":"NO_BAKED_LIGHTING","value":null},
+          {"kind":"param"}
+        ]}
+        """).RootElement;
+        var edits = BlenderLinkRequests.MaterialEdits(json, out int unreadable);
+        Assert.Equal(1, unreadable);
+        Assert.Equal(5, edits.Count);
+        Assert.Equal(new[] { 1, 0.5, 0, 1 }, edits[0].Values);
+        Assert.Equal("ASSETS/x.tex", edits[1].Text);
+        Assert.Equal(1, edits[2].Address['u']);
+        Assert.Null(edits[2].Address['w']);
+        Assert.False(edits[2].Address.ContainsKey('v'));
+        Assert.False(edits[3].On);
+        Assert.True(edits[4].Remove);
+
+        var assignJson = System.Text.Json.JsonDocument.Parse("""{"assignments":[{"mesh":3,"material":"X"},{"mesh":4,"submesh":1,"material":"Y"},{"mesh":"no"}]}""").RootElement;
+        var assignments = BlenderLinkRequests.Assignments(assignJson, out int bad);
+        Assert.Equal(1, bad);
+        Assert.Equal(new BridgeAssignment(3, -1, "X"), assignments[0]);
+        Assert.Equal(new BridgeAssignment(4, 1, "Y"), assignments[1]);
+
+        Assert.True(BlenderLinkRequests.TryParseLink("0x00ff00ff00ff00ff", out ulong link));
+        Assert.Equal(0x00ff00ff00ff00fful, link);
+        Assert.False(BlenderLinkRequests.TryParseLink("assets/maps/x.tex", out _));
     }
 }

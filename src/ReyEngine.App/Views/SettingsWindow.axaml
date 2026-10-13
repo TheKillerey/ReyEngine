@@ -377,9 +377,13 @@
         <StackPanel Spacing="14" IsVisible="{Binding ShowBlender}">
           <Border Classes="settingsCard">
             <StackPanel Spacing="10">
-              <TextBlock Classes="settingsTitle" Text="BLENDER ADD-ON" />
+              <TextBlock Classes="settingsTitle" Text="BLENDER ADD-ON (MAPGEOADDON)" />
               <TextBlock Classes="settingsDesc"
-                         Text="The ReyEngine Bridge add-on lets Blender pull a map's meshes from the running editor and push placements and shapes back (Tools ▸ Blender Link). Install it into each Blender version here - it is copied into that version's scripts\addons and switched on when its blender.exe can be found." />
+                         Text="MapgeoAddon is ReyEngine's Blender add-on: its ReyEngine panel (LoL Mapgeo tab) pulls the open map with its materials and textures from the running editor (Tools ▸ Blender link) and pushes placements, shapes, material assignments and material edits back. It replaces the old ReyEngine Bridge add-on, which installing removes. Install it into each Blender version here - it is copied into that version's scripts\addons\MapgeoAddon and switched on when its blender.exe can be found." />
+              <TextBlock Text="Install from (a folder, a .zip or a URL; empty = the latest GitHub release)" FontSize="11"
+                         Foreground="{DynamicResource ReyTextDimBrush}" Margin="0,4,0,0" />
+              <TextBox Text="{Binding BlenderAddonSourceSetting}" FontSize="12"
+                       PlaceholderText="https://github.com/TheKillerey/MapgeoAddon/releases/latest" />
               <TextBlock Classes="mono" Text="{Binding BlenderAddonSource}" TextWrapping="Wrap" />
               <ItemsControl ItemsSource="{Binding BlenderInstalls}" Margin="0,4,0,0">
                 <ItemsControl.ItemTemplate>

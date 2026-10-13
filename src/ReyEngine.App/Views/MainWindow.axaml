@@ -105,14 +105,17 @@
                   Classes.newFeature="{Binding NewFeature[legacy-map-port]}"
                   ToolTip.Tip="Replace the open mapgeo's ordinary geometry from an old room.nvr or room.wgeo, port unique textures and shared editable materials, and retain the destination render regions" />
         <Separator />
-        <!-- M580: the Blender link. Geometry out, placements back. -->
+        <!-- M580: the Blender link. M841: MapgeoAddon, protocol 3 - geometry, placements and materials. -->
         <MenuItem Header="{Binding BlenderLinkMenuHeader}" Command="{Binding ToggleBlenderLinkCommand}"
                   Classes.newFeature="{Binding NewFeature[blender-link]}"
-                  ToolTip.Tip="Serve the open map's meshes to Blender on 127.0.0.1 so they can be edited there and their placements pushed back. Install tools/blender/reyengine_bridge.py in Blender, then use the ReyEngine tab in its 3D-view sidebar. Geometry only - materials stay here." />
+                  ToolTip.Tip="Serve the open map to Blender on 127.0.0.1 - meshes, materials and their textures - for MapgeoAddon's ReyEngine panel (LoL Mapgeo tab). Placements, shapes, material assignments and material edits come back as pending ReyEngine edits that Save writes." />
         <MenuItem Header="{Binding BlenderLinkStatus}" IsEnabled="False" />
-        <MenuItem Header="Install Blender add-on…" Command="{Binding OpenBlenderAddonSetupCommand}"
+        <MenuItem Header="Copy link token for Blender" Command="{Binding CopyBlenderLinkTokenCommand}"
+                  IsVisible="{Binding BlenderLinkActive}"
+                  ToolTip.Tip="MapgeoAddon's ReyEngine panel asks for this token once; a new one is made each time the link starts." />
+        <MenuItem Header="Install MapgeoAddon in Blender…" Command="{Binding OpenBlenderAddonSetupCommand}"
                   Classes.newFeature="{Binding NewFeature[blender-addon]}"
-                  ToolTip.Tip="Put the ReyEngine Bridge add-on into every Blender on this PC from here, instead of Edit ▸ Preferences ▸ Add-ons ▸ Install… by hand." />
+                  ToolTip.Tip="Install MapgeoAddon (it replaces the old ReyEngine Bridge add-on) into every Blender on this PC from here, instead of Edit ▸ Preferences ▸ Add-ons ▸ Install… by hand." />
         <Separator />
         <MenuItem Header="Character Editor…" Command="{Binding OpenCharacterBrowserCommand}"
                   Classes.newFeature="{Binding NewFeature[character-editor]}"

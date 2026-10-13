@@ -99,7 +99,7 @@
   </Fragment>
 
   <Fragment>
-    <!-- every file the publish produced, subfolders included (blender\, data\, ...) -->
+    <!-- every file the publish produced, subfolders included (data\, ...) -->
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Files Include="$(var.PublishDir)\**" />
     </ComponentGroup>

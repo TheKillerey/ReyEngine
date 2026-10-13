@@ -8680,12 +8680,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         set
         {
             if (_selection.Primary is not { } mesh || value is not { Length: > 0 } name) return;
-            if (string.Equals(mesh.EffectiveMaterial, name, StringComparison.Ordinal)) return;
+            // M841: the same name is still a change when submeshes carry their own edits (the picker means "all of it")
+            if (string.Equals(mesh.EffectiveMaterial, name, StringComparison.Ordinal) && mesh.SubmeshMaterialEdits is not { Count: > 0 }) return;
 
             string? before = mesh.MaterialEdit;
+            var submeshesBefore = mesh.SubmeshMaterialEdits;   // M841: the picker assigns the whole mesh
             mesh.MaterialEdit = name;
+            mesh.SubmeshMaterialEdits = null;
             UndoService.PushApplied(new MeshMaterialCommand(_currentMap, mesh, before, name,
-                AfterMeshMaterialEdit));
+                AfterMeshMaterialEdit, submeshesBefore));
             AfterMeshMaterialEdit();
         }
     }
@@ -8734,9 +8737,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_selection.Primary is not { HasMaterialEdit: true } mesh) return;
         string? before = mesh.MaterialEdit;
+        var submeshesBefore = mesh.SubmeshMaterialEdits;   // M841
         mesh.MaterialEdit = null;
+        mesh.SubmeshMaterialEdits = null;
         UndoService.PushApplied(new MeshMaterialCommand(_currentMap, mesh, before, null,
-            AfterMeshMaterialEdit));
+            AfterMeshMaterialEdit, submeshesBefore));
         AfterMeshMaterialEdit();
     }
 

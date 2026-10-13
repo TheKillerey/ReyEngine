@@ -317,9 +317,36 @@ public sealed class MapGeoMesh
 
     public string EffectiveMaterial => MaterialEdit ?? (Materials.Count > 0 ? Materials[0] : "");
 
-    public bool HasMaterialEdit =>
-        MaterialEdit is { Length: > 0 } edit
-        && !(Materials.Count == 1 && string.Equals(Materials[0], edit, System.StringComparison.Ordinal));
+    /// <summary>
+    /// M841: per-SUBMESH material edits (submesh index -> material), on top of <see cref="MaterialEdit"/>. The
+    /// Blender link assigns a material to one submesh of a mesh that has several; the inspector picker still
+    /// assigns the whole mesh through <see cref="MaterialEdit"/>. Null or empty = none. Applied by
+    /// <see cref="MapGeoMaterialWriter"/> like the whole-mesh edit.
+    /// </summary>
+    public Dictionary<int, string>? SubmeshMaterialEdits;
+
+    /// <summary>M841: the material submesh <paramref name="submesh"/> is drawn with once the pending edits are
+    /// written: its own edit, else the whole-mesh edit, else what the file names.</summary>
+    public string EffectiveSubmeshMaterial(int submesh)
+    {
+        if (SubmeshMaterialEdits is { } edits && edits.TryGetValue(submesh, out var own) && own.Length > 0) return own;
+        if (MaterialEdit is { Length: > 0 } whole) return whole;
+        return submesh >= 0 && submesh < Materials.Count ? Materials[submesh] : "";
+    }
+
+    public bool HasMaterialEdit
+    {
+        get
+        {
+            if (SubmeshMaterialEdits is { Count: > 0 } edits)
+                foreach (var (k, m) in edits)
+                    if (k >= 0 && k < Materials.Count && m.Length > 0
+                        && !string.Equals(EffectiveSubmeshMaterial(k), Materials[k], System.StringComparison.Ordinal))
+                        return true;
+            return MaterialEdit is { Length: > 0 } edit
+                && !(Materials.Count == 1 && string.Equals(Materials[0], edit, System.StringComparison.Ordinal));
+        }
+    }
 
     public Vector3 Offset;                                // accumulated single-select move (world space), default zero
     public Vector3 RotationDegrees;                        // accumulated single-select rotation (XYZ euler, degrees)

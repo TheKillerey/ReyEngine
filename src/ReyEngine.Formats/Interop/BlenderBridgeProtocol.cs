@@ -5,6 +5,13 @@ using System.Text;
 namespace ReyEngine.Formats.Interop;
 
 /// <summary>
+/// M841: one submesh range of a <see cref="BridgeMesh"/> - the material it is drawn with and the slice of the
+/// mesh's OWN index list it covers. <see cref="StartIndex"/> and <see cref="IndexCount"/> count indices, not
+/// triangles, and are relative to <see cref="BridgeMesh.Indices"/>.
+/// </summary>
+public sealed record BridgeSubmesh(string Material, int StartIndex, int IndexCount);
+
+/// <summary>
 /// One map mesh on the wire. Geometry is world space RELATIVE TO <see cref="Pivot"/>, in League axes.
 ///
 /// <para>Relative to the pivot rather than to the world origin because that is what makes the transform
@@ -12,6 +19,9 @@ namespace ReyEngine.Formats.Interop;
 /// rotates and scales about the object origin. Put the Blender object's origin on the pivot and the two
 /// operations are the same operation, so a rotation authored in Blender maps onto a ReyEngine rotation
 /// with no re-derivation and no drift.</para>
+///
+/// <para>M841 (protocol 3) adds the raw lightmap channel (TEXCOORD7 as the file holds it, before the
+/// BakedLight scale/bias), the vertex colour and the submesh table with each range's material.</para>
 /// </summary>
 public sealed record BridgeMesh(
     int Index,
@@ -28,6 +38,16 @@ public sealed record BridgeMesh(
 {
     public int VertexCount => Positions.Length / 3;
     public int TriangleCount => Indices.Length / 3;
+
+    /// <summary>M841: raw TEXCOORD7, 2 floats per vertex. Null when the mesh has no lightmap channel.</summary>
+    public float[]? LightmapUvs { get; init; }
+
+    /// <summary>M841: vertex colour, RGBA 0..1, 4 floats per vertex. Null when the mesh has none.</summary>
+    public float[]? Colors { get; init; }
+
+    /// <summary>M841: the submesh ranges, in submesh order. Empty when the sender does not describe them
+    /// (a pushed shape: the reshaper keeps one material per mesh).</summary>
+    public IReadOnlyList<BridgeSubmesh> Submeshes { get; init; } = Array.Empty<BridgeSubmesh>();
 }
 
 /// <summary>A mesh placement coming back from Blender, in League axes and ReyEngine's own edit terms.</summary>
@@ -54,12 +74,19 @@ public sealed record BridgeTransform(
 /// <para><b>The wire is League space</b> — Y up, the same numbers the .mapgeo holds. The add-on converts to
 /// and from Blender's Z-up on its side. Keeping the conversion in one place, at the edge that actually
 /// needs it, means nothing here has to think about two coordinate systems.</para>
+///
+/// <para>M841: protocol 3 is spoken by MapgeoAddon, which replaced the old single-file "ReyEngine Bridge"
+/// add-on. It keeps this framing and adds materials, textures, material assignment and material edits;
+/// docs/reyengine-link-protocol.md is the specification, in this repository and in MapgeoAddon's.</para>
 /// </summary>
 public static class BlenderBridgeProtocol
 {
-    /// <summary>Bumped whenever the framing or the mesh block changes shape. The add-on refuses a mismatch
+    /// <summary>Bumped whenever the framing or the mesh block changes shape. Both sides refuse a mismatch
     /// rather than misreading a payload — a silently wrong decode looks like corrupt geometry.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
+
+    /// <summary>The protocol the retired single-file "ReyEngine Bridge" add-on speaks.</summary>
+    public const int LegacyBridgeVersion = 2;
 
     /// <summary>Loopback only. This link hands out a map's whole geometry and accepts edits to it; it has no
     /// business being reachable from anywhere but this machine.</summary>
@@ -68,11 +95,16 @@ public static class BlenderBridgeProtocol
     /// <summary>Ceiling on one header line.</summary>
     public const int MaxHeaderBytes = 16 * 1024 * 1024;
 
+    /// <summary>Ceiling on one submesh table, per mesh. A mapgeo mesh has a handful; more is a desync.</summary>
+    private const int MaxSubmeshes = 4096;
+
     // ---- mesh blocks -----------------------------------------------------------------------------
 
     /// <summary>
-    /// Pack meshes into the binary block that follows a <c>meshes</c> header.
-    /// Layout per mesh: name, index, pivot, then the three arrays, each length-prefixed.
+    /// Pack meshes into the binary block that follows a <c>meshes</c> header (and that a
+    /// <c>push_geometry</c> request carries).
+    /// Layout per mesh: name, index, pivot, location, rotation, scale, then positions, normals, uvs,
+    /// lightmap uvs, colours and indices (each length-prefixed), then the submesh table.
     /// </summary>
     public static byte[] EncodeMeshes(IReadOnlyList<BridgeMesh> meshes)
     {
@@ -82,9 +114,7 @@ public static class BlenderBridgeProtocol
         w.Write(meshes.Count);
         foreach (var m in meshes)
         {
-            var name = Encoding.UTF8.GetBytes(m.Name ?? "");
-            w.Write(name.Length);
-            w.Write(name);
+            WriteString(w, m.Name);
             w.Write(m.Index);
             w.Write(m.Pivot.X); w.Write(m.Pivot.Y); w.Write(m.Pivot.Z);
             // The placement travels with the geometry, so a mesh already moved in the editor arrives in
@@ -93,19 +123,22 @@ public static class BlenderBridgeProtocol
             w.Write(m.RotationDegrees.X); w.Write(m.RotationDegrees.Y); w.Write(m.RotationDegrees.Z);
             w.Write(m.Scale.X); w.Write(m.Scale.Y); w.Write(m.Scale.Z);
 
-            w.Write(m.Positions.Length);
-            foreach (float f in m.Positions) w.Write(f);
-
-            int normals = m.Normals?.Length ?? 0;
-            w.Write(normals);
-            if (m.Normals is not null) foreach (float f in m.Normals) w.Write(f);
-
-            int uvs = m.Uvs?.Length ?? 0;
-            w.Write(uvs);
-            if (m.Uvs is not null) foreach (float f in m.Uvs) w.Write(f);
+            WriteFloats(w, m.Positions);
+            WriteFloats(w, m.Normals);
+            WriteFloats(w, m.Uvs);
+            WriteFloats(w, m.LightmapUvs);
+            WriteFloats(w, m.Colors);
 
             w.Write(m.Indices.Length);
             foreach (uint i in m.Indices) w.Write(i);
+
+            w.Write(m.Submeshes.Count);
+            foreach (var s in m.Submeshes)
+            {
+                WriteString(w, s.Material);
+                w.Write(s.StartIndex);
+                w.Write(s.IndexCount);
+            }
         }
         return ms.ToArray();
     }
@@ -123,9 +156,7 @@ public static class BlenderBridgeProtocol
         var meshes = new List<BridgeMesh>(count);
         for (int i = 0; i < count; i++)
         {
-            int nameLength = r.ReadInt32();
-            if (nameLength < 0 || nameLength > 4096) throw new InvalidDataException("mesh name length is not plausible");
-            string name = Encoding.UTF8.GetString(r.ReadBytes(nameLength));
+            string name = ReadString(r, "mesh name");
             int index = r.ReadInt32();
             var pivot = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
             var location = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
@@ -134,28 +165,75 @@ public static class BlenderBridgeProtocol
 
             float[] positions = ReadFloats(r, "positions");
             if (positions.Length % 3 != 0) throw new InvalidDataException($"'{name}' has {positions.Length} position floats, not a multiple of 3");
+            int vertices = positions.Length / 3;
             float[] normals = ReadFloats(r, "normals");
             if (normals.Length != 0 && normals.Length != positions.Length)
                 throw new InvalidDataException($"'{name}' has {normals.Length} normal floats for {positions.Length} position floats");
             float[] uvs = ReadFloats(r, "uvs");
-            if (uvs.Length != 0 && uvs.Length != positions.Length / 3 * 2)
-                throw new InvalidDataException($"'{name}' has {uvs.Length} uv floats for {positions.Length / 3} vertices");
+            if (uvs.Length != 0 && uvs.Length != vertices * 2)
+                throw new InvalidDataException($"'{name}' has {uvs.Length} uv floats for {vertices} vertices");
+            float[] lightmap = ReadFloats(r, "lightmap uvs");
+            if (lightmap.Length != 0 && lightmap.Length != vertices * 2)
+                throw new InvalidDataException($"'{name}' has {lightmap.Length} lightmap uv floats for {vertices} vertices");
+            float[] colors = ReadFloats(r, "colors");
+            if (colors.Length != 0 && colors.Length != vertices * 4)
+                throw new InvalidDataException($"'{name}' has {colors.Length} colour floats for {vertices} vertices");
 
             int indexCount = r.ReadInt32();
             if (indexCount < 0 || indexCount > 200_000_000) throw new InvalidDataException("index count is not plausible");
             var indices = new uint[indexCount];
             for (int k = 0; k < indexCount; k++) indices[k] = r.ReadUInt32();
-
-            int vertices = positions.Length / 3;
             foreach (uint index2 in indices)
                 if (index2 >= vertices)
                     throw new InvalidDataException($"'{name}' indexes vertex {index2} of {vertices}");
 
+            int submeshCount = r.ReadInt32();
+            if (submeshCount < 0 || submeshCount > MaxSubmeshes) throw new InvalidDataException($"'{name}' has {submeshCount} submeshes");
+            var submeshes = new BridgeSubmesh[submeshCount];
+            for (int s = 0; s < submeshCount; s++)
+            {
+                string material = ReadString(r, "submesh material");
+                int start = r.ReadInt32();
+                int length = r.ReadInt32();
+                if (start < 0 || length < 0 || (long)start + length > indexCount)
+                    throw new InvalidDataException($"'{name}' submesh {s} covers indices {start}+{length} of {indexCount}");
+                submeshes[s] = new BridgeSubmesh(material, start, length);
+            }
+
             meshes.Add(new BridgeMesh(index, name, pivot, positions,
                 normals.Length == 0 ? null : normals, uvs.Length == 0 ? null : uvs,
-                indices, location, rotation, scale));
+                indices, location, rotation, scale)
+            {
+                LightmapUvs = lightmap.Length == 0 ? null : lightmap,
+                Colors = colors.Length == 0 ? null : colors,
+                Submeshes = submeshes,
+            });
         }
+        if (ms.Position != ms.Length)
+            throw new InvalidDataException($"{ms.Length - ms.Position} byte(s) left over after {count} mesh(es) - the block is not protocol {Version}");
         return meshes;
+    }
+
+    private static void WriteString(BinaryWriter w, string? text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text ?? "");
+        w.Write(bytes.Length);
+        w.Write(bytes);
+    }
+
+    private static string ReadString(BinaryReader r, string what)
+    {
+        int length = r.ReadInt32();
+        if (length < 0 || length > 4096) throw new InvalidDataException($"{what} length {length} is not plausible");
+        var bytes = r.ReadBytes(length);
+        if (bytes.Length != length) throw new EndOfStreamException($"{what} is truncated");
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    private static void WriteFloats(BinaryWriter w, float[]? values)
+    {
+        w.Write(values?.Length ?? 0);
+        if (values is not null) foreach (float f in values) w.Write(f);
     }
 
     private static float[] ReadFloats(BinaryReader r, string what)
@@ -186,7 +264,11 @@ public static class BlenderBridgeProtocol
     /// Byte at a time on purpose. A buffered reader would swallow part of the binary body that follows the
     /// newline, and the body is not self-describing enough to recover from that.
     /// </remarks>
-    public static string? ReadHeader(Stream stream)
+    public static string? ReadHeader(Stream stream) => ReadHeader(stream, MaxHeaderBytes);
+
+    /// <summary>Read one header line of at most <paramref name="maxBytes"/> bytes (the server reads a
+    /// connection's first line with a small ceiling: it has to be a hello).</summary>
+    public static string? ReadHeader(Stream stream, int maxBytes)
     {
         ArgumentNullException.ThrowIfNull(stream);
         var line = new List<byte>(256);
@@ -198,7 +280,22 @@ public static class BlenderBridgeProtocol
             if (b != '\r') line.Add((byte)b);
             // A push carries its transforms in the header as JSON, and a big map is thousands of
             // meshes, so this ceiling is about a desynced stream rather than about message size.
-            if (line.Count > MaxHeaderBytes) throw new InvalidDataException("header line never ended");
+            if (line.Count > maxBytes) throw new InvalidDataException("header line never ended");
+        }
+    }
+
+    /// <summary>M841: read and drop <paramref name="count"/> bytes in small chunks - a body nobody wants is
+    /// not worth allocating.</summary>
+    public static void Skip(Stream stream, long count)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
+        var buffer = new byte[64 * 1024];
+        while (count > 0)
+        {
+            int n = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, count));
+            if (n <= 0) throw new EndOfStreamException($"{count} byte(s) of a body never arrived");
+            count -= n;
         }
     }
 

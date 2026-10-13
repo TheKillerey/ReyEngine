@@ -4,15 +4,24 @@ using ReyEngine.Formats.MapGeo;
 namespace ReyEngine.Formats.Interop;
 
 /// <summary>What a snapshot contains, plus anything about it the user needs told.</summary>
-public sealed record BridgeSnapshot(IReadOnlyList<BridgeMesh> Meshes, IReadOnlyList<string> Notes);
+public sealed record BridgeSnapshot(IReadOnlyList<BridgeMesh> Meshes, IReadOnlyList<string> Notes)
+{
+    /// <summary>M841: per-mesh metadata for the pull header (<see cref="MapGeoBlenderBridge.Describe"/>), in
+    /// the order of <see cref="Meshes"/>. Empty when the caller has none.</summary>
+    public IReadOnlyList<Dictionary<string, object?>> MeshInfo { get; init; } = Array.Empty<Dictionary<string, object?>>();
+
+    /// <summary>M841: map-wide values for the pull header (visibility layer names, lightmap colour scale).</summary>
+    public Dictionary<string, object?> MapInfo { get; init; } = new();
+}
 
 /// <summary>
 /// M580: turn the open map into meshes Blender can hold, and put Blender's placements back.
 ///
-/// <para>Geometry only, by design — no materials, no submesh ranges, no lightmap channels. Those are
-/// bound to the mapgeo's own layout and to material state Blender has no way to represent; round-tripping
-/// them through an .blend would be a good way to lose them. What Blender is genuinely better at is shape
-/// and placement, so that is what crosses.</para>
+/// <para>M841 (protocol 3, MapgeoAddon): the snapshot also carries each submesh range with its material,
+/// the raw lightmap channel and the vertex colour, so Blender can show the map as MapgeoAddon's own
+/// importer would. Materials still never round-trip through a file: Blender sends EDITS (an assignment,
+/// a parameter) and the editor applies them through its own commands - ReyEngine stays the only writer
+/// of the .mapgeo and the .materials.bin.</para>
 ///
 /// <para>Each mesh is sent about its PIVOT with its transform carried separately, which is what makes the
 /// round trip exact rather than approximate — see <see cref="BridgeMesh"/>.</para>
@@ -27,8 +36,19 @@ public static class MapGeoBlenderBridge
     {
         ArgumentNullException.ThrowIfNull(map);
         var meshes = new List<BridgeMesh>();
+        var info = new List<Dictionary<string, object?>>();
         var notes = new List<string>();
         int grouped = 0, degenerate = 0;
+
+        // M841: groups by their mesh, once. The old per-mesh walk over EVERY group's indices was
+        // O(meshes x indices) - billions of comparisons on a full Summoner's Rift.
+        var groupsByMesh = new Dictionary<int, List<MapGeoGroup>>();
+        foreach (var g in map.Groups)
+        {
+            if (g.MeshIndex < 0) continue;
+            if (!groupsByMesh.TryGetValue(g.MeshIndex, out var list)) groupsByMesh[g.MeshIndex] = list = new List<MapGeoGroup>();
+            list.Add(g);
+        }
 
         foreach (var mesh in map.Meshes)
         {
@@ -59,16 +79,35 @@ public static class MapGeoBlenderBridge
             if (map.Uvs is { Length: > 0 } source && (mesh.VertexStart + mesh.VertexCount) * 2 <= source.Length)
                 uvs = source.AsSpan(mesh.VertexStart * 2, mesh.VertexCount * 2).ToArray();
 
+            // M841: the lightmap channel as the FILE holds it (raw TEXCOORD7, before the BakedLight
+            // scale/bias), so MapgeoAddon can show it the way its own importer does and keep it exact.
+            float[]? lightmap = null;
+            if (mesh.HasLightmapUv && map.RawLightmapUvs is { Length: > 0 } raw
+                && (mesh.VertexStart + mesh.VertexCount) * 2 <= raw.Length)
+                lightmap = raw.AsSpan(mesh.VertexStart * 2, mesh.VertexCount * 2).ToArray();
+            float[]? colors = null;
+            if (mesh.HasVertexColor && map.Colors is { Length: > 0 } col
+                && (mesh.VertexStart + mesh.VertexCount) * 4 <= col.Length)
+                colors = col.AsSpan(mesh.VertexStart * 4, mesh.VertexCount * 4).ToArray();
+
+            var (indices, submeshes) = IndicesOf(map, mesh,
+                groupsByMesh.TryGetValue(mesh.Index, out var own) ? own : (IReadOnlyList<MapGeoGroup>)Array.Empty<MapGeoGroup>());
             var placement = CurrentTransform(mesh);
             meshes.Add(new BridgeMesh(mesh.Index, mesh.Name, mesh.Pivot, positions, normals, uvs,
-                IndicesOf(map, mesh), placement.Location, placement.RotationDegrees, placement.Scale));
+                indices, placement.Location, placement.RotationDegrees, placement.Scale)
+            {
+                LightmapUvs = lightmap,
+                Colors = colors,
+                Submeshes = submeshes,
+            });
+            info.Add(Describe(mesh));
         }
 
         if (grouped > 0)
             notes.Add($"{grouped:n0} mesh(es) skipped: they carry a batch (multi-select) transform from this "
                       + "session, which the bridge cannot represent. Save the map, reload it, and they will send.");
         if (degenerate > 0) notes.Add($"{degenerate:n0} mesh(es) skipped: no vertices.");
-        return new BridgeSnapshot(meshes, notes);
+        return new BridgeSnapshot(meshes, notes) { MeshInfo = info };
     }
 
     /// <summary>
@@ -77,14 +116,21 @@ public static class MapGeoBlenderBridge
     /// <para>The decoder concatenates every mesh's vertices into one array and every mesh's indices into
     /// another, so the raw indices are absolute. Blender wants each object indexing its own vertices.</para>
     /// </summary>
-    private static uint[] IndicesOf(MapGeoAsset map, MapGeoMesh mesh)
+    /// <remarks>M841: per submesh, in submesh order, each with the material it will be drawn with once the
+    /// pending edits are written (<see cref="MapGeoMesh.EffectiveSubmeshMaterial"/>), so Blender shows what
+    /// the editor shows and an assignment pushed back names the submesh by the same number.</remarks>
+    private static (uint[] Indices, IReadOnlyList<BridgeSubmesh> Submeshes) IndicesOf(
+        MapGeoAsset map, MapGeoMesh mesh, IReadOnlyList<MapGeoGroup> groups)
     {
         var indices = new List<uint>();
+        var submeshes = new List<BridgeSubmesh>(groups.Count);
         uint first = (uint)mesh.VertexStart;
         uint last = (uint)(mesh.VertexStart + mesh.VertexCount);
 
-        foreach (var group in map.Groups)
+        for (int k = 0; k < groups.Count; k++)
         {
+            var group = groups[k];
+            int start = indices.Count;
             for (int i = group.StartIndex; i + 2 < group.StartIndex + group.IndexCount && i + 2 < map.Indices.Length; i += 3)
             {
                 uint a = map.Indices[i], b = map.Indices[i + 1], c = map.Indices[i + 2];
@@ -93,8 +139,50 @@ public static class MapGeoBlenderBridge
                 if (a == b || b == c || a == c) continue;
                 indices.Add(a - first); indices.Add(b - first); indices.Add(c - first);
             }
+            string material = mesh.Materials.Count > 0 ? mesh.EffectiveSubmeshMaterial(k) : group.Material;
+            submeshes.Add(new BridgeSubmesh(material, start, indices.Count - start));
         }
-        return indices.ToArray();
+        return (indices.ToArray(), submeshes);
+    }
+
+    /// <summary>
+    /// M841: what MapgeoAddon's importer records on an object beside its geometry - visibility, the
+    /// controller, the lightmap and baked-paint channels, texture overrides - as JSON-ready values. Sent in
+    /// the pull header next to the binary block.
+    /// </summary>
+    public static Dictionary<string, object?> Describe(MapGeoMesh mesh)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var d = new Dictionary<string, object?>
+        {
+            ["i"] = mesh.Index,
+            ["name"] = mesh.Name,
+            ["visibility"] = mesh.EffectiveVisibility,
+            ["controller"] = mesh.EffectiveController,
+            ["render_region"] = mesh.RegionHash,
+            ["render_flags"] = mesh.RenderFlags,
+            ["disable_backface_culling"] = mesh.EffectiveDisableBackface,
+            ["file_materials"] = mesh.Materials,
+            ["has_lightmap_uv"] = mesh.HasLightmapUv,
+            ["has_vertex_color"] = mesh.HasVertexColor,
+        };
+        if (mesh.BakedLightTexture is { Length: > 0 } lm)
+            d["lightmap"] = new Dictionary<string, object?>
+            {
+                ["texture"] = lm,
+                ["scale"] = new[] { mesh.BakedLightScale.X, mesh.BakedLightScale.Y },
+                ["bias"] = new[] { mesh.BakedLightBias.X, mesh.BakedLightBias.Y },
+            };
+        if (mesh.BakedPaintTexture is { Length: > 0 } || mesh.BakedPaintScale != Vector2.One || mesh.BakedPaintBias != Vector2.Zero)
+            d["baked_paint"] = new Dictionary<string, object?>
+            {
+                ["texture"] = mesh.BakedPaintTexture ?? "",
+                ["scale"] = new[] { mesh.BakedPaintScale.X, mesh.BakedPaintScale.Y },
+                ["bias"] = new[] { mesh.BakedPaintBias.X, mesh.BakedPaintBias.Y },
+            };
+        if (mesh.StationaryLightTexture is { Length: > 0 } sl) d["stationary_light"] = sl;
+        if (mesh.TextureOverrides.Count > 0) d["texture_overrides"] = mesh.TextureOverrides;
+        return d;
     }
 
     /// <summary>

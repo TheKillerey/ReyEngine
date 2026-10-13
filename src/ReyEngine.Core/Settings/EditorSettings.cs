@@ -145,6 +145,10 @@ public sealed class EditorSettings
     public string WwiseConsolePath { get; set; } = "";
     public string WwiseProjectPath { get; set; } = "";
 
+    /// <summary>M841: where Settings > Blender installs MapgeoAddon from - a local folder, a .zip, or a URL.
+    /// Empty = the latest MapgeoAddon release on GitHub.</summary>
+    public string BlenderAddonSource { get; set; } = "";
+
     /// <summary>
     /// Overwrite this instance's values from another.
     ///
@@ -174,5 +178,6 @@ public sealed class EditorSettings
         AutoSaveEdits = s.AutoSaveEdits; AutoSaveDelaySeconds = s.AutoSaveDelaySeconds;   // M505
         ProjectsDirectory = s.ProjectsDirectory;
         WwiseConsolePath = s.WwiseConsolePath; WwiseProjectPath = s.WwiseProjectPath;
+        BlenderAddonSource = s.BlenderAddonSource;   // M841
     }
 }

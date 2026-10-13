@@ -47,8 +47,13 @@ public static class MapGeoMaterialWriter
                 error = $"Mesh {mesh.Index} is outside the {binary.Meshes.Count} in the file — nothing was written.";
                 return null;
             }
-            string material = mesh.MaterialEdit!;
-            foreach (var submesh in binary.Meshes[mesh.Index].Submeshes) submesh.Material = material;
+            // M841: per submesh - a whole-mesh edit, overridden by the submesh's own edit (the Blender link).
+            var submeshes = binary.Meshes[mesh.Index].Submeshes;
+            for (int k = 0; k < submeshes.Count; k++)
+            {
+                string material = mesh.EffectiveSubmeshMaterial(k);
+                if (material.Length > 0) submeshes[k].Material = material;
+            }
         }
 
         try { return binary.Write(); }

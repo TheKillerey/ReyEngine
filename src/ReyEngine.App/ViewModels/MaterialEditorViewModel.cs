@@ -2699,7 +2699,10 @@ public sealed partial class MaterialEditorViewModel : ViewModelBase
                 _sphereCache = (path, img);
             }
         }
-        m.SpherePreview = Imaging.MaterialBallPreview.Render(img, m.CurrentUvScale(), m.CurrentUvOffset());
+        // M841: the ball is a picture; a process with no render platform (a test, a headless harness) has no
+        // bitmaps to make, and that must not stop a bin from loading into the editor.
+        try { m.SpherePreview = Imaging.MaterialBallPreview.Render(img, m.CurrentUvScale(), m.CurrentUvOffset()); }
+        catch (InvalidOperationException) { m.SpherePreview = null; }
     }
 
     private void UpdateUnresolved()
