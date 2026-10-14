@@ -180,16 +180,38 @@ public sealed class MapGeoMeshReshaperTests
     }
 
     [Fact]
-    public void AMeshSharingItsBuffersIsRefused()
+    public void AMeshSharingItsBuffersGetsItsOwnAndTheSharersKeepTheirsByteForByte()
     {
-        // Resizing a shared buffer redefines the OTHER mesh that points at it.
+        // M842: Riot instancing - several meshes on one vertex/index buffer. A reshape of one of them used to
+        // be refused; now it gets new buffers and every other sharer is left exactly as it was.
         if (Shipped() is not { } bytes) return;
-        var refusals = MapGeoMeshReshaper.Refusals(bytes);
-        var shared = refusals.FirstOrDefault(r => r.Value.Contains("shared", StringComparison.Ordinal));
-        if (shared.Value is null) return;
+        var sharing = MapGeoMeshReshaper.SharingMeshes(bytes);
+        Assert.True(MapGeoBinary.TryReadEditable(bytes, out var before));
+        int index = sharing.FirstOrDefault(i => before.Meshes[i].Submeshes.Count == 1, -1);
+        if (index < 0) return;
+        var was = before.Meshes[index];
+        var sharers = Enumerable.Range(0, before.Meshes.Count).Where(i => i != index
+            && (before.Meshes[i].VertexBufferIds.Intersect(was.VertexBufferIds).Any() || before.Meshes[i].IndexBufferId == was.IndexBufferId)).ToList();
+        Assert.NotEmpty(sharers);
 
-        Assert.Null(MapGeoMeshReshaper.TryApply(bytes, new[] { Tetra(shared.Key) }, out string? error));
-        Assert.Contains("shared", error, StringComparison.OrdinalIgnoreCase);
+        var result = MapGeoMeshReshaper.TryApply(bytes, new[] { Tetra(index) }, out string? error, out var notes);
+        Assert.True(result is not null, error);
+        Assert.Contains(notes, n => n.Contains("own copy", StringComparison.Ordinal));
+        Assert.True(MapGeoBinary.TryReadEditable(result!, out var after));
+        Assert.Empty(after.UnreferencedVertexBuffers());   // LTK refuses an unreferenced vertex buffer (M768)
+
+        var now = after.Meshes[index];
+        Assert.Equal(4, now.VertexCount);
+        Assert.DoesNotContain(after.Meshes.Where((_, i) => i != index).SelectMany(m => m.VertexBufferIds), id => now.VertexBufferIds.Contains(id));
+        Assert.DoesNotContain(after.Meshes.Where((_, i) => i != index), m => m.IndexBufferId == now.IndexBufferId);
+        foreach (int i in sharers)
+        {
+            var x0 = before.Meshes[i]; var x1 = after.Meshes[i];
+            Assert.Equal(x0.VertexBufferIds, x1.VertexBufferIds);
+            Assert.Equal(x0.IndexBufferId, x1.IndexBufferId);
+            foreach (int id in x0.VertexBufferIds) Assert.Equal(before.VertexBuffers[id].Data, after.VertexBuffers[id].Data);
+            Assert.Equal(before.IndexBuffers[x0.IndexBufferId].Data, after.IndexBuffers[x1.IndexBufferId].Data);
+        }
     }
 
     [Fact]

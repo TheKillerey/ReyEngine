@@ -34,6 +34,8 @@ public sealed record BlenderBridgeHandlers(
     /// <summary>M841: reshapes with a per-mesh answer (refusal index = position in the pushed block). Used instead
     /// of <see cref="PushGeometry"/> when set, so the add-on re-baselines only the meshes that were queued.</summary>
     public Func<IReadOnlyList<BridgeMesh>, BridgeEditReply>? PushGeometryEdits { get; init; }
+    /// <summary>M842: the open map's navgrid and the editor's overlay layers (read-only: shown, never edited).</summary>
+    public Func<BridgeNavGrid>? NavGrid { get; init; }
 }
 
 /// <summary>
@@ -262,6 +264,7 @@ public sealed class BlenderBridgeServer : IDisposable
                     case "push_geometry": PushGeometry(stream, (int)bodyBytes); break;
                     case "assign_material": AssignMaterial(stream, request); break;
                     case "edit_material": EditMaterial(stream, request); break;
+                    case "navgrid": SendNavGrid(stream); break;
                     default: Fail(stream, $"unknown op '{op}'"); break;
                 }
             }
@@ -321,7 +324,9 @@ public sealed class BlenderBridgeServer : IDisposable
                 ? $"this ReyEngine speaks Blender link protocol {BlenderBridgeProtocol.Version} and works with MapgeoAddon. "
                   + "The old 'ReyEngine Bridge' add-on (reyengine_bridge.py, protocol 2) has been replaced: disable it in "
                   + "Blender and install MapgeoAddon from ReyEngine (Settings > Blender)."
-                : $"the add-on speaks protocol {theirs}, this ReyEngine speaks {BlenderBridgeProtocol.Version}. Update ReyEngine.");
+                : theirs < BlenderBridgeProtocol.Version
+                    ? $"this MapgeoAddon speaks link protocol {theirs}, this ReyEngine speaks {BlenderBridgeProtocol.Version}. Update MapgeoAddon (ReyEngine > Settings > Blender)."
+                    : $"this MapgeoAddon speaks link protocol {theirs}, this ReyEngine speaks {BlenderBridgeProtocol.Version}. Update ReyEngine.");
             return false;
         }
         if (!string.IsNullOrEmpty(Token))
@@ -483,6 +488,46 @@ public sealed class BlenderBridgeServer : IDisposable
         var reply = Run(() => edit(edits), new BridgeEditReply(0, Array.Empty<BridgeRefusal>(), "no map is open"));
         if (reply.Applied > 0) MapChanged?.Invoke();
         RespondEdits(stream, reply, unreadable);
+    }
+
+    private void SendNavGrid(System.IO.Stream stream)
+    {
+        if (Handlers?.NavGrid is not { } nav) { Fail(stream, "this ReyEngine cannot serve the navgrid"); return; }
+        var answer = Run(nav, new BridgeNavGrid(false, "", "", null, Array.Empty<BridgeNavLayer>(), "no map is open"));
+        var header = new Dictionary<string, object?>
+        {
+            ["op"] = "navgrid",
+            ["found"] = answer.Found && answer.Grid is not null,
+            ["path"] = answer.Path,
+            ["source"] = answer.Source,
+            ["bytes"] = 0,
+        };
+        if (answer.Message is { Length: > 0 } message) header["message"] = message;
+        byte[] body = Array.Empty<byte>();
+        if (answer.Found && answer.Grid is { } grid)
+        {
+            body = BlenderLinkNavGrid.Encode(grid);
+            header["version"] = $"{grid.VersionMajor}.{grid.VersionMinor}";
+            header["min"] = new[] { grid.Min.X, grid.Min.Y, grid.Min.Z };
+            header["max"] = new[] { grid.Max.X, grid.Max.Y, grid.Max.Z };
+            header["cell_size"] = grid.CellSize;
+            header["count_x"] = grid.CountX;
+            header["count_z"] = grid.CountZ;
+            header["has_heights"] = grid.HasHeights;
+            header["lift"] = BridgeNavGrid.Lift;
+            // the editor's overlay layers, so Blender never hard-codes names, colours or the default
+            header["layers"] = answer.Layers.Select(l => new Dictionary<string, object?>
+            {
+                ["mask"] = (int)l.Mask,
+                ["label"] = l.Label,
+                ["color"] = new[] { l.Color.X, l.Color.Y, l.Color.Z, l.Color.W },
+                ["cells"] = l.Cells,
+                ["visible"] = l.VisibleInEditor,
+                ["default_visible"] = l.DefaultVisible,
+            }).ToList();
+            header["bytes"] = body.Length;
+        }
+        BlenderBridgeProtocol.WriteMessage(stream, JsonSerializer.Serialize(header, Json), body);
     }
 
     private void RespondEdits(System.IO.Stream stream, BridgeEditReply reply, int unreadable)

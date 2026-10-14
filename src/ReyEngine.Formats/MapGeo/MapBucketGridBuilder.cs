@@ -240,7 +240,11 @@ public static class MapBucketGridBuilder
                 throw new InvalidDataException($"Bucket [{x},{z}] exceeds the mapgeo ushort face-count limit.");
 
             uint baseVertex = checked((uint)vertices.Count);
-            var localVertices = new Dictionary<uint, ushort>();
+            // M842: keyed by POSITION, not by the source vertex index. The grid stores positions only, so two
+            // source vertices at the same place (a UV or normal seam, two meshes meeting) are the same grid
+            // vertex - Riot's own grids are welded like this (base_srx: 196,057 grid vertices for 192,509
+            // faces, where the source meshes split them into ~2.3 per triangle).
+            var localVertices = new Dictionary<Vector3, ushort>();
             foreach (BucketFace face in inside.Concat(sticking))
             {
                 AddIndex(face.Triangle.A);
@@ -269,13 +273,14 @@ public static class MapBucketGridBuilder
 
             void AddIndex(uint globalIndex)
             {
-                if (!localVertices.TryGetValue(globalIndex, out ushort localIndex))
+                Vector3 position = PositionAt(asset, globalIndex);
+                if (!localVertices.TryGetValue(position, out ushort localIndex))
                 {
                     if (localVertices.Count > ushort.MaxValue)
                         throw new InvalidDataException($"Bucket [{x},{z}] exceeds the mapgeo ushort vertex-index limit.");
                     localIndex = checked((ushort)localVertices.Count);
-                    localVertices.Add(globalIndex, localIndex);
-                    vertices.Add(PositionAt(asset, globalIndex));
+                    localVertices.Add(position, localIndex);
+                    vertices.Add(position);
                 }
                 indices.Add(localIndex);
             }

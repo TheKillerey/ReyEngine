@@ -210,9 +210,9 @@ public sealed class BlenderBridgeServerTests : IDisposable
         int port = Start();
         using var client = new TcpClient();
         var stream = Connect(port, client);
-        var (hello, _) = Send(stream, "{\"op\":\"hello\",\"protocol\":3,\"client\":\"MapgeoAddon 0.5.0\"}");
+        var (hello, _) = Send(stream, "{\"op\":\"hello\",\"protocol\":4,\"client\":\"MapgeoAddon 0.5.0\"}");
         Assert.Equal("hello", hello.GetProperty("op").GetString());
-        Assert.Equal(3, hello.GetProperty("protocol").GetInt32());
+        Assert.Equal(4, hello.GetProperty("protocol").GetInt32());
         Assert.Equal("Test project", hello.GetProperty("project").GetString());
         Assert.Equal("jade_container.mapgeo", hello.GetProperty("map").GetString());
         Assert.Equal("MapgeoAddon 0.5.0", _server.ClientName);
@@ -224,7 +224,7 @@ public sealed class BlenderBridgeServerTests : IDisposable
         int port = Start();
         using var client = new TcpClient();
         var stream = Connect(port, client);
-        Send(stream, "{\"op\":\"hello\",\"protocol\":3}");
+        Send(stream, "{\"op\":\"hello\",\"protocol\":4}");
 
         var (meshes, body) = Send(stream, "{\"op\":\"pull\"}");
         Assert.Equal(1, meshes.GetProperty("count").GetInt32());
@@ -261,7 +261,7 @@ public sealed class BlenderBridgeServerTests : IDisposable
         int port = Start();
         using var client = new TcpClient();
         var stream = Connect(port, client);
-        Send(stream, "{\"op\":\"hello\",\"protocol\":3}");
+        Send(stream, "{\"op\":\"hello\",\"protocol\":4}");
 
         var (failed, _) = Send(stream, "{\"op\":\"edit_material\",\"edits\":[{\"material\":\"boom\",\"kind\":\"switch\",\"name\":\"S\",\"on\":true}]}");
         Assert.Equal("error", failed.GetProperty("op").GetString());
@@ -288,7 +288,7 @@ public sealed class BlenderBridgeServerTests : IDisposable
         Assert.True(bare.Start(0, out _));
         using var client = new TcpClient();
         var stream = Connect(bare.Port, client);
-        Send(stream, "{\"op\":\"hello\",\"protocol\":3}");
+        Send(stream, "{\"op\":\"hello\",\"protocol\":4}");
         foreach (string op in new[] { "materials", "texture", "assign_material", "edit_material" })
         {
             var (reply, _) = Send(stream, "{\"op\":\"" + op + "\",\"path\":\"x\"}");
@@ -316,7 +316,7 @@ public sealed class BlenderBridgeServerTests : IDisposable
         int port = Start();
         // what fetch("http://127.0.0.1:47800", {method: "POST", mode: "no-cors", body}) sends: a text/plain body
         // whose lines are valid link requests (even a valid hello - the page cannot know the token)
-        string body = "{\"op\":\"hello\",\"protocol\":3}\n" + Push + "\n" + Assign + "\n";
+        string body = "{\"op\":\"hello\",\"protocol\":4}\n" + Push + "\n" + Assign + "\n";
         string http = "POST / HTTP/1.1\r\nHost: 127.0.0.1:" + port + "\r\nContent-Type: text/plain\r\nContent-Length: "
                       + System.Text.Encoding.UTF8.GetByteCount(body) + "\r\n\r\n" + body;
         using (var client = new TcpClient())
@@ -356,14 +356,14 @@ public sealed class BlenderBridgeServerTests : IDisposable
         using (var client = new TcpClient())
         {
             var stream = Connect(port, client);
-            var (wrong, _) = Send(stream, "{\"op\":\"hello\",\"protocol\":3,\"token\":\"AAAA-BBBB\"}");
+            var (wrong, _) = Send(stream, "{\"op\":\"hello\",\"protocol\":4,\"token\":\"AAAA-BBBB\"}");
             Assert.Equal("error", wrong.GetProperty("op").GetString());
             Assert.Contains("wrong link token", wrong.GetProperty("message").GetString());
         }
         using (var client = new TcpClient())
         {
             var stream = Connect(port, client);
-            var (hello, _) = Send(stream, "{\"op\":\"hello\",\"protocol\":3,\"token\":\"k7q29xmb\"}");
+            var (hello, _) = Send(stream, "{\"op\":\"hello\",\"protocol\":4,\"token\":\"k7q29xmb\"}");
             Assert.Equal("hello", hello.GetProperty("op").GetString());
             var (ok, _) = Send(stream, Push);
             Assert.Equal("ok", ok.GetProperty("op").GetString());
@@ -383,7 +383,7 @@ public sealed class BlenderBridgeServerTests : IDisposable
 
         using var client = new TcpClient();
         var stream = Connect(port, client);
-        Send(stream, "{\"op\":\"hello\",\"protocol\":3}");
+        Send(stream, "{\"op\":\"hello\",\"protocol\":4}");
         var (pull, _) = Send(stream, "{\"op\":\"pull\"}");
         Assert.Equal("meshes", pull.GetProperty("op").GetString());   // served while the silent one waits
 
@@ -407,7 +407,7 @@ public sealed class BlenderBridgeServerTests : IDisposable
         Assert.True(slow.Start(0, out _));
         using var client = new TcpClient();
         var stream = Connect(slow.Port, client);
-        BlenderBridgeProtocol.WriteMessage(stream, "{\"op\":\"hello\",\"protocol\":3}");
+        BlenderBridgeProtocol.WriteMessage(stream, "{\"op\":\"hello\",\"protocol\":4}");
         // the hello itself waits on the editor thread for the map name: run it
         for (int i = 0; i < 50 && queued.Count == 0; i++) Thread.Sleep(20);
         lock (queued) { foreach (var a in queued) a(); queued.Clear(); }

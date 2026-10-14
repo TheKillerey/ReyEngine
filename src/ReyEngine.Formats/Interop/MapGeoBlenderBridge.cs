@@ -89,6 +89,16 @@ public static class MapGeoBlenderBridge
             if (mesh.HasVertexColor && map.Colors is { Length: > 0 } col
                 && (mesh.VertexStart + mesh.VertexCount) * 4 <= col.Length)
                 colors = col.AsSpan(mesh.VertexStart * 4, mesh.VertexCount * 4).ToArray();
+            // M842: TEXCOORD5, the grass clump pivot of a VertexDeform bush - a POSITION, so it travels in the
+            // same pivot-relative world space as the vertices and comes back through the same transform.
+            float[]? grass = null;
+            if (Array.IndexOf(mesh.Attributes, "Texcoord5") >= 0 && map.GrassPivots is { Length: > 0 } gp
+                && (mesh.VertexStart + mesh.VertexCount) * 3 <= gp.Length)
+            {
+                grass = gp.AsSpan(mesh.VertexStart * 3, mesh.VertexCount * 3).ToArray();
+                for (int i = 0; i + 2 < grass.Length; i += 3)
+                { grass[i] -= mesh.Pivot.X; grass[i + 1] -= mesh.Pivot.Y; grass[i + 2] -= mesh.Pivot.Z; }
+            }
 
             var (indices, submeshes) = IndicesOf(map, mesh,
                 groupsByMesh.TryGetValue(mesh.Index, out var own) ? own : (IReadOnlyList<MapGeoGroup>)Array.Empty<MapGeoGroup>());
@@ -98,6 +108,7 @@ public static class MapGeoBlenderBridge
             {
                 LightmapUvs = lightmap,
                 Colors = colors,
+                GrassPivots = grass,
                 Submeshes = submeshes,
             });
             info.Add(Describe(mesh));
@@ -281,7 +292,55 @@ public static class MapGeoBlenderBridge
         }
 
         float[]? uvs = sent.Uvs is { } sentUvs && sentUvs.Length == vertices * 2 ? sentUvs : null;
-        return new MeshReshape(mesh.Index, positions, normals, uvs, sent.Indices);
+
+        // M842: the grass pivot is a position: pivot-relative world -> local, like the vertices
+        float[]? grass = null;
+        if (sent.GrassPivots is { } gp && gp.Length == vertices * 3)
+        {
+            grass = new float[gp.Length];
+            for (int i = 0; i < vertices; i++)
+            {
+                var local = Vector3.Transform(new Vector3(gp[i * 3], gp[i * 3 + 1], gp[i * 3 + 2]) + mesh.Pivot, toLocal);
+                grass[i * 3] = local.X; grass[i * 3 + 1] = local.Y; grass[i * 3 + 2] = local.Z;
+            }
+        }
+        var remap = PendingMaterialRemap(mesh);
+        return new MeshReshape(mesh.Index, positions, normals, uvs, sent.Indices)
+        {
+            LightmapUvs = sent.LightmapUvs is { } lm && lm.Length == vertices * 2 ? lm : null,
+            Colors = sent.Colors is { } col && col.Length == vertices * 4 ? col : null,
+            GrassPivots = grass,
+            Submeshes = sent.Submeshes.Count > 0
+                ? sent.Submeshes.Select(x => new ReshapeSubmesh(
+                    remap.TryGetValue(x.Material, out var to) ? to : x.Material, x.StartIndex, x.IndexCount)).ToList()
+                : null,
+        };
+    }
+
+    /// <summary>
+    /// M842 review: a submesh table names materials by what Blender PULLED. Pulled before a material edit that
+    /// is still pending in ReyEngine, it names the file's old material - and the save writes the material edit
+    /// first and the reshape after it, so the reshape would silently put the old material back. Old -> edited,
+    /// for every file material the pending edits replace unambiguously (one old name edited to two different
+    /// materials on two submeshes is left alone: there is no telling which one a Blender range meant).
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> PendingMaterialRemap(MapGeoMesh mesh)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        // every material each file name becomes (an unedited submesh of the same name keeps it: ambiguous too)
+        var becomes = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        for (int s = 0; s < mesh.Materials.Count; s++)
+        {
+            string old = mesh.Materials[s], now = mesh.EffectiveSubmeshMaterial(s);
+            if (now.Length == 0) now = old;
+            if (!becomes.TryGetValue(old, out var set)) becomes[old] = set = new HashSet<string>(StringComparer.Ordinal);
+            set.Add(now);
+        }
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (old, set) in becomes)
+            if (set.Count == 1 && set.First() is var now && !string.Equals(old, now, StringComparison.Ordinal))
+                remap[old] = now;
+        return remap;
     }
 
     /// <summary>Where a mesh's Blender object should sit, and how it should be oriented, right now.</summary>

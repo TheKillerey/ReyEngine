@@ -109,6 +109,7 @@ public sealed partial class MainWindowViewModel
         AssignMaterial = AssignMaterialsFromBlender,
         EditMaterial = EditMaterialsFromBlender,
         PushGeometryEdits = ApplyBlenderGeometryEdits,
+        NavGrid = NavGridForBlender,
     };
 
     /// <summary>
@@ -130,15 +131,22 @@ public sealed partial class MainWindowViewModel
 
     private string ApplyBlenderGeometry(IReadOnlyList<BridgeMesh> meshes) => ApplyBlenderGeometryEdits(meshes).Detail;
 
-    /// <summary>M841: reshapes with a per-mesh answer. A mesh the reshaper would refuse at Save (several
-    /// materials, a buffer another mesh shares) is refused NOW, by name, instead of failing the whole save later.</summary>
+    /// <summary>M841: reshapes with a per-mesh answer. A mesh the reshaper would refuse at Save is refused NOW,
+    /// by name, instead of failing the whole save later. M842: shared buffers are un-shared at Save instead.</summary>
     private BridgeEditReply ApplyBlenderGeometryEdits(IReadOnlyList<BridgeMesh> meshes)
     {
         if (_currentMap is not { } map)
             return new BridgeEditReply(0, meshes.Select((m, i) => new BridgeRefusal(i, m.Name, "no map is open")).ToList(), "No map is open.");
 
+        if (BlenderReadOnlyReason(_currentMapEntry, isBin: false) is { } readOnly)
+            return new BridgeEditReply(0, meshes.Select((m, i) => new BridgeRefusal(i, m.Name, readOnly)).ToList(), readOnly);
+
+        // M842: shared buffers are no longer refused (the reshape gets its own); several materials are, unless
+        // the push says which triangle is which (a submesh table), and every material it names must exist.
         IReadOnlyDictionary<int, string> unreshapable = new Dictionary<int, string>();
-        try { if (_currentMapBytes is { } bytes) unreshapable = MapGeoMeshReshaper.Refusals(bytes); } catch { }
+        try { if (_currentMapBytes is { } bytes) unreshapable = MapGeoMeshReshaper.Refusals(bytes, ExtendedChannelMaterialsFor(_currentMapEntry?.Path)); } catch { }
+        var known = new HashSet<string>(MapMaterialNames, StringComparer.Ordinal);
+        foreach (var vm in MaterialEditor.Materials) known.Add(vm.Model.Name);
 
         int accepted = 0;
         var problems = new List<string>();
@@ -146,9 +154,14 @@ public sealed partial class MainWindowViewModel
         for (int i = 0; i < meshes.Count; i++)
         {
             var sent = meshes[i];
-            if (unreshapable.TryGetValue(sent.Index, out var why))
+            if (sent.Submeshes.Count == 0 && unreshapable.TryGetValue(sent.Index, out var why))
             {
-                string reason = $"'{sent.Name}' cannot be reshaped: {why}";
+                string reason = $"'{sent.Name}' cannot be reshaped: {why}, and the push did not say which triangle is which";
+                problems.Add(reason); refused.Add(new BridgeRefusal(i, sent.Name, reason)); continue;
+            }
+            if (sent.Submeshes.FirstOrDefault(x => !known.Contains(x.Material)) is { } unknown)
+            {
+                string reason = $"'{sent.Name}': '{unknown.Material}' is not a material of this map's materials.bin";
                 problems.Add(reason); refused.Add(new BridgeRefusal(i, sent.Name, reason)); continue;
             }
             var reshape = MapGeoBlenderBridge.ToReshape(map, sent, out var problem);
@@ -235,6 +248,12 @@ public sealed partial class MainWindowViewModel
     private string ApplyBlenderTransforms(IReadOnlyList<BridgeTransform> transforms)
     {
         if (_currentMap is not { } map) return "No map is open.";
+        // M842 review: the same read-only gate as a reshape (a game map without a project, a linked bin...)
+        if (BlenderReadOnlyReason(_currentMapEntry, isBin: false) is { } readOnly)
+        {
+            _log.Warn("Blender", "Transforms from Blender were not applied: " + readOnly);
+            return readOnly;
+        }
 
         var changed = MapGeoBlenderBridge.ApplyTransforms(map, transforms, out var problems);
         foreach (string problem in problems.Take(6)) _log.Warn("Blender", problem);
@@ -282,6 +301,7 @@ public sealed partial class MainWindowViewModel
             ["mesh_count"] = _currentMap?.Meshes.Count ?? 0,
             ["map_read_only_reason"] = _currentMap is null ? "no map is open" : BlenderReadOnlyReason(_currentMapEntry, isBin: false),
             ["materials_read_only_reason"] = bin is null ? "the map has no materials.bin" : BlenderReadOnlyReason(bin, isBin: true),
+            ["navgrid"] = _navGridEntry?.Path,
         };
     }
 

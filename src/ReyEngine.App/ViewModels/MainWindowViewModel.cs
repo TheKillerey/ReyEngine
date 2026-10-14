@@ -408,6 +408,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private void LoadNavGridForCurrentMap(string? mapGeoPath)
     {
         _navGrid = null;
+        _navGridEntry = null;   // M842: which file it came from, for the Blender link
         BushCellLines = null;
         BushCellLayers = null;
         NavGridLayers.Clear();
@@ -425,12 +426,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             string navPath = ReyEngine.Formats.MapGeo.NavGrid.PathFor(map);
             ulong hash = HashAlgorithms.WadPath(navPath);
-            if (!TryResolveEntry(hash, out _))
+            if (!TryResolveEntry(hash, out var navEntry))
             { _log.Info("NavGrid", $"This map ships no navgrid ({navPath}), so there is nothing to show."); return; }
             if (!ReyEngine.Formats.MapGeo.NavGrid.TryParse(ReadAsset(hash), out var grid, out string? why) || grid is null)
             { if (why is not null) _log.Info("NavGrid", $"{map}: {why}"); return; }
 
             _navGrid = grid;
+            _navGridEntry = navEntry;
             var present = grid.PresentFlags();
             _log.Info("NavGrid", $"{map}: v{grid.VersionMajor}.{grid.VersionMinor}, {grid.CountX}x{grid.CountZ} "
                 + $"cells of {grid.CellSize:n0} units, {present.Count} distinct flag(s)"
@@ -11216,10 +11218,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         + "ones. Save them separately: clear or save the face edits first, then reload.");
                     return;
                 }
-                var reshaped = MapGeoMeshReshaper.TryApply(bytes, PendingBlenderReshapes, out string? reshapeError);
+                var reshaped = MapGeoMeshReshaper.TryApply(bytes, PendingBlenderReshapes,
+                    ExtendedChannelMaterialsFor(entry.Path), out string? reshapeError, out var reshapeNotes);
                 if (reshaped is null)
                 { _log.Error("MapGeo", reshapeError ?? "Blender reshapes could not be written."); return; }
                 bytes = reshaped;
+                foreach (string note in reshapeNotes) _log.Info("MapGeo", note);   // M842: un-shared buffers, zeroed channels
                 _log.Success("MapGeo", $"Wrote {PendingBlenderReshapes.Count:n0} reshaped mesh(es) from Blender.");
             }
 

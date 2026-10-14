@@ -45,6 +45,10 @@ public sealed record BridgeMesh(
     /// <summary>M841: vertex colour, RGBA 0..1, 4 floats per vertex. Null when the mesh has none.</summary>
     public float[]? Colors { get; init; }
 
+    /// <summary>M842 (protocol 4): TEXCOORD5, the grass clump pivot of a VertexDeform bush - pivot-relative world
+    /// space like <see cref="Positions"/>, 3 floats per vertex. Null when the mesh has none.</summary>
+    public float[]? GrassPivots { get; init; }
+
     /// <summary>M841: the submesh ranges, in submesh order. Empty when the sender does not describe them
     /// (a pushed shape: the reshaper keeps one material per mesh).</summary>
     public IReadOnlyList<BridgeSubmesh> Submeshes { get; init; } = Array.Empty<BridgeSubmesh>();
@@ -83,7 +87,7 @@ public static class BlenderBridgeProtocol
 {
     /// <summary>Bumped whenever the framing or the mesh block changes shape. Both sides refuse a mismatch
     /// rather than misreading a payload — a silently wrong decode looks like corrupt geometry.</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     /// <summary>The protocol the retired single-file "ReyEngine Bridge" add-on speaks.</summary>
     public const int LegacyBridgeVersion = 2;
@@ -104,7 +108,7 @@ public static class BlenderBridgeProtocol
     /// Pack meshes into the binary block that follows a <c>meshes</c> header (and that a
     /// <c>push_geometry</c> request carries).
     /// Layout per mesh: name, index, pivot, location, rotation, scale, then positions, normals, uvs,
-    /// lightmap uvs, colours and indices (each length-prefixed), then the submesh table.
+    /// lightmap uvs, colours, grass pivots (protocol 4) and indices (each length-prefixed), then the submesh table.
     /// </summary>
     public static byte[] EncodeMeshes(IReadOnlyList<BridgeMesh> meshes)
     {
@@ -128,6 +132,7 @@ public static class BlenderBridgeProtocol
             WriteFloats(w, m.Uvs);
             WriteFloats(w, m.LightmapUvs);
             WriteFloats(w, m.Colors);
+            WriteFloats(w, m.GrassPivots);
 
             w.Write(m.Indices.Length);
             foreach (uint i in m.Indices) w.Write(i);
@@ -178,6 +183,9 @@ public static class BlenderBridgeProtocol
             float[] colors = ReadFloats(r, "colors");
             if (colors.Length != 0 && colors.Length != vertices * 4)
                 throw new InvalidDataException($"'{name}' has {colors.Length} colour floats for {vertices} vertices");
+            float[] grass = ReadFloats(r, "grass pivots");
+            if (grass.Length != 0 && grass.Length != vertices * 3)
+                throw new InvalidDataException($"'{name}' has {grass.Length} grass pivot floats for {vertices} vertices");
 
             int indexCount = r.ReadInt32();
             if (indexCount < 0 || indexCount > 200_000_000) throw new InvalidDataException("index count is not plausible");
@@ -206,6 +214,7 @@ public static class BlenderBridgeProtocol
             {
                 LightmapUvs = lightmap.Length == 0 ? null : lightmap,
                 Colors = colors.Length == 0 ? null : colors,
+                GrassPivots = grass.Length == 0 ? null : grass,
                 Submeshes = submeshes,
             });
         }

@@ -1,15 +1,18 @@
-# ReyEngine live link — protocol 3
+# ReyEngine live link — protocol 4
 
 The live link between **ReyEngine** (the map editor) and **MapgeoAddon** (its Blender add-on). Protocol 3
 replaced protocol 2, which the retired single-file "ReyEngine Bridge" add-on (`reyengine_bridge.py`) spoke.
+Protocol 4 (ReyEngine M842) adds the grass pivot to the mesh block, keeps every channel and several materials
+through a reshape, un-shares instanced buffers instead of refusing them, and adds the navgrid, read-only
+(`navgrid`). A protocol 3 add-on is told to update; the two sides refuse a mismatch either way.
 
 This file is kept identical in both repositories:
 
 - ReyEngine: `docs/reyengine-link-protocol.md`; code in `src/ReyEngine.Formats/Interop/BlenderBridgeProtocol.cs`,
   `BlenderLinkMaterials.cs`, `BlenderLinkRequests.cs`, `MapGeoBlenderBridge.cs` and
   `src/ReyEngine.App/Services/BlenderBridgeServer.cs`.
-- MapgeoAddon: `docs/reyengine-link-protocol.md`; code in `reyengine_link_protocol.py` (wire, no bpy) and
-  `reyengine_link.py` (the ReyEngine panel in the LoL Mapgeo tab).
+- MapgeoAddon: `docs/reyengine-link-protocol.md`; code in `reyengine_link_protocol.py` (wire, no bpy),
+  `reyengine_link.py` (the ReyEngine panel in the LoL Mapgeo tab) and `reyengine_link_navgrid.py`.
 
 ## Roles
 
@@ -75,8 +78,8 @@ importer's convention.
 
 Must be the first request of every connection; anything else before it is refused.
 
-    → {"op":"hello","protocol":3,"client":"MapgeoAddon 0.5.0","token":"K7Q2-9XMB"}
-    ← {"op":"hello","protocol":3,"app":"ReyEngine","app_version":"0.5.1","map":"base_srx.mapgeo",
+    → {"op":"hello","protocol":4,"client":"MapgeoAddon 0.5.0","token":"K7Q2-9XMB"}
+    ← {"op":"hello","protocol":4,"app":"ReyEngine","app_version":"0.5.1","map":"base_srx.mapgeo",
        "project":"My Rift","project_root":"D:\\...","map_path":"data/maps/mapgeometry/map11/base_srx.mapgeo",
        "materials_bin":"data/maps/mapgeometry/map11/base_srx.materials.bin","mesh_count":586,
        "map_read_only_reason":null,"materials_read_only_reason":null}
@@ -90,7 +93,7 @@ project, a chunk the project's LTK GameData changes, …).
 ### pull
 
     → {"op":"pull"}
-    ← {"op":"meshes","protocol":3,"count":586,"bytes":N,"notes":[...],
+    ← {"op":"meshes","protocol":4,"count":586,"bytes":N,"notes":[...],
        "meshes":[ per-mesh info, in block order ],
        "map":"base_srx.mapgeo","map_path":"...","layers":[{"name":"Base","mask":1}, ...],
        "lightmap_color_scale":1.0}
@@ -130,6 +133,8 @@ Meshes carrying a session-only batch transform, or with no vertices, are left ou
       i32 n, f32[n] uvs            (UV0, 2 per vertex, or n = 0)
       i32 n, f32[n] lightmapUvs    (raw TEXCOORD7, 2 per vertex, before the BakedLight scale/bias, or n = 0)
       i32 n, f32[n] colors         (RGBA 0..1, 4 per vertex, or n = 0)
+      i32 n, f32[n] grassPivots    (TEXCOORD5, the VertexDeform bush clump pivot: xyz, pivot-relative like
+                                    positions, or n = 0)                                      [protocol 4]
       i32 n, u32[n] indices        (triangle list, into THIS mesh's vertices)
       i32 submeshCount
       per submesh:
@@ -141,12 +146,14 @@ the vertex count, a submesh range outside the index list and bytes left over aft
 triangles (ReyEngine's deleted faces) are not sent.
 
 MapgeoAddon builds `LightmapUV` as its importer does — `(u·su + bu, 1 − (v·sv + bv))` with the mesh's
-lightmap scale/bias — and stores the raw channel in the `raw_lightmap_uv` point attribute.
+lightmap scale/bias — and stores the raw channel in the `raw_lightmap_uv` point attribute. Vertex colour goes
+into the `Color` corner attribute through `color_srgb` (the file's bytes, exactly), the grass pivot into the
+`TEXCOORD5` point attribute (Blender axes, the object's own space).
 
 ### materials
 
     → {"op":"materials"}
-    ← {"op":"materials","protocol":3,"bin":"data/.../base_srx.materials.bin","live":true,"count":191,
+    ← {"op":"materials","protocol":4,"bin":"data/.../base_srx.materials.bin","live":true,"count":191,
        "used":186,"editable":true,"read_only_reason":null,"lightmap_color_scale":1.0,
        "materials":{ "<name>": material, ... }}
 
@@ -210,20 +217,30 @@ scene; written by *Save Map Content Edits*.
 
 ### push_geometry
 
-    → {"op":"push_geometry","bytes":N}  + N bytes: a mesh block (placement fields and submesh table ignored)
-    ← {"op":"ok","applied":1,"refused":[{"index":1,"what":"MapGeo_Instance_7","reason":"... 2 materials"}],
+    → {"op":"push_geometry","bytes":N}  + N bytes: a mesh block (placement fields ignored)
+    ← {"op":"ok","applied":1,"refused":[{"index":1,"what":"MapGeo_Instance_7","reason":"..."}],
        "detail":"1 queued, 1 refused"}
 
-`refused[].index` is the mesh's position in the pushed block; MapgeoAddon re-baselines only the queued ones.
-Reshaped meshes, pivot-relative world space, League axes. ReyEngine converts them to mesh-local space and
-queues them for its mesh reshaper, which refuses a mesh with more than one material, a mesh whose buffers
-another mesh shares, and more than 65,536 vertices (16-bit index buffers) - the first two are checked when the
-push arrives, so the refusal names the mesh instead of failing the save. Reshaping drops the mesh's baked
-lightmap UVs and vertex colour (and the grass pivot): the reshaper zeroes channels Blender does not send and
-logs which. With auto-apply on, ReyEngine saves the map content edits and reloads the map.
+Reshaped meshes, pivot-relative world space, League axes. `refused[].index` is the mesh's position in the
+block; MapgeoAddon re-baselines only the queued ones and lists the refused ones in its panel. ReyEngine
+converts positions, normals and grass pivots to mesh-local space and queues the reshape; Save Map Content
+Edits writes it:
 
-MapgeoAddon only sends meshes whose shape changed (a fingerprint of coordinates and topology, or any
-modifier), and refuses multi-material shapes and the vertex limit itself before sending.
+- **Channels.** Position, normal, UV0, raw TEXCOORD7, PRIMARY_COLOR and TEXCOORD5 are written from what was
+  sent, in the mesh's own vertex declaration (float formats and the packed 8888 colours). A channel the push
+  did not carry (or a packed format the writer does not produce, e.g. tangents) is zeroed and logged.
+- **Several materials.** The submesh table (one range per material, tiling the index list) becomes one
+  submesh per material; a submesh of a material the mesh already had keeps its hash. Every material must be
+  one of the map's. A mesh with several materials and NO table is refused.
+- **Shared buffers (Riot instancing).** The reshaped mesh gets its OWN new vertex and/or index buffers; every
+  other mesh that shared them keeps the original buffers byte for byte; nothing is left unreferenced (LTK's
+  loader rule). The declaration (stride, layout) stays the mesh's own.
+- At most 65,536 vertices (16-bit index buffers). Saving a reshape rebuilds the map's bucket grids, which
+  grows the file (measured on base_srx: scene graphs 6.6 MB -> 33.3 MB).
+
+MapgeoAddon sends a mesh when its shape changed - coordinates, topology OR which face uses which material
+slot - or it carries a modifier. Splitting per corner follows UV0 and the corner colour. A face on a slot whose
+material is not a ReyEngine material is refused in Blender, with the reason.
 
 ### assign_material
 
@@ -275,6 +292,31 @@ MapgeoAddon derives these edits by diffing the JSON its material editor keeps on
 (`parameters`, `samplers`, `switches`, `shader_macros`) against a snapshot taken at pull. Only a material whose
 edits were all taken is re-baselined; one with a refused edit sends it again on the next push.
 
+### navgrid (protocol 4, read-only)
+
+    → {"op":"navgrid"}
+    ← {"op":"navgrid","found":true,"path":"assets/maps/navgrid/map11/aipath.aimesh_ngrid","source":"project",
+       "version":"7.x","min":[x,y,z],"max":[x,y,z],"cell_size":50,"count_x":N,"count_z":M,"has_heights":true,
+       "lift":12,
+       "layers":[{"mask":2,"label":"not walkable   (bit 1)","color":[r,g,b,a],"cells":34079,
+                  "visible":false,"default_visible":true}, ...],
+       "bytes":N*M*6}
+      + body: f32 height per cell, then u16 flags per cell (row-major, x fastest)
+
+The navgrid as ReyEngine reads it, and ReyEngine's navgrid overlay layers: one per single-bit flag present,
+commonest first, with ReyEngine's label (`NavGrid.LabelFor`; an unidentified bit says so), its colour and
+alpha, its cell count, whether ReyEngine's overlay shows it right now (`visible`) and what ReyEngine shows when
+its overlay is switched on with no layer chosen (`default_visible`: the commonest layer). `lift` is how far
+above a cell's ground height ReyEngine draws it. `found:false` with a `message` when the map has none (or it
+is not a version 7 grid).
+
+The link only SHOWS the navgrid; there is no op that changes it. MapgeoAddon builds one object per layer in a
+`<map>_NavGrid` collection - each cell as two triangles at its height + `lift`, drawn as a thin wireframe in
+the layer colour and alpha, in front of the map (ReyEngine draws the overlay without depth testing), not
+selectable. Its panel has "Show NavGrid" (ReyEngine's overlay switch: on with no layer chosen shows the
+commonest) and one switch per layer. A map pull mirrors what ReyEngine's overlay shows at that moment; Pull
+NavGrid shows it.
+
 ## Installing MapgeoAddon from ReyEngine
 
 Settings ▸ Blender installs from a folder, a `.zip` or an https URL (empty = the latest release of
@@ -294,6 +336,9 @@ Blender's user preferences**; then it deletes `reyengine_bridge.py` and its comp
   node builders know Riot's shaders, not ReyEngine's graphs. `rey.graph` says which graph it is.
 - Render state (blend, cull, write mask) is described but not editable over the link.
 - Adding or removing parameters, samplers or switches, creating materials and changing a material's shader
-  are not part of protocol 3.
+  are not part of protocols 3 and 4.
+- Navgrid: version 7 only, shown read-only (flags and heights; the region layers and the rest of each cell
+  record are not sent). Editing it is not part of the link.
+- A reshape cannot write tangents (TEXCOORD6) or packed-format UVs; they are zeroed and logged.
 - Transforms pushed from Blender are applied without their own undo step (as in protocol 2); assignments and
   material edits are undoable.

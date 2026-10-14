@@ -57,7 +57,7 @@ public sealed class BlenderLinkRealMapTests : IDisposable
         string folder = Path.Combine(_root, "Map11");
         var db = new HashSyncService().LoadLocal(_ => { });
         using (var wad = WadArchive.Open(wadPath, new WadPathResolver(db)))
-            foreach (string p in new[] { MapgeoPath, MaterialsPath })
+            foreach (string p in new[] { MapgeoPath, MaterialsPath, NavGrid.PathFor("map11") })
             {
                 string file = Path.Combine(folder, p.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(file)!);
@@ -66,6 +66,8 @@ public sealed class BlenderLinkRealMapTests : IDisposable
         string mapFile = Path.Combine(folder, MapgeoPath.Replace('/', Path.DirectorySeparatorChar));
         string binFile = Path.Combine(folder, MaterialsPath.Replace('/', Path.DirectorySeparatorChar));
         byte[] mapBefore = File.ReadAllBytes(mapFile);
+        string navFile = Path.Combine(folder, NavGrid.PathFor("map11").Replace('/', Path.DirectorySeparatorChar));
+        byte[] navBefore = File.ReadAllBytes(navFile);
 
         var vm = new MainWindowViewModel { Project = ReyProjectService.OpenFolder(_root) };
         vm.MaterialEditor.LoadThumbnail = null;   // texture thumbnails are Avalonia bitmaps: no render platform in a test
@@ -81,6 +83,7 @@ public sealed class BlenderLinkRealMapTests : IDisposable
         var map = MapGeoDecoder.Decode(raw, (IReadOnlySet<string>)Call(vm, "ExtendedChannelMaterialsFor", entry.Path)!);
         foreach (var (field, value) in new (string, object)[] { ("_currentMap", map), ("_currentMapBytes", raw), ("_currentMapEntry", entry) })
             typeof(MainWindowViewModel).GetField(field, Any)!.SetValue(vm, value);
+        Call(vm, "LoadNavGridForCurrentMap", entry.Path);   // what the map open does beside the mapgeo
 
         // ---- the real handlers, on a real socket (inline: the test is the editor's only thread here)
         using var server = new BlenderBridgeServer(a => a(), (_, _) => { })
@@ -94,7 +97,7 @@ public sealed class BlenderLinkRealMapTests : IDisposable
         client.Connect(System.Net.IPAddress.Loopback, server.Port);
         var stream = client.GetStream();
 
-        var (hello, _) = Send(stream, new { op = "hello", protocol = 3, client = "MapgeoAddon test", token = server.Token!.ToLowerInvariant() });
+        var (hello, _) = Send(stream, new { op = "hello", protocol = 4, client = "MapgeoAddon test", token = server.Token!.ToLowerInvariant() });
         Assert.Equal("hello", hello.GetProperty("op").GetString());
         Assert.Equal(MapgeoPath, hello.GetProperty("map_path").GetString());
         Assert.Equal(MaterialsPath, hello.GetProperty("materials_bin").GetString());
@@ -171,6 +174,29 @@ public sealed class BlenderLinkRealMapTests : IDisposable
         Assert.Equal(1, sampled.GetProperty("applied").GetInt32());
         Assert.Contains("neither in the project nor in the game", sampled.GetProperty("refused")[0].GetProperty("reason").GetString());
 
+        // M842: the navgrid - pulled read-only, with exactly the editor's overlay layers
+        var (nav, navBody) = Send(stream, new { op = "navgrid" });
+        Assert.True(nav.GetProperty("found").GetBoolean());
+        Assert.Equal("project", nav.GetProperty("source").GetString());
+        int cellCount = nav.GetProperty("count_x").GetInt32() * nav.GetProperty("count_z").GetInt32();
+        Assert.Equal(cellCount * 6, navBody.Length);
+        var layers = nav.GetProperty("layers").EnumerateArray().ToList();
+        Assert.Equal(vm.NavGridLayers.Count, layers.Count);
+        Assert.NotEmpty(layers);
+        for (int k = 0; k < layers.Count; k++)
+        {
+            Assert.Equal(vm.NavGridLayers[k].Mask, layers[k].GetProperty("mask").GetInt32());
+            Assert.Equal(vm.NavGridLayers[k].Label, layers[k].GetProperty("label").GetString());
+            Assert.Equal(vm.NavGridLayers[k].Cells, layers[k].GetProperty("cells").GetInt32());
+            Assert.Equal(vm.NavGridLayers[k].Color.W, layers[k].GetProperty("color")[3].GetSingle());
+            Assert.Equal(k == 0, layers[k].GetProperty("default_visible").GetBoolean());
+            int counted = Enumerable.Range(0, cellCount)
+                .Count(c => (BitConverter.ToUInt16(navBody, cellCount * 4 + c * 2) & vm.NavGridLayers[k].Mask) != 0);
+            Assert.Equal(vm.NavGridLayers[k].Cells, counted);   // the body says the same as the layer
+        }
+        var (navEdit, _) = Send(stream, new { op = "navgrid_edit", cells = new object[] { new { i = 0, flags = 2 } } });
+        Assert.Equal("error", navEdit.GetProperty("op").GetString());   // the link never edits the navgrid
+
         // pending in the editor, nothing written yet
         var mesh = map.Meshes.First(m => m.Index == target.Index);
         Assert.True(mesh.HasMaterialEdit);
@@ -190,6 +216,8 @@ public sealed class BlenderLinkRealMapTests : IDisposable
         string? Wad(ulong h) => db.TryGetPath(h, out var p) ? p : null;
         var saved = MaterialDocument.Parse(File.ReadAllBytes(binFile), Bin, Wad)
             .Materials.First(m => m.Name == editName).Parameters.First(p => p.Name == param);
+        Assert.Equal(navBefore, File.ReadAllBytes(navFile));   // the navgrid is never written
+
         Assert.True(saved.TryGetVector4(out var v4));
         Assert.Equal(new System.Numerics.Vector4(0.375f, 0.5f, 0.625f, 1f), v4);
 

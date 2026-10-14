@@ -126,3 +126,41 @@ public static class BlenderLinkRequests
     private static string? Str(JsonElement item, string name) =>
         item.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }
+
+/// <summary>
+/// M842: one navgrid overlay layer as the editor shows it - one per single-bit flag present
+/// (<see cref="ReyEngine.Formats.MapGeo.NavGrid.PresentFlags"/>), commonest first, with the editor's label and colour.
+/// </summary>
+/// <param name="VisibleInEditor">Whether the editor's overlay is showing this layer right now.</param>
+/// <param name="DefaultVisible">What the editor shows when its overlay is switched on with no layer chosen:
+/// the commonest layer only.</param>
+public sealed record BridgeNavLayer(ushort Mask, string Label, System.Numerics.Vector4 Color, int Cells,
+    bool VisibleInEditor, bool DefaultVisible);
+
+/// <summary>M842: the <c>navgrid</c> answer: the open map's navgrid and the editor's overlay layers. Read-only:
+/// the link shows the navgrid, it never edits it.</summary>
+public sealed record BridgeNavGrid(bool Found, string Path, string Source, ReyEngine.Formats.MapGeo.NavGrid? Grid,
+    IReadOnlyList<BridgeNavLayer> Layers, string? Message)
+{
+    /// <summary>How far above a cell's ground height the editor draws it (world units).</summary>
+    public const float Lift = 12f;
+}
+
+/// <summary>M842: the <c>navgrid</c> body.</summary>
+public static class BlenderLinkNavGrid
+{
+    /// <summary>Body of a <c>navgrid</c> reply: f32 height per cell, then u16 flags per cell, row-major, X fastest.</summary>
+    public static byte[] Encode(ReyEngine.Formats.MapGeo.NavGrid grid)
+    {
+        ArgumentNullException.ThrowIfNull(grid);
+        int n = grid.CellCount;
+        var body = new byte[n * 6];
+        for (int i = 0; i < n; i++)
+        {
+            float h = grid.HasHeights && grid.Heights.Length == n ? grid.Heights[i] : grid.Min.Y;
+            BitConverter.TryWriteBytes(body.AsSpan(i * 4, 4), h);
+            BitConverter.TryWriteBytes(body.AsSpan(n * 4 + i * 2, 2), grid.HasFlags ? grid.Flags[i] : (ushort)0);
+        }
+        return body;
+    }
+}
