@@ -382,7 +382,7 @@ public sealed class BlenderBridgeTests
         Assert.Equal(sent.LightmapUvs, back.LightmapUvs);
         Assert.Equal(sent.Colors, back.Colors);
         Assert.Equal(sent.Submeshes, back.Submeshes);
-        Assert.Equal(4, BlenderBridgeProtocol.Version);
+        Assert.Equal(5, BlenderBridgeProtocol.Version);
     }
 
     [Fact]

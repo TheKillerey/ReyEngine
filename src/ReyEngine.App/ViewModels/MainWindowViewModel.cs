@@ -412,6 +412,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         BushCellLines = null;
         BushCellLayers = null;
         NavGridLayers.Clear();
+        _navCatalog = null; _navMapFolder = ""; _navAppliedOverlays = new(); _navRequestedOverlays = new(); _navGeneration++;   // M843
+        NavGridGridLabels.Clear(); NavGridOverlayLabels.Clear(); NavGridVariantSummary = "";
+        OnPropertyChanged(nameof(HasNavGridVariants));
         OnPropertyChanged(nameof(HasNavGrid));
         if (string.IsNullOrWhiteSpace(mapGeoPath)) return;
 
@@ -424,40 +427,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         try
         {
-            string navPath = ReyEngine.Formats.MapGeo.NavGrid.PathFor(map);
-            ulong hash = HashAlgorithms.WadPath(navPath);
-            if (!TryResolveEntry(hash, out var navEntry))
-            { _log.Info("NavGrid", $"This map ships no navgrid ({navPath}), so there is nothing to show."); return; }
-            if (!ReyEngine.Formats.MapGeo.NavGrid.TryParse(ReadAsset(hash), out var grid, out string? why) || grid is null)
-            { if (why is not null) _log.Info("NavGrid", $"{map}: {why}"); return; }
-
-            _navGrid = grid;
-            _navGridEntry = navEntry;
-            var present = grid.PresentFlags();
-            _log.Info("NavGrid", $"{map}: v{grid.VersionMajor}.{grid.VersionMinor}, {grid.CountX}x{grid.CountZ} "
-                + $"cells of {grid.CellSize:n0} units, {present.Count} distinct flag(s)"
-                + (grid.HasHeights ? "." : ", and NO ground heights - its cells sit at the grid floor."));
-
-            // M565: the bits are NOT named. M562 called 0x0004 the bush and the reporter, looking at the
-            // cells on their own map, identified them as the area only one team may walk. So every flag
-            // present becomes its own toggleable layer and whoever is looking at the map does the naming -
-            // which is the only way any of these get identified honestly.
-            for (int i = 0; i < present.Count; i++)
-            {
-                var (mask, cells) = present[i];
-                NavGridLayers.Add(new NavGridLayerViewModel
-                {
-                    Mask = mask,
-                    Cells = cells,
-                    Share = grid.CellCount > 0 ? cells / (double)grid.CellCount : 0,
-                    Color = LayerColor(i),
-                    Changed = RebuildBushCellLines,
-                });
-                _log.Info("NavGrid", $"  0x{mask:x4} (bit {System.Numerics.BitOperations.TrailingZeroCount(mask)}): "
-                    + $"{cells:n0} cell(s), {(grid.CellCount > 0 ? 100.0 * cells / grid.CellCount : 0):n1}%");
-            }
-            OnPropertyChanged(nameof(HasNavGrid));
-            if (ShowBushAreas) RebuildBushCellLines();
+            // M843: every grid and state overlay of the map, not only aipath. The grid shown follows the open geometry's
+            // map container; the pickers and Map Visibility choose another grid / overlay (MainWindowViewModel.NavGridVariants.cs).
+            InitNavGridVariants(map, mapGeoPath);
+            ApplyNavGridSelection();
         }
         catch (Exception ex) { _log.Info("NavGrid", "Could not read the navgrid: " + ex.Message); }
     }
@@ -8618,30 +8591,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         if (_currentMap is not { } map)
         { CurrentModelSubmeshVisible = null; CurrentModelSubmeshMirrored = null; return; }
-        var selections = CurrentVisibilitySelections;
         var resolver = _visibilityResolver ??= new MapVisibilityResolver(_mapControllers, _mapVisibility);
-        var regionOf = map.Meshes.ToDictionary(m => m.Index, m => m.RegionHash);
-        // M105: pending layer edits preview live — the group snapshot keeps the FILE's values, so the
-        // check reads the mesh's effective (edited) mask/controller when there is one.
-        var meshByIdx = map.Meshes.ToDictionary(m => m.Index);
+        // M105: pending layer edits preview live - the evaluator reads the mesh's effective (edited) mask/controller.
         var hiddenByUser = MapContent.AllMapPieces
             .Where(p => !p.IsEditorVisible || p.IsDisabled || p.IsRemoved)
             .Select(p => p.MeshIndex).ToHashSet();
-        HasRenderRegions = regionOf.Values.Any(r => r != 0);
-        var vis = new bool[map.Groups.Count];
-        for (int i = 0; i < vis.Length; i++)
-        {
-            var g = map.Groups[i];
-            int flags = g.VisibilityFlags;
-            uint ctrl = g.ControllerHash;
-            if (g.MeshIndex >= 0 && meshByIdx.TryGetValue(g.MeshIndex, out var src))
-            { flags = src.EffectiveVisibility; ctrl = src.EffectiveController; }
-            vis[i] = resolver.IsVisible(flags, ctrl, selections, CurrentStageMask, CurrentEnabledEvents);   // M797: a board stage's exact mask, or null; M802: the events that are on
-            if (hiddenByUser.Contains(g.MeshIndex)) vis[i] = false;
-            if (vis[i] && !RenderRegionsEnabled && g.MeshIndex >= 0
-                && regionOf.TryGetValue(g.MeshIndex, out var region) && region != 0)
-                vis[i] = false;
-        }
+        HasRenderRegions = map.Meshes.Any(m => m.RegionHash != 0);
+        // M843: the ONE visibility function (shared with the Blender link's visibility_eval). M797: a board stage's exact
+        // mask, or null; M802: the events that are on; M104: render regions.
+        var vis = MapVisibilityEvaluator.GroupsVisible(map, resolver, CurrentVisibilitySelection(), hiddenByUser.Contains);
         CurrentModelSubmeshVisible = vis;
 
         // M661: the same groups, by whether their source mesh is mirrored. Built here because this is
@@ -8658,6 +8616,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         UpdateParticleMarkers();
         UpdatePlaceableMarkers();
         RefreshMeshDetails();  // keep the inspector's mesh details + "why visible/hidden" in sync
+        RefreshNavGridForVisibility();   // M843: with the overlay picker on Auto, the dragon / baron state brings its overlay
         PruneSelectionToVisible(); // hidden (filtered-out) meshes must not stay selected/transformable
         if (PlayAllParticles) RebuildParticlePlayback();
         if (AmbienceEnabled) UpdateAmbience(_lastCamPosForAudio, force: true);
@@ -9107,6 +9066,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         _visibilityResolver = new MapVisibilityResolver(_mapControllers, _mapVisibility);
         RebuildVisibilityAxes(_mapVisibility);
         SetMapEvents(_mapControllers, announce: true);   // M802: every event OFF, as in a normal game
+        if (_navMapFolder.Length > 0) { RebuildNavGridCatalog(); ApplyNavGridSelection(); }   // M843: the open path reads the navgrid BEFORE the axes
         LayerControllerChoices.Clear();
         _layerControllerHashes.Clear();
         VisibilityLayerBits.Clear();

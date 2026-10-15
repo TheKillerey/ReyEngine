@@ -149,7 +149,7 @@ public sealed class BlenderLinkM842Tests
         using var client = new TcpClient();
         client.Connect(System.Net.IPAddress.Loopback, server.Port);
         var stream = client.GetStream();
-        BlenderBridgeProtocol.WriteMessage(stream, "{\"op\":\"hello\",\"protocol\":4}");
+        BlenderBridgeProtocol.WriteMessage(stream, "{\"op\":\"hello\",\"protocol\":5}");
         BlenderBridgeProtocol.ReadHeader(stream);
 
         BlenderBridgeProtocol.WriteMessage(stream, "{\"op\":\"navgrid\"}");

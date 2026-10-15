@@ -109,7 +109,10 @@ public sealed partial class MainWindowViewModel
         AssignMaterial = AssignMaterialsFromBlender,
         EditMaterial = EditMaterialsFromBlender,
         PushGeometryEdits = ApplyBlenderGeometryEdits,
-        NavGrid = NavGridForBlender,
+        NavGridFor = NavGridForBlender,
+        NavGridVariants = NavGridVariantsForBlender,
+        Visibility = VisibilityForBlender,
+        VisibilityEval = VisibilityEvalForBlender,
     };
 
     /// <summary>
@@ -233,6 +236,8 @@ public sealed partial class MainWindowViewModel
                 ["map_path"] = _currentMapEntry?.Path ?? "",
                 ["layers"] = layers,
                 ["lightmap_color_scale"] = CurrentLightmapScale,
+                // M843: the editor's visibility right now, so a pull shows the map as the editor does
+                ["visibility"] = VisibilityForBlender(),
             },
         };
     }

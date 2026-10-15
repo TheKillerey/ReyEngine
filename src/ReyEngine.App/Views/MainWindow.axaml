@@ -801,7 +801,21 @@
                       <CheckBox IsChecked="{Binding ShowBushAreas, Mode=OneWay}" Command="{Binding ToggleNavGridOverlayCommand}"
                                 Classes.newFeature="{Binding NewFeature[navgrid-overlay]}"
                                 Content="🌿 NavGrid overlay" FontSize="11"
-                                ToolTip.Tip="Show the map's navigation grid on its 50-unit lattice, read from assets/maps/navgrid/&lt;map&gt;/aipath.aimesh_ngrid. Click to switch the overlay on; use the layer list below to choose which flags to draw. The flags are NOT named - the editor reports the mask and how many cells carry it, and you decide what each one is by looking at where it lands." />
+                                ToolTip.Tip="Show the map's navigation grid on its 50-unit lattice, read from assets/maps/navgrid/&lt;map&gt;/ - the grid the open geometry plays on, with the state overlay of the dragon / baron pit layer picked under Visibility Layers (NAVGRID VARIANT below chooses another grid or overlay). Click to switch the overlay on; use the layer list below to choose which flags to draw. The flags are NOT named - the editor reports the mask and how many cells carry it, and you decide what each one is by looking at where it lands." />
+                      <!-- M843: the map's other grids and its state overlays (dragon terrains, baron pit shapes, Atakhan pits). -->
+                      <StackPanel Spacing="3" IsVisible="{Binding HasNavGridVariants}">
+                        <TextBlock Text="NAVGRID VARIANT" FontSize="10" FontWeight="Bold" />
+                        <TextBlock Text="Grid" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <ComboBox ItemsSource="{Binding NavGridGridLabels}" SelectedIndex="{Binding NavGridGridIndex}"
+                                  FontSize="10" HorizontalAlignment="Stretch" MinWidth="240"
+                                  ToolTip.Tip="Every navigation grid this map ships. Base is the grid the open geometry plays on (its map container's NavGridPath); the others belong to other map skins or events." />
+                        <TextBlock Text="State overlay" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <ComboBox ItemsSource="{Binding NavGridOverlayLabels}" SelectedIndex="{Binding NavGridOverlayIndex}"
+                                  FontSize="10" HorizontalAlignment="Stretch" MinWidth="240"
+                                  ToolTip.Tip="Auto shows the overlay of the dragon / baron pit state picked under Visibility Layers on top of the grid. An overlay replaces the cells it covers (view only; Riot's own switching is not emulated)." />
+                        <TextBlock Text="{Binding NavGridVariantSummary}" FontSize="9" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                      </StackPanel>
                       <TextBlock Text="NAVGRID LAYERS" FontSize="10" FontWeight="Bold" />
                       <TextBlock Text="Every flag this grid contains. They are unlabelled on purpose - name them by what you see."
                                  FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />

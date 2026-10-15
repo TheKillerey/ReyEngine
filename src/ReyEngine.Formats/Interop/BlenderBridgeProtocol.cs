@@ -87,7 +87,7 @@ public static class BlenderBridgeProtocol
 {
     /// <summary>Bumped whenever the framing or the mesh block changes shape. Both sides refuse a mismatch
     /// rather than misreading a payload — a silently wrong decode looks like corrupt geometry.</summary>
-    public const int Version = 4;
+    public const int Version = 5;
 
     /// <summary>The protocol the retired single-file "ReyEngine Bridge" add-on speaks.</summary>
     public const int LegacyBridgeVersion = 2;

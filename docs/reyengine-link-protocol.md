@@ -1,10 +1,15 @@
-# ReyEngine live link — protocol 4
+# ReyEngine live link — protocol 5
 
 The live link between **ReyEngine** (the map editor) and **MapgeoAddon** (its Blender add-on). Protocol 3
 replaced protocol 2, which the retired single-file "ReyEngine Bridge" add-on (`reyengine_bridge.py`) spoke.
 Protocol 4 (ReyEngine M842) adds the grass pivot to the mesh block, keeps every channel and several materials
 through a reshape, un-shares instanced buffers instead of refusing them, and adds the navgrid, read-only
-(`navgrid`). A protocol 3 add-on is told to update; the two sides refuse a mismatch either way.
+(`navgrid`). Protocol 5 (ReyEngine M843) adds the navgrid's variants (`navgrid_variants`, and `variant` /
+`selection` on `navgrid`) and ReyEngine's map-visibility model (`visibility`, `visibility_eval`, and the
+`visibility` block of the `pull` header). The version is bumped because an older ReyEngine answers the new ops
+with an error: hello refuses a mismatch either way ("update MapgeoAddon" / "update ReyEngine"). Even so, MapgeoAddon
+treats `navgrid_variants` and `visibility` as optional during a pull: if they fail, the pull still completes and says
+the controls are unavailable.
 
 This file is kept identical in both repositories:
 
@@ -12,7 +17,8 @@ This file is kept identical in both repositories:
   `BlenderLinkMaterials.cs`, `BlenderLinkRequests.cs`, `MapGeoBlenderBridge.cs` and
   `src/ReyEngine.App/Services/BlenderBridgeServer.cs`.
 - MapgeoAddon: `docs/reyengine-link-protocol.md`; code in `reyengine_link_protocol.py` (wire, no bpy),
-  `reyengine_link.py` (the ReyEngine panel in the LoL Mapgeo tab) and `reyengine_link_navgrid.py`.
+  `reyengine_link.py` (the ReyEngine panel in the LoL Mapgeo tab), `reyengine_link_navgrid.py` and
+  `reyengine_link_visibility.py`.
 
 ## Roles
 
@@ -292,10 +298,14 @@ MapgeoAddon derives these edits by diffing the JSON its material editor keeps on
 (`parameters`, `samplers`, `switches`, `shader_macros`) against a snapshot taken at pull. Only a material whose
 edits were all taken is re-baselined; one with a refused edit sends it again on the next push.
 
-### navgrid (protocol 4, read-only)
+### navgrid (protocol 4, read-only; variants protocol 5)
 
-    → {"op":"navgrid"}
-    ← {"op":"navgrid","found":true,"path":"assets/maps/navgrid/map11/aipath.aimesh_ngrid","source":"project",
+    → {"op":"navgrid"}                                   (optional: "variant":"grid:aipath_srx_3+overlay:navgrid_ocean_seasonal",
+                                                          "selection":{...})
+    ← {"op":"navgrid","found":true,"path":"assets/maps/navgrid/map11/aipath_srx_3.aimesh_ngrid","source":"project",
+       "variant":"grid:aipath_srx_3+overlay:navgrid_ocean_seasonal","base":"grid:aipath_srx_3",
+       "overlays":[{"id":"overlay:navgrid_ocean_seasonal","label":"Dragon: Ocean","path":"assets/maps/navgrid/navgrid_ocean_seasonal.ngrid_overlay",
+                    "changed":614,"outside":0}],
        "version":"7.x","min":[x,y,z],"max":[x,y,z],"cell_size":50,"count_x":N,"count_z":M,"has_heights":true,
        "lift":12,
        "layers":[{"mask":2,"label":"not walkable   (bit 1)","color":[r,g,b,a],"cells":34079,
@@ -310,12 +320,101 @@ its overlay is switched on with no layer chosen (`default_visible`: the commones
 above a cell's ground height ReyEngine draws it. `found:false` with a `message` when the map has none (or it
 is not a version 7 grid).
 
+**Variants (M843).** A map ships several grids and state overlays; `variant` names what to serve, as tokens
+joined by `+`: a grid id (`grid:<file stem>`), overlay ids (`overlay:<file stem>`, applied in order on top of the
+grid), `auto` (the overlays the visibility `selection` implies, see below) or `none`. Without a `variant`, the
+grid and overlays ReyEngine shows right now are served. A missing grid token means the grid ReyEngine shows; a
+missing overlay token means ReyEngine's own overlay choice. `selection` is the object `visibility_eval` takes;
+it is what `auto` is evaluated for (without it, ReyEngine's current selection). An unknown token is answered
+`found:false` with the reason. The reply's `variant` is the composite id actually served, `base` its grid, and
+`overlays` lists each overlay applied with how many cells it changed (`changed`) and how many of its cells fell
+outside the grid (`outside`). The layers are those of the grid AS SHOWN (overlay applied), the `visible` flags
+are the editor's where it has the same flag layer on.
+
 The link only SHOWS the navgrid; there is no op that changes it. MapgeoAddon builds one object per layer in a
 `<map>_NavGrid` collection - each cell as two triangles at its height + `lift`, drawn as a thin wireframe in
 the layer colour and alpha, in front of the map (ReyEngine draws the overlay without depth testing), not
 selectable. Its panel has "Show NavGrid" (ReyEngine's overlay switch: on with no layer chosen shows the
-commonest) and one switch per layer. A map pull mirrors what ReyEngine's overlay shows at that moment; Pull
-NavGrid shows it.
+commonest), a **Grid** and an **Overlay** dropdown (the variants below; a change reloads the layers and keeps
+the layers that were switched on) and one switch per layer. A map pull mirrors what ReyEngine's overlay shows
+at that moment; Pull NavGrid shows it.
+
+### navgrid_variants (protocol 5, M843)
+
+    → {"op":"navgrid_variants"}
+    ← {"op":"navgrid_variants","found":true,"map":"map11","default_grid":"grid:aipath_srx_3",
+       "default_reason":"the map container 'base_srx' names it (NavGridPath)",
+       "current_grid":"grid:aipath_srx_3","current_overlay":"auto","current_overlays":[],
+       "variants":[
+         {"id":"grid:aipath_srx_3","label":"Base: aipath_srx_3 - Base_SRX, Milkshake_SRS +2","path":"assets/maps/navgrid/map11/aipath_srx_3.aimesh_ngrid",
+          "kind":"grid","group":"Base","detail":"...","version":"7.1","supported":true,"in_game":true,"default":true},
+         {"id":"overlay:navgrid_ocean_seasonal","label":"Dragon: Ocean","path":"assets/maps/navgrid/navgrid_ocean_seasonal.ngrid_overlay",
+          "kind":"overlay","group":"Dragon","detail":"...","axis":"0x9e019715","bit":8,"in_game":true}, ...],
+       "bytes":0}
+
+Every navigation grid and state overlay of the open map, with readable labels. `kind` is `grid` (a whole
+`.aimesh_ngrid`) or `overlay` (a `.ngrid_overlay`: the cells one map state changes, shown on top of a grid). A grid
+whose header version is not 7 is listed with `supported:false`, its `reason` ("unsupported version 8.0") and the
+reason appended to its label; it cannot be served. `default_grid` is the grid the open geometry plays on (its map
+container's `NavGridPath`; the classic `aipath` when nothing names one); `current_grid`, `current_overlay`
+(`auto`, `none` or an overlay id) and `current_overlays` (the overlays applied now) are what ReyEngine shows.
+An overlay tied to a Map Visibility state carries that state: `axis` (the visibility axis id) and `bit`.
+
+Overlays are tied to a state by **name**: a map declares them (`MapNavGridOverlays`) under the hash of
+`NavGrid_<layer>`, and for Map11 Chemtech, Infernal, Mountain and Ocean (the Map Visibility axis, group "Dragon")
+and Cup and Tunnel (the Baron Pit axis, group "Baron") match a layer name exactly; two further overlays
+(`AtakhanBot`, `AtakhanTop`) match none and are labelled "Overlay: ...". Hextech, Cloud, Void, Base and Upgraded
+have no overlay. An overlay is shown by **replacing** the base grid's flag word in each of its blocks. Nothing in
+the data says when the game switches an overlay on, so this is ReyEngine's reading, not Riot's wiring, and Riot's
+own variant handling is not emulated beyond picking or overlaying for display.
+
+### visibility (protocol 5, M843)
+
+    → {"op":"visibility"}
+    ← {"op":"visibility","found":true,
+       "axes":[{"id":"0x9e019715","name":"Map Visibility","primary":true,"initial_mask":1,"selected":0,
+                "options":[{"label":"All","bit":0},{"label":"Base","bit":1},{"label":"Infernal","bit":2}, ...]},
+               {"id":"0xd31ac6ce","name":"Baron Pit","primary":false,"initial_mask":1,"selected":0,"options":[...]}],
+       "events":[{"name":"SR_Hall_Of_Legends","label":"SR Hall Of Legends","on":false}, ...],
+       "render_regions":{"available":true,"enabled":false},
+       "stages":null,
+       "selection":{"axes":{"0x9e019715":0,"0xd31ac6ce":0},"events":[],"render_regions":false,"stage":0},
+       "visible":[0,1,2,...],"navgrid_overlays":[],"bytes":0}
+
+ReyEngine's map-visibility model: the same option lists, labels and defaults as its Visibility Layers panel (Map
+Visibility, Baron Pit, Events, Render regions, and on a TFT board the Board stage), and ReyEngine's CURRENT
+selection (`selected` per axis, `on` per event, `render_regions.enabled`, `stages.selected`). A fresh map opens on
+All, no event on and render regions off. `stages` (`{"options":[{"index":0,"label":"Start","mask":null}, ...],
+"selected":0}`) is null on a map without board stages. `visible` is the list of mesh indices ReyEngine draws under
+that selection; `navgrid_overlays` the overlay ids the selection implies.
+
+### visibility_eval (protocol 5, M843)
+
+    → {"op":"visibility_eval","selection":{"axes":{"0x9e019715":2,"0xd31ac6ce":0},"events":["SR_Hall_Of_Legends"],
+                                          "render_regions":false,"stage":0}}
+    ← {"op":"visibility_eval","found":true,"visible":[...],"total":586,"selection":{...},"navgrid_overlays":[...],"bytes":0}
+
+Which meshes are drawn under a selection, computed by ReyEngine's own function (`MapVisibilityEvaluator`, the one
+its viewports draw with): dragon bits decide (a mask on all layers or on Base alone stays; a mask naming dragons
+shows only under those), a visibility controller overrides the mask, an event's content shows only while the
+event is on, a board stage replaces the primary axis, and meshes of a render region show only with regions on.
+Everything omitted keeps the default (axes All, no events, regions off, no stage). `axes` keys are the axis `id`
+or its name; a value must be 0 (All) or a layer bit of that axis. A selection the map cannot take (an unknown
+axis, a bit that is not a layer, an unknown event, a stage the map does not have) is answered `found:false` with
+the reason - never guessed. A mesh is drawn when any of its draw groups is.
+
+MapgeoAddon's ReyEngine panel has a **Visibility** section mirroring these controls (a dropdown per axis, a box
+per event, Render regions, Board stage when present) with the defaults ReyEngine sends. Changing one asks
+`visibility_eval` and sets `hide_viewport`/`hide_render` on every pulled mesh ReyEngine does not draw; the layer
+collections stay as an outline and are not what hides a mesh. **Sync from ReyEngine** adopts ReyEngine's current
+selection. While the navgrid's Overlay dropdown is **Auto**, picking a dragon or baron pit state also loads the
+navgrid overlay of the same name; choosing an overlay by hand stops that. A pull applies ReyEngine's current
+visibility (the `visibility` block of the `pull` header is the `visibility` reply).
+
+Not part of the model: the editor's per-mesh eye / disable / delete state (editing state, not map visibility). The mesh
+indices in `visible` are `MapGeoMesh.Index`, the same number a pull sends as each mesh's `i` (`rey_index` in Blender).
+MapgeoAddon hides/shows only the objects under the current pull's root collection, and so overrides any manual hide
+the user set on them.
 
 ## Installing MapgeoAddon from ReyEngine
 
@@ -338,7 +437,8 @@ Blender's user preferences**; then it deletes `reyengine_bridge.py` and its comp
 - Adding or removing parameters, samplers or switches, creating materials and changing a material's shader
   are not part of protocols 3 and 4.
 - Navgrid: version 7 only, shown read-only (flags and heights; the region layers and the rest of each cell
-  record are not sent). Editing it is not part of the link.
+  record are not sent). Editing it is not part of the link. State overlays are shown by replacing flag words
+  (an interpretation checked against the grid's own data); the regions files of an overlay are not read.
 - A reshape cannot write tangents (TEXCOORD6) or packed-format UVs; they are zeroed and logged.
 - Transforms pushed from Blender are applied without their own undo step (as in protocol 2); assignments and
   material edits are undoable.

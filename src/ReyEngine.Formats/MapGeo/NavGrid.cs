@@ -150,6 +150,23 @@ public sealed class NavGrid
                     yield return CellBounds(x, z);
     }
 
+    /// <summary>
+    /// M843: this grid with its flag plane replaced - how a navgrid overlay is shown on top of its base. Heights,
+    /// bounds and the header are shared with the original (an overlay only carries flag words).
+    /// </summary>
+    public NavGrid WithFlags(ushort[] flags)
+    {
+        ArgumentNullException.ThrowIfNull(flags);
+        if (flags.Length != CellCount) throw new ArgumentException($"expected {CellCount} flags, got {flags.Length}", nameof(flags));
+        return new NavGrid
+        {
+            VersionMajor = VersionMajor, VersionMinor = VersionMinor,
+            Min = Min, Max = Max, CellSize = CellSize,
+            CountX = CountX, CountZ = CountZ, Flags = flags,
+            Heights = Heights, HasHeights = HasHeights,
+        };
+    }
+
     public int CountWith(ushort mask)
     {
         if (!HasFlags) return 0;

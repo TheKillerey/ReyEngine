@@ -36,6 +36,15 @@ public sealed record BlenderBridgeHandlers(
     public Func<IReadOnlyList<BridgeMesh>, BridgeEditReply>? PushGeometryEdits { get; init; }
     /// <summary>M842: the open map's navgrid and the editor's overlay layers (read-only: shown, never edited).</summary>
     public Func<BridgeNavGrid>? NavGrid { get; init; }
+    /// <summary>M843: the same, for a request that may name a variant and a visibility selection (the whole request object).
+    /// Used instead of <see cref="NavGrid"/> when set.</summary>
+    public Func<JsonElement, BridgeNavGrid>? NavGridFor { get; init; }
+    /// <summary>M843: the <c>navgrid_variants</c> reply body (every field but <c>op</c>).</summary>
+    public Func<Dictionary<string, object?>>? NavGridVariants { get; init; }
+    /// <summary>M843: the <c>visibility</c> reply body: the editor's visibility model and current selection.</summary>
+    public Func<Dictionary<string, object?>>? Visibility { get; init; }
+    /// <summary>M843: the <c>visibility_eval</c> reply body for the request's selection.</summary>
+    public Func<JsonElement, Dictionary<string, object?>>? VisibilityEval { get; init; }
 }
 
 /// <summary>
@@ -264,7 +273,10 @@ public sealed class BlenderBridgeServer : IDisposable
                     case "push_geometry": PushGeometry(stream, (int)bodyBytes); break;
                     case "assign_material": AssignMaterial(stream, request); break;
                     case "edit_material": EditMaterial(stream, request); break;
-                    case "navgrid": SendNavGrid(stream); break;
+                    case "navgrid": SendNavGrid(stream, request); break;
+                    case "navgrid_variants": SendSimple(stream, "navgrid_variants", Handlers?.NavGridVariants, "the navgrid variants"); break;
+                    case "visibility": SendSimple(stream, "visibility", Handlers?.Visibility, "the map visibility"); break;
+                    case "visibility_eval": SendVisibilityEval(stream, request); break;
                     default: Fail(stream, $"unknown op '{op}'"); break;
                 }
             }
@@ -490,10 +502,28 @@ public sealed class BlenderBridgeServer : IDisposable
         RespondEdits(stream, reply, unreadable);
     }
 
-    private void SendNavGrid(System.IO.Stream stream)
+    /// <summary>M843: a read-only op whose whole reply is a dictionary the editor builds.</summary>
+    private void SendSimple(System.IO.Stream stream, string op, Func<Dictionary<string, object?>>? work, string what)
     {
-        if (Handlers?.NavGrid is not { } nav) { Fail(stream, "this ReyEngine cannot serve the navgrid"); return; }
-        var answer = Run(nav, new BridgeNavGrid(false, "", "", null, Array.Empty<BridgeNavLayer>(), "no map is open"));
+        if (work is null) { Fail(stream, $"this ReyEngine cannot serve {what}"); return; }
+        var body = Run(work, new Dictionary<string, object?> { ["found"] = false, ["message"] = "no map is open" });
+        var reply = new Dictionary<string, object?>(body) { ["op"] = op, ["bytes"] = 0 };
+        BlenderBridgeProtocol.WriteMessage(stream, JsonSerializer.Serialize(reply, Json));
+    }
+
+    private void SendVisibilityEval(System.IO.Stream stream, JsonElement request)
+    {
+        if (Handlers?.VisibilityEval is not { } eval) { Fail(stream, "this ReyEngine cannot evaluate map visibility"); return; }
+        var body = Run(() => eval(request), new Dictionary<string, object?> { ["found"] = false, ["message"] = "no map is open" });
+        var reply = new Dictionary<string, object?>(body) { ["op"] = "visibility_eval", ["bytes"] = 0 };
+        BlenderBridgeProtocol.WriteMessage(stream, JsonSerializer.Serialize(reply, Json));
+    }
+
+    private void SendNavGrid(System.IO.Stream stream, JsonElement request)
+    {
+        if (Handlers?.NavGrid is null && Handlers?.NavGridFor is null) { Fail(stream, "this ReyEngine cannot serve the navgrid"); return; }
+        var fallback = new BridgeNavGrid(false, "", "", null, Array.Empty<BridgeNavLayer>(), "no map is open");
+        var answer = Handlers!.NavGridFor is { } forRequest ? Run(() => forRequest(request), fallback) : Run(Handlers.NavGrid!, fallback);
         var header = new Dictionary<string, object?>
         {
             ["op"] = "navgrid",
@@ -503,6 +533,13 @@ public sealed class BlenderBridgeServer : IDisposable
             ["bytes"] = 0,
         };
         if (answer.Message is { Length: > 0 } message) header["message"] = message;
+        if (answer.Variant.Length > 0)   // M843
+        {
+            header["variant"] = answer.Variant;
+            header["base"] = answer.BaseId;
+            header["overlays"] = answer.Overlays.Select(o => new Dictionary<string, object?>
+            { ["id"] = o.Id, ["label"] = o.Label, ["path"] = o.Path, ["changed"] = o.Changed, ["outside"] = o.Outside }).ToList();
+        }
         byte[] body = Array.Empty<byte>();
         if (answer.Found && answer.Grid is { } grid)
         {

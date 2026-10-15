@@ -137,11 +137,21 @@ public static class BlenderLinkRequests
 public sealed record BridgeNavLayer(ushort Mask, string Label, System.Numerics.Vector4 Color, int Cells,
     bool VisibleInEditor, bool DefaultVisible);
 
+/// <summary>M843: one state overlay shown on top of the base grid.</summary>
+public sealed record BridgeNavOverlay(string Id, string Label, string Path, int Changed, int Outside);
+
 /// <summary>M842: the <c>navgrid</c> answer: the open map's navgrid and the editor's overlay layers. Read-only:
 /// the link shows the navgrid, it never edits it.</summary>
 public sealed record BridgeNavGrid(bool Found, string Path, string Source, ReyEngine.Formats.MapGeo.NavGrid? Grid,
     IReadOnlyList<BridgeNavLayer> Layers, string? Message)
 {
+    /// <summary>M843: the composite id served (<c>grid:aipath_srx_3+overlay:navgrid_ocean_seasonal</c>); "" when none.</summary>
+    public string Variant { get; init; } = "";
+    /// <summary>M843: the id of the whole grid the overlays were applied to.</summary>
+    public string BaseId { get; init; } = "";
+    /// <summary>M843: the state overlays applied on top of the base, in order, with how many cells each changed.</summary>
+    public IReadOnlyList<BridgeNavOverlay> Overlays { get; init; } = Array.Empty<BridgeNavOverlay>();
+
     /// <summary>How far above a cell's ground height the editor draws it (world units).</summary>
     public const float Lift = 12f;
 }

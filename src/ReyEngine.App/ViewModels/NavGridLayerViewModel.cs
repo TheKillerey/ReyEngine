@@ -28,9 +28,16 @@ public sealed partial class NavGridLayerViewModel : ObservableObject
     public int Bit => System.Numerics.BitOperations.TrailingZeroCount(Mask);
     /// <summary>M568: the name comes from LOOKING at the layer on a map, not from its distribution.
     /// A flag nobody has identified shows its mask alone rather than a guess.</summary>
-    public string Label => ReyEngine.Formats.MapGeo.NavGrid.LabelFor(Mask) is { } named
-        ? $"{named}   (bit {Bit})"
-        : $"0x{Mask:x4}  ·  bit {Bit}  ·  unidentified";
+    public string Label => LabelOf(Mask);
+
+    /// <summary>The label of a flag layer - the same text the editor's list and the Blender link show.</summary>
+    public static string LabelOf(ushort mask)
+    {
+        int bit = System.Numerics.BitOperations.TrailingZeroCount(mask);
+        return ReyEngine.Formats.MapGeo.NavGrid.LabelFor(mask) is { } named
+            ? $"{named}   (bit {bit})"
+            : $"0x{mask:x4}  ·  bit {bit}  ·  unidentified";
+    }
     public string Detail => $"{Cells:n0} cells · {Share:P1}";
 
     /// <summary>The layer's colour as a brush, so the list can show which is which in the viewport.</summary>

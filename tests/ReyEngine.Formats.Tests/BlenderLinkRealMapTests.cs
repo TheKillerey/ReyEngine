@@ -97,7 +97,7 @@ public sealed class BlenderLinkRealMapTests : IDisposable
         client.Connect(System.Net.IPAddress.Loopback, server.Port);
         var stream = client.GetStream();
 
-        var (hello, _) = Send(stream, new { op = "hello", protocol = 4, client = "MapgeoAddon test", token = server.Token!.ToLowerInvariant() });
+        var (hello, _) = Send(stream, new { op = "hello", protocol = 5, client = "MapgeoAddon test", token = server.Token!.ToLowerInvariant() });
         Assert.Equal("hello", hello.GetProperty("op").GetString());
         Assert.Equal(MapgeoPath, hello.GetProperty("map_path").GetString());
         Assert.Equal(MaterialsPath, hello.GetProperty("materials_bin").GetString());
