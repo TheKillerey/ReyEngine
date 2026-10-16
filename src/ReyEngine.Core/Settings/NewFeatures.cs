@@ -39,7 +39,7 @@ public static class NewFeatures
     /// <summary>The release whose highlights are currently on offer. Bumped when a release ADDS entries -
     /// a fix-only release (0.4.6) leaves it, so the What's New list keeps its newest header and nothing
     /// glows for a release that changed no entry point.</summary>
-    public const string CurrentVersion = "0.5.0";
+    public const string CurrentVersion = "0.5.2";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -136,6 +136,14 @@ public static class NewFeatures
         // address a field by its hash, so declarations need 1.21. The line said 1.20+ when 0.5.0 shipped.
         NewFeature.Note("0.5.0", "Project Settings can send game bin edits to LTK Manager 1.21+ as declarations, so a mod keeps Riot's later changes to those bins"),
         NewFeature.Note("0.5.0", "Bake tangents into a skin's .skn for normal-mapped skins, byte for byte what LTK Manager writes"),
+        // 0.5.2. Notes only: the Material Graph and Shader Graph open from the Material Editor, the Chroma tab is
+        // in the Character window and the NavGrid variant block in the outliner, so none has a control here.
+        NewFeature.Note("0.5.2", "Material Graph: every material opens as an Unreal-style node graph, edited through the Material Editor"),
+        NewFeature.Note("0.5.2", "Shader Graph: build your own shader for Summoner's Rift ground from nodes, with your own parameters and textures, and ship it with the mod"),
+        NewFeature.Note("0.5.2", "Chroma tab in the Character window: recolour a skin's textures, colour parameters and effects"),
+        NewFeature.Note("0.5.2", "LTK Manager's layered mods: import, preview and edit their GameData, and export your own"),
+        NewFeature.Note("0.5.2", "Rey's Mapgeo Blender Addon (v0.6.0) is the Blender link: materials, face edits, the navgrid and map visibility"),
+        NewFeature.Note("0.5.2", "NavGrid variants: the map's real grid, with the dragon and Baron state overlays"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
