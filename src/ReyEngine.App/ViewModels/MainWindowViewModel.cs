@@ -4722,6 +4722,25 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         finally { Interlocked.Decrement(ref _mapThumbnailBusy); }
     }
 
+    /// <summary>M844: the last D3D11 scene build had no lights, so no slice was pinned to the in-shader light loop.</summary>
+    private bool _dx11SceneBuiltUnpinned;
+
+    /// <summary>M844: pure decision - should a light list that just became non-empty rebuild the D3D11 scene? Only when the
+    /// last build pinned nothing (so the pin choice would flip), a map is open, and a map load is not mid-flight (it bumps
+    /// MapGeneration itself, which rebuilds once with the final list).</summary>
+    public static bool ShouldRebuildForLights(bool dx11On, bool mapOpen, bool loadingLights, bool builtUnpinned, bool hasLightsNow)
+        => dx11On && mapOpen && !loadingLights && builtUnpinned && hasLightsNow;
+
+    /// <summary>M844: called by the window when HasDynamicLights changes. True (once per unpinned build) when the scene must
+    /// be rebuilt so the new lights get Riot's in-shader loop instead of the additive overlay.</summary>
+    public bool ShouldRebuildDx11ForLights()
+    {
+        if (!ShouldRebuildForLights(UseDx11Viewport, _currentMap is not null, _applyingLighting, _dx11SceneBuiltUnpinned, HasDynamicLights))
+            return false;
+        _dx11SceneBuiltUnpinned = false;   // the rebuild re-reads and re-records it
+        return true;
+    }
+
     private async Task<string> BuildDx11SceneCoreAsync(ReyEngine.Rendering.D3D11.ShaderPreviewRenderer renderer)
     {
         if (_currentMap is not { } map) return "No map open - the D3D11 surface has no scene to draw yet.";
@@ -4771,11 +4790,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // into the material's own pixel shader. Read here, on the UI thread, for the same reason as the
         // two lines above - DynamicLights is view-model state.
         //
-        // NOTE the consequence: the choice is baked into the scene. Loading a Light.dat AFTER the D3D11
-        // scene was built leaves those materials on the overlay until the scene is rebuilt (a map change
-        // or a viewport re-toggle). Turning the lights OFF afterwards is fine - an empty cluster grid
-        // makes the in-shader loop a no-op.
+        // NOTE the consequence: the choice is baked into the scene. M844: a light list that arrives AFTER
+        // this build (Light.dat load, light import, the first light added) flips HasDynamicLights, and the
+        // window rebuilds once via ShouldRebuildDx11ForLights - recorded below as _dx11SceneBuiltUnpinned.
+        // Turning the lights OFF afterwards is fine - an empty cluster grid makes the in-shader loop a no-op.
+        // LoadMapGeoAsync bumps MapGeneration only after the lights are published, so this read is final.
         bool hasDynamicLights = DynamicLights is { Count: > 0 };
+        _dx11SceneBuiltUnpinned = !hasDynamicLights;
 
         Services.Dx11SceneBuilder.PreparedScene? prepared = null;
         string? error = null;
@@ -12344,7 +12365,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 PrebuildRayIndex(map, MeshVerticesRevision);   // M172a: warm it so the first click is instant
                 _currentMapBytes = rawMapBytes;
                 _currentMapEntry = entry;
-                MapGeneration++;
                 HasMapGeo = true;   // M79
                 // M446 (D): show the map's OWN placed lights, not just the ones the editor happens to hold.
                 ImportPlacedLightsIntoPanel(entry.Path);
@@ -12384,6 +12404,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 RestoreMapLighting(entry);
                 // M515: from here on the user's edits are their own again.
                 _applyingLighting = wasApplyingLighting;
+                // M844: THE bump is here, after the map's lights are in DynamicLights, and not where the map is
+                // assigned. MapGeneration's PropertyChanged starts the D3D11 scene build synchronously, and that
+                // build reads DynamicLights before its first await to decide whether to pin Riot's in-shader
+                // light loop. Bumped earlier, it saw an empty (or the previous map's) list on a first open, pinned
+                // nothing, and every light fell to the far brighter additive overlay until a viewport re-toggle.
+                MapGeneration++;
                 ClearSecondaryTextures(); // maps don't use champion secondary samplers
                 PublishMapMaterialLayers(); // re-apply map special-material layers wiped above
                 MapGeoInspector.Show(map, entry.Path);

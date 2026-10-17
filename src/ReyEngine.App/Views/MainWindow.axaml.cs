@@ -157,6 +157,10 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                     // one on screen - stale geometry that looked like the new map had failed to load.
                     else if (e.PropertyName == nameof(MainWindowViewModel.MapGeneration)
                              && vm.UseDx11Viewport) OnDx11Toggled(vm);
+                    // M844: lights that arrive after the scene was built (Light.dat, import, first light) need the pin
+                    // decision re-made; rebuilds only when the last build pinned nothing, so light edits cost nothing.
+                    else if (e.PropertyName == nameof(MainWindowViewModel.HasDynamicLights)
+                             && vm.ShouldRebuildDx11ForLights()) OnDx11Toggled(vm);
                     // M501: ...and when the MATERIALS change under a viewport that is already on. The scene
                     // caches resolved shader permutations, decoded textures and every authored parameter,
                     // so a material edit, a legacy port or a bulk macro change left DX11 drawing the old
