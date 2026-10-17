@@ -31,6 +31,17 @@ public sealed unsafe partial class ShaderPreviewRenderer
     private ComPtr<ID3D11InputLayout> _lightLayout;
     private ComPtr<ID3D11Buffer> _lightCb;
     private ComPtr<ID3D11DepthStencilState> _lightDepth;
+    private ComPtr<ID3D11RasterizerState> _lightRaster;
+    private (bool Wireframe, bool Mirror) _lightRasterKey;
+
+    /// <summary>M845: the depth bias the overlay draws with, toward the camera. D3D11 applies it as
+    /// <c>DepthBias * r + SlopeScaledDepthBias * maxDepthSlope</c> where r is the smallest representable
+    /// step of the primitive's depth (the buffer is D32_FLOAT, so r = 2^(exp(z) - 23)): a bias in
+    /// ULPs of the actual buffer, not in world units. Negative = nearer under standard depth (clear 1,
+    /// LESS). 16 ULPs absorbs the rounding gap between two vertex shaders' clip positions; the slope term
+    /// keeps a grazing, steeply sloped triangle from losing the same race across a pixel.</summary>
+    public const int LightDepthBias = -16;
+    public const float LightSlopeScaledDepthBias = -1f;
     private ComPtr<ID3D11BlendState> _lightBlend;
     private ComPtr<ID3D11ShaderResourceView> _lightGrey;
     private bool _lightTried;
@@ -78,11 +89,13 @@ VOut vsmain(VIn i)
 {
     VOut o;
     o.pos = mul(float4(i.pos, 1.0), gViewProj);
-    // This pass recomputes clip position with its own shader, so its depth does not land bit-identically
-    // on what Riot's vertex shader wrote for the same triangle - at equal depth LESS_EQUAL is a coin toss
-    // (see EnsureOverlay's no-test escape hatch). The bucket grid solved the same problem with this exact
-    // clip-space bias (GridHlsl), so the constant is proven on map-scale depth rather than guessed.
-    o.pos.z -= 0.0006 * o.pos.w;
+    // M845: NO clip-space bias here. This pass recomputes clip position with its own shader, so at equal
+    // depth LESS_EQUAL against Riot's vertex shader is a coin toss, and the first answer was a constant
+    // `pos.z -= 0.0006 * pos.w`. That constant is a fixed slice of NDC depth, which at map range (standard
+    // depth, near = min(1, distance * 0.0025)) is hundreds of world units, so a surface buried under the
+    // visible one still passed the test and took light. The coplanar tolerance now lives in the rasterizer
+    // state (see EnsureLightRaster): a few depth-buffer ULPs plus a slope term, which tracks the real
+    // precision of the buffer at any distance instead of a fixed distance in the world.
     o.world = i.pos;               // map geometry is world-space (RenderFrame draws it with world = I)
     o.nrm = i.nrm;
     o.uv = i.uv;
@@ -236,6 +249,28 @@ float4 psmain(VOut i) : SV_Target
         return true;
     }
 
+    private void EnsureLightRaster(PreviewSettings s)
+    {
+        var key = (s.Wireframe, s.MirrorX);
+        if (_lightRaster.Handle is not null && _lightRasterKey == key) return;
+        _lightRaster.Dispose();
+        _lightRaster = default;
+        _lightRasterKey = key;
+        var rd = new RasterizerDesc
+        {
+            FillMode = s.Wireframe ? FillMode.Wireframe : FillMode.Solid,
+            CullMode = CullMode.None,
+            FrontCounterClockwise = !s.MirrorX,
+            DepthClipEnable = 1,
+            DepthBias = LightDepthBias,
+            DepthBiasClamp = 0f,
+            SlopeScaledDepthBias = LightSlopeScaledDepthBias,
+        };
+        ComPtr<ID3D11RasterizerState> rs = default;
+        _device.CreateRasterizerState(in rd, ref rs);
+        _lightRaster = rs;
+    }
+
     private bool CompileLight(D3DCompiler compiler, byte* src, int len, string entry, string target,
         ID3D10Blob** code, ID3D10Blob** errs)
     {
@@ -299,7 +334,8 @@ float4 psmain(VOut i) : SV_Target
         _ctx.VSSetConstantBuffers(0, 1, ref _lightCb);
         _ctx.PSSetConstantBuffers(0, 1, ref _lightCb);
         _ctx.PSSetSamplers(0, 1, ref _linearWrap);
-        _ctx.RSSetState(_raster);   // cull-off scene state: depth already resolves what is visible
+        EnsureLightRaster(s);
+        _ctx.RSSetState(_lightRaster.Handle is not null ? _lightRaster : _raster);   // cull off like the scene's, plus the M845 bias
         _ctx.OMSetDepthStencilState(_lightDepth, 0);
         var factor = stackalloc float[4] { 0f, 0f, 0f, 0f };
         _ctx.OMSetBlendState(_lightBlend, factor, 0xFFFFFFFF);
@@ -384,7 +420,7 @@ float4 psmain(VOut i) : SV_Target
     private void DisposeDynamicLights()
     {
         _lightVs.Dispose(); _lightPs.Dispose(); _lightLayout.Dispose();
-        _lightCb.Dispose(); _lightDepth.Dispose(); _lightBlend.Dispose();
+        _lightCb.Dispose(); _lightDepth.Dispose(); _lightRaster.Dispose(); _lightRaster = default; _lightBlend.Dispose();
         _lightGrey.Dispose();
     }
 }
