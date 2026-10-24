@@ -8142,8 +8142,35 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private string? ResolveBinName(uint h)
     {
         if (_resolver.Database.TryGetBinName(h, out var n)) return n;
-        return Meta.TryGetName(h, out var m) ? m : null;
+        if (Meta.TryGetName(h, out var m)) return m;
+        return MapGeoNamesByKey().TryGetValue(h, out var g) ? g : null;
     }
+
+    /// <summary>M847: the open map's own material names, keyed by the object key they hash to. Since 16.21 a
+    /// material's <c>name</c> is an XXH3 hash, so a mod's own materials (paths no hash table knows, e.g. Old SR's
+    /// Maps/KitPieces/SRX/...) came out as 0x... - the Materials tab then listed hashes and the selected-mesh
+    /// filter matched nothing ("0 of 369"). The mapgeo still names every material it draws as text, and the
+    /// object key is FNV-1a of that path, so it is a name source of its own. Consulted last: it never changes a
+    /// name the tables already give. Rebuilt when the open map changes.</summary>
+    private IReadOnlyDictionary<uint, string> MapGeoNamesByKey()
+    {
+        var map = _currentMap;
+        var cached = _namesByMapKey;
+        if (cached.Map == map) return cached.Names;
+        var names = new Dictionary<uint, string>();
+        if (map is not null)
+            foreach (var g in map.Groups)
+                if (!string.IsNullOrEmpty(g.Material))
+                {
+                    names.TryAdd(HashAlgorithms.Fnv1a(g.Material), g.Material);
+                    names.TryAdd(HashAlgorithms.Fnv1aRaw(g.Material), g.Material);
+                }
+        _namesByMapKey = (map, names);
+        return names;
+    }
+
+    private (MapGeoAsset? Map, IReadOnlyDictionary<uint, string> Names) _namesByMapKey =
+        (null, new Dictionary<uint, string>());
 
     /// <summary>
     /// M590: hash to WAD PATH — the 64-bit counterpart of <see cref="ResolveBinName"/>.
