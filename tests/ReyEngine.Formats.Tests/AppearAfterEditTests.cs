@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.App.ViewModels;
@@ -28,7 +29,7 @@ public sealed class AppearAfterEditTests
         });
         byte[] bin;
         using (var ms = new MemoryStream()) { new BinTree(new[] { chars }, Array.Empty<string>()).Write(ms); bin = ms.ToArray(); }
-        id = MapPlaceableWriter.NewAnimatedPropId(new BinTree(new MemoryStream(bin, false)), H("Urf_1"));
+        id = MapPlaceableWriter.NewAnimatedPropId(BinTreeIo.Read(bin), H("Urf_1"));
         return MapPlaceableWriter.WriteEdits(bin, new[]
         {
             new MapPlacementEdit(id)
@@ -84,7 +85,7 @@ public sealed class AppearAfterEditTests
         var reread = Node(bin);
         Assert.Equal(id, reread.Prop.Id);                 // the same placement, not a new one
         Assert.Equal(120m, reread.AppearAfterSeconds);
-        Assert.Equal(2, new BinTree(new MemoryStream(bin, false)).Objects.Count);   // one controller, replaced
+        Assert.Equal(2, BinTreeIo.Read(bin).Objects.Count);   // one controller, replaced
     }
 
     [Fact]
@@ -110,7 +111,7 @@ public sealed class AppearAfterEditTests
         bin = MapPlaceableWriter.WriteEdits(bin, new[] { EditFor(node) }, out string? error)!;
         Assert.Null(error);
         Assert.Null(Node(bin).Prop.AppearAfterSeconds);
-        Assert.Single(new BinTree(new MemoryStream(bin, false)).Objects);   // the controller went with it
+        Assert.Single(BinTreeIo.Read(bin).Objects);   // the controller went with it
     }
 
     [Fact]

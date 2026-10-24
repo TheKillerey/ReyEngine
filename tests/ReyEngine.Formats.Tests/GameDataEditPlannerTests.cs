@@ -1,3 +1,5 @@
+using LeagueToolkit.Core.Meta;
+using LeagueToolkit.Core.Meta.Properties;
 using System.Text.Json;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.LtkGameData;
@@ -301,5 +303,33 @@ public sealed class GameDataEditPlannerTests
         Assert.Contains("Test/Obj/A is missing", BinTreeEquivalence.FirstDifference(left, missing, Names));
         var moreLinks = SafeBinTree.Parse(Bin(new[] { "data/x.bin", "data/y.bin" }, a, b));
         Assert.Contains("dependency data/y.bin is extra", BinTreeEquivalence.FirstDifference(left, moreLinks, Names));
+    }
+
+    // ===================================================== 16.21: StaticMaterialDef.name is a Hash 8 bytes wide
+
+    [Fact]
+    public void A_renamed_material_is_declared_as_its_hash_and_applies_back_as_zero_x_11_and_eight_bytes()
+    {
+        static byte[] Material(string name) => ReyEngine.Formats.Meta.BinTreeIo.Serialize(new BinTree(new[]
+        {
+            new BinTreeObject(H("Test/Obj/A"), H("StaticMaterialDef"), new BinTreeProperty[]
+            {
+                new BinTreeString(H("name"), name), new BinTreeI32(H("count"), 1),
+            }),
+        }, Array.Empty<string>()));
+        var names = new Known(("Test/Obj/A", ""), ("StaticMaterialDef", ""), ("name", ""), ("count", ""));
+        byte[] imported = Material("Maps/T/Old"), edited = Material("Maps/T/New");
+
+        var plan = GameDataEditPlanner.Plan(Path, imported, edited, names, NoSchema.Instance);
+        ulong want = ReyEngine.Formats.Meta.BinWireNormalizer.NameHash("Maps/T/New");
+        Assert.Contains($"0x{want:x16}", plan.ModuleText);
+
+        var applied = GameDataApplier.Apply(imported, GameDataDocument.Parse("{\"version\":1,\"modules\":[" + plan.ModuleText + "]}").Modules[0].Edits!,
+            _ => GameDataBytesRead.Failed("none"), _ => GameDataEntryRead.None, NoSchema.Instance);
+        Assert.Equal(edited, applied.Bytes);
+        var name = (PropInt)PropCodec.ReadObject(applied.Bytes, H("Test/Obj/A"))!.Properties.ValueAt(
+            PropCodec.ReadObject(applied.Bytes, H("Test/Obj/A"))!.Properties.IndexOf(H("name")));
+        Assert.Equal(PropKind.Hash, name.Kind);
+        Assert.Equal(want, name.Bits);
     }
 }

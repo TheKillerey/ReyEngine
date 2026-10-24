@@ -41,7 +41,7 @@ public class MapGraphicsFeatureTests
 
     private static IReadOnlyList<BinTreeProperty> ComponentsOf(byte[] bin)
     {
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         var container = tree.Objects.Values.First(o => o.ClassHash == ContainerCls);
         return ((BinTreeContainer)container.Properties[ComponentsField]).Elements.ToList();
     }
@@ -554,7 +554,7 @@ public class MapGraphicsFeatureTests
         Assert.NotNull(updated);
         Assert.True(result.Changed);
 
-        var tree = new BinTree(new MemoryStream(updated!, false));
+        var tree = BinTreeIo.Read(updated!);
         var channel = tree.Objects.Values.FirstOrDefault(o => o.ClassHash == MapGameplayTextureBuilder.ChannelClass);
         Assert.NotNull(channel);
         Assert.Equal("Grass", ((BinTreeString)channel!.Properties[MapGameplayTextureBuilder.FieldChannelName]).Value);
@@ -577,7 +577,7 @@ public class MapGraphicsFeatureTests
         byte[] twice = MapGameplayTextureBuilder.SetChannel(
             once, MapGameplayTextureBuilder.Slot.Red, "Grass", null, out _)!;
 
-        var tree = new BinTree(new MemoryStream(twice, false));
+        var tree = BinTreeIo.Read(twice);
         Assert.Single(tree.Objects.Values.Where(o => o.ClassHash == MapGameplayTextureBuilder.ChannelClass));
     }
 
@@ -589,7 +589,7 @@ public class MapGraphicsFeatureTests
             bin = MapGameplayTextureBuilder.SetChannel(bin, slot, "Ch" + slot, null, out _)!;
 
         Assert.Empty(MapGameplayTextureBuilder.UnlinkedSlots(bin));
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         Assert.Equal(4, tree.Objects.Values.Count(o => o.ClassHash == MapGameplayTextureBuilder.ChannelClass));
     }
 

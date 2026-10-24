@@ -57,7 +57,7 @@ public sealed partial class LtkEditFlowTests
             }),
         });
         using var ms = new MemoryStream();
-        new BinTree(new[] { test, skin, material }, Array.Empty<string>()).Write(ms);
+        ReyEngine.Formats.Meta.BinTreeIo.Write(new BinTree(new[] { test, skin, material }, Array.Empty<string>()), ms);   // 16.21 form
         return ms.ToArray();
     }
 

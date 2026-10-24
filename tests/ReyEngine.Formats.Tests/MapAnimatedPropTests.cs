@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.App.ViewModels;
@@ -42,7 +43,7 @@ public sealed class MapAnimatedPropTests
 
     private static BinTreeStruct Written(byte[] bin, MapPlacementId id)
     {
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         var items = (BinTreeMap)tree.Objects[id.ContainerHash].Properties[H("items")];
         return (BinTreeStruct)items.First(e => e.Key is BinTreeHash k && k.Value == id.ItemKey).Value;
     }
@@ -50,7 +51,7 @@ public sealed class MapAnimatedPropTests
     private static (byte[] Bin, MapPlacementId Id) Place(string prop, uint skinId, string? idle)
     {
         byte[] bin = Bytes(Container("scratch", Item(0)), Container("chars", Item(SceneryCharacter)));
-        var id = MapPlaceableWriter.NewAnimatedPropId(new BinTree(new MemoryStream(bin, false)), H(prop + "_1"));
+        var id = MapPlaceableWriter.NewAnimatedPropId(BinTreeIo.Read(bin), H(prop + "_1"));
         var output = MapPlaceableWriter.WriteEdits(bin, new[]
         {
             new MapPlacementEdit(id)
@@ -120,7 +121,7 @@ public sealed class MapAnimatedPropTests
     public void APropWithoutAPropNameIsRefused()
     {
         byte[] bin = Bytes(Container("chars", Item(SceneryCharacter)));
-        var id = MapPlaceableWriter.NewAnimatedPropId(new BinTree(new MemoryStream(bin, false)), 1);
+        var id = MapPlaceableWriter.NewAnimatedPropId(BinTreeIo.Read(bin), 1);
         var output = MapPlaceableWriter.WriteEdits(bin, new[]
         {
             new MapPlacementEdit(id) { CreateAnimatedProp = true, Transform = Matrix4x4.Identity },

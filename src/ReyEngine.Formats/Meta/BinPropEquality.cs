@@ -13,20 +13,40 @@ namespace ReyEngine.Formats.Meta;
 public static class BinPropEquality
 {
     public static bool ObjectsEqual(BinTreeObject a, BinTreeObject b) =>
-        a.ClassHash == b.ClassHash && DictsEqual(a.Properties, b.Properties);
+        a.ClassHash == b.ClassHash && DictsEqual(a.Properties, b.Properties, a.ClassHash);
 
-    public static bool DictsEqual(IReadOnlyDictionary<uint, LtProp> a, IReadOnlyDictionary<uint, LtProp> b)
+    public static bool DictsEqual(IReadOnlyDictionary<uint, LtProp> a, IReadOnlyDictionary<uint, LtProp> b) => DictsEqual(a, b, 0);
+
+    /// <param name="ownerClass">The class the properties belong to. Patch 16.21 stores a StaticMaterialDef name as the XXH3 of the
+    /// lowercased text where older bins hold the text, so those two forms of one name are the same value, not an edit.</param>
+    public static bool DictsEqual(IReadOnlyDictionary<uint, LtProp> a, IReadOnlyDictionary<uint, LtProp> b, uint ownerClass)
     {
         if (a.Count != b.Count) return false;
         foreach (var (k, v) in a)
-            if (!b.TryGetValue(k, out var other) || !PropsEqual(v, other)) return false;
+        {
+            if (!b.TryGetValue(k, out var other)) return false;
+            if (PropsEqual(v, other)) continue;
+            if (BinWireNormalizer.IsMaterialName(ownerClass, k) && SameMaterialName(v, other)) continue;
+            return false;
+        }
         return true;
     }
+
+    private static bool SameMaterialName(LtProp a, LtProp b)
+    {
+        if (a is BinTreeString s1 && b is BinTreeU64 h1) return BinWireNormalizer.NameHash(s1.Value) == h1.Value;
+        if (a is BinTreeU64 h2 && b is BinTreeString s2) return BinWireNormalizer.NameHash(s2.Value) == h2.Value;
+        return false;
+    }
+
 
     public static bool PropsEqual(LtProp? a, LtProp? b)
     {
         if (ReferenceEquals(a, b)) return true;
         if (a is null || b is null) return false;
+        // a property compared on its own (the three-way merge walks an object's properties one by one) has no class around it; a
+        // "name" that is a String on one side and exactly its own XXH3 on the other is the 16.20 / 16.21 forms of one value
+        if (a.NameHash == b.NameHash && a.NameHash == BinWireNormalizer.NameField && SameMaterialName(a, b)) return true;
         if (a.GetType() != b.GetType() || a.NameHash != b.NameHash) return false;
 
         switch (a)
@@ -37,7 +57,7 @@ public static class BinPropEquality
             case BinTreeStruct sa:   // also covers BinTreeEmbedded (same runtime type enforced above)
             {
                 var sb = (BinTreeStruct)b;
-                return sa.ClassHash == sb.ClassHash && DictsEqual(sa.Properties, sb.Properties);
+                return sa.ClassHash == sb.ClassHash && DictsEqual(sa.Properties, sb.Properties, sa.ClassHash);
             }
 
             case BinTreeContainer ca:

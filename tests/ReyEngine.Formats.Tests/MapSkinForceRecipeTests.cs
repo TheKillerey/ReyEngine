@@ -101,13 +101,16 @@ public sealed class MapSkinForceRecipeTests
 
     private static BinTree Parse(byte[] bytes) => SafeBinTree.Parse(bytes);
 
+    /// <summary>Compares in the 16.21 form: a pre-16.21 bin carries material names as Strings, which ReyEngine now always writes as hashes.</summary>
+    private static BinTree ParseCurrentForm(byte[] bytes) => SafeBinTree.Parse(BinTreeIo.Serialize(SafeBinTree.Parse(bytes)));
+
     private static string Str(BinTree tree, uint objectHash, string field) =>
         Assert.IsType<BinTreeString>(tree.Objects[objectHash].Properties[H(field)]).Value;
 
     private static void AssertSameBin(byte[] expected, byte[] actual, string because)
     {
-        var a = Parse(expected);
-        var b = Parse(actual);
+        var a = ParseCurrentForm(expected);
+        var b = ParseCurrentForm(actual);
         Assert.True(a.Objects.Count == b.Objects.Count, $"{because}: {a.Objects.Count} vs {b.Objects.Count} objects");
         foreach (var (key, objectA) in a.Objects)
             Assert.True(b.Objects.TryGetValue(key, out var objectB) && BinPropEquality.ObjectsEqual(objectA, objectB),

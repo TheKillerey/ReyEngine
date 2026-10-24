@@ -86,8 +86,7 @@ public sealed class ShaderPermutationIndex
             using var stream = wad.OpenChunk(chunk);
             var ms = new MemoryStream();
             stream.CopyTo(ms);
-            ms.Position = 0;
-            var tree = new BinTree(ms);
+            var tree = ReyEngine.Formats.Meta.BinTreeIo.Read(ms.ToArray());
 
             uint pathHash = HashAlgorithms.Fnv1a("objectPath");
 

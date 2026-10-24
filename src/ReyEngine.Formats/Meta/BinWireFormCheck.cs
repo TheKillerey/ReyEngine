@@ -43,7 +43,7 @@ public static class BinWireFormCheck
         if (meta is null) return found;
 
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(bin, false)); }
+        try { tree = BinTreeIo.Read(bin); }
         catch { return found; }
 
         foreach (var (_, obj) in tree.Objects)

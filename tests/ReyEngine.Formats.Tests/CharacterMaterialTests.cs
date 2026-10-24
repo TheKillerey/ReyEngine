@@ -100,7 +100,7 @@ public sealed class CharacterMaterialTests
 
         // the wire form: a Container (list) of Embedded entries - the client drops a property whose form
         // disagrees with its class, and a dropped material is a submesh that silently keeps the old look
-        var tree = new BinTree(new MemoryStream(bound!, false));
+        var tree = BinTreeIo.Read(bound!);
         var smp = tree.Objects.Values.Select(o => o.Properties.GetValueOrDefault(H("skinMeshProperties")))
             .OfType<BinTreeStruct>().Single();
         var list = Assert.IsType<BinTreeContainer>(smp.Properties[H("materialOverride")]);

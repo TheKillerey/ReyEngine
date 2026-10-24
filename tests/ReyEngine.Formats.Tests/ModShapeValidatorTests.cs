@@ -89,7 +89,7 @@ public class ModShapeValidatorTests
         Bin().Write(ms);
         byte[] raw = ms.ToArray();
 
-        var reread = new BinTree(new MemoryStream(raw, writable: false));
+        var reread = BinTreeIo.Read(raw);
         Assert.Empty(ModShapeValidator.ValidateBin(reread, raw));
     }
 
@@ -227,7 +227,7 @@ public class ModShapeValidatorTests
         byte[] broken = NullStructBin(longForm: true);
         // the strict reader rejects these bytes outright, which is the premise: the tree here is the
         // repaired reading, and the rule answers from the raw bytes rather than from the tree
-        Assert.ThrowsAny<Exception>(() => new BinTree(new MemoryStream(broken, writable: false)));
+        Assert.ThrowsAny<Exception>(() => BinTreeIo.Read(broken));
 
         var issue = Assert.Single(
             ModShapeValidator.ValidateBin(SafeBinTree.Parse(broken), broken),
@@ -241,7 +241,7 @@ public class ModShapeValidatorTests
     public void TheCanonicalNullFormIsClean()
     {
         byte[] raw = NullStructBin(longForm: false);
-        Assert.Empty(ModShapeValidator.ValidateBin(new BinTree(new MemoryStream(raw, false)), raw));
+        Assert.Empty(ModShapeValidator.ValidateBin(BinTreeIo.Read(raw), raw));
     }
 
     /// <summary>One object holding a map with a null struct entry, in either encoding.</summary>

@@ -22,7 +22,7 @@ public sealed class BinTreeClonerTests
             { new BinTreeOptional(H("emitterLinger"), new BinTreeF32(0, 1f)) }) }, Array.Empty<string>());
         using var ms = new MemoryStream();
         tree.Write(ms);
-        var read = new BinTree(new MemoryStream(ms.ToArray()));
+        var read = BinTreeIo.Read(ms.ToArray());
         var option = (BinTreeOptional)read.Objects[H("o")].Properties[H("emitterLinger")];
         option.Value = null;
         return option;

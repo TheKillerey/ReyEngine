@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Particles;
@@ -84,7 +85,7 @@ public sealed class TroyPrimitiveTests
     {
         var result = TroyBinConverter.Convert(troy, "T", "Particles/T");
         BinTree tree;
-        using (var ms = new MemoryStream(result.BinBytes)) tree = new BinTree(ms);
+        tree = BinTreeIo.Read(result.BinBytes);
         var emitter = Kids(tree.Objects.Values.Single().Properties[H("complexEmitterDefinitionData")]).Single();
         return Prop(Kids(emitter), "primitive") as BinTreeStruct;
     }

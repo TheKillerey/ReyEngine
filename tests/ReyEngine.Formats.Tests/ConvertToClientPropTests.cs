@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -38,7 +39,7 @@ public sealed class ConvertToClientPropTests
         string record = "Characters/Urf_Ghost_Jade/CharacterRecords/Root")
     {
         byte[] bin = Empty();
-        var id = MapPlaceableWriter.NewCharacterId(new BinTree(new MemoryStream(bin, false)), H("Urf_Ghost_Jade_1"));
+        var id = MapPlaceableWriter.NewCharacterId(BinTreeIo.Read(bin), H("Urf_Ghost_Jade_1"));
         bin = MapPlaceableWriter.WriteEdits(bin, new[]
         {
             new MapPlacementEdit(id)
@@ -52,7 +53,7 @@ public sealed class ConvertToClientPropTests
     }
 
     private static BinTreeStruct Item(byte[] bin, MapPlacementId id) =>
-        (BinTreeStruct)((BinTreeMap)new BinTree(new MemoryStream(bin, false)).Objects[id.ContainerHash].Properties[H("items")])
+        (BinTreeStruct)((BinTreeMap)BinTreeIo.Read(bin).Objects[id.ContainerHash].Properties[H("items")])
             .First(e => e.Key is BinTreeHash k && k.Value == id.ItemKey).Value;
 
     private static byte[] Convert(byte[] bin, MapPlacementId id, float? appearAfter = null)
@@ -123,7 +124,7 @@ public sealed class ConvertToClientPropTests
     public void AnAttackableUnitIsRefused()
     {
         var (bin, id) = OldStyle();
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         var items = (BinTreeMap)tree.Objects[id.ContainerHash].Properties[H("items")];
         var unit = new BinTreeStruct(0, 0xad65d8c4u, Item(bin, id).Properties.Values.ToArray());
         tree.Objects[id.ContainerHash].Properties[H("items")] = new BinTreeMap(H("items"), items.KeyType, items.ValueType,
@@ -154,7 +155,7 @@ public sealed class ConvertToClientPropTests
     public void AFieldTheNewFormCannotSayIsRefusedNotDropped()
     {
         var (bin, id) = OldStyle();
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         var items = (BinTreeMap)tree.Objects[id.ContainerHash].Properties[H("items")];
         var withExtra = Item(bin, id);
         withExtra.Properties[0xbbe68da1u] = new BinTreeBool(0xbbe68da1u, false);   // as Riot's structure placements carry

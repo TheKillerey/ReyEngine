@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -56,7 +57,7 @@ public class EmbeddedElementTests
         using var ms = new MemoryStream();
         tree.Write(ms);
 
-        var reread = new BinTree(new MemoryStream(ms.ToArray(), writable: false));
+        var reread = BinTreeIo.Read(ms.ToArray());
         var container = Assert.IsType<BinTreeUnorderedContainer>(
             Assert.Single(reread.Objects).Value.Properties[H("paramValues")]);
         Assert.Equal(elementType, container.ElementType);

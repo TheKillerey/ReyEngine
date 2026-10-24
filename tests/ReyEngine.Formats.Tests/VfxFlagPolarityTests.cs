@@ -1,5 +1,6 @@
 ﻿using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
+using ReyEngine.Formats.Meta;
 using System.Text.Json;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
@@ -117,7 +118,7 @@ public sealed class VfxFlagPolarityTests
         foreach (var entry in archive.Entries.Where(e => e.IsResolved && e.Path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)))
         {
             BinTree tree;
-            try { tree = new BinTree(new MemoryStream(archive.Extract(entry.PathHash))); }
+            try { tree = BinTreeIo.Read(archive.Extract(entry.PathHash)); }
             catch { continue; }
             foreach (var obj in tree.Objects.Values) Walk(obj.ClassHash, obj.Properties);
 

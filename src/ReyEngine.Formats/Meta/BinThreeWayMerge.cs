@@ -141,7 +141,7 @@ public static class BinThreeWayMerge
                     + "(String -> WadChunkLink)");
 
         using var ms = new MemoryStream();
-        newT.Write(ms);
+        BinTreeIo.Write(newT, ms);
         byte[] bytes = ms.ToArray();
         _ = SafeBinTree.Parse(bytes);   // must round-trip or the merge is unusable
 

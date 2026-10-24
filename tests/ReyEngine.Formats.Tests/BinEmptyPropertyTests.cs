@@ -120,7 +120,7 @@ public class BinEmptyPropertyTests
 
         using var ms = new MemoryStream();
         tree.Write(ms);
-        var reread = new BinTree(new MemoryStream(ms.ToArray(), writable: false));
+        var reread = BinTreeIo.Read(ms.ToArray());
         Assert.False(Assert.Single(reread.Objects).Value.Properties.ContainsKey(H("switches")));
     }
 }

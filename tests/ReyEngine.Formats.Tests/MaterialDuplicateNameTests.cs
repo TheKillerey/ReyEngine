@@ -182,10 +182,13 @@ public sealed class MaterialDuplicateNameTests
         var doc = MaterialDocument.Parse(original, Resolve);
         byte[] saved = doc.Serialize();
 
-        var before = new BinTree(new MemoryStream(original, false));
-        var after = new BinTree(new MemoryStream(saved, false));   // strict: still a well-formed bin
+        var before = BinTreeIo.Read(original);
+        var after = BinTreeIo.Read(saved);   // strict: still a well-formed bin
         var a = Assert.Single(before.Objects.Values);
         var b = Assert.Single(after.Objects.Values);
+        // 16.21: the writer stores a String name as the 8-byte XXH3 of the lowercased name (read back as a U64 stand-in)
+        if (a.Properties.TryGetValue(H("name"), out var legacyName) && legacyName is BinTreeString legacyText)
+            a.Properties[H("name")] = new BinTreeU64(H("name"), BinWireNormalizer.NameHash(legacyText.Value));
         Assert.True(BinPropEquality.ObjectsEqual(a, b), "saving a material with repeated names changed it");
         Assert.Equal(6, ((BinTreeContainer)b.Properties[H("switches")]).Elements.Count);
         Assert.Equal(4, ((BinTreeContainer)b.Properties[H("paramValues")]).Elements.Count);
@@ -212,7 +215,7 @@ public sealed class MaterialDuplicateNameTests
         Assert.True(m.Switches["UNLIT_MODE"]);
         Assert.True(m.IsDirty);
 
-        var saved = new BinTree(new MemoryStream(doc.Serialize(), false));
+        var saved = BinTreeIo.Read(doc.Serialize());
         var elements = ((BinTreeContainer)saved.Objects.Values.Single().Properties[H("switches")]).Elements
             .Cast<BinTreeStruct>().ToList();
         Assert.Equal(6, elements.Count);
@@ -312,7 +315,7 @@ public sealed class MaterialDuplicateNameTests
     private static Dictionary<uint, List<(string Name, bool On)>> RawSwitches(byte[] bin)
     {
         var map = new Dictionary<uint, List<(string, bool)>>();
-        foreach (var (hash, o) in new BinTree(new MemoryStream(bin, false)).Objects)
+        foreach (var (hash, o) in BinTreeIo.Read(bin).Objects)
         {
             if (o.ClassHash != H("StaticMaterialDef")) continue;
             if (!o.Properties.TryGetValue(H("switches"), out var sp) || sp is not BinTreeContainer sw) continue;
@@ -350,8 +353,8 @@ public sealed class MaterialDuplicateNameTests
             }
         }
 
-        var before = new BinTree(new MemoryStream(bin, false));
-        var after = new BinTree(new MemoryStream(doc.Serialize(), false));
+        var before = BinTreeIo.Read(bin);
+        var after = BinTreeIo.Read(doc.Serialize());
         Assert.Equal(before.Objects.Count, after.Objects.Count);
         foreach (var (hash, o) in before.Objects)
         {

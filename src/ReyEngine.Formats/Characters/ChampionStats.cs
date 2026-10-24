@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -115,7 +116,7 @@ public static class ChampionStatsReader
     {
         try
         {
-            var tree = new BinTree(new MemoryStream(recordBin));
+            var tree = BinTreeIo.Read(recordBin);
             if (PickRecord(tree, characterName) is not { } record) return null;
             var p = record.Properties;
 

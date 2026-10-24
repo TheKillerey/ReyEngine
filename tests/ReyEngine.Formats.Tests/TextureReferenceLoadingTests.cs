@@ -75,13 +75,32 @@ public sealed class TextureReferenceLoadingTests
         return wad.TryGetEntry(h, out _) ? wad.Extract(h) : null;
     }
 
+    /// <summary>What the app really passes: the material strings the mapgeo itself carries (every printable run in it).</summary>
+    private static List<string> MapgeoNames(WadArchive wad)
+    {
+        ulong h = HashAlgorithms.WadPath("data/maps/mapgeometry/map12/bloom.mapgeo");
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!wad.TryGetEntry(h, out _)) return names.ToList();
+        var d = wad.Extract(h);
+        for (int i = 0; i < d.Length;)
+        {
+            int j = i;
+            while (j < d.Length && d[j] >= 0x20 && d[j] < 0x7f) j++;
+            if (j - i >= 8) names.Add(System.Text.Encoding.ASCII.GetString(d, i, j - i));
+            i = j + 1;
+        }
+        return names.ToList();
+    }
+
     [Fact]
     public void EveryDiffuseResolvesToARealChunkWithoutAnyDictionary()
     {
         if (ShippedBloom() is not { } bytes) return;   // no game install
         using var wad = WadArchive.Open(Map12);
 
-        var names = MaterialDocument.Parse(bytes, _ => null).Materials.Select(m => m.Name).ToList();
+        // 16.21 stores a material's name as an XXH3 hash, so the path comes from the hash tables - the app reads the
+        // names from the mapgeo's own material strings instead.
+        var names = MapgeoNames(wad);
         var m2t = MapGeoMaterialResolver.Resolve(bytes, names);   // deliberately NO wad resolver
 
         Assert.True(m2t.Count > 100, $"expected most materials to yield a diffuse, got {m2t.Count}");
@@ -100,7 +119,9 @@ public sealed class TextureReferenceLoadingTests
         // back as bare hashes. They must address real chunks either way.
         if (ShippedBloom() is not { } bytes) return;
         using var wad = WadArchive.Open(Map12);
-        var names = MaterialDocument.Parse(bytes, _ => null).Materials.Select(m => m.Name).ToList();
+        // 16.21 stores a material's name as an XXH3 hash, so the path comes from the hash tables - the app reads the
+        // names from the mapgeo's own material strings instead.
+        var names = MapgeoNames(wad);
 
         var profiles = MaterialProfiles.ForMapMaterials(bytes, names, _ => null);
         var layers = profiles.Values
@@ -121,7 +142,9 @@ public sealed class TextureReferenceLoadingTests
         // The property that makes the fix correct rather than lucky: naming must not change addressing.
         if (ShippedBloom() is not { } bytes) return;
         using var wad = WadArchive.Open(Map12);
-        var names = MaterialDocument.Parse(bytes, _ => null).Materials.Select(m => m.Name).ToList();
+        // 16.21 stores a material's name as an XXH3 hash, so the path comes from the hash tables - the app reads the
+        // names from the mapgeo's own material strings instead.
+        var names = MapgeoNames(wad);
 
         var blind = MapGeoMaterialResolver.Resolve(bytes, names);
         var named = MapGeoMaterialResolver.Resolve(bytes, names,

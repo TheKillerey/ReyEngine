@@ -185,7 +185,7 @@ public sealed partial class RitobinEditorViewModel : ObservableObject
             byte[] bytes;
             using (var ms = new MemoryStream())
             {
-                merged.Write(ms);
+                BinTreeIo.Write(merged, ms);
                 bytes = ms.ToArray();
             }
 

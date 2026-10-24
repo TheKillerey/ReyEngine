@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -28,7 +29,7 @@ public static class MapAudioDeclaration
     {
         var units = new List<MapBankUnit>();
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(mapBin, false)); }
+        try { tree = BinTreeIo.Read(mapBin); }
         catch { return units; }
 
         foreach (var obj in tree.Objects.Values)

@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.App.Services;
@@ -22,6 +23,7 @@ public sealed class ChromaParametersTests : IDisposable
     private static readonly Dictionary<uint, string> Known = new[]
     {
         "StaticMaterialDef", "skeleton", "simpleSkin", "materialOverride", "material", "texture", "fresnelColor", "reflectionFresnelColor",
+        "Characters/Zz/Skins/Skin1/Materials/Zz_Skin1_Body_inst",   // 16.21: a material name is a hash, so the path comes from the table
     }.ToDictionary(H);
     private static string? Resolve(uint h) => Known.TryGetValue(h, out var n) ? n : null;
 
@@ -62,7 +64,7 @@ public sealed class ChromaParametersTests : IDisposable
     private static byte[] Bin(params BinTreeObject[] objects)
     {
         using var ms = new MemoryStream();
-        new BinTree(objects, Array.Empty<string>()).Write(ms);
+        BinTreeIo.Write(new BinTree(objects, Array.Empty<string>()), ms);
         return ms.ToArray();
     }
 
@@ -330,7 +332,7 @@ public sealed class ChromaParametersTests : IDisposable
         byte[] riot = RiotBin();
         var keys = new[] { Key("TintColor"), Key("Glow_Color") };
         byte[] once = SkinColorParameters.Rewrite(riot, riot, Green, keys, Array.Empty<SkinColorParamKey>(), Resolve).Bytes!;
-        _ = new BinTree(new MemoryStream(once, false));
+        _ = BinTreeIo.Read(once);
         // the writer's own order is a fixed point: serialising the result again changes nothing
         Assert.Equal(once, MaterialDocument.Parse(once, Resolve).Serialize());
         Assert.Equal(riot.Length, once.Length);   // the edit moved no bytes in or out (floats replace floats)

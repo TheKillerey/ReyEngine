@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -77,7 +78,7 @@ public sealed record MapStateData(
     public static MapStateData Parse(byte[] binBytes, Func<uint, string?>? resolveName = null)
     {
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(binBytes, writable: false)); }
+        try { tree = BinTreeIo.Read(binBytes); }
         catch { return Empty; }
 
         var skins = new List<MapSkinAssets>();

@@ -503,8 +503,15 @@ public static class MaterialProfiles
         try
         {
             var doc = MaterialDocument.Parse(materialsBin, resolve, resolveWadPath);
+            // 16.21 stores a material's own name as a hash, so a binding's Name is only as good as the hash tables.
+            // The mapgeo names are real strings: match them through the object's path hash too, which needs no table.
+            var byPathHash = new Dictionary<uint, string>();
+            foreach (var n in wanted) byPathHash.TryAdd(ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(n), n);
             foreach (var b in doc.Materials)
+            {
                 if (wanted.Contains(b.Name)) map[b.Name] = b.Profile;
+                else if (byPathHash.TryGetValue(b.ObjectPathHash, out var wantedName)) map.TryAdd(wantedName, b.Profile);
+            }
         }
         catch { /* best effort */ }
         return map;

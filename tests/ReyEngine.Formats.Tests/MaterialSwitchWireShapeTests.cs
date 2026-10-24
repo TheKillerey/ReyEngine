@@ -2,6 +2,7 @@ using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Materials;
+using ReyEngine.Formats.Meta;
 
 namespace ReyEngine.Formats.Tests;
 
@@ -66,7 +67,7 @@ public sealed class MaterialSwitchWireShapeTests
     private static bool? AuthoredOn(byte[] bytes, string switchName)
     {
         using var ms = new MemoryStream(bytes);
-        var tree = new BinTree(ms);
+        var tree = BinTreeIo.Read(bytes);
         foreach (var o in tree.Objects.Values)
         {
             if (!o.Properties.TryGetValue(H("switches"), out var prop) || prop is not BinTreeContainer c) continue;

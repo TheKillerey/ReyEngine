@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -278,7 +279,7 @@ public static class ChampionSpellData
     {
         try
         {
-            var tree = new BinTree(new MemoryStream(recordBin));
+            var tree = BinTreeIo.Read(recordBin);
             if (PickRecord(tree, characterName) is not { } record) return Array.Empty<AbilitySlot>();
 
             if (Get(record.Properties, FSpellNames) is not BinTreeContainer names) return Array.Empty<AbilitySlot>();
@@ -333,7 +334,7 @@ public static class ChampionSpellData
     {
         try
         {
-            var tree = new BinTree(new MemoryStream(recordBin));
+            var tree = BinTreeIo.Read(recordBin);
             if (PickRecord(tree, characterName) is not { } record) return Array.Empty<AttackSpell>();
             string champ = Get(record.Properties, FCharacterName) is BinTreeString cn && cn.Value.Length > 0
                 ? cn.Value

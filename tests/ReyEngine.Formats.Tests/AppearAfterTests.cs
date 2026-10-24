@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.App.ViewModels;
@@ -39,7 +40,7 @@ public sealed class AppearAfterTests
     private static (byte[] Bin, MapPlacementId Id) Place(float? seconds)
     {
         byte[] bin = Map();
-        var id = MapPlaceableWriter.NewAnimatedPropId(new BinTree(new MemoryStream(bin, false)), H("Urf_1"));
+        var id = MapPlaceableWriter.NewAnimatedPropId(BinTreeIo.Read(bin), H("Urf_1"));
         var output = MapPlaceableWriter.WriteEdits(bin, new[]
         {
             new MapPlacementEdit(id)
@@ -60,7 +61,7 @@ public sealed class AppearAfterTests
     public void TheGateIsTheControllerRiotsClassesSpell()
     {
         var (bin, id) = Place(60);
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         uint ctrlHash = H(MapPlaceableWriter.AppearAfterControllerPath(id));
 
         // the placement links it, as its LAST field
@@ -89,7 +90,7 @@ public sealed class AppearAfterTests
     public void WithoutAGateNothingIsAdded()
     {
         var (bin, id) = Place(null);
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         Assert.False(Item(tree, id).Properties.ContainsKey(H("VisibilityController")));
         Assert.Single(tree.Objects);   // just the container
     }
@@ -109,7 +110,7 @@ public sealed class AppearAfterTests
         var (bin, id) = Place(60);
         bin = MapPlaceableWriter.WriteEdits(bin, new[] { new MapPlacementEdit(id) { AppearAfterSeconds = 120 } }, out string? error)!;
         Assert.Null(error);
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         Assert.Equal(2, tree.Objects.Count);
         Assert.Equal(120f, MapPlaceableWriter.ReadAppearAfter(tree, Item(tree, id)));
     }
@@ -120,7 +121,7 @@ public sealed class AppearAfterTests
         var (bin, id) = Place(60);
         bin = MapPlaceableWriter.WriteEdits(bin, new[] { new MapPlacementEdit(id) { AppearAfterSeconds = 0 } }, out string? error)!;
         Assert.Null(error);
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         Assert.Single(tree.Objects);
         Assert.False(Item(tree, id).Properties.ContainsKey(H("VisibilityController")));
     }
@@ -132,7 +133,7 @@ public sealed class AppearAfterTests
     public void ANonsenseTimeIsRefused(float seconds)
     {
         byte[] bin = Map();
-        var id = MapPlaceableWriter.NewAnimatedPropId(new BinTree(new MemoryStream(bin, false)), 1);
+        var id = MapPlaceableWriter.NewAnimatedPropId(BinTreeIo.Read(bin), 1);
         var output = MapPlaceableWriter.WriteEdits(bin, new[]
         {
             new MapPlacementEdit(id) { CreateAnimatedProp = true, PropName = "X", Transform = Matrix4x4.Identity, AppearAfterSeconds = seconds },

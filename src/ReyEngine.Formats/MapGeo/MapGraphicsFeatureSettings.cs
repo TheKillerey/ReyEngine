@@ -1,4 +1,5 @@
 using System.Globalization;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -75,7 +76,7 @@ public static class MapGraphicsFeatureSettings
         result = new Result(false, "");
 
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(materialsBin, false)); }
+        try { tree = BinTreeIo.Read(materialsBin); }
         catch (Exception ex) { result = new Result(false, $"bin did not parse: {ex.Message}"); return null; }
 
         foreach (var (_, obj) in tree.Objects)
@@ -102,7 +103,7 @@ public static class MapGraphicsFeatureSettings
             }
 
             var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             return ms.ToArray();
         }
 
@@ -205,7 +206,7 @@ public static class MapGraphicsFeatureSettings
     private static BinTreeStruct? FindComponent(byte[] materialsBin, uint classHash)
     {
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(materialsBin, false)); }
+        try { tree = BinTreeIo.Read(materialsBin); }
         catch { return null; }
 
         foreach (var (_, obj) in tree.Objects)

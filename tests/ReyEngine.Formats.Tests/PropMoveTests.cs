@@ -1,4 +1,5 @@
 using System;
+using ReyEngine.Formats.Meta;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -130,7 +131,7 @@ public sealed class PropMoveTests
         Assert.Null(error);
         Assert.NotNull(written);
 
-        var moved = (BinTreeStruct)((BinTreeMap)new BinTree(new MemoryStream(written!, false))
+        var moved = (BinTreeStruct)((BinTreeMap)BinTreeIo.Read(written!)
             .Objects[id.ContainerHash].Properties[H("items")])
             .Single(e => ((BinTreeHash)e.Key).Value == id.ItemKey).Value;
         Assert.Equal(new Vector3(60f, 25f, 312f), ((BinTreeMatrix44)moved.Properties[H("transform")]).Value.Translation);

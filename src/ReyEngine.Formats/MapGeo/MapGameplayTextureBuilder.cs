@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -185,7 +186,7 @@ public static class MapGameplayTextureBuilder
     private static bool TryOpen(byte[] bin, out BinTree? tree, out BinTreeStruct? component, out string error)
     {
         tree = null; component = null; error = "";
-        try { tree = new BinTree(new MemoryStream(bin, false)); }
+        try { tree = BinTreeIo.Read(bin); }
         catch (Exception ex) { error = $"bin did not parse: {ex.Message}"; return false; }
 
         foreach (var (_, obj) in tree.Objects)
@@ -203,7 +204,7 @@ public static class MapGameplayTextureBuilder
     private static byte[] Write(BinTree tree)
     {
         var ms = new MemoryStream();
-        tree.Write(ms);
+        BinTreeIo.Write(tree, ms);
         return ms.ToArray();
     }
 }

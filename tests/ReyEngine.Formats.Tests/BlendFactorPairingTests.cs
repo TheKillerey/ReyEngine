@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Materials;
@@ -21,7 +22,7 @@ public class BlendFactorPairingTests
 
     private static BinTreeStruct? Pass(byte[] bin, string materialName)
     {
-        var tree = new BinTree(new MemoryStream(bin, writable: false));
+        var tree = BinTreeIo.Read(bin);
         if (!tree.Objects.TryGetValue(H(materialName), out var o)) return null;
         if (!o.Properties.TryGetValue(H("techniques"), out var tp) || tp is not BinTreeContainer tc) return null;
         foreach (var t in tc.Elements)

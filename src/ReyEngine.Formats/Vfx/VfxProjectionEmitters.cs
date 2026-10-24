@@ -95,7 +95,7 @@ public static class VfxProjectionEmitters
         if (done.Count == 0) return bin;
 
         byte[] result;
-        try { using var ms = new MemoryStream(); tree.Write(ms); result = ms.ToArray(); }
+        try { using var ms = new MemoryStream(); BinTreeIo.Write(tree, ms); result = ms.ToArray(); }
         catch (Exception ex) { error = $"could not write the bin: {ex.Message}"; return null; }
 
         // Re-read and prove every one of them is off.

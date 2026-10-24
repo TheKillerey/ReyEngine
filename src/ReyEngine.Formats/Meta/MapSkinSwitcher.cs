@@ -379,12 +379,12 @@ public static class MapSkinSwitcher
             : (ChangedProperties: 0, TargetHash: (uint?)null, SourceHash: (uint?)null, SourceAudio: (BinTreeObject?)null);
 
         using var output = new MemoryStream(shippingBin.Length);
-        tree.Write(output);
+        BinTreeIo.Write(tree, output);
         byte[] bytes = output.ToArray();
 
         // Strict reparse plus semantic invariants. The selection table and source definition stay
         // untouched, and every rewritten registered slot or alias must survive semantic round-trip exactly.
-        var verified = new BinTree(new MemoryStream(bytes, writable: false));
+        var verified = BinTreeIo.Read(bytes);
         if (verified.Objects.Count != tree.Objects.Count)
             throw new InvalidDataException("The rewritten shipping bin changed its object count.");
         var original = SafeBinTree.Parse(shippingBin);
@@ -488,7 +488,7 @@ public static class MapSkinSwitcher
         }
 
         using var output = new MemoryStream(sourceMaterialsBin.Length);
-        source.Write(output);
+        BinTreeIo.Write(source, output);
         byte[] bytes = output.ToArray();
         var verified = SafeBinTree.Parse(bytes);
         if (verified.Objects.Count != source.Objects.Count)

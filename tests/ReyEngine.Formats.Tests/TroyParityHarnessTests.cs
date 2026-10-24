@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
@@ -157,7 +158,7 @@ public sealed class TroyParityHarnessTests
         using var wad = WadArchive.Open(wadPath);
         if (!wad.TryGetEntry(HashAlgorithms.WadPath(asset), out var entry)) return;
         BinTree tree;
-        using (var ms = new MemoryStream(wad.Extract(entry))) tree = new BinTree(ms);
+        tree = BinTreeIo.Read(wad.Extract(entry));
 
         uint vfx = H("VfxSystemDefinitionData");
         var acc = new TroyConversionParity.Accumulator();
@@ -173,7 +174,7 @@ public sealed class TroyParityHarnessTests
 
             var converted = TroyBinConverter.Convert(troy, sn.Value, "Particles/" + sn.Value);
             BinTree ours;
-            using (var ms = new MemoryStream(converted.BinBytes)) ours = new BinTree(ms);
+            ours = BinTreeIo.Read(converted.BinBytes);
             TroyConversionParity.Compare(system, ours.Objects.Values.First(), acc);
             pairs++;
         }

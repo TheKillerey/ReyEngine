@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -106,7 +107,7 @@ public class DynamicPointLightTests
         byte[]? outBin = DynamicPointLights.Write(BinWith(),
             new[] { new DynamicPointLight("A", Vector3.One, Vector3.One, 500f, 1f) }, out _, out _);
 
-        var tree = new BinTree(new MemoryStream(outBin!, false));
+        var tree = BinTreeIo.Read(outBin!);
         var container = Assert.Single(tree.Objects.Values);
         var map = Assert.IsType<BinTreeMap>(Assert.Single(container.Properties.Values));
         var value = Assert.Single(map).Value;

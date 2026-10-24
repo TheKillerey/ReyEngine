@@ -29,7 +29,8 @@ public sealed partial class MaterialEditorViewModel
         ArgumentNullException.ThrowIfNull(edit);
         if (_doc is null) return LinkEditOutcome.Refused("no materials.bin is open in ReyEngine's Materials tab");
         var vm = Materials.FirstOrDefault(m => string.Equals(m.Model.Name, edit.Material, StringComparison.Ordinal))
-              ?? Materials.FirstOrDefault(m => string.Equals(m.Model.Name, edit.Material, StringComparison.OrdinalIgnoreCase));
+              ?? Materials.FirstOrDefault(m => string.Equals(m.Model.Name, edit.Material, StringComparison.OrdinalIgnoreCase))
+              ?? Materials.FirstOrDefault(m => m.Model.IsNamed(edit.Material));
         if (vm is null) return LinkEditOutcome.Refused($"this materials.bin has no material '{edit.Material}'");
         if (vm.IsLinked) return LinkEditOutcome.Refused($"it is defined in the linked bin {vm.LinkedFromBin} and is read-only here");
         if (!vm.Model.IsStaticMaterialDef) return LinkEditOutcome.Refused("it is not a StaticMaterialDef");

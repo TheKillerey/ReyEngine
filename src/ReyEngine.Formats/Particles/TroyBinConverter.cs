@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -123,7 +124,7 @@ public static class TroyBinConverter
         });
 
         using var ms = new MemoryStream();
-        new BinTree(new[] { system }, Array.Empty<string>()).Write(ms);
+        BinTreeIo.Write(new BinTree(new[] { system }, Array.Empty<string>()), ms);
 
         // meshes come across as staged assets even though nothing binds them yet: dropping them would
         // lose the only record that the original effect used them
@@ -387,7 +388,7 @@ public static class TroyBinConverter
         });
 
         using var ms = new MemoryStream();
-        new BinTree(new[] { system }, Array.Empty<string>()).Write(ms);
+        BinTreeIo.Write(new BinTree(new[] { system }, Array.Empty<string>()), ms);
 
         var assets = used.Concat(troy.SkeletonPath is { } skl ? new[] { skl } : Array.Empty<string>())
             .Distinct(StringComparer.OrdinalIgnoreCase).Select(ToMapping).ToArray();

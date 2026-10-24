@@ -48,7 +48,7 @@ public class SchemaFieldRoundTripTests
         });
         var tree = new BinTree(new[] { system }, System.Array.Empty<string>());
         using var ms = new MemoryStream();
-        tree.Write(ms);
+        BinTreeIo.Write(tree, ms);
         return ms.ToArray();
     }
 
@@ -60,7 +60,7 @@ public class SchemaFieldRoundTripTests
         });
         var tree = new BinTree(new[] { material }, System.Array.Empty<string>());
         using var ms = new MemoryStream();
-        tree.Write(ms);
+        BinTreeIo.Write(tree, ms);
         return ms.ToArray();
     }
 
@@ -221,8 +221,8 @@ public class SchemaFieldRoundTripTests
         Assert.Equal(1u, Assert.IsType<BinTreeU32>(ReadBack(written, 0x5150CAFE, type)).Value);
 
         // and the name it already had is still there
-        Assert.Equal("Test/Material_inst",
-            Assert.IsType<BinTreeString>(ReadBack(written, 0x5150CAFE, H("name"))).Value);
+        Assert.Equal(BinWireNormalizer.NameHash("Test/Material_inst"),
+            Assert.IsType<BinTreeU64>(ReadBack(written, 0x5150CAFE, H("name"))).Value);
     }
 
     // ---------------------------------------------------------------- refusals, at the document layer

@@ -2360,7 +2360,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (replaced > 0)
         {
             using var resetStream = new MemoryStream();
-            priorSystems.Write(resetStream);
+            BinTreeIo.Write(priorSystems, resetStream);
             binBytes = resetStream.ToArray();
             _log.Info("Legacy Port", $"Replacing {replaced:n0} particle system(s) from an earlier port.");
         }
@@ -2900,8 +2900,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var doc = Formats.Materials.MaterialDocument.Parse(bin, ResolveBinName, ResolveWadPath);
-            var binding = doc.Materials.FirstOrDefault(m =>
-                m.Name.Equals(materialName, StringComparison.OrdinalIgnoreCase));
+            var binding = doc.Materials.FirstOrDefault(m => m.IsNamed(materialName));
             if (binding is null) return Array.Empty<string>();
             return binding.Slots.Select(x => x.Path).Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
         }
@@ -4050,8 +4049,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
             foreach (string name in names)
             {
-                var m = doc.Materials.FirstOrDefault(x =>
-                    x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                var m = doc.Materials.FirstOrDefault(x => x.IsNamed(name));
                 if (m is null) continue;
                 if (m.MacroOn(Formats.Materials.MaterialBinding.MacroNoBakedLighting)) continue;
 
@@ -4529,7 +4527,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .Select(g => g.Material)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var candidates = document.Materials
-            .Where(m => lightmappedNames.Contains(m.Name)
+            .Where(m => (lightmappedNames.Contains(m.Name) || lightmappedNames.Any(m.IsNamed))
                      && (string.Equals(m.RenderShader ?? m.ShaderName,
                              Services.ExperimentalDynamicEffectShaderService.RenderShader,
                              StringComparison.OrdinalIgnoreCase)
@@ -4886,7 +4884,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             int cleared = 0, refused = 0;
             foreach (var m in doc.Materials)
             {
-                if (m.Name is not { } n || !materials.Contains(n)) continue;
+                if (!materials.Contains(m.Name) && !materials.Any(m.IsNamed)) continue;
                 // M166: only clear where the resulting define set is one the game actually ships. On
                 // Map11/base_srx 20 of 184 materials are NOT, and clearing them is what made the client
                 // log "Unable to find correct hash for shader ... in wad" and fail to compile.
@@ -5551,7 +5549,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             { _log.Info("Materials", "Every material container already has the wire form Riot ships."); return; }
 
             using var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             byte[] bytes = ms.ToArray();
 
             var issues = Formats.Meta.ModShapeValidator.ValidateBin(
@@ -5743,8 +5741,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
-            var source = doc.Materials.FirstOrDefault(m =>
-                m.Name.Equals(materialName, StringComparison.OrdinalIgnoreCase));
+            var source = doc.Materials.FirstOrDefault(m => m.IsNamed(materialName));
             if (source is null)
             { _log.Warn("Materials", $"'{materialName}' is not in {binEntry.DisplayName}."); return null; }
 
@@ -5813,7 +5810,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
             var wanted = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
-            var targets = doc.Materials.Where(m => wanted.Contains(m.Name)).ToList();
+            var targets = doc.Materials.Where(m => wanted.Contains(m.Name) || wanted.Any(m.IsNamed)).ToList();
             var context = BuildMaterialPresetContext();
 
             var rows = (write
@@ -7100,7 +7097,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (!await EnsureProjectSavedAsync()) return;
 
         var bytes = pdoc.Serialize();
-        try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
+        try { _ = ReyEngine.Formats.Meta.BinTreeIo.Read(bytes); }
         catch (Exception ex) { _log.Error("Particle", $"Edited particle .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
 
         // M126: one save path for project bins — folder-project files are written IN PLACE (and any
@@ -8395,7 +8392,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (bytes is null) return;
         byte[] serialized = bytes;   // M837: what the next save's merge must diff from
         bytes = RebaseOntoCurrent(binEntry, bytes, editor.BaseBytes, "Material");   // M823: a bin the mod's GameData changes is rebased by its save instead (below), after the preview has settled
-        try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
+        try { _ = ReyEngine.Formats.Meta.BinTreeIo.Read(bytes); }
         catch (Exception ex) { _log.Error("Material", $"Edited material .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
 
         // M126: one save path for project bins — folder-project files are written IN PLACE (and any
@@ -10547,11 +10544,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (TryResolveMaterialsBin(entry.Path, out var binEntry))
             {
                 var doc = Formats.Materials.MaterialDocument.Parse(ReadAsset(binEntry.PathHash), ResolveBinName, ResolveWadPath);
-                foreach (var mat in doc.Materials.Where(m => extended.Contains(m.Name)))
-                    samplers[mat.Name] = mat.Slots
+                foreach (var mat in doc.Materials)
+                {
+                    // the map's own name for it (a hashed 16.21 name has no readable text of its own)
+                    string? key = extended.Contains(mat.Name) ? mat.Name : extended.FirstOrDefault(mat.IsNamed);
+                    if (key is null) continue;
+                    samplers[key] = mat.Slots
                         .Where(s => !string.IsNullOrWhiteSpace(s.SamplerName) && !string.IsNullOrWhiteSpace(s.OriginalPath))
                         .GroupBy(s => s.SamplerName, StringComparer.Ordinal)
                         .ToDictionary(g => g.Key, g => g.First().OriginalPath, StringComparer.Ordinal);
+                }
             }
         }
         catch (Exception ex) { _log.Warn("MapGeo", "Material samplers could not be read: " + ex.Message); }
@@ -11545,7 +11547,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         bytes = rebased;
 
         // Validate the edited .bin re-parses before committing it to the override layer.
-        try { _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(bytes, false)); }
+        try { _ = ReyEngine.Formats.Meta.BinTreeIo.Read(bytes); }
         catch (Exception ex) { _log.Error("Bin", $"Edited .bin failed to re-parse — NOT saved: {ex.Message}"); return; }
 
         try
@@ -11851,8 +11853,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 binBytes = cleaned;
             }
 
+            // 16.21 hashes a material's name, and no table knows the porter's invented LegacyPort/ paths: collect them from
+            // what is certain to carry them - the map being replaced (its meshes name their materials) and this port's own.
+            var knownGenerated = result.Materials.Select(m => m.Name).ToList();
+            try { knownGenerated.AddRange(MapMaterialFactory.HarvestPaths(GetAssetBytes(mapEntry), "LegacyPort/")); }
+            catch (Exception ex) { _log.Warn("Legacy Port", $"Could not read the destination map for earlier generated materials: {ex.Message}"); }
             var resetBin = MapMaterialFactory.RemoveGeneratedMaterials(binBytes, "LegacyPort/",
-                out int replacedGenerated, out var resetError);
+                out int replacedGenerated, out var resetError, ResolveBinName,
+                knownGenerated);
             if (resetBin is null) throw new InvalidDataException($"Could not replace earlier legacy materials: {resetError}");
             binBytes = resetBin;
 
@@ -14606,7 +14614,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (hits == 0) { _log.Warn("Validate", $"{entry.DisplayName}: no reference to {fromPath} found — already fixed?"); return false; }
 
         using var ms = new MemoryStream();
-        tree.Write(ms);
+        BinTreeIo.Write(tree, ms);
         if (!await SaveEditorBinBytesAsync(entry, ms.ToArray(), bytes, "Validate", holdsDocument: false)) return false;   // M823: the bytes it read, so that a bin that changed meanwhile has the repoint merged onto it
         _log.Success("Validate", $"{entry.DisplayName}: repointed {hits} reference(s) {fromPath} → {toPath}.");
         if (MaterialEditor.BinEntry?.PathHash == entry.PathHash)
@@ -15417,7 +15425,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                         n = Formats.Meta.BinAssetLinkMigration.AlignWith(tree, patchCopy);
                         if (n == 0) continue;
                         using var ms = new MemoryStream();
-                        tree.Write(ms);
+                        BinTreeIo.Write(tree, ms);
                         outBytes = ms.ToArray();
                     }
                     catch { continue; }

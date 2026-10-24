@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Materials;
@@ -57,7 +58,7 @@ public class PorterEmbeddedOutputTests
         Assert.Null(error);
         Assert.NotNull(bytes);
 
-        var tree = new BinTree(new MemoryStream(bytes!, writable: false));
+        var tree = BinTreeIo.Read(bytes!);
         var material = Assert.Single(tree.Objects).Value;
 
         int checkedContainers = 0;
@@ -90,7 +91,7 @@ public class PorterEmbeddedOutputTests
             replaceExisting: false, blendEnable: true, sourceBlendFactor: 6, destinationBlendFactor: 7);
 
         Assert.Null(error);
-        var tree = new BinTree(new MemoryStream(bytes!, writable: false));
+        var tree = BinTreeIo.Read(bytes!);
         var material = Assert.Single(tree.Objects).Value;
         var technique = Assert.IsType<BinTreeEmbedded>(
             Assert.IsAssignableFrom<BinTreeContainer>(material.Properties[H("techniques")]).Elements.Single());

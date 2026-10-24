@@ -50,7 +50,7 @@ public sealed class CharacterPackageTests
     private static string Text(CharacterPackage package, string binPath, out BinTree tree)
     {
         var file = package.Bins.Single(b => b.Path == binPath);
-        tree = new BinTree(new MemoryStream(file.Bytes, false));
+        tree = BinTreeIo.Read(file.Bytes);
         var wadPaths = package.AllPaths.ToDictionary(HashAlgorithms.WadPath, p => p);
         return RitobinText.Write(tree, Name, h => wadPaths.GetValueOrDefault(h)).Replace("\r\n", "\n").TrimEnd();
     }
@@ -247,7 +247,7 @@ public sealed class CharacterPackageTests
     public void ACreatedPlacementIsTheSceneryCharacterEveryShippedMapHas()
     {
         byte[] bin = BinWithContainer();
-        var id = MapPlaceableWriter.NewParticleId(new BinTree(new MemoryStream(bin, false)), H("MyGolem_1"));
+        var id = MapPlaceableWriter.NewParticleId(BinTreeIo.Read(bin), H("MyGolem_1"));
         Assert.True(id.IsValid);
         var transform = Matrix4x4.CreateTranslation(761.5f, 133.2f, 453.3f);
         var edit = new MapPlacementEdit(id)
@@ -265,7 +265,7 @@ public sealed class CharacterPackageTests
 
         // exactly Riot's four fields in Riot's forms: measured on 119 scenery placements, the name is a
         // hash, Character a pointer, CharacterMesh an embed
-        var tree = new BinTree(new MemoryStream(written!, false));
+        var tree = BinTreeIo.Read(written!);
         var items = (BinTreeMap)tree.Objects[ContainerHash].Properties[H("items")];
         var item = (BinTreeStruct)items.Single(e => ((BinTreeHash)e.Key).Value == id.ItemKey).Value;
         Assert.Equal(0x9aa5b4bcu, item.ClassHash);
@@ -303,11 +303,11 @@ public sealed class CharacterPackageTests
         Assert.True(prop.PlaysIdle);
 
         // a placement created without a clip is the still form: Riot's "Idle1" default, no flag
-        var stillId = MapPlaceableWriter.NewParticleId(new BinTree(new MemoryStream(bin, false)), H("Still_1"));
+        var stillId = MapPlaceableWriter.NewParticleId(BinTreeIo.Read(bin), H("Still_1"));
         byte[]? still = MapPlaceableWriter.WriteEdits(bin,
             new[] { edit with { Id = stillId, Name = "Still_1", IdleAnimation = null } }, out var stillError);
         Assert.Null(stillError);
-        var stillMesh = (BinTreeStruct)((BinTreeStruct)((BinTreeMap)new BinTree(new MemoryStream(still!, false))
+        var stillMesh = (BinTreeStruct)((BinTreeStruct)((BinTreeMap)BinTreeIo.Read(still!)
             .Objects[ContainerHash].Properties[H("items")])
             .Single(e => ((BinTreeHash)e.Key).Value == stillId.ItemKey).Value).Properties[H("CharacterMesh")];
         Assert.Equal("Idle1", ((BinTreeString)stillMesh.Properties[H("IdleAnimationName")]).Value);
@@ -325,19 +325,19 @@ public sealed class CharacterPackageTests
         // a RENAME keeps the class's own wire form - a hash here, a string on a particle or a sound
         var renamed = MapPlaceableWriter.WriteEdits(written!, new[] { new MapPlacementEdit(id) { Name = "MyGolem_renamed" } }, out error);
         Assert.Null(error);
-        var renamedItem = (BinTreeStruct)((BinTreeMap)new BinTree(new MemoryStream(renamed!, false)).Objects[ContainerHash].Properties[H("items")])
+        var renamedItem = (BinTreeStruct)((BinTreeMap)BinTreeIo.Read(renamed!).Objects[ContainerHash].Properties[H("items")])
             .Single(e => ((BinTreeHash)e.Key).Value == id.ItemKey).Value;
         Assert.Equal(H("MyGolem_renamed"), Assert.IsType<BinTreeHash>(renamedItem.Properties[H("name")]).Value);
         var renamedSound = MapPlaceableWriter.WriteEdits(written!, new[] { new MapPlacementEdit(new MapPlacementId(ContainerHash, 0xAAAAAAAAu)) { Name = "Still a string" } }, out error);
         Assert.Null(error);
-        var soundItem = (BinTreeStruct)((BinTreeMap)new BinTree(new MemoryStream(renamedSound!, false)).Objects[ContainerHash].Properties[H("items")])
+        var soundItem = (BinTreeStruct)((BinTreeMap)BinTreeIo.Read(renamedSound!).Objects[ContainerHash].Properties[H("items")])
             .Single(e => ((BinTreeHash)e.Key).Value == 0xAAAAAAAAu).Value;
         Assert.Equal("Still a string", Assert.IsType<BinTreeString>(soundItem.Properties[H("name")]).Value);
 
         // the ordinary verbs still edit it afterwards: a moved prop keeps its hashed name and its idle
         var moved = MapPlaceableWriter.WriteEdits(written!, new[] { new MapPlacementEdit(id) { Transform = Matrix4x4.CreateTranslation(1, 1, 1) } }, out error);
         Assert.Null(error);
-        var movedItem = (BinTreeStruct)((BinTreeMap)new BinTree(new MemoryStream(moved!, false)).Objects[ContainerHash].Properties[H("items")])
+        var movedItem = (BinTreeStruct)((BinTreeMap)BinTreeIo.Read(moved!).Objects[ContainerHash].Properties[H("items")])
             .Single(e => ((BinTreeHash)e.Key).Value == id.ItemKey).Value;
         Assert.IsType<BinTreeHash>(movedItem.Properties[H("name")]);
         Assert.Equal(Vector3.One, ((BinTreeMatrix44)movedItem.Properties[H("transform")]).Value.Translation);

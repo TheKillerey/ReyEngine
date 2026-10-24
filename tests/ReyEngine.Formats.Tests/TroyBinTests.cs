@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -189,7 +190,7 @@ public class TroyBinTests
     /// <summary>The Vector4 values of emitter <paramref name="index"/>'s colour curve.</summary>
     private static IReadOnlyList<Vector4> Values(byte[] bin, int index)
     {
-        var tree = new BinTree(new MemoryStream(bin, writable: false));
+        var tree = BinTreeIo.Read(bin);
         var container = (BinTreeContainer)tree.Objects.Values.Single()
             .Properties[HashAlgorithms.Fnv1a("complexEmitterDefinitionData")];
         var emitter = (BinTreeStruct)container.Elements[index];
@@ -531,8 +532,8 @@ public class TroyBinTests
         byte[] raw = Build(new[] { "e1", "DATA/Particles/e1.dds" });
         Assert.True(TroyBinFile.TryParse(raw, out var troy, out _));
 
-        var tree = new BinTree(new MemoryStream(
-            TroyBinConverter.Convert(troy!, "X", "Particles/X").BinBytes, writable: false));
+        var tree = BinTreeIo.Read(
+            TroyBinConverter.Convert(troy!, "X", "Particles/X").BinBytes);
         var container = Assert.IsType<BinTreeContainer>(
             Assert.Single(tree.Objects).Value.Properties[HashAlgorithms.Fnv1a("complexEmitterDefinitionData")]);
 
@@ -564,7 +565,7 @@ public class TroyBinTests
         var result = TroyBinConverter.Convert(troy!, "X", "Particles/X");
         var staged = result.Assets.Select(a => a.TargetPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var tree = new BinTree(new MemoryStream(result.BinBytes, writable: false));
+        var tree = BinTreeIo.Read(result.BinBytes);
         foreach (string referenced in AssetStrings(tree.Objects.Values.Single().Properties.Values))
             Assert.Contains(referenced, staged);
     }
@@ -843,7 +844,7 @@ public class TroyBinTests
 
     private static BinTreeProperty? FindEmitterProperty(byte[] bin, string field)
     {
-        var tree = new BinTree(new MemoryStream(bin, writable: false));
+        var tree = BinTreeIo.Read(bin);
         var container = (BinTreeContainer)tree.Objects.Values.Single()
             .Properties[HashAlgorithms.Fnv1a("complexEmitterDefinitionData")];
         var emitter = (BinTreeStruct)container.Elements[0];

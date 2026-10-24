@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.App.ViewModels;
@@ -23,7 +24,7 @@ public sealed class MaterialGraphWiringTests
     private const string OtherPath = "Maps/Test/Materials/Other_MAT";
     private const string ShaderPath = "Shaders/StaticMesh/Test_Shader";
 
-    private static readonly Dictionary<uint, string> Known = new[] { "StaticMaterialDef", "name", ShaderPath }.ToDictionary(H);
+    private static readonly Dictionary<uint, string> Known = new[] { "StaticMaterialDef", "name", ShaderPath, MatPath, OtherPath }.ToDictionary(H);
     private static string? Resolve(uint h) => Known.TryGetValue(h, out var n) ? n : null;
 
     private static BinTreeEmbedded Sampler(string name, string path) =>
@@ -72,7 +73,7 @@ public sealed class MaterialGraphWiringTests
         var other = Material(OtherPath, new[] { Sampler("Diffuse_Texture", "assets/maps/other_d.tex") },
             new[] { Param("TintColor", new BinTreeVector4(H("value"), Vector4.One)) });
         using var ms = new MemoryStream();
-        new BinTree(new[] { rock, other }, Array.Empty<string>()).Write(ms);
+        BinTreeIo.Write(new BinTree(new[] { rock, other }, Array.Empty<string>()), ms);
         return ms.ToArray();
     }
 

@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -49,7 +50,7 @@ public sealed class TroyColorCurveTests
     {
         var result = TroyBinConverter.Convert(troy, "Test", "Particles/Test");
         BinTree tree;
-        using (var ms = new MemoryStream(result.BinBytes)) tree = new BinTree(ms);
+        tree = BinTreeIo.Read(result.BinBytes);
         var emitters = Kids(tree.Objects.Values.Single().Properties[H("complexEmitterDefinitionData")]);
         return emitters.Single(e => Prop(Kids(e), "emitterName") is BinTreeString s && s.Value == name);
     }

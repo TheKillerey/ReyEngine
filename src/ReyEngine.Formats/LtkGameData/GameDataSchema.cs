@@ -6,8 +6,11 @@ namespace ReyEngine.Formats.LtkGameData;
 
 /// <summary>A property type (<c>Shape</c>): a kind, and the kinds a container carries. The key is a map's key kind; the item is a
 /// container's or an option's item kind, or a map's value kind.</summary>
-public readonly record struct GameDataShape(PropKind Kind, PropKind? Key = null, PropKind? Item = null)
+public readonly record struct GameDataShape(PropKind Kind, PropKind? Key = null, PropKind? Item = null, bool Wide = false)
 {
+    // Wide: a Hash whose hasher is 8 bytes wide (XXH3-64, lowercased) - patch 16.21's StaticMaterialDef.name. It is carried by a PropInt of
+    // kind Hash, where every other Hash is a four-byte PropHash.
+
     /// <summary>The shape of a kind with no key and no item.</summary>
     public static GameDataShape Bare(PropKind kind) => new(kind);
 
@@ -15,7 +18,7 @@ public readonly record struct GameDataShape(PropKind Kind, PropKind? Key = null,
     public static GameDataShape Of(PropValue value)
     {
         var shape = value.Shape;
-        return new GameDataShape(shape.Kind, shape.Key, shape.Item);
+        return new GameDataShape(shape.Kind, shape.Key, shape.Item, value is PropInt { Kind: PropKind.Hash });
     }
 }
 
@@ -242,7 +245,7 @@ public sealed class LtkMetaSchema
                         if (revision.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.Array)
                             foreach (var slot in type.EnumerateArray())
                                 slots.Add(slot.ValueKind == JsonValueKind.String ? slot.GetString()! : throw new FormatException("meta schema database: a type slot is not a string"));
-                        list.Add(new Revision { From = ReadUInt(revision, "from"), To = ReadOptionalUInt(revision, "to"), Shape = ShapeWritten(slots) });
+                        list.Add(new Revision { From = ReadUInt(revision, "from"), To = ReadOptionalUInt(revision, "to"), Shape = ShapeWritten(slots, ReadHasher(revision)) });
                     }
                 }
                 parsed.Properties[field] = list;
@@ -291,8 +294,20 @@ public sealed class LtkMetaSchema
 
     /// <summary><c>Shape::written</c>: the kind from slot 0, a map's key from slot 1 (a list writes its fixed size there, which is a
     /// count and not a kind), and the item or value kind from slot 2. Null where a slot the shape needs is not a type name.</summary>
-    private static GameDataShape? ShapeWritten(List<string> slots)
+    /// <summary>The "hasher" a Hash revision declares: 0 for the ordinary four-byte FNV, 8 for the XXH3-64 form, -1 for one this reader does not
+    /// implement (the revision is then declined rather than answered wrongly).</summary>
+    private static int ReadHasher(JsonElement revision)
     {
+        if (!revision.TryGetProperty("hasher", out var hasher) || hasher.ValueKind != JsonValueKind.Object) return 0;
+        int width = hasher.TryGetProperty("width", out var w) && w.ValueKind == JsonValueKind.Number && w.TryGetInt32(out int n) ? n : -1;
+        string? algorithm = hasher.TryGetProperty("algorithm", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
+        bool lowered = hasher.TryGetProperty("lowercased", out var l) && l.ValueKind == JsonValueKind.True;
+        return width == 8 && algorithm == "Xxh3" && lowered ? 8 : -1;
+    }
+
+    private static GameDataShape? ShapeWritten(List<string> slots, int hasherWidth = 0)
+    {
+        if (hasherWidth < 0) return null;
         string? Slot(int index) => index < slots.Count && slots[index] != EmptySlot ? slots[index] : null;
 
         if (Slot(0) is not { } first || !Names.TryGetValue(first, out var kind)) return null;
@@ -308,7 +323,7 @@ public sealed class LtkMetaSchema
             if (!Names.TryGetValue(valueName, out var itemKind)) return null;
             item = itemKind;
         }
-        return new GameDataShape(kind, key, item);
+        return new GameDataShape(kind, key, item, hasherWidth == 8 && kind == PropKind.Hash);
     }
 
     // ------------------------------------------------------------------------------------------ queries

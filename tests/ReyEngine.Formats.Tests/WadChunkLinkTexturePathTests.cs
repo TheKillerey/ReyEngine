@@ -186,7 +186,10 @@ public sealed class WadChunkLinkTexturePathTests
     public void TheViewportResolverFindsADiffuseForShippedMaterials()
     {
         if (ShippedBaseSrx() is not { } bytes) return;
-        var names = MaterialDocument.Parse(bytes, _ => null).Materials.Select(m => m.Name).ToList();
+        // 16.21 stores a material's name as an XXH3 hash, so the path comes from the hash tables - the app reads the
+        // names from the mapgeo's own material strings instead.
+        var hashes = new ReyEngine.Core.Hashing.HashSyncService().LoadLocal(_ => { });
+        var names = MaterialDocument.Parse(bytes, h => hashes.TryGetBinName(h, out var n) ? n : null).Materials.Select(m => m.Name).ToList();
 
         var resolved = MapGeoMaterialResolver.Resolve(bytes, names, NameEverything);
 

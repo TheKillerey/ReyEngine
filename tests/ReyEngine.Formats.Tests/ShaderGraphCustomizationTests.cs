@@ -1199,7 +1199,7 @@ public sealed class ShaderGraphCustomizationTests : IDisposable
         byte[] written = serialized;
         if (editor.BaseBytes is { } b && !disk.AsSpan().SequenceEqual(b))
             written = BinThreeWayMerge.Merge(b, serialized, disk, Names).Merged;
-        _ = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(written, false));
+        _ = ReyEngine.Formats.Meta.BinTreeIo.Read(written);
         if (moveBase) editor.NoteSaved(serialized);
         return written;
     }

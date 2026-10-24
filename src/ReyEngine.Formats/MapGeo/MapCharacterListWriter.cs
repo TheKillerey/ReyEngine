@@ -112,7 +112,7 @@ public static class MapCharacterListWriter
         try
         {
             using var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             result = ms.ToArray();
         }
         catch (Exception ex) { error = $"could not write the map bin: {ex.Message}"; return null; }

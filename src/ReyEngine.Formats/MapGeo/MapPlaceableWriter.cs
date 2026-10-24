@@ -192,7 +192,7 @@ public static class MapPlaceableWriter
         try
         {
             using var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             result = ms.ToArray();
         }
         catch (Exception ex) { error = $"could not write the .bin: {ex.Message}"; return null; }

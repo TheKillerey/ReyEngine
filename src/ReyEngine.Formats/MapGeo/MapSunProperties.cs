@@ -267,7 +267,7 @@ public sealed record MapSunProperties
             Set("surfaceAreaToShadowMapScale", new BinTreeF32(HashAlgorithms.Fnv1a("surfaceAreaToShadowMapScale"), sun.SurfaceAreaToShadowMapScale), sun.SurfaceAreaToShadowMapScale == defaults.SurfaceAreaToShadowMapScale);
 
             var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             result = new WriteResult(true, created, updated, added,
                 (created ? "created the component; " : "") + $"{updated} field(s) updated, {added} added");
             return ms.ToArray();

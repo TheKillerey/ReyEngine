@@ -74,7 +74,7 @@ public static class CharacterSkinReader
     {
         try
         {
-            var tree = new BinTree(new MemoryStream(skinBin));
+            var tree = BinTreeIo.Read(skinBin);
             var skin = tree.Objects.Values.FirstOrDefault(o => o.ClassHash == ClassSkin);
             return skin is null ? null : ReadObject(skin, binPath, resolveWadPath);
         }

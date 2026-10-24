@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -84,7 +85,7 @@ public class MapSunWriterTests
 
         byte[]? outBin = MapSunProperties.Write(bin, Authored, out _);
 
-        var tree = new BinTree(new MemoryStream(outBin!, false));
+        var tree = BinTreeIo.Read(outBin!);
         var sun = tree.Objects.Values.SelectMany(o => o.Properties.Values)
             .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
             .OfType<BinTreeStruct>().Single(s => s.ClassHash == H("MapSunProperties"));
@@ -123,7 +124,7 @@ public class MapSunWriterTests
     public void FogEnabled_is_a_bool_under_its_own_hash()
     {
         var outBin = MapSunProperties.Write(BinWith(), new MapSunProperties { FogEnabled = false }, out _)!;
-        var tree = new BinTree(new MemoryStream(outBin, false));
+        var tree = BinTreeIo.Read(outBin);
         var sun = tree.Objects.Values.SelectMany(o => o.Properties.Values)
             .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
             .OfType<BinTreeStruct>().Single(s => s.ClassHash == H("MapSunProperties"));
@@ -224,7 +225,7 @@ public class MapSunWriterTests
 
         byte[]? outBin = MapSunProperties.Write(bin, sun, out var result);
 
-        var tree = new BinTree(new MemoryStream(outBin!, false));
+        var tree = BinTreeIo.Read(outBin!);
         var s = tree.Objects.Values.SelectMany(o => o.Properties.Values)
             .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
             .OfType<BinTreeStruct>().Single(x => x.ClassHash == H("MapSunProperties"));
@@ -247,7 +248,7 @@ public class MapSunWriterTests
 
         byte[]? outBin = MapSunProperties.Write(bin, Authored, out _);
 
-        var tree = new BinTree(new MemoryStream(outBin!, false));
+        var tree = BinTreeIo.Read(outBin!);
         var s = tree.Objects.Values.SelectMany(o => o.Properties.Values)
             .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
             .OfType<BinTreeStruct>().Single(x => x.ClassHash == H("MapSunProperties"));
@@ -267,7 +268,7 @@ public class MapSunWriterTests
         Assert.Equal(0.5f, MapSunProperties.Extract(strong!)!.SunIntensityScale);
 
         byte[]? neutral = MapSunProperties.Write(bin, new MapSunProperties(), out _);
-        var tree = new BinTree(new MemoryStream(neutral!, false));
+        var tree = BinTreeIo.Read(neutral!);
         var s = tree.Objects.Values.SelectMany(o => o.Properties.Values)
             .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
             .OfType<BinTreeStruct>().Single(x => x.ClassHash == H("MapSunProperties"));
@@ -344,7 +345,7 @@ public class MapSunWriterTests
 
         byte[] outBin = MapSunProperties.Write(BinWith(new BinTreeVector4(H("sunColor"), Vector4.One)),
                                                Authored, out _)!;
-        var tree = new BinTree(new MemoryStream(outBin, false));
+        var tree = BinTreeIo.Read(outBin);
         var sun = tree.Objects.Values.SelectMany(o => o.Properties.Values)
             .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
             .OfType<BinTreeStruct>().Single(s => s.ClassHash == H("MapSunProperties"));
@@ -364,7 +365,7 @@ public class MapSunWriterTests
 
         byte[]? outBin = MapSunProperties.Write(bin, sun, out var result);
 
-        var tree = new BinTree(new MemoryStream(outBin!, false));
+        var tree = BinTreeIo.Read(outBin!);
         var s = tree.Objects.Values.SelectMany(o => o.Properties.Values)
             .OfType<BinTreeContainer>().SelectMany(c => c.Elements)
             .OfType<BinTreeStruct>().Single(x => x.ClassHash == H("MapSunProperties"));

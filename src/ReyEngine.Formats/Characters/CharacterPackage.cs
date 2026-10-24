@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -199,7 +200,7 @@ public static class CharacterPackageBuilder
     private static byte[] Bytes(BinTree tree)
     {
         using var ms = new MemoryStream();
-        tree.Write(ms);
+        BinTreeIo.Write(tree, ms);
         return ms.ToArray();
     }
 }

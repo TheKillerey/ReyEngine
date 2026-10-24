@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -27,7 +28,7 @@ public static class ChampionRecord
     {
         try
         {
-            var tree = new BinTree(new MemoryStream(recordBin));
+            var tree = BinTreeIo.Read(recordBin);
             foreach (var o in tree.Objects.Values)
             {
                 if (!o.Properties.TryGetValue(FSpellNames, out var property)) continue;

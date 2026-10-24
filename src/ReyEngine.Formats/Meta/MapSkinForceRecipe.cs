@@ -135,7 +135,7 @@ public sealed record MapSkinForceRecipe(
         var objects = new List<BinTreeObject> { snapshot.Skin };
         if (snapshot.Audio is not null) objects.Add(snapshot.Audio);
         using var ms = new MemoryStream();
-        new BinTree(objects, Array.Empty<string>()).Write(ms);
+        BinTreeIo.Write(new BinTree(objects, Array.Empty<string>()), ms);
         return ms.ToArray();
     }
 
@@ -214,7 +214,7 @@ public sealed record MapSkinForceRecipe(
             if (relinked > 0)
             {
                 using var ms = new MemoryStream();
-                tree.Write(ms);
+                BinTreeIo.Write(tree, ms);
                 bytes = ms.ToArray();
                 notes.Add($"{relinked} recorded asset reference(s) rewritten to the wire form this patch uses");
             }

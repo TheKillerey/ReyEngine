@@ -193,6 +193,9 @@ public static class Dx11SceneBuilder
         var merged = MergeSlices(map);
         var byName = new Dictionary<string, MaterialBinding>(StringComparer.OrdinalIgnoreCase);
         foreach (var m in materials) byName[m.Name] = m;
+        foreach (string unbound in map.Groups.Select(g => g.Material).Distinct(StringComparer.OrdinalIgnoreCase).ToList())
+            if (!string.IsNullOrEmpty(unbound) && !byName.ContainsKey(unbound) && materials.FirstOrDefault(m => m.IsNamed(unbound)) is { } named)
+                byName[unbound] = named;
         var terrainWorldTransform = MapGeoMaterialResolver.TerrainBlendWorldTransformFor(map,
             materials.Where(m => m.Profile.TerrainWorldProjectedMask).Select(m => m.Name));
 

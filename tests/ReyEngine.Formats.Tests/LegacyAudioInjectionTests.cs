@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using System.Text;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
@@ -227,7 +228,7 @@ public sealed class LegacyAudioInjectionTests
         Assert.Equal("Play_sfx_Env_LegacyPort_map2_ENV_11", added.EventName);
         Assert.Equal(transform.Translation, added.Position);
 
-        var tree = new BinTree(new MemoryStream(outBytes!, false));
+        var tree = BinTreeIo.Read(outBytes!);
         var item = ((BinTreeMap)tree.Objects[ContainerHash].Properties[H("items")])
             .First(e => e.Key is BinTreeHash k && k.Value == id.ItemKey).Value;
         var s2 = Assert.IsType<BinTreeStruct>(item);

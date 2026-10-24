@@ -139,6 +139,11 @@ internal sealed class Coercer
             }
             case PropKind.String:
                 return value is GdString text ? new PropString(text.Value) : PropertySkipReason.KindMismatch;
+            case PropKind.Hash when shape.Wide:
+            {
+                var error = HashXxh3(value, out ulong wide);
+                return error is null ? new PropInt(PropKind.Hash, wide) : error.Value;
+            }
             case PropKind.Hash:
             case PropKind.ObjectLink:
             {
@@ -390,6 +395,21 @@ internal sealed class Coercer
             case GdString { Value.Length: 0 }: return null;
             case GdString text:
                 hash = LtkHash.Hash32Of(text.Value);
+                return null;
+            default: return PropertySkipReason.KindMismatch;
+        }
+    }
+
+    /// <summary>The 8-byte hasher of a StaticMaterialDef name: the 16 hex digits <c>0x</c> spells, else XXH3-64 of the lowercased text; zero for null and <c>""</c>.</summary>
+    private static PropertySkipReason? HashXxh3(GameDataLiteral value, out ulong hash)
+    {
+        hash = 0;
+        switch (value)
+        {
+            case GdNull: return null;
+            case GdString { Value.Length: 0 }: return null;
+            case GdString text:
+                hash = LtkHash.TryHex64(text.Value, out ulong spelled) ? spelled : ReyEngine.Formats.Meta.BinWireNormalizer.NameHash(text.Value);
                 return null;
             default: return PropertySkipReason.KindMismatch;
         }

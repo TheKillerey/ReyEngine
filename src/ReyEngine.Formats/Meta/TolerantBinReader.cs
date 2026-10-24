@@ -47,6 +47,10 @@ public static class TolerantBinReader
     public static BinTree Read(byte[] data) => Read(data, null);
 
     public static BinTree Read(byte[] data, ICollection<BinRepairIssue>? issues)
+        => ReadNormalized(BinWireNormalizer.Normalize(data), issues);     // 16.21: 8-byte material name hash -> U64 stand-in
+
+    /// <summary>For bytes that already went through <see cref="BinWireNormalizer.Normalize"/> (SafeBinTree does it once for all its readers).</summary>
+    internal static BinTree ReadNormalized(byte[] data, ICollection<BinRepairIssue>? issues)
     {
         using var ms = new MemoryStream(data, writable: false);
         using var br = new BinaryReader(ms);
@@ -140,6 +144,7 @@ public static class SafeBinTree
     /// repair. An empty list means the file is well-formed (the strict parser accepted it).</summary>
     public static BinTree Parse(byte[] data, out IReadOnlyList<BinRepairIssue> issues)
     {
+        data = BinWireNormalizer.Normalize(data);     // 16.21: 8-byte material name hash -> U64 stand-in
         try
         {
             var tree = new BinTree(new MemoryStream(data, writable: false));
@@ -157,7 +162,7 @@ public static class SafeBinTree
         {
             try
             {
-                var tree = new BinTree(new MemoryStream(repaired, writable: false));
+                var tree = new BinTree(new MemoryStream(BinWireNormalizer.Normalize(repaired), writable: false));
                 issues =
                 [
                     new BinRepairIssue(0, 0, "Non-canonical null struct", null,
@@ -173,7 +178,7 @@ public static class SafeBinTree
         }
 
         var list = new List<BinRepairIssue>();
-        var tolerant = TolerantBinReader.Read(data, list);
+        var tolerant = TolerantBinReader.ReadNormalized(data, list);
         issues = list;
         int lost = list.Count(i => i.Kind == TolerantBinReader.UnreadableDataKind);
         if (lost > 0) Lossy.AddOrUpdate(tolerant, new LossyParse(lost, list));

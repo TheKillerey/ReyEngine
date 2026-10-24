@@ -38,8 +38,9 @@ public sealed class MapMaterialFactoryTests
         var tree = SafeBinTree.Parse(result!);
         uint importedHash = H("Workshop_Imported");
         Assert.True(tree.Objects.ContainsKey(importedHash));
-        Assert.Equal("Workshop_Imported",
-            ((BinTreeString)tree.Objects[importedHash].Properties[H("name")]).Value);
+        // 16.21: the name is the 8-byte XXH3-64 of the lowercased new path
+        Assert.Equal(BinWireNormalizer.NameHash("Workshop_Imported"),
+            ((BinTreeU64)tree.Objects[importedHash].Properties[H("name")]).Value);
         Assert.True(tree.Objects.ContainsKey(0x100u));
     }
 

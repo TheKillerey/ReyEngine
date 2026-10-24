@@ -38,7 +38,7 @@ public sealed class MaterialMacroEditingTests
         });
         var tree = new BinTree(new[] { material }, Array.Empty<string>());
         using var stream = new MemoryStream();
-        tree.Write(stream);
+        BinTreeIo.Write(tree, stream);
         byte[] original = stream.ToArray();
 
         string? Resolve(uint hash) => hash switch
@@ -63,7 +63,7 @@ public sealed class MaterialMacroEditingTests
         Assert.Equal(MaterialBinding.MacroNoBakedLighting, persisted.Name);
         Assert.True(persisted.On);
 
-        var savedTree = new BinTree(new MemoryStream(document.Serialize(), writable: false));
+        var savedTree = BinTreeIo.Read(document.Serialize());
         var savedMaterial = Assert.Single(savedTree.Objects).Value;
         Assert.IsType<BinTreeMap>(savedMaterial.Properties[H("shaderMacros")]);
         Assert.False(savedMaterial.Properties.ContainsKey(HashAlgorithms.Fnv1aRaw("shaderMacros")));
@@ -81,7 +81,7 @@ public sealed class MaterialMacroEditingTests
             new BinTreeMap(rawField, BinPropertyType.String, BinPropertyType.String, new[] { macro }),
         });
         using var stream = new MemoryStream();
-        new BinTree(new[] { material }, Array.Empty<string>()).Write(stream);
+        BinTreeIo.Write(new BinTree(new[] { material }, Array.Empty<string>()), stream);
         string? Resolve(uint hash) => hash == H("StaticMaterialDef") ? "StaticMaterialDef" : null;
 
         var document = MaterialDocument.Parse(stream.ToArray(), Resolve);

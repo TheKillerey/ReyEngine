@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -81,7 +82,7 @@ public static class MapGraphicsFeatures
     {
         var found = new List<Feature>();
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(materialsBin, false)); }
+        try { tree = BinTreeIo.Read(materialsBin); }
         catch { return found; }
 
         foreach (var comps in Containers(tree))
@@ -113,7 +114,7 @@ public static class MapGraphicsFeatures
         result = new Result(false, "");
 
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(materialsBin, false)); }
+        try { tree = BinTreeIo.Read(materialsBin); }
         catch (Exception ex) { result = new Result(false, $"bin did not parse: {ex.Message}"); return null; }
 
         foreach (var (obj, comps) in ContainersWithOwner(tree))
@@ -144,7 +145,7 @@ public static class MapGraphicsFeatures
             }
 
             var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             return ms.ToArray();
         }
 
@@ -159,7 +160,7 @@ public static class MapGraphicsFeatures
         result = new Result(false, "");
 
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(materialsBin, false)); }
+        try { tree = BinTreeIo.Read(materialsBin); }
         catch (Exception ex) { result = new Result(false, $"bin did not parse: {ex.Message}"); return null; }
 
         foreach (var (obj, comps) in ContainersWithOwner(tree))
@@ -174,7 +175,7 @@ public static class MapGraphicsFeatures
 
             obj.Properties[ComponentsField] = new BinTreeContainer(ComponentsField, comps.ElementType, kept);
             var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             result = new Result(true, $"removed {feature.Name}");
             return ms.ToArray();
         }

@@ -37,7 +37,7 @@ public sealed class BinObjectGraphImporterTests
         Assert.Null(error);
         Assert.NotNull(result);
         Assert.Equal(2, result!.ImportedObjects);
-        var tree = new BinTree(new MemoryStream(result.Bytes, writable: false));
+        var tree = BinTreeIo.Read(result.Bytes);
         Assert.True(tree.Objects.ContainsKey(root));
         Assert.True(tree.Objects.ContainsKey(child));
         Assert.True(tree.Objects.ContainsKey(0x300u));

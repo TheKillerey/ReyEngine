@@ -1,4 +1,5 @@
 using System.Globalization;
+using ReyEngine.Formats.Meta;
 using System.Numerics;
 using System.Text.Json;
 using LeagueToolkit.Core.Meta;
@@ -121,7 +122,7 @@ public static class ShaderCatalogLoader
                 e.IsResolved && e.Path.Equals(ShaderBinPath, StringComparison.OrdinalIgnoreCase));
             if (entry is null) return null;
 
-            var tree = new BinTree(new MemoryStream(wad.Extract(entry), writable: false));
+            var tree = BinTreeIo.Read(wad.Extract(entry));
             var shaders = new List<LeagueShaderDef>();
             foreach (var (hash, obj) in tree.Objects)
             {

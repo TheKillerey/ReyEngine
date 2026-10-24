@@ -1,4 +1,5 @@
 using LeagueToolkit.Core.Meta;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 
@@ -43,7 +44,7 @@ public static class MapBakeProperties
     {
         result = new Result(false, false, "");
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(materialsBin, false)); }
+        try { tree = BinTreeIo.Read(materialsBin); }
         catch (Exception ex) { result = new Result(false, false, $"bin did not parse: {ex.Message}"); return null; }
 
         foreach (var (_, obj) in tree.Objects)
@@ -75,7 +76,7 @@ public static class MapBakeProperties
             bake.Properties[FieldLightGridFileName] = new BinTreeString(FieldLightGridFileName, lightGridPath);
 
             var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             result = new Result(true, created,
                 $"lightGridSize={lightGridSize}, characterFullBright={characterFullBrightIntensity:0.##}, file='{lightGridPath}'"
                 + (created ? " (created the component)" : " (updated the existing component)"));
@@ -91,7 +92,7 @@ public static class MapBakeProperties
     {
         try
         {
-            var tree = new BinTree(new MemoryStream(materialsBin, false));
+            var tree = BinTreeIo.Read(materialsBin);
             foreach (var (_, obj) in tree.Objects)
             {
                 if (obj.ClassHash != ContainerCls) continue;

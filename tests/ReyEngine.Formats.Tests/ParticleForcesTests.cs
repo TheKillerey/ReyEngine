@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -67,7 +68,7 @@ public sealed class ParticleForcesTests
         // wire form is a property the client silently skips.
         var doc = Doc();
         Emitter(doc).AddForce(ParticleForceKind.Drag);
-        var tree = new BinTree(new MemoryStream(doc.Serialize(), false));
+        var tree = BinTreeIo.Read(doc.Serialize());
         var emitter = (BinTreeStruct)((BinTreeContainer)tree.Objects[H("sys")].Properties[H("complexEmitterDefinitionData")]).Elements[0];
 
         var collection = emitter.Properties[H("fieldCollectionDefinition")];
@@ -182,7 +183,7 @@ public sealed class ParticleForcesTests
 
         e.RemoveForce(ParticleForceKind.Noise, 0);
         Assert.Null(Resolved(doc));
-        var tree = new BinTree(new MemoryStream(doc.Serialize(), false));
+        var tree = BinTreeIo.Read(doc.Serialize());
         var emitter = (BinTreeStruct)((BinTreeContainer)tree.Objects[H("sys")].Properties[H("complexEmitterDefinitionData")]).Elements[0];
         Assert.False(emitter.Properties.ContainsKey(H("fieldCollectionDefinition")));
     }

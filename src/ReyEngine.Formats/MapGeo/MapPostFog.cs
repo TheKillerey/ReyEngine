@@ -172,7 +172,7 @@ public sealed record MapPostFog(MapScreenFog DepthFog, MapScreenFog HeightFog)
             Fog("HeightFog", fog.HeightFog, Defaults.HeightFog);
 
             using var ms = new MemoryStream();
-            tree.Write(ms);
+            BinTreeIo.Write(tree, ms);
             detail = (created ? "created the post-effects component; " : "") + $"{updated} field(s) updated, {added} added";
             return ms.ToArray();
         }

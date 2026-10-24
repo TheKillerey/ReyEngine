@@ -204,7 +204,7 @@ public sealed partial class MaterialGraphViewModel
             // The editor loaded its file again. The SAME file (a refresh after a save, a repair): follow it to the material of
             // that name, keeping the selection. Another file, or none: what this graph holds is no longer the editor's document.
             if (string.Equals(_boundBin, _editor.BinEntry?.Path, StringComparison.OrdinalIgnoreCase)
-                && _editor.Materials.FirstOrDefault(m => !m.IsLinked && m.Model.Name == _binding.Name) is { } again)
+                && _editor.Materials.FirstOrDefault(m => !m.IsLinked && (m.Model.Name == _binding.Name || (_binding.ObjectPathHash != 0 && m.Model.ObjectPathHash == _binding.ObjectPathHash))) is { } again)
             {
                 var editor = _editor;
                 string? selected = SelectedNodeId;

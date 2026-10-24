@@ -186,7 +186,7 @@ public static class CharacterMaterialBinder
         }
 
         using var ms = new MemoryStream();
-        try { tree.Write(ms); }
+        try { BinTreeIo.Write(tree, ms); }
         catch (Exception ex) { error = "The edited skin bin could not be written: " + ex.Message; return null; }
         return ms.ToArray();
     }

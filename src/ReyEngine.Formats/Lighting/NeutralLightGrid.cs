@@ -141,7 +141,7 @@ public static class NeutralLightGrid
         ArgumentNullException.ThrowIfNull(materialsBin);
         try
         {
-            var tree = new LeagueToolkit.Core.Meta.BinTree(new MemoryStream(materialsBin, false));
+            var tree = ReyEngine.Formats.Meta.BinTreeIo.Read(materialsBin);
             uint container = Core.Hashing.HashAlgorithms.Fnv1a("MapContainer");
             uint field = Core.Hashing.HashAlgorithms.Fnv1a("mapPath");
             foreach (var (_, obj) in tree.Objects)

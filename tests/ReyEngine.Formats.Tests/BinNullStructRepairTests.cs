@@ -86,8 +86,8 @@ public class BinNullStructRepairTests
     [Fact]
     public void TheBrokenFixtureIsRejectedByTheStrictReaderAndTheGoodOneIsNot()
     {
-        _ = new BinTree(new MemoryStream(Good, writable: false));
-        Assert.ThrowsAny<Exception>(() => new BinTree(new MemoryStream(Broken, writable: false)));
+        _ = BinTreeIo.Read(Good);
+        Assert.ThrowsAny<Exception>(() => BinTreeIo.Read(Broken));
         Assert.Equal(Good.Length + 12, Broken.Length);   // two nulls x six stray bytes
     }
 
@@ -149,7 +149,7 @@ public class BinNullStructRepairTests
         byte[] saved = ms.ToArray();
 
         Assert.Equal(Good.Length, saved.Length);
-        _ = new BinTree(new MemoryStream(saved, writable: false));   // strictly readable
+        _ = BinTreeIo.Read(saved);   // strictly readable
     }
 
     /// <summary>A clean file must not be reported as repaired - the issue list drives UI warnings.</summary>

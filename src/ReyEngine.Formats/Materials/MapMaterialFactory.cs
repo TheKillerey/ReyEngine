@@ -28,8 +28,14 @@ public static class MapMaterialFactory
     /// <summary>Remove material objects authored by an earlier legacy-port pass, including objects made
     /// by older ReyEngine builds which accidentally used a non-material class hash. The namespace is
     /// owned by the porter and is rebuilt immediately after this call.</summary>
+    /// <param name="knownPaths">Paths the caller knows the porter generated (or would generate): ReyEngine invents the
+    /// <c>LegacyPort/&lt;slug&gt;/...</c> names, so no hash table can resolve them. The object key is FNV1a of the path, so
+    /// a known path finds its object without any table.</param>
+    /// <param name="resolvePath">16.21 stores a material <c>name</c> as an XXH3 hash, so the prefix can no longer be
+    /// read from it; the object's own path is resolved through this instead (the object key is FNV of the path).</param>
     public static byte[]? RemoveGeneratedMaterials(byte[] materialsBin, string prefix,
-        out int removedCount, out string? error)
+        out int removedCount, out string? error, Func<uint, string?>? resolvePath = null,
+        IEnumerable<string>? knownPaths = null)
     {
         removedCount = 0;
         error = null;
@@ -37,16 +43,22 @@ public static class MapMaterialFactory
         {
             var tree = SafeBinTree.Parse(materialsBin);
             uint nameField = HashAlgorithms.Fnv1a("name");
+            var known = new HashSet<uint>();
+            if (knownPaths is not null)
+                foreach (var p in knownPaths)
+                    if (p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) known.Add(HashAlgorithms.Fnv1a(p));
             var remove = tree.Objects
-                .Where(pair => pair.Value.Properties.TryGetValue(nameField, out var property)
-                    && property is BinTreeString name
-                    && name.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .Where(pair => known.Contains(pair.Key) || (pair.Value.Properties.TryGetValue(nameField, out var property)
+                        && property is BinTreeString name
+                        && name.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    || (resolvePath?.Invoke(pair.Key) is { } path
+                        && path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
                 .Select(pair => pair.Key).ToList();
             foreach (uint hash in remove) tree.Objects.Remove(hash);
             removedCount = remove.Count;
             if (removedCount == 0) return materialsBin;
             using var output = new MemoryStream();
-            tree.Write(output);
+            BinTreeIo.Write(tree, output);
             byte[] result = output.ToArray();
             _ = SafeBinTree.Parse(result);
             return result;
@@ -76,7 +88,7 @@ public static class MapMaterialFactory
             if (removedCount == 0) return materialsBin;
 
             using var output = new MemoryStream();
-            tree.Write(output);
+            BinTreeIo.Write(tree, output);
             byte[] result = output.ToArray();
             _ = SafeBinTree.Parse(result);
             return result;
@@ -177,18 +189,46 @@ public static class MapMaterialFactory
             if (target.Objects.ContainsKey(newHash)) { error = $"A material named '{newName}' already exists."; return null; }
             var clone = new BinTreeObject(newHash, template.ClassHash,
                 template.Properties.Select(kv => BinTreeCloner.Clone(kv.Value, kv.Key)));
-            uint nameField = HashAlgorithms.Fnv1a("name");
-            if (clone.Properties.TryGetValue(nameField, out var name) && name is BinTreeString text)
-                text.Value = newName;
+            SetMaterialName(clone, newName);
             target.Objects[newHash] = clone;
 
             using var output = new MemoryStream();
-            target.Write(output);
+            BinTreeIo.Write(target, output);
             var bytes = output.ToArray();
             _ = SafeBinTree.Parse(bytes);
             return bytes;
         }
         catch (Exception ex) { error = ex.Message; return null; }
+    }
+
+    /// <summary>Every printable ASCII run in <paramref name="data"/> (a mapgeo, say) that starts with <paramref name="prefix"/>:
+    /// the material names a map's meshes carry, which is how a generated material can be found without any hash table.</summary>
+    public static List<string> HarvestPaths(byte[] data, string prefix)
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < data.Length;)
+        {
+            int j = i;
+            while (j < data.Length && data[j] >= 0x20 && data[j] < 0x7f) j++;
+            if (j - i >= prefix.Length)
+            {
+                string run = System.Text.Encoding.ASCII.GetString(data, i, j - i);
+                if (run.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) found.Add(run);
+            }
+            i = j + 1;
+        }
+        return found.ToList();
+    }
+
+    /// <summary>A renamed copy keeps its <c>name</c> in the template's form: a String (pre-16.21 bin; the writer turns it into
+    /// the hash) or, in a 16.21 bin, the U64 stand-in for the 8-byte XXH3-64 of the lowercased path.</summary>
+    public static void SetMaterialName(BinTreeObject material, string newName)
+    {
+        uint nameField = HashAlgorithms.Fnv1a("name");
+        if (!material.Properties.TryGetValue(nameField, out var current)) return;
+        if (current is BinTreeString text) text.Value = newName;
+        else if (current is BinTreeU64)
+            material.Properties[nameField] = new BinTreeU64(nameField, BinWireNormalizer.NameHash(newName));
     }
 
     /// <summary>Write an RGBA image as an uncompressed BGRA .dds (the game loads plain DDS fine).</summary>
@@ -250,16 +290,14 @@ public static class MapMaterialFactory
                 template.Properties.Select(kv => BinTreeCloner.Clone(kv.Value, kv.Key)));
 
             // the material's own 'name' string mirrors its object path
-            uint nameField = HashAlgorithms.Fnv1a("name");
-            if (clone.Properties.TryGetValue(nameField, out var np) && np is BinTreeString ns)
-                ns.Value = newName;
+            SetMaterialName(clone, newName);
 
             if (diffusePath is not null) RepointDiffuse(clone, diffusePath, resolve);
             if (shaderPath is not null) RepointShader(clone, shaderPath, resolve);
 
             tree.Objects[newHash] = clone;
             using var outMs = new MemoryStream();
-            tree.Write(outMs);
+            BinTreeIo.Write(tree, outMs);
             return outMs.ToArray();
         }
         catch (Exception ex) { error = $"{ex.Message} ({ex.GetType().Name} in {ex.StackTrace?.Split((char)10).FirstOrDefault()?.Trim()})"; return null; }
@@ -432,7 +470,7 @@ public static class MapMaterialFactory
             // which is where the 117 empty shaderMacros maps in an earlier mod came from.
             var props = new List<BinTreeProperty>
             {
-                new BinTreeString(F("name"), newName),
+                new BinTreeU64(F("name"), BinWireNormalizer.NameHash(newName)),
                 new BinTreeU32(F("type"), 0),
                 new BinTreeContainer(F("techniques"), BinPropertyType.Embedded, new BinTreeProperty[] { technique }),
             };
@@ -447,7 +485,7 @@ public static class MapMaterialFactory
 
             tree.Objects[newHash] = new BinTreeObject(newHash, materialClass, props);
             using var outMs = new MemoryStream();
-            tree.Write(outMs);
+            BinTreeIo.Write(tree, outMs);
             return outMs.ToArray();
         }
         catch (Exception ex)

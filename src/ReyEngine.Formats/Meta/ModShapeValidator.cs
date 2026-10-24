@@ -122,7 +122,7 @@ public static class ModShapeValidator
         // A 0x82 struct is NULLABLE: class hash 0 means null and NOTHING follows. Written in the long
         // form it carries six extra bytes, and every byte after the first one in that container is
         // misread. Riot's reader stops after the hash, so this is an instant crash at map load.
-        if (raw is { Length: > 0 } && BinNullStructRepair.TryRepair(raw, out _, out var repair) && repair.NullsFixed > 0)
+        if (raw is { Length: > 0 } && BinNullStructRepair.TryRepair(BinWireNormalizer.Normalize(raw), out _, out var repair) && repair.NullsFixed > 0)
             issues.Add(new BinIssue("null-struct-form",
                 "(file)",
                 $"{repair.NullsFixed:n0} nullable struct(s) across {repair.ObjectsFixed} object(s) are written in the long "

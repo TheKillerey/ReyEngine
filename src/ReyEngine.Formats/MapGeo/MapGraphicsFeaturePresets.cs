@@ -61,7 +61,7 @@ public static class MapGraphicsFeaturePresets
         ArgumentNullException.ThrowIfNull(feature);
 
         BinTree tree;
-        try { tree = new BinTree(new MemoryStream(shippedBin, false)); }
+        try { tree = BinTreeIo.Read(shippedBin); }
         catch { return null; }
 
         foreach (var (_, obj) in tree.Objects)

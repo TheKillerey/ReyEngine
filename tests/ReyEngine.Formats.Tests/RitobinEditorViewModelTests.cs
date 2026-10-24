@@ -27,13 +27,14 @@ public sealed class RitobinEditorViewModelTests
             Material("Test/Third", "third"),
         }, Array.Empty<string>());
         using var ms = new MemoryStream();
-        tree.Write(ms);
+        BinTreeIo.Write(tree, ms);   // 16.21 form: the material name goes to disk as an 8-byte hash
         return ms.ToArray();
 
         static BinTreeObject Material(string path, string label) =>
             new(H(path), H("StaticMaterialDef"), new BinTreeProperty[]
             {
-                new BinTreeString(H("name"), label),
+                new BinTreeString(H("name"), path),
+                new BinTreeString(H("label"), label),
                 new BinTreeU32(H("type"), 0),
             });
     }
@@ -41,7 +42,7 @@ public sealed class RitobinEditorViewModelTests
     /// <summary>The resolver matters: without one the writer emits hex field names, and a test that edits
     /// "type: u32" would silently match nothing and pass for the wrong reason. Real usage always has one.</summary>
     private static readonly Dictionary<uint, string> KnownNames =
-        new[] { "Test/Material", "Test/Second", "Test/Third", "StaticMaterialDef", "name", "type" }
+        new[] { "Test/Material", "Test/Second", "Test/Third", "StaticMaterialDef", "name", "label", "type" }
             .ToDictionary(H, s => s);
 
     private static RitobinTarget Target(byte[] bin, Action<byte[]>? onSave = null) =>
@@ -115,7 +116,7 @@ public sealed class RitobinEditorViewModelTests
         }
         Assert.Equal(1, changed);
         Assert.Equal("second_edited",
-            ((BinTreeString)after.Objects[H("Test/Second")].Properties[H("name")]).Value);
+            ((BinTreeString)after.Objects[H("Test/Second")].Properties[H("label")]).Value);
     }
 
     [Fact]
@@ -151,7 +152,7 @@ public sealed class RitobinEditorViewModelTests
         Assert.NotNull(saved);
         var back = SafeBinTree.Parse(saved!);
         Assert.Equal("first_edited",
-            ((BinTreeString)back.Objects[H("Test/Material")].Properties[H("name")]).Value);
+            ((BinTreeString)back.Objects[H("Test/Material")].Properties[H("label")]).Value);
     }
 
     [Fact]

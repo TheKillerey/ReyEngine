@@ -121,7 +121,7 @@ public static class DynamicPointLights
         }
 
         var ms = new MemoryStream();
-        tree.Write(ms);
+        BinTreeIo.Write(tree, ms);
         return ms.ToArray();
     }
 

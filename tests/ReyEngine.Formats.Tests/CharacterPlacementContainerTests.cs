@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -91,7 +92,7 @@ public sealed class CharacterPlacementContainerTests
         byte[] bin;
         using (var ms = new MemoryStream()) { tree.Write(ms); bin = ms.ToArray(); }
 
-        var id = MapPlaceableWriter.NewCharacterId(new BinTree(new MemoryStream(bin, false)), H("Urf_1"));
+        var id = MapPlaceableWriter.NewCharacterId(BinTreeIo.Read(bin), H("Urf_1"));
         var output = MapPlaceableWriter.WriteEdits(bin, new[]
         {
             new MapPlacementEdit(id)
@@ -105,7 +106,7 @@ public sealed class CharacterPlacementContainerTests
         }, out string? error);
 
         Assert.Null(error);
-        var back = new BinTree(new MemoryStream(output!, false));
+        var back = BinTreeIo.Read(output!);
         var chars = (BinTreeMap)back.Objects[H("chars")].Properties[H("items")];
         var scratch = (BinTreeMap)back.Objects[H("scratch")].Properties[H("items")];
         Assert.Equal(2, chars.Count);

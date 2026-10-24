@@ -145,8 +145,8 @@ public sealed class LinkedMaterialResolutionTests
             // byte-identical for that reason alone, with 0 property reorders and 0 lost objects). The
             // property this milestone owns is that resolving a LINKED material changes nothing about what
             // gets serialized: same object set, same properties, and specifically no Glass_inst.
-            var original = new BinTree(new MemoryStream(skinBin));
-            var reparsed = new BinTree(new MemoryStream(serialized));
+            var original = BinTreeIo.Read(skinBin);
+            var reparsed = BinTreeIo.Read(serialized);
             Assert.Equal(original.Objects.Count, reparsed.Objects.Count);
             foreach (var (hash, obj) in original.Objects)
             {

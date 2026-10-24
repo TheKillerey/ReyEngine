@@ -1,3 +1,4 @@
+using ReyEngine.Formats.Meta;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -149,10 +150,12 @@ public static class PropCodec
     {
         uint path = cursor.U32();
         ushort count = cursor.U16();
-        return new PropObject(path, classHash, ReadProperties(cursor, count, 0));
+        return new PropObject(path, classHash, ReadProperties(cursor, count, 0, classHash));
     }
 
-    private static OrderedMap<PropValue> ReadProperties(Cursor cursor, ushort count, int depth)
+    /// <param name="owner">The class of the object or struct these properties belong to: patch 16.21 stores StaticMaterialDef.name as
+    /// a Hash eight bytes wide (XXH3-64) where every other Hash is four, so the width is a function of (class, field).</param>
+    private static OrderedMap<PropValue> ReadProperties(Cursor cursor, ushort count, int depth, uint owner)
     {
         // a property takes five bytes at the least, its name and its kind, so a count the bytes left cannot hold is not reserved for
         var properties = new OrderedMap<PropValue>(Math.Min(count, cursor.Remaining / 5));
@@ -162,7 +165,9 @@ public static class PropCodec
             uint name = cursor.U32();
             var kind = cursor.Kind();
             meter?.Charge(1);
-            properties.Set(name, ReadValue(cursor, kind, depth));
+            properties.Set(name, kind == PropKind.Hash && BinWireNormalizer.IsMaterialName(owner, name)
+                ? new PropInt(PropKind.Hash, cursor.U64())     // written back as 8 bytes: WriteValue's PropInt default arm
+                : ReadValue(cursor, kind, depth));
         }
         return properties;
     }
@@ -263,7 +268,7 @@ public static class PropCodec
         uint declared = cursor.U32();
         int start = cursor.Position;
         ushort count = cursor.U16();
-        var properties = ReadProperties(cursor, count, depth + 1);
+        var properties = ReadProperties(cursor, count, depth + 1, classHash);
         long consumed = cursor.Position - start;
         if (consumed != declared) throw InvalidSize(declared, consumed);
         return new PropStruct(kind, classHash, properties);

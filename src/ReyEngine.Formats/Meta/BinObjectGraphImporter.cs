@@ -55,7 +55,7 @@ public static class BinObjectGraphImporter
             }
 
             using var output = new MemoryStream();
-            target.Write(output);
+            BinTreeIo.Write(target, output);
             var bytes = output.ToArray();
             _ = SafeBinTree.Parse(bytes);
             return new Result(bytes, imported, assets.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray());

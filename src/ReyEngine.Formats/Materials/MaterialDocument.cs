@@ -55,7 +55,7 @@ public sealed class MaterialDocument
         Meta.SafeBinTree.ThrowIfLossy(_tree, "this materials bin");
         Meta.BinEmptyProperty.Strip(_tree);   // M414 - Riot never ships an empty container; one crashed Map453
         using var ms = new MemoryStream();
-        _tree.Write(ms);
+        BinTreeIo.Write(_tree, ms);
         return ms.ToArray();
     }
 
@@ -351,6 +351,8 @@ public sealed class MaterialDocument
             if (samplers is null && !isStaticMat) continue;
 
             string name = (Field(o.Properties, "name") as BinTreeString)?.Value ?? resolve(pathHash) ?? $"0x{pathHash:x8}";
+            // 16.21: the material's own name is an XXH3-64 (read as a U64 stand-in), so the text is only as good as the hash tables.
+            ulong? nameHash = Field(o.Properties, "name") is BinTreeU64 nameU64 ? nameU64.Value : null;
             string shader = resolve(o.ClassHash) ?? "StaticMaterialDef";
 
             var slots = new List<TextureSlot>();
@@ -507,6 +509,7 @@ public sealed class MaterialDocument
             materials.Add(new MaterialBinding(name, renderShader ?? shader, subs, isDefault, slots, parameters)
             {
                 ObjectPathHash = pathHash,
+                NameHash = nameHash,
                 DynamicParameters = dynamicParameters,
                 MaterialObject = isStaticMat && !isLinked ? o : null,
                 LinkedFromBin = linkedFrom,   // M777: never null-checked against _tree - Serialize() cannot see it
@@ -616,6 +619,22 @@ public sealed class MaterialBinding
     /// <summary>M125: the bin object this binding came from (0 for champion pseudo-bindings) —
     /// links repair issues back to the material they live in.</summary>
     public uint ObjectPathHash { get; init; }
+
+    /// <summary>16.21: the raw XXH3-64 the material stores as its <c>name</c> (null in an older bin, where the name is text).</summary>
+    public ulong? NameHash { get; init; }
+
+    /// <summary>
+    /// Is <paramref name="candidate"/> (a name from a mapgeo, a preset or a browser row) this material? The game matches on the
+    /// object path and on the hashed name, not on a display string, so a material the hash tables cannot name still answers to
+    /// its real path: <see cref="Name"/>, the FNV path hash of the object, or the XXH3 of the lowercased candidate.
+    /// </summary>
+    public bool IsNamed(string candidate)
+    {
+        if (string.IsNullOrEmpty(candidate)) return false;
+        if (Name.Equals(candidate, StringComparison.OrdinalIgnoreCase)) return true;
+        if (ObjectPathHash != 0 && ObjectPathHash == ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(candidate)) return true;
+        return NameHash is { } h && h == ReyEngine.Formats.Meta.BinWireNormalizer.NameHash(candidate);
+    }
 
     /// <summary>
     /// M777: the WAD path of the LINKED bin (a <c>tree.Dependencies</c> entry of the skin bin this

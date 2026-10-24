@@ -444,7 +444,7 @@ public static class BinDeclarations
         foreach (var (hash, mp) in mod)
         {
             string path = prefix.Length == 0 ? w.FieldName(hash, cls) : prefix + "." + w.FieldName(hash, cls);
-            if (!riot.TryGetValue(hash, out var rp)) { edits.Add(new DeclEntry(path, w.Value(mp))); continue; }
+            if (!riot.TryGetValue(hash, out var rp)) { edits.Add(new DeclEntry(path, w.Value(mp, cls))); continue; }
             if (BinPropEquality.PropsEqual(rp, mp)) continue;
             // M814: ltk_game_data refuses an embed pin whose class is not the class of the value it replaces
             // (coerce.rs: PinMismatch) - the edit would be skipped with a diagnostic and the field left as the game
@@ -459,7 +459,7 @@ public static class BinDeclarations
                 DiffProps(path, ms.ClassHash, rs.Properties, ms.Properties, topLevel: false, edits, w, entry);
                 continue;
             }
-            edits.Add(new DeclEntry(path, w.Value(mp)));   // a different struct, a struct that lost a field, a container
+            edits.Add(new DeclEntry(path, w.Value(mp, cls)));   // a different struct, a struct that lost a field, a container
         }
         if (!topLevel) return;   // a nested removal was set whole above
         foreach (var hash in riot.Keys)
@@ -690,7 +690,7 @@ public static class BinDeclarations
             {
                 string key = FieldName(p.NameHash, cls);
                 if (!keys.Add(key)) throw new Refused($"a struct holding the field '{key}' twice");
-                fields.Add(new DeclEntry(key, Value(p)));
+                fields.Add(new DeclEntry(key, Value(p, cls)));
             }
             return fields;
         }
@@ -699,6 +699,19 @@ public static class BinDeclarations
         private static DeclValue Int(ulong v) => new DeclInteger(v.ToString(CultureInfo.InvariantCulture));
         private static DeclValue Single(float v) => new DeclFloat(Float(v));
         private static DeclValue Singles(params float[] v) => new DeclList(v.Select(Single).ToList());
+
+        /// <param name="ownerClass">The class that holds <paramref name="p"/>, 0 when unknown. Patch 16.21 types StaticMaterialDef.name as a Hash
+        /// whose hasher is 8 bytes wide (XXH3-64 of the lowercased text); the declaration spells it the way hash64_of reads it back: the
+        /// 16 hex digits of the stored value (no table can name it), or the text when the bin still holds one.</param>
+        public DeclValue Value(LtProp p, uint ownerClass = 0)
+        {
+            if (BinWireNormalizer.IsMaterialName(ownerClass, p.NameHash))
+            {
+                if (p is BinTreeU64 wide) return new DeclText($"0x{wide.Value:x16}");
+                if (p is BinTreeString text && text.Value.Length > 0) return new DeclText(text.Value);
+            }
+            return Value(p);
+        }
 
         public DeclValue Value(LtProp p) => p switch
         {

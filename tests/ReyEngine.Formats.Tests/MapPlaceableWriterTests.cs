@@ -1,4 +1,5 @@
 using System.Numerics;
+using ReyEngine.Formats.Meta;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
@@ -49,7 +50,7 @@ public class MapPlaceableWriterTests
     /// transform at all, and a helper that assumes one turns that into a test bug rather than a result.</summary>
     private static (string Name, Matrix4x4? Transform, uint? System)? Read(byte[] bin, uint key)
     {
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         if (!tree.Objects.TryGetValue(ContainerHash, out var c)) return null;
         if (c.Properties[H("items")] is not BinTreeMap map) return null;
         foreach (var e in map)
@@ -119,7 +120,7 @@ public class MapPlaceableWriterTests
         Assert.Equal("retinted", a.Name);
         Assert.Equal(0xFEEDu, a.System);
 
-        var tree = new BinTree(new MemoryStream(outBytes!, false));
+        var tree = BinTreeIo.Read(outBytes!);
         var map = (BinTreeMap)tree.Objects[ContainerHash].Properties[H("items")];
         var s = (BinTreeStruct)map.Single(e => ((BinTreeHash)e.Key).Value == KeyA).Value;
         Assert.Equal(new Vector4(1f, 0.5f, 0.25f, 0.75f), ((BinTreeVector4)s.Properties[H("colorModulate")]).Value);
@@ -135,7 +136,7 @@ public class MapPlaceableWriterTests
 
         Assert.Null(err);
         Assert.NotNull(Read(outBytes!, KeyA));
-        var tree = new BinTree(new MemoryStream(outBytes!, false));
+        var tree = BinTreeIo.Read(outBytes!);
         var map = (BinTreeMap)tree.Objects[ContainerHash].Properties[H("items")];
         var placement = (BinTreeStruct)map.Single(e => ((BinTreeHash)e.Key).Value == KeyA).Value;
         Assert.Equal(0, ((BinTreeU8)placement.Properties[H("mVisibilityFlags")]).Value);
@@ -168,7 +169,7 @@ public class MapPlaceableWriterTests
             new[] { new MapPlacementEdit(new MapPlacementId(ContainerHash, KeyA)) { Skin = replacement } }, out var err);
 
         Assert.Null(err);
-        var tree = new BinTree(new MemoryStream(outBytes!, false));
+        var tree = BinTreeIo.Read(outBytes!);
         var outputItems = (BinTreeMap)tree.Objects[ContainerHash].Properties[H("items")];
         var outputProp = (BinTreeStruct)outputItems.Single().Value;
         var outputCharacter = outputProp.Properties.Values.OfType<BinTreeStruct>()
@@ -199,7 +200,7 @@ public class MapPlaceableWriterTests
             new[] { new MapPlacementEdit(new MapPlacementId(ContainerHash, KeyA)) { Name = "x" } },
             out _);
 
-        var tree = new BinTree(new MemoryStream(outBytes!, false));
+        var tree = BinTreeIo.Read(outBytes!);
         Assert.Equal(2f, ((BinTreeF32)tree.Objects[0x6000u].Properties[H("lightMapColorScale")]).Value);
     }
 
@@ -236,7 +237,7 @@ public class MapPlaceableWriterTests
     public void CloningAddsANewPlacementAndLeavesTheSourceIntact()
     {
         var bin = BuildBin(Matrix4x4.CreateTranslation(7f, 8f, 9f));
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         uint newKey = MapPlaceableWriter.NewItemKey(tree, new MapPlacementId(ContainerHash, KeyA));
 
         var outBytes = MapPlaceableWriter.WriteEdits(bin, new[]
@@ -268,7 +269,7 @@ public class MapPlaceableWriterTests
     {
         var shared = Matrix4x4.CreateTranslation(1f, 2f, 3f);
         var bin = BuildBin(shared);
-        var tree = new BinTree(new MemoryStream(bin, false));
+        var tree = BinTreeIo.Read(bin);
         uint newKey = MapPlaceableWriter.NewItemKey(tree, new MapPlacementId(ContainerHash, KeyB));
 
         var outBytes = MapPlaceableWriter.WriteEdits(bin, new[]
@@ -288,7 +289,7 @@ public class MapPlaceableWriterTests
     [Fact]
     public void NewItemKeyNeverCollidesAndIsStable()
     {
-        var tree = new BinTree(new MemoryStream(BuildBin(Matrix4x4.Identity), false));
+        var tree = BinTreeIo.Read(BuildBin(Matrix4x4.Identity));
         var src = new MapPlacementId(ContainerHash, KeyA);
         uint k1 = MapPlaceableWriter.NewItemKey(tree, src);
         uint k2 = MapPlaceableWriter.NewItemKey(tree, src);
@@ -340,7 +341,7 @@ public class MapPlaceableWriterTests
     public void WorkshopCanCreateANewMinimalParticle()
     {
         var bin = BuildBin(Matrix4x4.Identity);
-        var tree = new BinTree(new MemoryStream(bin, writable: false));
+        var tree = BinTreeIo.Read(bin);
         var id = MapPlaceableWriter.NewParticleId(tree, H("Workshop_Spark"));
         var transform = Matrix4x4.CreateTranslation(10, 20, 30);
 
