@@ -44,7 +44,11 @@ public sealed partial class MainWindowViewModel
             CurrentVisibilitySelection());
 
     private List<string> NavOverlaysFor(IReadOnlyDictionary<uint, int>? axes) =>
-        _navCatalog?.OverlaysFor(axes).Select(o => o.Id).ToList() ?? new List<string>();
+        _navCatalog?.OverlaysFor(PlainSelections(axes)).Select(o => o.Id).ToList() ?? new List<string>();
+
+    /// <summary>M849: a selection as the navgrid overlays read it: "before terraform" is the primary axis's initial layer.</summary>
+    private IReadOnlyDictionary<uint, int>? PlainSelections(IReadOnlyDictionary<uint, int>? selections) =>
+        selections is null ? null : MapVisibility.PlainBits(selections, _mapVisibility);
 
     private Dictionary<string, object?> VisibilityEvalForBlender(JsonElement request)
     {

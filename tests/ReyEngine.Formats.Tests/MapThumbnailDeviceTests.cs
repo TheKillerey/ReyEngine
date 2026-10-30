@@ -204,7 +204,9 @@ public sealed class MapThumbnailDeviceTests(ITestOutputHelper output)
 
         Assert.True(outcome.Png is not null, outcome.Failure);
         Assert.True(outcome.Slices > 200, $"ARAM's start state draws its slices ({outcome.Slices})");
-        Assert.Equal(0, outcome.HiddenSlices);                                      // a single-state map hides nothing at its own state
+        // a single-state map hides nothing at its own state - but for what a named controller (e07edfa4) holds back until the server sets it:
+        // M849, DefaultVisible false: ARAM's one mesh on 336eff2a
+        Assert.InRange(outcome.HiddenSlices, 0, 1);
         Assert.True(outcome.PropInstances > 0);
         Assert.InRange(outcome.NonClearShare, 0.5, 1.0);
         output.WriteLine($"map12 base: {outcome.TotalMs:0} ms; {outcome.Summary}");

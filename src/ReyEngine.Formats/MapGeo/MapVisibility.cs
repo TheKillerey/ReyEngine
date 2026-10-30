@@ -93,6 +93,48 @@ public static class MapVisibility
         });
     }
 
+    /// <summary>M849: the selection value for "no terraform yet" on the primary axis - the state a match starts in, before any
+    /// rift is chosen - as its own choice next to 0 = All. Negative, so it can never be a layer bit.</summary>
+    public const int NoTerraform = -1;
+
+    public const string NoTerraformLabel = "Before terraform (game start)";
+
+    /// <summary>M849: the mask a mapgeo mesh WITHOUT a controller is judged against for <paramref name="selected"/>
+    /// (<see cref="VisibleForMask"/>). "No terraform yet" is the axis's initial state; an axis with none matches no layer.</summary>
+    public static int MaskSelection(MapVisibilityAxis? axis, int selected)
+    {
+        if (selected >= 0) return selected;
+        if (axis is not { IsPrimary: true }) return 0;
+        return axis.InitialMask != 0 ? axis.InitialMask : 1 << 30;
+    }
+
+    /// <summary>M849: a selection for a consumer that knows only layer bits (the navgrid overlays, the grass tint): "no terraform yet"
+    /// is the primary axis's initial layer there (0 = All when the axis has none).</summary>
+    public static IReadOnlyDictionary<uint, int> PlainBits(IReadOnlyDictionary<uint, int> selections, MapVisibilityDefinition definition)
+    {
+        if (!selections.Values.Any(v => v < 0)) return selections;
+        var plain = new Dictionary<uint, int>(selections);
+        foreach (var (hash, bit) in selections)
+            if (bit < 0) plain[hash] = definition.Axes.FirstOrDefault(a => a.DefinitionFieldHash == hash)?.InitialMask ?? 0;
+        return plain;
+    }
+
+    /// <summary>
+    /// M849: the active state a visibility CONTROLLER leaf is judged against, for a concrete (non-All) selection. The game's
+    /// terrain controllers are visible only while their mask holds the rift in play, so the base state - "no terraform yet",
+    /// the axis's initial bit - is the mask 0 and matches no terrain controller, even one whose mask has the Base bit. (A mesh
+    /// mask is different: M771 keeps Base on for meshes without a controller.) Secondary axes are exclusive states and take the
+    /// selected bit as it is. An axis whose initial mask is a multi-bit staged start (Map22) is unmeasured and keeps the additive
+    /// reading.
+    /// </summary>
+    public static int ControllerStateMask(MapVisibilityAxis axis, int selected)
+    {
+        if (selected < 0) return 0;
+        if (!axis.IsPrimary) return selected;
+        if (IsSingleStateInitial(axis)) return selected & ~axis.InitialMask;
+        return selected | axis.InitialMask;
+    }
+
     /// <summary>Evaluate a mapgeo mask using the map's permanent initial mask plus the selected state.</summary>
     public static bool VisibleForMask(int flags, MapVisibilityAxis? axis, int selectedBit)
     {

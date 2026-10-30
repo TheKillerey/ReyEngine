@@ -159,7 +159,7 @@ public sealed class BlenderLinkM843Tests : IDisposable
         var (vis, _) = Send(stream, new { op = "visibility" });
         var axes = vis.GetProperty("axes").EnumerateArray().ToList();
         Assert.Equal(new[] { "Map Visibility", "Baron Pit" }, axes.Select(a => a.GetProperty("name").GetString()));
-        Assert.Equal(new[] { "All", "Base", "Infernal", "Mountain", "Ocean", "Cloud", "Hextech", "Chemtech", "Void" },
+        Assert.Equal(new[] { "All", "Base", "Infernal", "Mountain", "Ocean", "Cloud", "Hextech", "Chemtech", "Void", "Before terraform (game start)" },
             axes[0].GetProperty("options").EnumerateArray().Select(o => o.GetProperty("label").GetString()));
         Assert.Equal(vm.VisibilityAxes[0].Options, axes[0].GetProperty("options").EnumerateArray().Select(o => o.GetProperty("label").GetString()).ToList());
         Assert.Equal(vm.VisibilityAxes[1].Options, axes[1].GetProperty("options").EnumerateArray().Select(o => o.GetProperty("label").GetString()).ToList());
@@ -186,6 +186,9 @@ public sealed class BlenderLinkM843Tests : IDisposable
                 new { axes = new Dictionary<string, int> { ["0x9e019715"] = 16, ["0xd31ac6ce"] = 2 } }),
             ("Chemtech + Tunnel", () => { vm.VisibilityAxes[0].SelectedIndex = 7; vm.VisibilityAxes[1].SelectedIndex = 3; },
                 new { axes = new Dictionary<string, int> { ["0x9e019715"] = 64, ["0xd31ac6ce"] = 4 } }),
+            // M849: "before terraform" is its own choice (bit -1), which Blender can send too
+            ("Before terraform + Cup", () => { vm.VisibilityAxes[0].SelectedIndex = 9; vm.VisibilityAxes[1].SelectedIndex = 2; },
+                new { axes = new Dictionary<string, int> { ["0x9e019715"] = -1, ["0xd31ac6ce"] = 2 } }),
             ("Upgraded", () => { vm.VisibilityAxes[0].SelectedIndex = 0; vm.VisibilityAxes[1].SelectedIndex = 4; },
                 new { axes = new Dictionary<string, int> { ["0xd31ac6ce"] = 8 } }),
             ("Hall of Legends", () => { vm.VisibilityAxes[0].SelectedIndex = 0; vm.VisibilityAxes[1].SelectedIndex = 0; vm.MapEvents.First(e => e.Name == "SR_Hall_Of_Legends").IsOn = true; },

@@ -136,7 +136,8 @@ public sealed class MapEventTests
         var resolver = Resolver(NoAxes, Event(0x9998, null), new BinTreeObject(0x9997, 0xe07edfa4, new BinTreeProperty[] { new BinTreeBool(H("DefaultVisible"), false) }));
 
         Assert.True(resolver.IsVisible(255, 0x9998, Nothing, null, On()));
-        Assert.True(resolver.IsVisible(255, 0x9997, Nothing, null, On()));
+        // M849: a named controller (e07edfa4) is evaluated now - before the server sets it, it shows its DefaultVisible
+        Assert.False(resolver.IsVisible(255, 0x9997, Nothing, null, On()));
         Assert.True(resolver.IsVisible(255, 0xdead, Nothing, null, On()));  // a controller no bin defines
     }
 
@@ -159,7 +160,7 @@ public sealed class MapEventTests
     {
         var resolver = Resolver(NoAxes,
             Event(Msi, "MSITrophy"), Event(HallOfLegends, "SR_Hall_Of_Legends"),
-            Combined(0x200, null, Msi, HallOfLegends),      // either event
+            Combined(0x200, 1, Msi, HallOfLegends),         // either event (ParentMode 1 = ANY; without a mode it is ALL since M849)
             Combined(0x201, 3, Msi, HallOfLegends));        // none of the events (the shipped ParentMode 3)
 
         Assert.False(resolver.IsVisible(255, 0x200, Nothing, null, On()));
@@ -174,8 +175,8 @@ public sealed class MapEventTests
     [Fact]
     public void A_graph_that_reaches_both_a_layer_and_an_event_is_satisfied_by_the_event_being_on()
     {
-        // no shipped Child mixes the two, but the union is what ParentMode already means: any parent on is enough
-        var resolver = Resolver(RiftOnly, Layer(0x100, 2), Event(Msi, "MSITrophy"), Combined(0x300, null, 0x100, Msi), Combined(0x301, 3, 0x100, Msi));
+        // no shipped Child mixes the two; with ParentMode 1 (ANY) a parent on is enough
+        var resolver = Resolver(RiftOnly, Layer(0x100, 2), Event(Msi, "MSITrophy"), Combined(0x300, 1, 0x100, Msi), Combined(0x301, 3, 0x100, Msi));
         var infernal = new Dictionary<uint, int> { [MapVisibility.PrimaryAxisHash] = 2 };
         var mountain = new Dictionary<uint, int> { [MapVisibility.PrimaryAxisHash] = 4 };
 
@@ -827,11 +828,16 @@ public sealed class MapEventRealDataTests(ITestOutputHelper output)
         int gatedByEvents = particles.Count(p => p.VisibilityControllerHash is 0x8f1ab207u or 0x76c50391u or 0x11a9b55du);
         Assert.InRange(gatedByEvents, 3, 10);
         Assert.False(Visible(winners[0]) || Visible(winners[1]));
-        Assert.Equal(particles.Count - gatedByEvents, particles.Count(Visible));
+        // M849: a named controller (e07edfa4, DefaultVisible false: the void-pit environments the server switches on) is hidden until
+        // set, so those placements are off at the start too - the only Riot difference the controller tree makes to base_srx
+        int namedOff = particles.Count(p => p.VisibilityControllerHash != 0
+            && rift.Controllers.Node(p.VisibilityControllerHash) is { Kind: ControllerKind.Named, DefaultVisible: false });
+        Assert.Equal(4, namedOff);
+        Assert.Equal(particles.Count - gatedByEvents - namedOff, particles.Count(Visible));
 
         vm.MapEvents.Single(e => e.Name == "MSITrophy").IsOn = true;
         Assert.True(Visible(winners[0]) && Visible(winners[1]));
-        Assert.Equal(particles.Count - (gatedByEvents - 2), particles.Count(Visible));
+        Assert.Equal(particles.Count - (gatedByEvents - 2) - namedOff, particles.Count(Visible));
         output.WriteLine($"ran: {particles.Count} placement(s) in base_srx; {gatedByEvents} gated by an event (SRU_MSI_Winner1/2 + the Hall of Legends godrays), "
             + $"{particles.Count(Visible)} shown with MSITrophy on; markers {vm.ParticleMarkers?.Count}");
     }

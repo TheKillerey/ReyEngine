@@ -43,6 +43,26 @@
         </ItemsControl.ItemTemplate>
       </ItemsControl>
 
+      <!-- M849: controller graphs are evaluated as the game does; this switch brings back the old, kinder reading (off by default). -->
+      <CheckBox Content="Lenient controllers (not game-faithful)" IsChecked="{Binding LenientVisibility}" FontSize="9" MinHeight="20" Padding="4,0,0,0"
+                IsVisible="{Binding HasVisibilityAxes}"
+                ToolTip.Tip="Off (default): a controller graph is a boolean tree like the client's (ParentMode 0 ALL, 1 ANY, 2 ONE, 3 NONE; a terrain controller shows only while a rift in its mask is in play - the Base bit never counts). On: the old editor reading, a union of the parents with the Base bit always counted - kinder than the game, so a map can look right here and be empty in the game. Session only." />
+
+      <!-- M849: the map check - controller graphs that never show, Base-bit terrain controllers, Riot controllers with other bits, ALLs with more than two parents. -->
+      <StackPanel Spacing="1" IsVisible="{Binding HasVisibilityFindings}">
+        <TextBlock Text="{Binding VisibilityFindingsHeader}" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource ReyWarningBrush}" />
+        <ItemsControl ItemsSource="{Binding VisibilityFindings}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <StackPanel>
+                <TextBlock Text="{Binding Text}" IsVisible="{Binding IsError}" FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyErrorBrush}" />
+                <TextBlock Text="{Binding Text}" IsVisible="{Binding IsNotError}" FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+
       <!-- M802: only a map whose bins hold a MutatorMapVisibilityController (Summoner's Rift). Every event starts OFF, as in
            a normal game, and ticking one shows the content it gates. Session only. IsVisible keeps the block out of the
            layout on every other map. -->

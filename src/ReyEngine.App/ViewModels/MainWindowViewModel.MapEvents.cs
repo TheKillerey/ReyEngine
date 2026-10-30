@@ -64,7 +64,7 @@ public sealed partial class MainWindowViewModel
 
     /// <summary>The VISIBILITY LAYERS section shows when the map has a layer to pick or an event to tick - a map can
     /// have either without the other.</summary>
-    public bool ShowVisibilityLayers => HasVisibilityAxes || HasMapEvents;
+    public bool ShowVisibilityLayers => HasVisibilityAxes || HasMapEvents || HasVisibilityFindings;
 
     /// <summary>The events that are ON. Empty when a map opens: a normal game has none.</summary>
     private readonly HashSet<string> _enabledEvents = new(StringComparer.OrdinalIgnoreCase);

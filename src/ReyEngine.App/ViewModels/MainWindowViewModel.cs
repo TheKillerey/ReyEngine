@@ -8579,11 +8579,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             _owner = owner;
             Axis = axis;
-            Options = new[] { "All" }.Concat(axis.Layers.Select(l => l.Name)).ToList();
+            // M849: the primary axis ends with "Before terraform" - the state a match starts in - a choice of its own, apart from All
+            Options = new[] { "All" }.Concat(axis.Layers.Select(l => l.Name))
+                .Concat(axis.IsPrimary ? new[] { MapVisibility.NoTerraformLabel } : Array.Empty<string>()).ToList();
         }
 
-        public int SelectedBit => SelectedIndex <= 0 || SelectedIndex > Axis.Layers.Count
-            ? 0 : Axis.Layers[SelectedIndex - 1].Bit;
+        /// <summary>0 = All, a layer bit, or <see cref="MapVisibility.NoTerraform"/> (-1) for the "Before terraform" choice.</summary>
+        public int SelectedBit => SelectedIndex <= 0 ? 0
+            : SelectedIndex <= Axis.Layers.Count ? Axis.Layers[SelectedIndex - 1].Bit
+            : Axis.IsPrimary && SelectedIndex == Axis.Layers.Count + 1 ? MapVisibility.NoTerraform
+            : 0;
 
         partial void OnSelectedIndexChanged(int value)
         {
@@ -8601,7 +8606,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private IReadOnlyDictionary<uint, int> CurrentVisibilitySelections =>
         VisibilityAxes.ToDictionary(a => a.Axis.DefinitionFieldHash, a => a.SelectedBit);
 
-    private int CurrentPrimaryVisibilityBit => VisibilityAxes.FirstOrDefault(a => a.Axis.IsPrimary)?.SelectedBit ?? 0;
+    /// <summary>The primary axis's layer as a plain bit (0 = All): "Before terraform" reads as the axis's initial layer here, the way
+    /// the grass tint and the stage-less mask rule know it. The resolver gets the real choice (<see cref="CurrentVisibilitySelections"/>).</summary>
+    private int CurrentPrimaryVisibilityBit
+    {
+        get
+        {
+            var primary = VisibilityAxes.FirstOrDefault(a => a.Axis.IsPrimary);
+            int bit = primary?.SelectedBit ?? 0;
+            return bit < 0 ? primary!.Axis.InitialMask : bit;
+        }
+    }
 
     private void RebuildVisibilityAxes(MapVisibilityDefinition definition, IReadOnlyList<int>? selectedIndices = null)
     {
@@ -9109,7 +9124,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             ? _mapControllers
             : MapVisibilityControllers.Build(bins, parsedVisibility);
         _visibilityResolver = new MapVisibilityResolver(_mapControllers, _mapVisibility);
+        _mapControllers.LenientEvaluation = LenientVisibility;   // M849: the session's switch (off = the game's rules)
+        if (_mapStartControllers is not null) _mapStartControllers.LenientEvaluation = LenientVisibility;
         RebuildVisibilityAxes(_mapVisibility);
+        RunVisibilityCheck(map, primaryMaterials);   // M849: the map check, shown under Visibility Layers
         SetMapEvents(_mapControllers, announce: true);   // M802: every event OFF, as in a normal game
         if (_navMapFolder.Length > 0) { RebuildNavGridCatalog(); ApplyNavGridSelection(); }   // M843: the open path reads the navgrid BEFORE the axes
         LayerControllerChoices.Clear();

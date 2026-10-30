@@ -32,7 +32,7 @@ public sealed class VisibilityControllerResolution
 /// of events that are on. Any other controller class (a named script switch, the legacy flag controller, the Map22
 /// carousel's provider controller) is still not indexed, and content that names one resolves as always visible.</para>
 /// </summary>
-public sealed class MapVisibilityControllers
+public sealed partial class MapVisibilityControllers
 {
     private const uint PrimaryController = 0xc406a533;
     private const uint BaronPitController = 0xec733fe2;
@@ -45,6 +45,9 @@ public sealed class MapVisibilityControllers
     private const uint FieldBaronPitBits = 0x8bff8cdf;     // recovered: baronpitflags
 
     private readonly Dictionary<uint, BinTreeObject> _controllers = new();
+    /// <summary>M849: path -> class of every OTHER object in the bins read, so a parent link that names a class this reader does not
+    /// index (a script switch, the legacy flag controller) can be named in the diagnostics instead of vanishing.</summary>
+    private readonly Dictionary<uint, uint> _otherClasses = new();
     private readonly Dictionary<uint, VisibilityControllerResolution> _cache = new();
     private readonly MapVisibilityDefinition _definition;
 
@@ -94,7 +97,7 @@ public sealed class MapVisibilityControllers
                 if (names.Count > 0) states.Add($"{axis.Name}: {string.Join(", ", names)}");
             }
             if (resolution.Mutators.Count > 0) states.Add($"event {string.Join(", ", resolution.Mutators)}");   // M802
-            string kind = o.ClassHash == ChildController ? "Combined" : o.ClassHash == MutatorController ? "Event" : "Layer";
+            string kind = o.ClassHash == ChildController ? "Combined" : o.ClassHash == MutatorController ? "Event" : o.ClassHash == NamedController ? "Named" : "Layer";
             return new ControllerInfo(o.PathHash, kind, states, resolution.NotVisible);
         })
         .OrderBy(ci => ci.Kind)
@@ -111,8 +114,11 @@ public sealed class MapVisibilityControllers
             try { bin = SafeBinTree.Parse(data); }
             catch { continue; }
             foreach (var o in bin.Objects.Values)
-                if (o.ClassHash is PrimaryController or BaronPitController or ChildController or MutatorController)
+            {
+                if (o.ClassHash is PrimaryController or BaronPitController or ChildController or MutatorController or NamedController)
                     result._controllers[o.PathHash] = o;
+                else result._otherClasses[o.PathHash] = o.ClassHash;
+            }
         }
         return result;
     }

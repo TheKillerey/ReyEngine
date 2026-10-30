@@ -157,7 +157,7 @@ public sealed partial class MainWindowViewModel
     private List<string> EffectiveNavOverlays(string overlayChoice, IReadOnlyDictionary<uint, int>? selections)
     {
         if (_navCatalog is null || overlayChoice == "none") return new List<string>();
-        if (overlayChoice == "auto") return _navCatalog.OverlaysFor(selections).Select(o => o.Id).ToList();
+        if (overlayChoice == "auto") return _navCatalog.OverlaysFor(PlainSelections(selections)).Select(o => o.Id).ToList();
         return _navCatalog.Find(overlayChoice) is { Kind: NavGridVariant.KindOverlay } o ? new List<string> { o.Id } : new List<string>();
     }
 

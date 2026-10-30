@@ -28,8 +28,12 @@ public static class BlenderLinkVisibility
             ["primary"] = a.IsPrimary,
             ["initial_mask"] = a.InitialMask,
             // "All" first, exactly as the editor's combo lists it
+            // M849: the primary axis ends with "Before terraform" (bit -1): the state a match starts in, which is not All
             ["options"] = new[] { new Dictionary<string, object?> { ["label"] = "All", ["bit"] = 0 } }
-                .Concat(a.Layers.Select(l => new Dictionary<string, object?> { ["label"] = l.Name, ["bit"] = l.Bit })).ToList(),
+                .Concat(a.Layers.Select(l => new Dictionary<string, object?> { ["label"] = l.Name, ["bit"] = l.Bit }))
+                .Concat(a.IsPrimary
+                    ? new[] { new Dictionary<string, object?> { ["label"] = MapVisibility.NoTerraformLabel, ["bit"] = MapVisibility.NoTerraform } }
+                    : Array.Empty<Dictionary<string, object?>>()).ToList(),
             ["selected"] = current.Axes.GetValueOrDefault(a.DefinitionFieldHash),
         }).ToList();
 
@@ -94,8 +98,8 @@ public static class BlenderLinkVisibility
                                                                || string.Equals(a.Name, p.Name, StringComparison.OrdinalIgnoreCase));
                 if (axis is null) { error = $"this map has no visibility axis '{p.Name}'"; return false; }
                 if (p.Value.ValueKind != JsonValueKind.Number || !p.Value.TryGetInt32(out int bit))
-                { error = $"axis '{axis.Name}': the selected layer must be a bit number (0 = All)"; return false; }
-                if (bit != 0 && !axis.Layers.Any(l => l.Bit == bit))
+                { error = $"axis '{axis.Name}': the selected layer must be a bit number (0 = All, -1 = before terraform on the primary axis)"; return false; }
+                if (bit != 0 && !(bit == MapVisibility.NoTerraform && axis.IsPrimary) && !axis.Layers.Any(l => l.Bit == bit))
                 { error = $"axis '{axis.Name}' has no layer with bit {bit}"; return false; }
                 axes[axis.DefinitionFieldHash] = bit;
             }
