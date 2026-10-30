@@ -162,6 +162,10 @@ public static class FantomeImporter
             notes.AddRange(droppedLayers);
         }
 
+        // M850: league-mod (PR #318) packs a layer's declarations as META/game_data/<layer>/game_data.yaml and writes no GameData field.
+        // That entry is read FIRST; the field of info.json is the fallback for a layer with no entry (every earlier package).
+        declaredTable = ReadManifestEntries(zip, declaredTable, notes);
+
         // M816 review: a layer name is the package's text, and it ends up a FOLDER name - content/<layer>/ in LTK Manager's workshop (which
         // Send to LTK Manager deletes and writes), a folder of the build output, WAD_<layer>/ in a .fantome. A table can spell one as
         // "..\..", "C:\Temp\x", "\\server\share", "a/b" or "con", and a name like that must never reach a path. The layer is KEPT - its
@@ -493,6 +497,7 @@ public static class FantomeImporter
                 continue;
             }
             string layerDir = Safe(tail[..slash]), rel = tail[(slash + 1)..];   // a folder of a renamed layer is found by the new name
+            if (GameDataManifestYaml.IsManifestName(rel)) continue;   // M850: a layer's declarations, read above - not an override file
             if (!layerSpelling.TryGetValue(layerDir, out var layerName) && !declaredTable.Any(l => string.Equals(l.Name, layerDir, OIC)))
             {
                 notes.Add($"The override file {full} belongs to layer '{tail[..slash]}', which the package does not declare, so it was not carried.");
@@ -734,6 +739,76 @@ public static class FantomeImporter
         wadName.EndsWith(".wad.client", StringComparison.OrdinalIgnoreCase) ? wadName[..^".wad.client".Length] : wadName;
 
     private static string N(int n) => n.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// M850: the layers' declarations from the <c>META/game_data/&lt;layer&gt;/game_data.yaml</c> entries, as the JSON document the project
+    /// stores. A layer with an entry takes its declarations from it whatever <c>info.json</c> says (league-mod's reader does the same); a layer
+    /// with none keeps the <c>GameData</c> field's text. An entry of a layer the table does not list adds the layer (priority 0, as a
+    /// <c>WAD_&lt;layer&gt;/</c> directory does). An entry this reader cannot read is a Note and leaves the field in place.
+    /// </summary>
+    private static IReadOnlyList<FantomeInfoLayer> ReadManifestEntries(ZipArchive zip, IReadOnlyList<FantomeInfoLayer> table, List<string> notes)
+    {
+        var result = table.ToList();
+        const string Prefix = "META/game_data/";
+        foreach (var entry in zip.Entries)
+        {
+            string full = entry.FullName.Replace('\\', '/');
+            if (full.EndsWith('/') || !full.StartsWith(Prefix, OIC)) continue;
+            string tail = full[Prefix.Length..];
+            int slash = tail.IndexOf('/');
+            if (slash <= 0 || !GameDataManifestYaml.IsManifestName(tail[(slash + 1)..])) continue;
+            string layerDir = tail[..slash];
+            string json;
+            try { json = GameDataManifestYaml.ToDocumentJson(ReadAll(entry)); }
+            catch (FormatException ex)
+            {
+                int at = result.FindIndex(l => string.Equals(l.Name, layerDir, OIC));
+                notes.Add($"The declarations in {full} could not be read ({ex.Message}); "
+                    + (at >= 0 && result[at].GameDataText is not null ? "the GameData field of META/info.json is used for layer '" + layerDir + "' instead."
+                                                                       : $"layer '{layerDir}' was imported without them."));
+                continue;
+            }
+            int index = result.FindIndex(l => string.Equals(l.Name, layerDir, OIC));
+            // a package this program wrote carries both, spelled differently; when they are the same document, the field's text is the
+            // one kept - it is the text an export wrote, and an export of the import gives it back as it was
+            if (index >= 0)
+            {
+                if (result[index].GameDataText is not { } field || !SameJsonTokens(field, json))
+                    result[index] = result[index] with { GameDataText = json };
+            }
+            else result.Add(new FantomeInfoLayer(layerDir, FantomeLayers.IsBase(layerDir) ? FantomeLayers.Base : layerDir, null, 0, json, null, Array.Empty<string>()));
+        }
+        return result;
+    }
+
+    /// <summary>Whether two JSON texts are the same document: the same tokens, whatever their layout. A number is compared as written
+    /// (<c>1.0</c> is not <c>1</c>: a declaration reads them as a float and an integer) and a string by its value.</summary>
+    internal static bool SameJsonTokens(string a, string b)
+    {
+        try
+        {
+            var ra = new System.Text.Json.Utf8JsonReader(Encoding.UTF8.GetBytes(a), new System.Text.Json.JsonReaderOptions { MaxDepth = GameDataDocumentText.MaxDepth });
+            var rb = new System.Text.Json.Utf8JsonReader(Encoding.UTF8.GetBytes(b), new System.Text.Json.JsonReaderOptions { MaxDepth = GameDataDocumentText.MaxDepth });
+            while (true)
+            {
+                bool ma = ra.Read(), mb = rb.Read();
+                if (ma != mb) return false;
+                if (!ma) return true;
+                if (ra.TokenType != rb.TokenType) return false;
+                switch (ra.TokenType)
+                {
+                    case System.Text.Json.JsonTokenType.PropertyName:
+                    case System.Text.Json.JsonTokenType.String:
+                        if (ra.GetString() != rb.GetString()) return false;
+                        break;
+                    case System.Text.Json.JsonTokenType.Number:
+                        if (!ra.ValueSpan.SequenceEqual(rb.ValueSpan)) return false;
+                        break;
+                }
+            }
+        }
+        catch (System.Text.Json.JsonException) { return false; }
+    }
 
     private static string ReadAll(ZipArchiveEntry entry)
     {

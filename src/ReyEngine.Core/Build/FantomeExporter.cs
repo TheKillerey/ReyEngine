@@ -15,6 +15,10 @@ public sealed class FantomeMeta
     public string? Heart { get; set; }   // optional URL (donate/social)
     public string? Home { get; set; }    // optional URL (homepage/releases)
 
+    /// <summary>M850: whether a layer's declarations are ALSO written as the <c>GameData</c> field of <c>META/info.json</c>, beside
+    /// the YAML manifest entry (<see cref="GameDataManifestYaml.EntryName"/>). Defaults to <see cref="FantomeLayers.GameDataInInfoJson"/>.</summary>
+    public bool GameDataInInfoJson { get; set; } = FantomeLayers.GameDataInInfoJson;
+
     /// <summary>M814: the tool that wrote the archive, "name version". Informational: league-mod's reader
     /// shows it and never varies its behaviour on it.</summary>
     public string? Generator { get; set; }
@@ -81,6 +85,15 @@ public sealed record FantomeLayer(string Name, int Priority, string? DisplayName
 
     /// <summary>The own modules, as nodes, in the order they are written behind the imported ones: the edits (<see cref="EditModules"/>), then the planner's
     /// (<see cref="GameData"/>; an object with no <c>modules</c> list has none).</summary>
+    /// <summary>M850: the layer's declarations as one JSON document (<c>{version, modules}</c>): the imported document with the own
+    /// modules behind it, or the planner's document; null when the layer declares nothing.</summary>
+    internal string? DocumentJson() =>
+        ImportedGameData is { } imported ? GameDataDocumentText.Read(imported).WithModules(OwnModules) : GameData?.ToJsonString();
+
+    /// <summary>M850: the layer's <c>game_data.yaml</c>, or null when it declares nothing or its document is not of the shape a manifest
+    /// holds (<see cref="GameDataManifestYaml.FromDocument"/>).</summary>
+    internal string? ManifestYaml() => DocumentJson() is { } document ? GameDataManifestYaml.FromDocument(document) : null;
+
     internal IReadOnlyList<JsonNode> OwnModules
     {
         get
@@ -133,6 +146,24 @@ public static class FantomeLayers
     /// manager that still pins 0.6 is worth supporting.</para>
     /// </summary>
     public const bool ModuleNames = false;
+
+    /// <summary>
+    /// M850: whether an export also writes a layer's declarations as the <c>GameData</c> field of <c>META/info.json</c>, beside the
+    /// <c>META/game_data/&lt;layer&gt;/game_data.yaml</c> entry. It does, for now.
+    ///
+    /// <para>league-mod's packer stopped writing the field (PR #318, 2026-10-30; <c>ltk_fantome</c> 0.18.0, <c>ltk_overlay</c> 0.20.0,
+    /// <c>ltk_mod_project</c> 0.19.0): a reader takes the YAML entry first and falls back to the field. Every reader older than that
+    /// finds no <c>GameData</c> in such an archive and applies no declarations, with no error. The newest LTK Manager RELEASE,
+    /// v1.31.1 (2026-10-28), pins <c>ltk_overlay</c> 0.19.0 and <c>ltk_fantome</c> 0.17.0 (its Cargo.lock), so it is such a reader; the
+    /// manager's main branch moved to 0.20.0/0.18.0 on 2026-10-30 and is not released. A package written without the field would apply
+    /// none of its bin edits in any released manager. With both, a new reader takes the YAML entry and ignores the field, and an old one
+    /// reads the field, so the same declarations reach both. The cost is the declarations twice in the archive.</para>
+    ///
+    /// <para>Set this to false (or <see cref="FantomeMeta.GameDataInInfoJson"/> per export) once a manager release bundles
+    /// <c>ltk_overlay</c> 0.20.0 or later and the older ones are not worth supporting. A document of a shape a manifest cannot hold
+    /// (<see cref="GameDataManifestYaml.FromDocument"/> is null) is always written to the field, because there is no entry for it.</para>
+    /// </summary>
+    public const bool GameDataInInfoJson = true;
 
     public static bool IsBase(string name) => name.Equals(Base, StringComparison.OrdinalIgnoreCase);
 
@@ -579,12 +610,15 @@ public static class FantomeExporter
             {
                 w.WriteStartObject(layer.Name);
                 // FantomeLayerInfo's field order: GameData, Name, DisplayName, Priority, StringOverrides
-                if (layer.ImportedGameData is { } imported)
+                // M850: the declarations are the layer's YAML entry. The field is written beside it while released managers still read
+                // only the field (FantomeLayers.GameDataInInfoJson), and alone for a document no manifest can hold.
+                bool field = meta.GameDataInInfoJson || (layer.DocumentJson() is not null && layer.ManifestYaml() is null);
+                if (field && layer.ImportedGameData is { } imported)
                 {
                     w.WritePropertyName("GameData");
                     GameDataDocumentText.Read(imported).WriteTo(w, layer.OwnModules);
                 }
-                else if (layer.GameData is not null)
+                else if (field && layer.GameData is not null)
                 {
                     w.WritePropertyName("GameData");
                     layer.GameData.WriteTo(w);
@@ -634,6 +668,10 @@ public static class FantomeExporter
     /// (<c>ltk_fantome::game_data_entry_name</c>).</summary>
     public static string OverrideEntryName(string layer, FantomeOverrideFile file) => "META/game_data/" + layer + "/" + file.Path;
 
+    /// <summary>M850: the archive entry of a layer's declarations: <c>META/game_data/&lt;layer&gt;/game_data.yaml</c>
+    /// (<c>ltk_fantome::game_data_entry_name(layer, GAME_DATA_MANIFEST)</c>).</summary>
+    public static string ManifestEntryName(string layer) => "META/game_data/" + layer + "/" + GameDataManifestYaml.EntryName;
+
     /// <summary>
     /// Writes the package. M814: the archive is built beside its destination as <c>&lt;output&gt;.tmp</c> and moved over
     /// <paramref name="outputFantome"/> only when it is complete, so a failure at any point - a layer the format cannot
@@ -671,6 +709,9 @@ public static class FantomeExporter
                     throw new InvalidOperationException($"The override file '{file.Path}' of layer '{layer.Name}' cannot be stored in a package: {why}.");
                 if (!File.Exists(file.FilePath))
                     throw new InvalidOperationException($"The override file '{file.Path}' of layer '{layer.Name}' is missing from the project ({file.FilePath}).");
+                // M850: league-mod's packer refuses an override file whose layer-relative path is the manifest's name
+                if (GameDataManifestYaml.IsManifestName(file.Path))
+                    throw new InvalidOperationException($"The override file '{file.Path}' of layer '{layer.Name}' has the name of the layer's declarations ({GameDataManifestYaml.EntryName}) in a package; rename it.");
                 if (!entryNames.Add(OverrideEntryName(layer.Name, file)))
                     throw new InvalidOperationException($"Two files would be stored as {OverrideEntryName(layer.Name, file)}.");
             }
@@ -686,6 +727,10 @@ public static class FantomeExporter
         var names = FantomeHashtables.Harvest(wads.Where(w => File.Exists(w.Path)).SelectMany(w => w.ChunkPaths ?? Array.Empty<string>()));
         string? hashtable = names.Count > 0 ? FantomeHashtables.Text(names) : null;
         string info = BuildInfoJson(meta, layers, hashtable: hashtable is not null);
+        // M850: each layer's declarations as its manifest entry (a layer with none writes none)
+        var manifests = new List<(string Entry, string Text)>();
+        foreach (var layer in layers)
+            if (layer.ManifestYaml() is { } yaml) manifests.Add((ManifestEntryName(layer.Name), yaml));
 
         // 3. write beside the destination, then move into place
         var dir = System.IO.Path.GetDirectoryName(outputFantome);
@@ -712,6 +757,7 @@ public static class FantomeExporter
             // M816: the package's README and license text, then each layer's override files below META/game_data/<layer>/
             foreach (var (entryName, filePath) in meta.MetaFiles)
                 zip.CreateEntryFromFile(filePath, entryName, CompressionLevel.Optimal);
+            foreach (var (entry, yaml) in manifests) WriteText(zip, entry, yaml);
             foreach (var layer in layers)
                 foreach (var file in layer.OverrideFiles)
                     zip.CreateEntryFromFile(file.FilePath, OverrideEntryName(layer.Name, file), CompressionLevel.Optimal);

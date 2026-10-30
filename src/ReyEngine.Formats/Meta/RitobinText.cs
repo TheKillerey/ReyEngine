@@ -117,6 +117,7 @@ public static class RitobinText
         private readonly Func<uint, string?>? _name;
         private readonly Func<ulong, string?>? _wad;
         private readonly StringBuilder _sb = new();
+        private uint _owner;   // M850: the class whose fields are being written (an 8-byte hash is told by its class and field)
 
         public Writer(Func<uint, string?>? name, Func<ulong, string?>? wad) { _name = name; _wad = wad; }
 
@@ -142,7 +143,9 @@ public static class RitobinText
             foreach (var (pathHash, obj) in tree.Objects)
             {
                 Line(1, $"{HashLiteral(pathHash)} = {ClassLiteral(obj.ClassHash)} {{");
+                uint outer = _owner; _owner = obj.ClassHash;
                 foreach (var (_, property) in obj.Properties) WriteProperty(2, property);
+                _owner = outer;
                 Line(1, "}");
             }
             Line(0, "}");
@@ -178,7 +181,9 @@ public static class RitobinText
                         if (pair.Value is BinTreeStruct s)
                         {
                             Line(depth + 1, $"{key} = {ClassLiteral(StructClass(s))} {{");
+                            uint outerMap = _owner; _owner = StructClass(s);
                             foreach (var (_, p) in s.Properties) WriteProperty(depth + 2, p);
+                            _owner = outerMap;
                             Line(depth + 1, "}");
                         }
                         else Line(depth + 1, $"{key} = {Scalar(pair.Value)}");
@@ -188,8 +193,17 @@ public static class RitobinText
 
                 case BinTreeStruct str:
                     Line(depth, $"{name}: {type} = {ClassLiteral(StructClass(str))} {{");
+                    uint outerStruct = _owner; _owner = StructClass(str);
                     foreach (var (_, p) in str.Properties) WriteProperty(depth + 1, p);
+                    _owner = outerStruct;
                     Line(depth, "}");
+                    return;
+
+                // M850: StaticMaterialDef.name is eight bytes in 16.21 and is held as a U64 stand-in (BinWireNormalizer). It is written the way
+                // ltk_ritobin 0.11 writes an 8-byte hash: its width, and 0x with sixteen lowercase digits. Nothing in a bin says which hash
+                // function made it, so there is no name to print.
+                case BinTreeU64 wide when BinWireNormalizer.IsMaterialName(_owner, wide.NameHash):
+                    Line(depth, $"{name}: hash[u64] = {WideHashLiteral(wide.Value)}");
                     return;
 
                 default:
@@ -204,7 +218,9 @@ public static class RitobinText
             if (element is BinTreeStruct s)
             {
                 Line(depth, $"{ClassLiteral(StructClass(s))} {{");
+                uint outer = _owner; _owner = StructClass(s);
                 foreach (var (_, p) in s.Properties) WriteProperty(depth + 1, p);
+                _owner = outer;
                 Line(depth, "}");
             }
             else if (element is BinTreeContainer c)
@@ -285,6 +301,9 @@ public static class RitobinText
             var resolved = _name?.Invoke(hash);
             return string.IsNullOrEmpty(resolved) ? $"0x{hash:x8}" : Quote(resolved!);
         }
+
+        /// <summary>M850: an 8-byte hash value, as ltk_ritobin prints it: <c>0x</c> and sixteen lowercase hex digits.</summary>
+        private static string WideHashLiteral(ulong hash) => $"0x{hash:x16}";
 
         private string WadLiteral(ulong hash)
         {

@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text;
 using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
+using System.IO.Hashing;
 using ReyEngine.Core.Hashing;
 
 namespace ReyEngine.Formats.Meta;
@@ -44,6 +45,31 @@ public static class RitobinTextReader
         return parser.Errors.Count == 0 ? tree : null;
     }
 
+    /// <summary>The hash of <paramref name="text"/> by a ritobin hash function, over its ASCII-lowercased bytes, narrowed to <paramref name="width"/>
+    /// bytes (4 keeps the low 32 bits, as ltk_hash's <c>HashValue::with_width</c> does). XXH64 and XXH3 use seed 0.</summary>
+    public static ulong HashText(string text, string function, int width)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var bytes = Encoding.UTF8.GetBytes(text);
+        for (int i = 0; i < bytes.Length; i++)
+            if (bytes[i] is >= (byte)'A' and <= (byte)'Z') bytes[i] += 32;
+        ulong hash = function switch
+        {
+            "fnv1a" => Fnv1a32(bytes),
+            "xxh64" => XxHash64.HashToUInt64(bytes, 0),
+            "xxh3" => XxHash3.HashToUInt64(bytes),
+            _ => throw new ArgumentException($"'{function}' is not fnv1a, xxh64 or xxh3.", nameof(function)),
+        };
+        return width == 4 ? (uint)hash : hash;
+    }
+
+    private static uint Fnv1a32(ReadOnlySpan<byte> bytes)
+    {
+        uint h = 0x811c9dc5;
+        foreach (byte b in bytes) { h ^= b; h *= 0x01000193; }
+        return h;
+    }
+
     // ---- tokens ----------------------------------------------------------
 
     private enum TokenKind { End, Identifier, String, Number, HexNumber, Symbol }
@@ -78,8 +104,8 @@ public static class RitobinTextReader
                 _i += 2;
                 while (_i < _s.Length && Uri.IsHexDigit(_s[_i])) _i++;
                 string hex = _s[(start + 2).._i];
-                ulong value = hex.Length == 0 ? 0
-                    : ulong.Parse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                // a literal wider than 64 bits is an error to report, not an exception to throw
+                ulong value = hex.Length == 0 || !ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong parsed) ? 0 : parsed;
                 return new Token(TokenKind.HexNumber, _s[start.._i], line, value);
             }
 
@@ -148,10 +174,20 @@ public static class RitobinTextReader
 
     // ---- parser ----------------------------------------------------------
 
+    /// <summary>
+    /// M850: the arguments of <c>hash[width]</c> / <c>hash[width,function]</c> (ltk_ritobin 0.11, <c>HashType</c>). Plain <c>hash</c> is
+    /// <c>hash[u32,fnv1a]</c> and carries none.
+    /// </summary>
+    /// <param name="Width">4 (<c>u32</c>) or 8 (<c>u64</c>).</param>
+    /// <param name="Function"><c>fnv1a</c>, <c>xxh64</c> or <c>xxh3</c>; null when only the width is given, which accepts a hex literal alone.</param>
+    private readonly record struct HashSpec(int Width, string? Function);
+
     private sealed class Parser
     {
         private readonly List<Token> _tokens = new();
         private int _at;
+        private uint _owner;                           // M850: the class whose fields are being read
+        private HashSpec? _specSelf, _specKey, _specElement;   // the hash arguments of the type spec just read
         public List<RitobinError> Errors { get; } = new();
 
         public Parser(string text)
@@ -267,16 +303,25 @@ public static class RitobinTextReader
                 uint classHash = HashOf(classToken);
                 if (!Expect("{")) { Recover(); continue; }
 
-                var properties = ParseFields();
+                var properties = ParseFields(classHash);
                 Expect("}");
                 objects.Add(new BinTreeObject(pathHash, classHash, properties));
             }
             Expect("}");
         }
 
-        private List<BinTreeProperty> ParseFields()
+        private List<BinTreeProperty> ParseFields(uint owner)
         {
             var properties = new List<BinTreeProperty>();
+            uint outer = _owner;
+            _owner = owner;
+            try { ReadFields(properties); }
+            finally { _owner = outer; }
+            return properties;
+        }
+
+        private void ReadFields(List<BinTreeProperty> properties)
+        {
             while (!AtEnd && !(Peek.Kind == TokenKind.Symbol && Peek.Text == "}"))
             {
                 var nameToken = Take();
@@ -288,23 +333,36 @@ public static class RitobinTextReader
                 var value = ParseValue(nameHash, type, key, element);
                 if (value is not null) properties.Add(value);
             }
-            return properties;
         }
 
         /// <summary>A type spec is <c>name</c>, <c>name[element]</c> or <c>map[key,value]</c>.</summary>
         private bool ParseTypeSpec(out BinPropertyType type, out BinPropertyType key, out BinPropertyType element)
         {
             type = key = element = BinPropertyType.None;
+            _specSelf = _specKey = _specElement = null;
             var t = Take();
             if (t.Kind != TokenKind.Identifier || !RitobinText.TryParseType(t.Text, out type))
             { Error(t.Line, $"unknown type '{t.Text}'"); return false; }
 
             if (Peek.Kind == TokenKind.Symbol && Peek.Text == "[")
             {
+                // M850: hash[u64], hash[u32,fnv1a]: the brackets of a hash give its width and function, not an element type
+                if (type == BinPropertyType.Hash)
+                {
+                    _at++;
+                    return ParseHashArgs(out _specSelf);
+                }
+
                 _at++;
                 var first = Take();
                 if (first.Kind != TokenKind.Identifier || !RitobinText.TryParseType(first.Text, out var a))
                 { Error(first.Line, $"unknown type '{first.Text}'"); return false; }
+                HashSpec? specA = null, specB = null;
+                if (a == BinPropertyType.Hash && Peek.Kind == TokenKind.Symbol && Peek.Text == "[")
+                {
+                    _at++;
+                    if (!ParseHashArgs(out specA)) return false;
+                }
 
                 if (Peek.Kind == TokenKind.Symbol && Peek.Text == ",")
                 {
@@ -312,18 +370,47 @@ public static class RitobinTextReader
                     var second = Take();
                     if (second.Kind != TokenKind.Identifier || !RitobinText.TryParseType(second.Text, out var b))
                     { Error(second.Line, $"unknown type '{second.Text}'"); return false; }
+                    if (b == BinPropertyType.Hash && Peek.Kind == TokenKind.Symbol && Peek.Text == "[")
+                    {
+                        _at++;
+                        if (!ParseHashArgs(out specB)) return false;
+                    }
                     key = a; element = b;
+                    _specKey = specA; _specElement = specB;
                 }
-                else element = a;
+                else { element = a; _specElement = specA; }
 
                 if (!Expect("]")) return false;
             }
             return true;
         }
 
+        /// <summary>The text of a hash type after its '[': <c>width]</c> or <c>width,function]</c>.</summary>
+        private bool ParseHashArgs(out HashSpec? spec)
+        {
+            spec = null;
+            var w = Take();
+            int width = w.Kind == TokenKind.Identifier ? w.Text switch { "u32" => 4, "u64" => 8, _ => 0 } : 0;
+            if (width == 0) { Error(w.Line, $"a hash width is u32 or u64, not '{w.Text}'"); return false; }
+            string? function = null;
+            if (Peek.Kind == TokenKind.Symbol && Peek.Text == ",")
+            {
+                _at++;
+                var f = Take();
+                if (f.Kind != TokenKind.Identifier || f.Text is not ("fnv1a" or "xxh64" or "xxh3"))
+                { Error(f.Line, $"a hash function is fnv1a, xxh64 or xxh3, not '{f.Text}'"); return false; }
+                function = f.Text;
+            }
+            if (!Expect("]")) return false;
+            spec = new HashSpec(width, function);
+            return true;
+        }
+
         private BinTreeProperty? ParseValue(uint nameHash, BinPropertyType type,
             BinPropertyType key, BinPropertyType element)
         {
+            // the hash arguments of THIS type spec, taken before a nested spec replaces them
+            HashSpec? self = _specSelf, keySpec = _specKey, elementSpec = _specElement;
             switch (type)
             {
                 case BinPropertyType.Container:
@@ -333,7 +420,7 @@ public static class RitobinTextReader
                     var items = new List<BinTreeProperty>();
                     while (!AtEnd && !(Peek.Kind == TokenKind.Symbol && Peek.Text == "}"))
                     {
-                        var item = ParseElement(element);
+                        var item = ParseElement(element, elementSpec);
                         if (item is not null) items.Add(item); else Recover();
                     }
                     Expect("}");
@@ -346,7 +433,7 @@ public static class RitobinTextReader
                 {
                     if (!Expect("{")) return null;
                     BinTreeProperty? inner = null;
-                    if (!(Peek.Kind == TokenKind.Symbol && Peek.Text == "}")) inner = ParseElement(element);
+                    if (!(Peek.Kind == TokenKind.Symbol && Peek.Text == "}")) inner = ParseElement(element, elementSpec);
                     Expect("}");
                     return new BinTreeOptional(nameHash, inner!);
                 }
@@ -357,10 +444,10 @@ public static class RitobinTextReader
                     var pairs = new List<KeyValuePair<BinTreeProperty, BinTreeProperty>>();
                     while (!AtEnd && !(Peek.Kind == TokenKind.Symbol && Peek.Text == "}"))
                     {
-                        var k = ParseScalar(0, key);
+                        var k = ParseScalar(0, key, keySpec);
                         if (k is null) { Recover(); continue; }
                         if (!Expect("=")) { Recover(); continue; }
-                        var v = ParseElement(element);
+                        var v = ParseElement(element, elementSpec);
                         if (v is null) { Recover(); continue; }
                         pairs.Add(new KeyValuePair<BinTreeProperty, BinTreeProperty>(k, v));
                     }
@@ -373,17 +460,17 @@ public static class RitobinTextReader
                     return ParseStruct(nameHash, type);
 
                 default:
-                    return ParseScalar(nameHash, type);
+                    return ParseScalar(nameHash, type, self);
             }
         }
 
         /// <summary>An element inside a container: a bare value, or a class name plus a body.</summary>
-        private BinTreeProperty? ParseElement(BinPropertyType type) => type switch
+        private BinTreeProperty? ParseElement(BinPropertyType type, HashSpec? spec = null) => type switch
         {
             BinPropertyType.Struct or BinPropertyType.Embedded => ParseStruct(0, type),
             BinPropertyType.Container or BinPropertyType.UnorderedContainer or
             BinPropertyType.Map or BinPropertyType.Optional => ParseNestedContainerElement(type),
-            _ => ParseScalar(0, type),
+            _ => ParseScalar(0, type, spec),
         };
 
         /// <summary>A container whose elements are themselves containers writes the inner type spec again.</summary>
@@ -407,14 +494,14 @@ public static class RitobinTextReader
 
             uint classHash = HashOf(classToken);
             if (!Expect("{")) return null;
-            var properties = ParseFields();
+            var properties = ParseFields(classHash);
             Expect("}");
             return type == BinPropertyType.Embedded
                 ? new BinTreeEmbedded(nameHash, classHash, properties)
                 : new BinTreeStruct(nameHash, classHash, properties);
         }
 
-        private BinTreeProperty? ParseScalar(uint nameHash, BinPropertyType type)
+        private BinTreeProperty? ParseScalar(uint nameHash, BinPropertyType type, HashSpec? spec = null)
         {
             switch (type)
             {
@@ -448,7 +535,7 @@ public static class RitobinTextReader
                     return new BinTreeString(nameHash, t.Text);
 
                 case BinPropertyType.Hash:
-                    return new BinTreeHash(nameHash, HashOf(t));
+                    return spec is { } hashSpec ? HashWithArguments(nameHash, t, hashSpec) : new BinTreeHash(nameHash, HashOf(t));
                 case BinPropertyType.ObjectLink:
                     return new BinTreeObjectLink(nameHash, HashOf(t));
                 case BinPropertyType.WadChunkLink:
@@ -514,6 +601,46 @@ public static class RitobinTextReader
             if (double.TryParse(t.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double d)) return (long)d;
             Error(t.Line, $"'{t.Text}' is not an integer");
             return 0;
+        }
+
+        /// <summary>
+        /// M850: a value of <c>hash[width]</c> or <c>hash[width,function]</c>, read as ltk_ritobin 0.11 reads it: a hex literal is the value
+        /// (it must fit the width), and a string (or bare name) is hashed with the function over its ASCII-lowercased bytes, XXH64 and XXH3
+        /// with seed 0, and narrowed to the low 32 bits for u32. A width with no function accepts a hex literal only.
+        ///
+        /// <para>A four-byte hash is a <see cref="BinTreeHash"/>. An eight-byte one is held as the U64 stand-in
+        /// <see cref="BinWireNormalizer"/> uses, which only <c>StaticMaterialDef.name</c> has; anywhere else it is an error, because the tree
+        /// has no eight-byte hash to put it in and the bin could not be written back.</para>
+        /// </summary>
+        private BinTreeProperty? HashWithArguments(uint nameHash, Token t, HashSpec spec)
+        {
+            ulong value;
+            if (t.Kind == TokenKind.HexNumber)
+            {
+                value = t.Hex;
+                if (spec.Width == 4 && value > uint.MaxValue)
+                { Error(t.Line, $"{t.Text} does not fit hash[u32]"); return null; }
+            }
+            else if (t.Kind is TokenKind.String or TokenKind.Identifier && spec.Function is { } function)
+            {
+                value = HashText(t.Text, function, spec.Width);
+            }
+            else
+            {
+                string width = spec.Width == 4 ? "u32" : "u64";
+                Error(t.Line, spec.Function is null
+                    ? $"hash[{width}] accepts a hex literal only; name a hash function (for example hash[{width},{(spec.Width == 4 ? "fnv1a" : "xxh3")}]) to give a string"
+                    : $"expected a string or a hex literal but found '{t.Text}'");
+                return null;
+            }
+
+            if (spec.Width == 4) return new BinTreeHash(nameHash, (uint)value);
+            if (!BinWireNormalizer.IsMaterialName(_owner, nameHash))
+            {
+                Error(t.Line, "an 8-byte hash is held only as StaticMaterialDef.name (patch 16.21); ReyEngine cannot write it anywhere else");
+                return null;
+            }
+            return new BinTreeU64(nameHash, value);
         }
 
         /// <summary>A 32-bit name: a 0x literal as-is, anything else hashed FNV-1a — which is what makes the
