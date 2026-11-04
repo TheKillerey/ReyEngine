@@ -228,15 +228,16 @@ public sealed class ShaderGraphCustomExportRealDataTests(ITestOutputHelper outpu
         var back = ShaderCacheReader.ParseToc(sw.Extract(HashAlgorithms.WadPath(TocName)), TocName)!;
         Assert.Contains(("REY_GRAPH", "1"), back.DefinePool);
         byte[] container = sw.Extract(HashAlgorithms.WadPath(TocName + "_200"));
-        Assert.Equal(54, SgShipBuilder.ReadRecords(container, "shipped container"));
+        Assert.Equal((int)(back.DeclaredBlobCount - 200), SgShipBuilder.ReadRecords(container, "shipped container"));   // blobs 200.. of the TOC: Riot's records + the 16 new ones
 
         // CreatePixelShader on every new blob; their $Globals hold only declared names
+        int riotRecords = (int)(back.DeclaredBlobCount - 200) - 16;
         var blobs = new List<byte[]>();
         int off = 0, idx = 0;
         while (off < container.Length)
         {
             int len = BitConverter.ToInt32(container, off);
-            if (idx >= 38) blobs.Add(container.AsSpan(off + 4, len - 1).ToArray());
+            if (idx >= riotRecords) blobs.Add(container.AsSpan(off + 4, len - 1).ToArray());
             off += 4 + len; idx++;
         }
         Assert.Equal(16, blobs.Count);

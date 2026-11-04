@@ -294,13 +294,15 @@ public sealed class ShaderGraphShipRealDataTests(ITestOutputHelper output) : IDi
         }
 
         // the 16 new records: framed, DXBC, and each one creates on a real D3D11 device
-        Assert.Equal(54, SgShipBuilder.ReadRecords(newContainer, "shipped container"));
+        // the _200 container holds blobs 200.. of the TOC: Riot's records (38 on 16.20, 68 on 16.21.8342754) and the 16 new ones
+        Assert.Equal((int)(back.DeclaredBlobCount - 200), SgShipBuilder.ReadRecords(newContainer, "shipped container"));
+        int riotRecords = (int)(back.DeclaredBlobCount - 200) - 16;
         var blobs = new List<byte[]>();
         int off = 0, idx = 0;
         while (off < newContainer.Length)
         {
             int len = BitConverter.ToInt32(newContainer, off);
-            if (idx >= 38) { Assert.Equal(0x35, newContainer[off + 4 + len - 1]); blobs.Add(newContainer.AsSpan(off + 4, len - 1).ToArray()); }
+            if (idx >= riotRecords) { Assert.Equal(0x35, newContainer[off + 4 + len - 1]); blobs.Add(newContainer.AsSpan(off + 4, len - 1).ToArray()); }
             off += 4 + len; idx++;
         }
         Assert.Equal(16, blobs.Count);
