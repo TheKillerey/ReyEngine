@@ -39,7 +39,7 @@ public static class NewFeatures
     /// <summary>The release whose highlights are currently on offer. Bumped when a release ADDS entries -
     /// a fix-only release (0.4.6) leaves it, so the What's New list keeps its newest header and nothing
     /// glows for a release that changed no entry point.</summary>
-    public const string CurrentVersion = "0.5.2";
+    public const string CurrentVersion = "0.5.3";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -144,6 +144,10 @@ public static class NewFeatures
         NewFeature.Note("0.5.2", "LTK Manager's layered mods: import, preview and edit their GameData, and export your own"),
         NewFeature.Note("0.5.2", "Rey's Mapgeo Blender Addon (v0.6.0) is the Blender link: materials, face edits, the navgrid and map visibility"),
         NewFeature.Note("0.5.2", "NavGrid variants: the map's real grid, with the dragon and Baron state overlays"),
+        // 0.5.3. Notes only: patch 16.21 support needs no control, and the visibility check lives in the outliner.
+        NewFeature.Note("0.5.3", "League 16.21: maps, skins and their materials load and save in the patch's new material-name form"),
+        NewFeature.Note("0.5.3", "Map visibility follows the game's own rules, and Visibility Layers lists what would stay hidden in the game"),
+        NewFeature.Note("0.5.3", "Export .fantome writes LTK's new game_data.yaml declarations, and older LTK Manager versions still read the package"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
