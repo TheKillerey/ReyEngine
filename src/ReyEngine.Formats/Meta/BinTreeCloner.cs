@@ -55,8 +55,13 @@ public static class BinTreeCloner
     /// real one (emitterLinger is option&lt;f32&gt; whether or not it holds a value) - every duplicated emitter
     /// shipped that divergence. The type is set on the private field the reader fills; should a
     /// LeagueToolkit update rename it, the clone is refused rather than silently retyped.
+    ///
+    /// <para>Internal rather than private: <see cref="BinAssetLinkMigration"/> reuses this exact mechanism
+    /// to retype an empty <c>Optional&lt;String&gt;</c> (an unset icon, say) to <c>Optional&lt;WadChunkLink&gt;</c>
+    /// when the reference says the field is link-only - the same problem, the same private field, no reason
+    /// to duplicate the reflection.</para>
     /// </summary>
-    private static BinTreeOptional EmptyOptional(uint nameHash, BinPropertyType valueType)
+    internal static BinTreeOptional EmptyOptional(uint nameHash, BinPropertyType valueType)
     {
         var o = new BinTreeOptional(nameHash, null);
         if (o.ValueType == valueType) return o;

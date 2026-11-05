@@ -217,8 +217,9 @@ public sealed class BlenderLinkM842ReviewTests
             },
         };
         var grid = MapBucketGridBuilder.Rebuild(asset, 1000f).Single();
-        // every bucket the triangle touches holds both copies of it: two faces, but the three corners once
+        // M848: both copies sit in the one bucket holding their min corner: two faces, but the three corners once
         int faces = grid.Indices.Count / 3, used = grid.Buckets.Count(b => b.InsideFaceCount + b.StickingOutFaceCount > 0);
+        Assert.Equal(1, used);
         Assert.Equal(2 * used, faces);
         Assert.Equal(3 * used, grid.Vertices.Count);   // keyed by source index it was 6 per bucket
     }

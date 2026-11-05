@@ -38,20 +38,33 @@ public sealed class MapBucketGridData
 
 /// <summary>
 /// Recreates League's X/Z culling grids from the map's current world-space triangles.
-/// Meshes are grouped by controller + render-region hash; each face is copied into every
-/// 2D bucket it overlaps and carries its source mesh's visibility byte.
+/// Meshes are grouped by controller + render-region hash. Each face is stored ONCE per grid, in the
+/// bucket that holds the min-X/min-Z corner of its X/Z box (see <see cref="LocateFace"/>), and carries
+/// its source mesh's visibility byte.
+///
+/// <para>M848: this used to copy a face into EVERY bucket it overlapped. The client draws planar
+/// projection VFX (<c>VfxPrimitivePlanarProjection</c>, the Jade turret shots' <c>projected</c> emitter)
+/// onto these grid triangles, not onto the render meshes, and it paints each copy additively. On Old
+/// Summoner's Rift the copies averaged 1.62 per face, far more for big ground triangles, and the shots
+/// drew bright, stepped washes with hard edges along the bucket lines. Riot stores each face once, in its
+/// min-corner bucket. That holds for every one of the 13,970,431 faces in the grids of the 202 mapgeos Riot
+/// ships in Maps/Shipping, base_srx's 323,296 among them. A grid rebuilt with Riot's rule drew the
+/// projection correctly in game (2026-10-25).</para>
 /// </summary>
 public static class MapBucketGridBuilder
 {
     public const float HeightRangeMin = -120f;
     public const float HeightRangeMax = 5000f;
-    public const float TargetBucketSize = 500f;
+    /// <summary>M848: about Riot's cell size. Riot's Map11 master grid is 128 x 128 buckets of ~120 units.
+    /// Riot's formula for the bucket count of its smaller grids is NOT known (it ships 128, 32, 25, 12,
+    /// 33, ... for extents that ceil(extent / 120) does not reproduce); ceil(larger extent / 120) is what
+    /// was verified in game. Was 500.</summary>
+    public const float TargetBucketSize = 120f;
     public const int MinimumBucketsPerSide = 4;
     public const int MaximumBucketsPerSide = 256;
 
     private const float BoundsPadding = 0.001f;
     private const float MinimumBucketSize = 0.01f;
-    private const float IntersectionEpsilon = 0.0001f;
 
     /// <summary>
     /// M410: the height range is now a PARAMETER, not a constant.
@@ -67,9 +80,13 @@ public static class MapBucketGridBuilder
     /// volume is slightly larger than the range in both directions.</para>
     /// </summary>
     /// <param name="heightMin">Absolute world Y, not relative to the map's bounds.</param>
+    /// <param name="meshSelection">M848: which meshes go in. Riot leaves VertexDeform meshes without lightmap
+    /// UVs out (see <see cref="MapBucketGridMeshSelection"/>). Null keeps every mesh, which was the only
+    /// behaviour before.</param>
     public static IReadOnlyList<MapBucketGridData> Rebuild(MapGeoAsset asset,
         float targetBucketSize = TargetBucketSize,
-        float heightMin = HeightRangeMin, float heightMax = HeightRangeMax)
+        float heightMin = HeightRangeMin, float heightMax = HeightRangeMax,
+        MapBucketGridMeshSelection? meshSelection = null)
     {
         ArgumentNullException.ThrowIfNull(asset);
         if (!float.IsFinite(targetBucketSize) || targetBucketSize <= 0)
@@ -83,11 +100,14 @@ public static class MapBucketGridBuilder
             throw new ArgumentOutOfRangeException(nameof(heightMin),
                 $"height range is inverted: min {heightMin} is above max {heightMax}");
 
+        HashSet<int> excludedMeshes = (meshSelection ?? MapBucketGridMeshSelection.All).ExcludedMeshes(asset);
         var trianglesByGrid = new Dictionary<MapBucketGridKey, List<Triangle>>();
         foreach (var group in asset.Groups)
         {
             if (group.MeshIndex < 0 || group.MeshIndex >= asset.Meshes.Count)
                 throw new InvalidDataException($"Mapgeo group references invalid mesh {group.MeshIndex}.");
+            if (excludedMeshes.Contains(group.MeshIndex))
+                continue;
             if (group.StartIndex < 0 || group.IndexCount < 0
                 || group.StartIndex > asset.Indices.Length - group.IndexCount)
                 throw new InvalidDataException($"Mapgeo group for mesh {group.MeshIndex} has an invalid index range.");
@@ -142,9 +162,10 @@ public static class MapBucketGridBuilder
     /// </summary>
     public static (Vector3 Min, Vector3 Max)? ComputeBakeBounds(MapGeoAsset asset,
         float targetBucketSize = TargetBucketSize,
-        float heightMin = HeightRangeMin, float heightMax = HeightRangeMax)
+        float heightMin = HeightRangeMin, float heightMax = HeightRangeMax,
+        MapBucketGridMeshSelection? meshSelection = null)
     {
-        var grids = Rebuild(asset, targetBucketSize, heightMin, heightMax);
+        var grids = Rebuild(asset, targetBucketSize, heightMin, heightMax, meshSelection);
         if (grids.Count == 0) return null;
 
         float minX = float.MaxValue, minZ = float.MaxValue;
@@ -182,38 +203,15 @@ public static class MapBucketGridBuilder
         maxX = minX + bucketSizeX * side;
         maxZ = minZ + bucketSizeZ * side;
 
+        // M848: one bucket per face - the one holding its X/Z min corner (Riot's rule, see LocateFace).
         var facesByBucket = new List<BucketFace>?[checked(side * side)];
         foreach (Triangle triangle in triangles)
         {
-            Vector3 a = PositionAt(asset, triangle.A);
-            Vector3 b = PositionAt(asset, triangle.B);
-            Vector3 c = PositionAt(asset, triangle.C);
-            float triMinX = MathF.Min(a.X, MathF.Min(b.X, c.X));
-            float triMaxX = MathF.Max(a.X, MathF.Max(b.X, c.X));
-            float triMinZ = MathF.Min(a.Z, MathF.Min(b.Z, c.Z));
-            float triMaxZ = MathF.Max(a.Z, MathF.Max(b.Z, c.Z));
-
-            int startX = Math.Max(0, CellOf(triMinX, minX, bucketSizeX) - 1);
-            int endX = Math.Min(side - 1, CellOf(triMaxX, minX, bucketSizeX) + 1);
-            int startZ = Math.Max(0, CellOf(triMinZ, minZ, bucketSizeZ) - 1);
-            int endZ = Math.Min(side - 1, CellOf(triMaxZ, minZ, bucketSizeZ) + 1);
-
-            for (int z = startZ; z <= endZ; z++)
-            for (int x = startX; x <= endX; x++)
-            {
-                float left = minX + x * bucketSizeX;
-                float bottom = minZ + z * bucketSizeZ;
-                float right = left + bucketSizeX;
-                float top = bottom + bucketSizeZ;
-                if (!TriangleOverlapsRectangle(a, b, c, left, bottom, right, top))
-                    continue;
-
-                bool inside = PointInsideRectangle(a, left, bottom, right, top)
-                    && PointInsideRectangle(b, left, bottom, right, top)
-                    && PointInsideRectangle(c, left, bottom, right, top);
-                int cellIndex = z * side + x;
-                (facesByBucket[cellIndex] ??= new List<BucketFace>()).Add(new BucketFace(triangle, inside));
-            }
+            var (x, z, inside) = LocateFace(
+                PositionAt(asset, triangle.A), PositionAt(asset, triangle.B), PositionAt(asset, triangle.C),
+                minX, minZ, bucketSizeX, bucketSizeZ, side);
+            int cellIndex = z * side + x;
+            (facesByBucket[cellIndex] ??= new List<BucketFace>()).Add(new BucketFace(triangle, inside));
         }
 
         var vertices = new List<Vector3>();
@@ -253,10 +251,9 @@ public static class MapBucketGridBuilder
                 visibility.Add(face.Triangle.Visibility);
             }
 
-            float left = minX + x * bucketSizeX;
-            float bottom = minZ + z * bucketSizeZ;
-            float right = left + bucketSizeX;
-            float top = bottom + bucketSizeZ;
+            // M848: only the +X/+Z edges can be crossed - the min corner always lies in this bucket.
+            float right = minX + (x + 1) * bucketSizeX;
+            float top = minZ + (z + 1) * bucketSizeZ;
             float stickOutX = 0f, stickOutZ = 0f;
             foreach (BucketFace face in sticking)
             {
@@ -287,9 +284,7 @@ public static class MapBucketGridBuilder
 
             void AccumulateStickOut(Vector3 point)
             {
-                if (point.X < left) stickOutX = MathF.Max(stickOutX, left - point.X);
                 if (point.X > right) stickOutX = MathF.Max(stickOutX, point.X - right);
-                if (point.Z < bottom) stickOutZ = MathF.Max(stickOutZ, bottom - point.Z);
                 if (point.Z > top) stickOutZ = MathF.Max(stickOutZ, point.Z - top);
             }
         }
@@ -335,73 +330,51 @@ public static class MapBucketGridBuilder
         maxZ = MathF.Max(maxZ, point.Z);
     }
 
-    private static int CellOf(float value, float min, float size) => (int)MathF.Floor((value - min) / size);
-
-    private static bool TriangleOverlapsRectangle(
-        Vector3 a, Vector3 b, Vector3 c,
-        float left, float bottom, float right, float top)
+    /// <summary>
+    /// M848: the one bucket Riot stores a face in, and whether it counts as inside it.
+    ///
+    /// <list type="number">
+    ///   <item>The bucket is the one holding the min-X/min-Z corner of the face's X/Z bounding box.</item>
+    ///   <item>Inside means all three vertices lie in that bucket. The min corner always does, so this is
+    ///   the max corner not passing the bucket's +X/+Z edges. Otherwise the face is sticking out, and it
+    ///   counts toward that bucket's MaxStickOutX/Z.</item>
+    /// </list>
+    ///
+    /// <para>Measured first on Riot's Map11 base_srx.mapgeo, then over every grid of all 202 mapgeos
+    /// Riot ships in Maps/Shipping. The bucket is <c>floor((min - gridMin) / bucketSize)</c> in single
+    /// precision, and that reproduces Riot's placement of every face, with 0 exceptions. The inside flag
+    /// is the max corner falling in the same bucket by the same formula. That matches every Riot face
+    /// except a handful whose max corner sits exactly on a +X/+Z edge or one float step before it, where
+    /// Riot says "sticking out". Those are the same few faces repeated across the Summoner's Rift
+    /// variants, 82 hits in all, and no epsilon reproduces them: Riot evidently classified them from
+    /// positions before they were rounded to the stored floats. Correcting the floor against the edges
+    /// (<c>min + i * size</c>) was tried and disagreed with Riot on 74 faces.</para>
+    ///
+    /// <para>Public so a test can hold Riot's own grids to it: given Riot's header, this function must put
+    /// every Riot face where Riot put it.</para>
+    /// </summary>
+    public static (int X, int Z, bool Inside) LocateFace(Vector3 a, Vector3 b, Vector3 c,
+        float gridMinX, float gridMinZ, float bucketSizeX, float bucketSizeZ, int bucketsPerSide)
     {
-        if (PointInsideRectangle(a, left, bottom, right, top)
-            || PointInsideRectangle(b, left, bottom, right, top)
-            || PointInsideRectangle(c, left, bottom, right, top))
-            return true;
-
-        Vector2 r0 = new(left, bottom), r1 = new(right, bottom);
-        Vector2 r2 = new(right, top), r3 = new(left, top);
-        Vector2 aa = new(a.X, a.Z), bb = new(b.X, b.Z), cc = new(c.X, c.Z);
-        if (PointInsideTriangle(r0, aa, bb, cc) || PointInsideTriangle(r1, aa, bb, cc)
-            || PointInsideTriangle(r2, aa, bb, cc) || PointInsideTriangle(r3, aa, bb, cc))
-            return true;
-
-        return SegmentIntersectsRectangle(aa, bb, r0, r1, r2, r3)
-            || SegmentIntersectsRectangle(bb, cc, r0, r1, r2, r3)
-            || SegmentIntersectsRectangle(cc, aa, r0, r1, r2, r3);
+        if (bucketsPerSide <= 0) throw new ArgumentOutOfRangeException(nameof(bucketsPerSide));
+        float faceMinX = MathF.Min(a.X, MathF.Min(b.X, c.X));
+        float faceMinZ = MathF.Min(a.Z, MathF.Min(b.Z, c.Z));
+        float faceMaxX = MathF.Max(a.X, MathF.Max(b.X, c.X));
+        float faceMaxZ = MathF.Max(a.Z, MathF.Max(b.Z, c.Z));
+        int x = Math.Clamp(CellOf(faceMinX, gridMinX, bucketSizeX), 0, bucketsPerSide - 1);
+        int z = Math.Clamp(CellOf(faceMinZ, gridMinZ, bucketSizeZ), 0, bucketsPerSide - 1);
+        bool inside = CellOf(faceMaxX, gridMinX, bucketSizeX) == x
+            && CellOf(faceMaxZ, gridMinZ, bucketSizeZ) == z;
+        return (x, z, inside);
     }
 
-    private static bool PointInsideRectangle(Vector3 point, float left, float bottom, float right, float top)
-        => point.X >= left - IntersectionEpsilon && point.X <= right + IntersectionEpsilon
-        && point.Z >= bottom - IntersectionEpsilon && point.Z <= top + IntersectionEpsilon;
-
-    private static bool PointInsideTriangle(Vector2 point, Vector2 a, Vector2 b, Vector2 c)
+    /// <summary>Unclamped, so a max corner past the grid's last edge reads as a later bucket. Large
+    /// values saturate rather than wrap.</summary>
+    private static int CellOf(float value, float min, float size)
     {
-        if (MathF.Abs(Cross(b - a, c - a)) <= IntersectionEpsilon)
-            return false;
-        float d1 = Cross(point - a, b - a);
-        float d2 = Cross(point - b, c - b);
-        float d3 = Cross(point - c, a - c);
-        bool hasNegative = d1 < -IntersectionEpsilon || d2 < -IntersectionEpsilon || d3 < -IntersectionEpsilon;
-        bool hasPositive = d1 > IntersectionEpsilon || d2 > IntersectionEpsilon || d3 > IntersectionEpsilon;
-        return !(hasNegative && hasPositive);
+        float q = MathF.Floor((value - min) / size);
+        return q >= int.MaxValue ? int.MaxValue : q <= int.MinValue ? int.MinValue : (int)q;
     }
-
-    private static bool SegmentIntersectsRectangle(
-        Vector2 a, Vector2 b, Vector2 r0, Vector2 r1, Vector2 r2, Vector2 r3)
-        => SegmentsIntersect(a, b, r0, r1) || SegmentsIntersect(a, b, r1, r2)
-        || SegmentsIntersect(a, b, r2, r3) || SegmentsIntersect(a, b, r3, r0);
-
-    private static bool SegmentsIntersect(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
-    {
-        float abC = Cross(b - a, c - a);
-        float abD = Cross(b - a, d - a);
-        float cdA = Cross(d - c, a - c);
-        float cdB = Cross(d - c, b - c);
-        if (MathF.Abs(abC) <= IntersectionEpsilon && OnSegment(a, b, c)) return true;
-        if (MathF.Abs(abD) <= IntersectionEpsilon && OnSegment(a, b, d)) return true;
-        if (MathF.Abs(cdA) <= IntersectionEpsilon && OnSegment(c, d, a)) return true;
-        if (MathF.Abs(cdB) <= IntersectionEpsilon && OnSegment(c, d, b)) return true;
-        return ((abC > IntersectionEpsilon && abD < -IntersectionEpsilon)
-                || (abC < -IntersectionEpsilon && abD > IntersectionEpsilon))
-            && ((cdA > IntersectionEpsilon && cdB < -IntersectionEpsilon)
-                || (cdA < -IntersectionEpsilon && cdB > IntersectionEpsilon));
-    }
-
-    private static bool OnSegment(Vector2 a, Vector2 b, Vector2 point)
-        => point.X >= MathF.Min(a.X, b.X) - IntersectionEpsilon
-        && point.X <= MathF.Max(a.X, b.X) + IntersectionEpsilon
-        && point.Y >= MathF.Min(a.Y, b.Y) - IntersectionEpsilon
-        && point.Y <= MathF.Max(a.Y, b.Y) + IntersectionEpsilon;
-
-    private static float Cross(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
 
     private readonly record struct Triangle(uint A, uint B, uint C, byte Visibility);
     private readonly record struct BucketFace(Triangle Triangle, bool Inside);

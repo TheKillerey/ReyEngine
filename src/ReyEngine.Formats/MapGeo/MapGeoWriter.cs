@@ -15,7 +15,10 @@ public static class MapGeoWriter
     public static bool HasMoves(IEnumerable<MapGeoMesh> meshes) => meshes.Any(m => m.IsMoved);
 
     /// <summary>Patch the edited meshes' transforms into <paramref name="originalMapgeo"/> and return new bytes.</summary>
-    public static byte[] WriteWithMoves(byte[] originalMapgeo, IReadOnlyList<MapGeoMesh> meshes)
+    /// <param name="gridSelection">M848: which meshes go into the regenerated bucket grids
+    /// (<see cref="MapBucketGridMeshSelection"/>). Null keeps every mesh.</param>
+    public static byte[] WriteWithMoves(byte[] originalMapgeo, IReadOnlyList<MapGeoMesh> meshes,
+        MapBucketGridMeshSelection? gridSelection = null)
     {
         var moves = meshes.Where(m => m.IsMoved).ToList();
         if (moves.Count == 0) return originalMapgeo;
@@ -63,7 +66,7 @@ public static class MapGeoWriter
             }
         }
         MapGeoAsset movedAsset = MapGeoDecoder.Decode(result);
-        return WriteWithRegeneratedBucketGrids(result, movedAsset);
+        return WriteWithRegeneratedBucketGrids(result, movedAsset, meshSelection: gridSelection);
     }
 
     /// <summary>
@@ -78,7 +81,9 @@ public static class MapGeoWriter
         // the user previewed - a save that silently re-baked with defaults would be a divergence nothing
         // on screen reveals.
         float heightMin = MapBucketGridBuilder.HeightRangeMin,
-        float heightMax = MapBucketGridBuilder.HeightRangeMax)
+        float heightMax = MapBucketGridBuilder.HeightRangeMax,
+        // M848: which meshes go in (MapBucketGridMeshSelection). Null keeps every mesh.
+        MapBucketGridMeshSelection? meshSelection = null)
     {
         ArgumentNullException.ThrowIfNull(originalMapgeo);
         ArgumentNullException.ThrowIfNull(asset);
@@ -91,7 +96,7 @@ public static class MapGeoWriter
         using var input = new MemoryStream(originalMapgeo, writable: false);
         using var environment = new EnvironmentAsset(input);
         MapGeoSceneGraphSection oldSection = MapGeoSceneGraphSection.Locate(originalMapgeo, environment, version);
-        IReadOnlyList<MapBucketGridData> grids = MapBucketGridBuilder.Rebuild(asset, targetBucketSize, heightMin, heightMax);
+        IReadOnlyList<MapBucketGridData> grids = MapBucketGridBuilder.Rebuild(asset, targetBucketSize, heightMin, heightMax, meshSelection);
         byte[] newSection = SerializeSceneGraphs(version, grids);
 
         int suffixOffset = oldSection.Offset + oldSection.Length;
@@ -148,11 +153,12 @@ public static class MapGeoWriter
     }
 
     /// <summary>Patch the edits AND validate the result still reopens. Returns null + a reason on failure.</summary>
-    public static byte[]? TryWriteWithMoves(byte[] originalMapgeo, IReadOnlyList<MapGeoMesh> meshes, out string? error)
+    public static byte[]? TryWriteWithMoves(byte[] originalMapgeo, IReadOnlyList<MapGeoMesh> meshes, out string? error,
+        MapBucketGridMeshSelection? gridSelection = null)
     {
         try
         {
-            var bytes = WriteWithMoves(originalMapgeo, meshes);
+            var bytes = WriteWithMoves(originalMapgeo, meshes, gridSelection);
             using var verify = new MemoryStream(bytes, writable: false);
             _ = new EnvironmentAsset(verify); // throws if the patched mapgeo is unreadable
             error = null;

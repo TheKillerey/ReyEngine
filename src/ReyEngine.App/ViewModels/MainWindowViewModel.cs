@@ -806,7 +806,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _showBakeBox;
     [ObservableProperty] private string _bakeHeightMinText = "-120";
     [ObservableProperty] private string _bakeHeightMaxText = "5000";
-    [ObservableProperty] private string _bakeBucketSizeText = "500";
+    [ObservableProperty] private string _bakeBucketSizeText = "120";   // M848: Riot's ~120-unit cells, was 500
     /// <summary>What the panel shows: grids, cells, cell size - the cell count is the redraw driver
     /// because the BOX can be byte-identical while the grid inside it changes completely (M411).</summary>
     [ObservableProperty] private string _bakeBoxInfo = "";
@@ -858,9 +858,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         try
         {
+            var selection = await BucketGridSelectionForAsync(_currentMapEntry?.Path);   // M848: the save's selection
             var (grids, box) = await Task.Run(() =>
             {
-                var g = Formats.MapGeo.MapBucketGridBuilder.Rebuild(map, cfg.Size, cfg.Min, cfg.Max);
+                var g = Formats.MapGeo.MapBucketGridBuilder.Rebuild(map, cfg.Size, cfg.Min, cfg.Max, selection);
                 (System.Numerics.Vector3, System.Numerics.Vector3)? b = null;
                 if (g.Count > 0)
                 {
@@ -902,7 +903,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M412: the panel's settings, falling back to the shipped defaults when unparsable.
             var cfg = BakeSettings() ?? (MapBucketGridBuilder.TargetBucketSize,
                 MapBucketGridBuilder.HeightRangeMin, MapBucketGridBuilder.HeightRangeMax);
-            var grids = await Task.Run(() => MapBucketGridBuilder.Rebuild(map, cfg.Size, cfg.Min, cfg.Max));
+            var selection = await BucketGridSelectionForAsync(_currentMapEntry?.Path);   // M848: the save's selection
+            var grids = await Task.Run(() => MapBucketGridBuilder.Rebuild(map, cfg.Size, cfg.Min, cfg.Max, selection));
             var infos = grids.Select(g =>
             {
                 var mp = new float[g.Vertices.Count * 3];
@@ -4491,6 +4493,66 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return empty;
         }
     }
+
+    /// <summary>
+    /// M848: which meshes go into this map's regenerated scene bucket grids - Riot leaves VertexDeform meshes
+    /// without lightmap UVs out (<see cref="MapBucketGridMeshSelection"/>). Read from the mapgeo's own sibling
+    /// materials.bin, like <see cref="ExtendedChannelMaterialsFor"/>, with <see cref="ResolveBinName"/> so a
+    /// 16.21 material's hashed name resolves through the open map (M847). When the bin cannot be read every
+    /// mesh goes in, which is what every bake did before M848 - and that is logged, because it puts the plants
+    /// back into the grid.
+    ///
+    /// <para>Cached per map and bin CONTENT: the bake panel's preview asks on every settled edit, and parsing a
+    /// Summoner's Rift materials.bin each time would sit on the UI thread. A changed bin re-parses.</para>
+    /// </summary>
+    private async Task<MapBucketGridMeshSelection> BucketGridSelectionForAsync(string? mapGeoPath)
+    {
+        if (string.IsNullOrEmpty(mapGeoPath)) return MapBucketGridMeshSelection.All;
+        try
+        {
+            // Entry lookup stays on the calling (UI) thread: it can walk AssetEntries. The read, hash and parse do not.
+            if (!TryResolveMaterialsBin(mapGeoPath, out var binEntry))
+            {
+                if (!string.Equals(_gridSelectionWarnedFor, mapGeoPath, StringComparison.OrdinalIgnoreCase))
+                    _log.Warn("BucketGrid", $"No materials.bin beside {mapGeoPath}: every mesh goes into the bucket grids, VertexDeform plants included.");
+                _gridSelectionWarnedFor = mapGeoPath;
+                return MapBucketGridMeshSelection.All;
+            }
+            var map = _currentMap;
+            ulong pathHash = binEntry.PathHash;
+            var (selection, emptyWarn) = await Task.Run(() =>
+            {
+                byte[] bin = ReadAsset(pathHash);
+                ulong binHash = System.IO.Hashing.XxHash64.HashToUInt64(bin);
+                if (_gridSelectionCache is { } cached && ReferenceEquals(cached.Map, map) && cached.BinHash == binHash
+                    && string.Equals(cached.Path, mapGeoPath, StringComparison.OrdinalIgnoreCase))
+                    return (cached.Selection, false);
+
+                var sel = MapBucketGridMeshSelection.FromMaterials(MaterialDocument.Parse(bin, ResolveBinName).Materials);
+                // A selection with no VertexDeform material means "every mesh goes in". That may just be a parse that
+                // ran before names resolved, so it is never cached: the next ask parses again.
+                if (sel.VertexDeformMaterials.Count > 0)
+                    _gridSelectionCache = new GridSelectionCacheEntry(mapGeoPath, map, binHash, sel);
+                return (sel, sel.VertexDeformMaterials.Count == 0);
+            });
+            if (emptyWarn && !string.Equals(_gridSelectionWarnedFor, mapGeoPath, StringComparison.OrdinalIgnoreCase))
+            {
+                _gridSelectionWarnedFor = mapGeoPath;
+                _log.Warn("BucketGrid", $"{mapGeoPath}: no VertexDeform material found in its materials.bin; every mesh goes into the bucket grids (not cached, re-read on the next bake).");
+            }
+            return selection;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("BucketGrid", "Bucket-grid mesh selection could not be read; every mesh goes in, VertexDeform plants included: " + ex.Message);
+            return MapBucketGridMeshSelection.All;
+        }
+    }
+
+    // A class swapped as one reference: it is written from Task.Run, and a struct tuple could tear between path, map and selection.
+    private sealed record GridSelectionCacheEntry(string Path, MapGeoAsset? Map, ulong BinHash, MapBucketGridMeshSelection Selection);
+    private volatile GridSelectionCacheEntry? _gridSelectionCache;
+    private string? _gridSelectionWarnedFor;
 
     /// <summary>
     /// Give lightmapped legacy SRX materials custom DX11 permutations, stage them as a ShaderCache
@@ -11217,6 +11279,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             byte[] bytes = _currentMapBytes;
+            // M848: every bucket-grid rebuild below uses the same mesh selection.
+            var gridSelection = await BucketGridSelectionForAsync(entry.Path);
 
             // M517: material edits before everything else. They REWRITE the file (a material name is a
             // length-prefixed string, so a longer one moves every byte after it), which invalidates any
@@ -11292,7 +11356,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // 1) mesh moves (rebuilds bucket grids for the moved geometry)
             if (hasMoves)
             {
-                var moved = MapGeoWriter.TryWriteWithMoves(bytes, map.Meshes, out var mErr);
+                var moved = MapGeoWriter.TryWriteWithMoves(bytes, map.Meshes, out var mErr, gridSelection);
                 if (moved is null) { _log.Error("MapGeo", $"Could not save mesh moves: {mErr}"); return; }
                 bytes = moved;
             }
@@ -11321,7 +11385,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (layered is not null) { appended = layered; reMap = await Task.Run(() => MapGeoDecoder.Decode(appended)); }
                     else _log.Warn("MapGeo", $"Added-mesh layers not applied: {lErr}");
                 }
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection);
             }
 
             // 2b) M105: bucket grids bake per-face visibility masks from the mesh flags, so layer-only
@@ -11336,7 +11400,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if ((hasLayers || hasReshapes || hasFaces || hasGrows) && !hasMoves && added.Count == 0)
             {
                 var reMap2 = await Task.Run(() => MapGeoDecoder.Decode(bytes));
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection);
             }
 
             // 3) Blender-style pending deletion: remove the selected mesh records and (M768) the buffers only
@@ -11347,7 +11411,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError, ExtendedChannelMaterialsFor(entry.Path));
                 if (stripped is null) { _log.Error("MapGeo", $"Could not remove selected meshes: {removeError}"); return; }
                 var remainingMap = await Task.Run(() => MapGeoDecoder.Decode(stripped));
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax());
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection);
             }
 
             // M768: whatever produced them, no save writes buffers no mesh references.
