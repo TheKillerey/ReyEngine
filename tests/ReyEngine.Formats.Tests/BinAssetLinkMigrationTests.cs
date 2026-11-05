@@ -318,6 +318,42 @@ public sealed class BinAssetLinkMigrationTests
         Assert.IsType<BinTreeString>(mine.Objects[H("M")].Properties[H("texture")]);
     }
 
+    [Fact]
+    public void ADragonStyleReferenceWithOneTextureOwnerDoesNotConvertAModEmittersTexture()
+    {
+        // A skin0.bin with no VFX shows "texture" link-only under SkinMeshDataProperties alone. A mod-added
+        // VfxEmitterDefinitionData.texture (a String in the schema) is a class the reference never mentions;
+        // one owner is not evidence for it.
+        var reference = new BinTree(new[]
+        {
+            new BinTreeObject(H("Skin"), H("SkinMeshDataProperties"), new BinTreeProperty[] { new BinTreeWadChunkLink(H("texture"), 1) }),
+        }, Array.Empty<string>());
+        var mine = new BinTree(new[]
+        {
+            new BinTreeObject(H("E"), H("VfxEmitterDefinitionData"), new BinTreeProperty[] { new BinTreeString(H("texture"), TexA) }),
+        }, Array.Empty<string>());
+
+        Assert.Equal(0, BinAssetLinkMigration.AlignWith(mine, reference));
+        Assert.IsType<BinTreeString>(mine.Objects[H("E")].Properties[H("texture")]);
+    }
+
+    [Fact]
+    public void ANameLinkOnlyUnderTwoClassesConvertsForAClassTheReferenceNeverMentions()
+    {
+        var reference = new BinTree(new[]
+        {
+            new BinTreeObject(H("A"), H("ClassA"), new BinTreeProperty[] { new BinTreeWadChunkLink(H("someIcon"), 1) }),
+            new BinTreeObject(H("B"), H("ClassB"), new BinTreeProperty[] { new BinTreeWadChunkLink(H("someIcon"), 2) }),
+        }, Array.Empty<string>());
+        var mine = new BinTree(new[]
+        {
+            new BinTreeObject(H("M"), H("ModOnlyClass"), new BinTreeProperty[] { new BinTreeString(H("someIcon"), TexA) }),
+        }, Array.Empty<string>());
+
+        Assert.Equal(1, BinAssetLinkMigration.AlignWith(mine, reference));
+        Assert.IsType<BinTreeWadChunkLink>(mine.Objects[H("M")].Properties[H("someIcon")]);
+    }
+
     // ---- empty Optionals keep a stale element type ---------------------------------------------------
 
     [Fact]

@@ -40,9 +40,13 @@ namespace ReyEngine.Formats.Meta;
 /// of a class this reference bin happens not to contain at all (a class only used elsewhere, or one the
 /// mod itself added). Per-class calibration alone would then never convert it, which is a real narrowing
 /// versus the old name-only rule for fields like <c>texturePath</c> that are link-only game-wide. When the
-/// owning class never appears anywhere in the reference, this falls back to the name-level verdict — link
-/// under every class that DOES carry that name in the reference — exactly what the pre-per-class code did.
-/// A name that is ambiguous even at that level (like <c>texture</c>) still is not touched.</para>
+/// owning class never appears anywhere in the reference, this falls back to the name-level verdict, but only
+/// for a name that is safe to convert by name: link-only (never a String) in the reference under at least TWO
+/// different owning classes, or one of <c>texturePath</c>, <c>mAnimationFilePath</c>, <c>oldAsset</c>, which are
+/// measured link-only game-wide. One owner proves nothing: a dragon <c>skin0.bin</c> with no VFX shows
+/// <c>texture</c> link-only under <c>SkinMeshDataProperties</c> alone, and a mod-added
+/// <c>VfxEmitterDefinitionData.texture</c> (still a String in the schema) must not be converted on that
+/// evidence. A name ambiguous at any level (like <c>texture</c>) is not touched.</para>
 ///
 /// <para><b>An Optional hides its field from a survey that only looks at the payload.</b>
 /// <c>iconCircle</c>/<c>iconSquare</c> on <c>SkinCharacterDataProperties</c> are <c>Optional&lt;File&gt;</c>;
@@ -82,6 +86,14 @@ public static class BinAssetLinkMigration
         public bool IsEmpty => ScalarFields.Count == 0 && ContainerFields.Count == 0 && NameOnlyFallback.Count == 0;
     }
 
+    /// <summary>Fields measured link-only under every class that carries them on the installed patch
+    /// (texturePath 11,695 links / 0 strings, mAnimationFilePath 8,983 / 0, oldAsset 3,432 / 0). Only these may
+    /// convert by name alone from a single owning class.</summary>
+    private static readonly HashSet<uint> GameWideLinkOnlyNames = new()
+    {
+        HashAlgorithms.Fnv1a("texturePath"), HashAlgorithms.Fnv1a("mAnimationFilePath"), HashAlgorithms.Fnv1a("oldAsset"),
+    };
+
     /// <summary>Surveys <paramref name="reference"/> for every verdict <see cref="Apply"/> needs.</summary>
     public static FieldCalibration LinkOnlyFields(BinTree reference)
     {
@@ -92,7 +104,14 @@ public static class BinAssetLinkMigration
         st.ScalarLink.ExceptWith(st.ScalarString);
         st.ContainerLink.ExceptWith(st.ContainerString);
         st.NameLink.ExceptWith(st.NameString);
-        return new FieldCalibration(st.ScalarLink, st.ContainerLink, st.NameLink, st.ClassesSeen);
+        // Name-only fallback is narrow: one owner of an ambiguous name proves nothing about another class that
+        // reuses it (a skin0.bin with no VFX makes "texture" look link-only). Keep a name only when the reference
+        // shows it link-only under at least two owning classes, or it is measured link-only game-wide.
+        var nameFallback = new HashSet<uint>();
+        foreach (uint name in st.NameLink)
+            if (GameWideLinkOnlyNames.Contains(name) || (st.NameLinkClasses.TryGetValue(name, out var owners) && owners.Count >= 2))
+                nameFallback.Add(name);
+        return new FieldCalibration(st.ScalarLink, st.ContainerLink, nameFallback, st.ClassesSeen);
     }
 
     /// <summary>
@@ -125,6 +144,14 @@ public static class BinAssetLinkMigration
         public readonly HashSet<(uint ClassHash, uint NameHash)> ContainerLink = new();
         public readonly HashSet<(uint ClassHash, uint NameHash)> ContainerString = new();
         public readonly HashSet<uint> NameLink = new();
+        public readonly Dictionary<uint, HashSet<uint>> NameLinkClasses = new();
+        public void NoteLink(uint ownerClass, uint nameHash)
+        {
+            ScalarLink.Add((ownerClass, nameHash));
+            NameLink.Add(nameHash);
+            if (!NameLinkClasses.TryGetValue(nameHash, out var set)) NameLinkClasses[nameHash] = set = new HashSet<uint>();
+            set.Add(ownerClass);
+        }
         public readonly HashSet<uint> NameString = new();
         public readonly HashSet<uint> ClassesSeen = new();
     }
@@ -142,7 +169,7 @@ public static class BinAssetLinkMigration
 
             if (nameHash != 0)
             {
-                if (value is BinTreeWadChunkLink) { st.ScalarLink.Add((ownerClass, nameHash)); st.NameLink.Add(nameHash); }
+                if (value is BinTreeWadChunkLink) st.NoteLink(ownerClass, nameHash);
                 else if (value is BinTreeString) { st.ScalarString.Add((ownerClass, nameHash)); st.NameString.Add(nameHash); }
                 else if (value is BinTreeContainer container)
                 {
@@ -154,7 +181,7 @@ public static class BinAssetLinkMigration
                     // An empty Optional (no value ever set) still declares an element type on the wire;
                     // treat that the same as a set value of that type, or a field that happens to be unset
                     // on every instance in the reference would contribute no evidence either way.
-                    if (empty.ValueType == BinPropertyType.WadChunkLink) { st.ScalarLink.Add((ownerClass, nameHash)); st.NameLink.Add(nameHash); }
+                    if (empty.ValueType == BinPropertyType.WadChunkLink) st.NoteLink(ownerClass, nameHash);
                     else if (empty.ValueType == BinPropertyType.String) { st.ScalarString.Add((ownerClass, nameHash)); st.NameString.Add(nameHash); }
                 }
             }
@@ -202,7 +229,13 @@ public static class BinAssetLinkMigration
             {
                 // No string to rehash - nothing was ever set - but the element type itself is part of the
                 // wire form (M756) and must not stay String once the schema calls for File.
-                props[key] = BinTreeCloner.EmptyOptional(emptyOpt.NameHash, BinPropertyType.WadChunkLink);
+                try { props[key] = BinTreeCloner.EmptyOptional(emptyOpt.NameHash, BinPropertyType.WadChunkLink); }
+                catch (NotSupportedException)
+                {
+                    // LeagueToolkit no longer lets us retype an empty option (private field renamed). Leave this one
+                    // untouched rather than abort the whole merge/patch update; it was never carrying a value.
+                    continue;
+                }
                 converted++;
                 continue;
             }
