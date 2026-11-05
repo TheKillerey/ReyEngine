@@ -219,6 +219,9 @@ public static class VfxSystemResolver
     // leave the parked table and are declared here for the preview-coverage reflection.
     private static readonly uint F_translationOverride = HashAlgorithms.Fnv1a("translationOverride");
     private static readonly uint F_scaleOverride       = HashAlgorithms.Fnv1a("scaleOverride");
+    // M852: bindWeight makes live particles follow their emitter (VfxParticleSimulator.SetWorldTransform), so it
+    // leaves the parked table and is declared here for the preview-coverage reflection.
+    private static readonly uint F_bindWeight          = HashAlgorithms.Fnv1a("bindWeight");
     private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
     // M185 (2.15) the Linger curve set. Class VfxLingerDefinitionData = 0x9b19f2b5.
     private static readonly uint F_linger              = HashAlgorithms.Fnv1a("Linger");
@@ -1148,7 +1151,8 @@ public static class VfxSystemResolver
             UseNavmeshMask               = GetBoolOrNull(p, PF("useNavmeshMask")),
             BirthRotationalAcceleration  = ReadCurve3(p, PF("birthRotationalAcceleration"))?.Constant,
 
-            BindWeight                   = ReadCurveF(p, PF("bindWeight"))?.Constant,
+            BindWeightCurve              = ReadCurveF(p, F_bindWeight),
+            BindWeight                   = ReadCurveF(p, F_bindWeight)?.Constant,
             RateByVelocityFunction       = ReadValueVec2(Get(p, PF("rateByVelocityFunction"))),
             MaximumRateByVelocity        = GetOptionalF32(p, PF("MaximumRateByVelocity")),
             ParticlesShareRandomValue    = GetBoolOrNull(p, PF("ParticlesShareRandomValue")),

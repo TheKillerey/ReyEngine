@@ -383,11 +383,45 @@ public sealed class VfxParticleSimulator
     public void SetWorldTransform(Matrix4x4 worldTransform)
     {
         var inverse = InverseOf(worldTransform);
-        foreach (var s in _emitters) PlaceEmitter(s, worldTransform, inverse);
+        foreach (var s in _emitters)
+        {
+            var previous = s.World;
+            PlaceEmitter(s, worldTransform, inverse);
+            FollowEmitter(s, previous);
+        }
         // M183: the beam endpoints hang off BasePos and the placement basis, both of which just moved -
         // M116 missiles re-anchor through here every frame, so a beam on a travelling system has to
         // follow rather than stay where it was first resolved.
         ResolveBeams();
+    }
+
+    /// <summary>M852: bindWeight. A live particle of an emitter that authors it moves with the emitter's frame by that
+    /// fraction of the frame's change (translation and rotation about the emitter origin; the matrix delta
+    /// previous^-1 * current). 1 = fully bound (a missile's body rides its emitter), 0 or absent = world space (the
+    /// smoke it leaves behind). The weight is a ValueFloat sampled over the particle's normalised age, like the
+    /// other over-life curves; its per-particle probability table is not applied. Velocity is left alone: the
+    /// particle keeps its own motion relative to the emitter, which a bound particle then adds to the emitter's.</summary>
+    private static void FollowEmitter(EmitterState s, in Matrix4x4 previous)
+    {
+        var extras = s.Def.Extras;
+        if (extras is null || s.Particles.Count == 0) return;
+        var curve = extras.BindWeightCurve ?? (extras.BindWeight is { } w ? VfxCurveF.Const(w) : (VfxCurveF?)null);
+        if (curve is not { } weights) return;
+        if (previous == s.World) return;
+        if (!Matrix4x4.Invert(previous, out var previousInverse)) return;
+        var delta = previousInverse * s.World;
+        for (int i = 0; i < s.Particles.Count; i++)
+        {
+            var p = s.Particles[i];
+            float t = float.IsPositiveInfinity(p.Life) || p.Life <= 0f ? 0f : Math.Clamp(p.Age / p.Life, 0f, 1f);
+            float weight = Math.Clamp(weights.Sample(t), 0f, 1f);
+            if (weight <= 0f) continue;
+            p.Pos = Vector3.Lerp(p.Pos, Vector3.Transform(p.Pos, delta), weight);
+            if (p.History is { } hist)
+                for (int h = 0; h < p.HistoryCount; h++)
+                    hist[h] = Vector3.Lerp(hist[h], Vector3.Transform(hist[h], delta), weight);
+            s.Particles[i] = p;
+        }
     }
 
     public void Reset()

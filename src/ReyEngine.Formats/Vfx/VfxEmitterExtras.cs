@@ -175,6 +175,9 @@ public sealed record VfxEmitterExtras
     /// <summary>699,969 - the most frequent unread field in the schema. The constant of a ValueFloat curve.
     /// Named as though it weights how strongly a particle follows its bound bone.</summary>
     public float? BindWeight { get; init; }
+    /// <summary>M852: the whole bindWeight ValueFloat. 0..1 over the particle's normalised age: 1 = a live particle
+    /// follows its emitter completely, 0 = it stays in the world. Null = not authored (= 0).</summary>
+    public VfxCurveF? BindWeightCurve { get; init; }
     /// <summary>15,504. The constant of a ValueVector2 curve.</summary>
     public Vector2? RateByVelocityFunction { get; init; }
     /// <summary>1,225.</summary>
@@ -255,7 +258,8 @@ public static class VfxParkedEmitterFields
         // M795: translationOverride and scaleOverride are gone from here - they place and size the emitter.
         "isFollowingTerrain", "useNavmeshMask",
         "birthRotationalAcceleration",
-        "bindWeight", "rateByVelocityFunction", "MaximumRateByVelocity", "ParticlesShareRandomValue",
+        // M852: bindWeight is gone from here - it moves live particles with their emitter.
+        "rateByVelocityFunction", "MaximumRateByVelocity", "ParticlesShareRandomValue",
         "directionVelocityScale", "directionVelocityMinScale",
         // M754: emissionMeshName and emissionMeshScale are gone from here - particles are born on the mesh.
         // The normal flag stays: it is read and deliberately not applied (see VfxEmissionSurface).
