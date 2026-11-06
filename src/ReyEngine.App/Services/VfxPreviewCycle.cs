@@ -61,6 +61,10 @@ public sealed class VfxPreviewCycle
     /// <c>LiveParticleCount</c> are all read from this list, never from <paramref name="allItems"/> -
     /// matching ViewportControl's own split between <c>_particleSimCache</c> (all) and <c>_particleSims</c>
     /// (active).</param>
+    /// <summary>M854: called whenever the cycle restarts the parents (replay or auto-stop), so a host that owns child
+    /// systems can retire them - they belong to the run that just ended, as the GL viewport clears its own.</summary>
+    public Action? Restarted { get; set; }
+
     public void Tick(float dt, VfxPreviewRig? rig, bool stopped, bool autoStop,
         IReadOnlyList<(VfxPlaybackItem Item, VfxParticleSimulator Sim)> allItems,
         IReadOnlyList<(VfxPlaybackItem Item, VfxParticleSimulator Sim)> activeItems)
@@ -89,6 +93,7 @@ public sealed class VfxPreviewCycle
             if (r.Replay && _rigElapsed >= r.RunLength(span))
             {
                 foreach (var (_, sim) in activeItems) sim.Reset();
+                Restarted?.Invoke();
                 _rigStopped.Clear();
                 _rigElapsed = 0f;
                 _autoStopElapsed = 0f;
@@ -118,6 +123,7 @@ public sealed class VfxPreviewCycle
             else if (activeItems.All(static a => a.Sim.LiveParticleCount == 0))
             {
                 foreach (var (_, sim) in activeItems) sim.Reset();
+                Restarted?.Invoke();
                 _autoStopElapsed = 0f;
             }
         }

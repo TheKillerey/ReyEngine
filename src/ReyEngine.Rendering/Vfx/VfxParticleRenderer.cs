@@ -1494,7 +1494,7 @@ public sealed class VfxParticleRenderer
     /// <c>mSmoothingMode</c> 1 walks newest to oldest and 2 oldest to newest, so U opens at zero on that end;
     /// either box-filters the interior points over <see cref="TrailSmoothingReach"/> particles each side and
     /// mitres each joint to the bisector of its two sides; 0 draws the raw points. <c>mCutoff</c> ends the walk
-    /// once that length has been covered (zero or less: the whole strand). U is the arc length walked over
+    /// once that length has been covered (EffectiveCutoff: junk such as -1 or 2^36 falls back to 1,000). U is the arc length walked over
     /// <c>mBirthTilingSize.x</c> (the default trail mode - the "wake" mode that runs U on the emitter's odometer
     /// is not implemented). A camera trail's sides lie across the view, an arbitrary trail's across the
     /// placement's up axis.</para></summary>
@@ -1509,7 +1509,7 @@ public sealed class VfxParticleRenderer
         int start = backToFront ? 0 : n - 1;
         int step = backToFront ? 1 : -1;
         float tiling = trail.EffectiveTiling;
-        float cutoff = trail.Cutoff > 0f ? trail.Cutoff : float.PositiveInfinity;
+        float cutoff = trail.EffectiveCutoff;
 
         float walked = 0f;
         bool haveLast = false;

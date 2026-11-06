@@ -782,11 +782,11 @@ public sealed record VfxTrailDefinition(
     /// maximum observed is 68,719,476,736 (2^36). <see cref="EffectiveCutoff"/> is what callers should
     /// use.</summary>
     float Cutoff,
-    /// <summary>mSmoothingMode, {1, 2}. Meaning UNKNOWN - both values occur (12,183 samples) and nothing
-    /// in the data distinguishes them. Parsed and carried so the editor can show it; the geometry builder
-    /// does not branch on it, which is the honest thing to do with an unresolved enum.</summary>
+    /// <summary>mSmoothingMode, {1, 2} in the data (0 = off). M853, from LTK Manager's engine reading: 1 walks the strand
+    /// newest to oldest and 2 oldest to newest, so U opens at zero on that end and mCutoff truncates from it; either
+    /// box-filters the points and mitres the joints. Applied by VfxParticleRenderer.BuildTrailStrand.</summary>
     int SmoothingMode,
-    /// <summary>mMaxAddedPerFrame - how many ribbon points may be appended per frame. Median 50.</summary>
+    /// <summary>mMaxAddedPerFrame - the most particles the trail emitter spawns in one step (M853); 0 = no cap. Median 50.</summary>
     int MaxAddedPerFrame)
 {
     /// <summary>The ribbon length to actually use. Rejects the -1 and 2^36 outliers and falls back to the

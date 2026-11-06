@@ -149,9 +149,30 @@ public sealed class VfxChildSystemTests
         // a child is retired on a timer and its emitter states leave the shared slices
         for (int i = 0; i < (int)(VfxPlaybackSim.ChildSimMaxAge * 30f) + 15; i++) driver.Tick(1f / 30f, mirrored, mirrored * proj, eye, 950f);
         Assert.True(driver.ChildSystems <= VfxPlaybackSim.MaxLiveChildSims);
+        // ... and a child of the SAME definition that spawns after that retirement still draws (the parent's burst loops):
+        // its billboard slice must not have died with the first child
+        for (int i = 0; i < 40; i++) driver.Tick(1f / 30f, mirrored, mirrored * proj, eye, 950f);
+        Assert.True(driver.ChildSystems >= 1, "no child after the first one was retired");
+        Assert.True(driver.LiveParticles >= 2, $"a later child drew nothing ({driver.LiveParticles} live)");
         driver.SetPlayback(null);
         driver.Tick(0f, mirrored, mirrored * proj, eye, 950f);
         Assert.Equal(0, driver.ChildSystems);
+    }
+
+    [Fact]
+    public void TheCycleToldAboutItsRestartLetsTheHostRetireItsChildren()
+    {
+        var sim = new VfxParticleSimulator(1);
+        var def = System(1, "p", Emitter("e", single: true));
+        sim.SetSystem(def, Matrix4x4.Identity);
+        var item = Plain(def);
+        var pairs = new[] { (item, sim) };
+        int restarts = 0;
+        var cycle = new VfxPreviewCycle { Restarted = () => restarts++ };
+        sim.Stop();   // stopped with nothing alive: the auto-stop cycle restarts it
+        sim.Reset(); sim.Stop();
+        cycle.Tick(0.1f, null, stopped: false, autoStop: true, pairs, pairs);
+        Assert.Equal(1, restarts);
     }
 
     private static HashDatabase? Database()

@@ -202,6 +202,8 @@ public sealed class D3D11MapParticles
         public required VfxParticleSimulator Sim { get; init; }
         public float Age;
         public readonly List<PreviewMaterial> Materials = new();
+        /// <summary>Billboard materials built at spawn: they belong to a shared slice that outlives this child.</summary>
+        public readonly HashSet<PreviewMaterial> QuadMaterials = new(ReferenceEqualityComparer.Instance);
     }
     private readonly List<ChildSim> _children = new();
     private readonly HashSet<VfxParticleSimulator> _childSet = new(ReferenceEqualityComparer.Instance);
@@ -219,6 +221,7 @@ public sealed class D3D11MapParticles
         _renderer = renderer;
         _cache = cache;
         _maxQuads = Math.Max(1, maxQuads);
+        _cycle.Restarted = RetireAllChildren;   // M854
     }
 
     // ---------------------------------------------------------------- state the UI reads
@@ -275,6 +278,12 @@ public sealed class D3D11MapParticles
     // stopped on its own. All three default to "off", which is what makes this optional: a caller that
     // never sets them - the map viewport, the character window - gets EXACTLY today's Tick.
     private readonly VfxPreviewCycle _cycle = new();
+
+    /// <summary>M854: the cycle restarted the parents; the children belong to the run that ended.</summary>
+    private void RetireAllChildren()
+    {
+        for (int i = _children.Count - 1; i >= 0; i--) { RetireChild(_children[i]); _children.RemoveAt(i); }
+    }
 
     /// <summary>Every (item, simulator) pair this playback holds, rebuilt once per <see cref="Rebuild"/> -
     /// the rig re-anchors ALL of them regardless of the camera gate, matching ViewportControl's own loop
@@ -967,7 +976,7 @@ public sealed class D3D11MapParticles
         }
 
         Register(mat, def);
-        owner?.Materials.Add(mat);
+        owner?.QuadMaterials.Add(mat);   // the slice is shared and stays; a later child of the same definition joins it
         var slice = new Slice { Material = mat, Def = def };
         if (!template) slice.Sources.Add((sim, es));
         _byEmitter[def] = slice;
@@ -1033,7 +1042,7 @@ public sealed class D3D11MapParticles
             int failed = 0;
             foreach (var es in csim.Emitters)
                 BuildEmitter(childItem, csim, es, tocs, sb, ref failed, template: false, child);
-            foreach (var pending in _pending) child.Materials.Add(pending.Mat);   // the mesh and ribbon materials built just now
+            foreach (var pending in _pending) if (!child.QuadMaterials.Contains(pending.Mat)) child.Materials.Add(pending.Mat);   // the mesh and ribbon materials built just now
             FlushPending();
             if (_slices.Count != slicesBefore) RefreshSliceTables();
 
