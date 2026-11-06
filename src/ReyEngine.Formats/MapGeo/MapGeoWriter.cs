@@ -17,13 +17,19 @@ public static class MapGeoWriter
     /// <summary>Patch the edited meshes' transforms into <paramref name="originalMapgeo"/> and return new bytes.</summary>
     /// <param name="gridSelection">M848: which meshes go into the regenerated bucket grids
     /// (<see cref="MapBucketGridMeshSelection"/>). Null keeps every mesh.</param>
+    /// <param name="extendedChannelMaterials">M859: the materials that select the 48-byte channel block
+    /// (<see cref="ExtendedChannelRule.From"/>). LeagueToolkit cannot read such a file, so the moves were refused
+    /// on every Mantis map. The file is read through a stripped copy and the extended entries are put back
+    /// afterwards, per mesh, exactly as they were. Null/empty keeps the old path byte for byte.</param>
     public static byte[] WriteWithMoves(byte[] originalMapgeo, IReadOnlyList<MapGeoMesh> meshes,
-        MapBucketGridMeshSelection? gridSelection = null)
+        MapBucketGridMeshSelection? gridSelection = null, IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         var moves = meshes.Where(m => m.IsMoved).ToList();
         if (moves.Count == 0) return originalMapgeo;
 
-        using var ms = new MemoryStream(originalMapgeo, writable: false);
+        // M859: the [bbox][transform] signatures are identical in the stripped and the real file, so they are
+        // READ from the stripped copy (which LeagueToolkit can parse) and PATCHED into the real one.
+        using var ms = new MemoryStream(ExtendedChannelRule.WithoutExtendedEntries(originalMapgeo, extendedChannelMaterials), writable: false);
         var env = new EnvironmentAsset(ms);
         var envMeshes = env.Meshes;
 
@@ -65,8 +71,9 @@ public static class MapGeoWriter
                 WriteMatrix(result, off + 24, newTransform);
             }
         }
-        MapGeoAsset movedAsset = MapGeoDecoder.Decode(result);
-        return WriteWithRegeneratedBucketGrids(result, movedAsset, meshSelection: gridSelection);
+        MapGeoAsset movedAsset = MapGeoDecoder.Decode(result, extendedChannelMaterials);
+        return WriteWithRegeneratedBucketGrids(result, movedAsset, meshSelection: gridSelection,
+            extendedChannelMaterials: extendedChannelMaterials);
     }
 
     /// <summary>
@@ -83,10 +90,21 @@ public static class MapGeoWriter
         float heightMin = MapBucketGridBuilder.HeightRangeMin,
         float heightMax = MapBucketGridBuilder.HeightRangeMax,
         // M848: which meshes go in (MapBucketGridMeshSelection). Null keeps every mesh.
-        MapBucketGridMeshSelection? meshSelection = null)
+        MapBucketGridMeshSelection? meshSelection = null,
+        // M859: see WriteWithMoves - the file is rebuilt through its stripped form and the extended entries restored.
+        IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         ArgumentNullException.ThrowIfNull(originalMapgeo);
         ArgumentNullException.ThrowIfNull(asset);
+        if (extendedChannelMaterials is { Count: > 0 })
+        {
+            byte[] stripped = ExtendedChannelRule.WithoutExtendedEntries(originalMapgeo, extendedChannelMaterials);
+            if (!ReferenceEquals(stripped, originalMapgeo))
+            {
+                byte[] rebuilt = WriteWithRegeneratedBucketGrids(stripped, asset, targetBucketSize, heightMin, heightMax, meshSelection);
+                return ExtendedChannelRule.WithExtendedEntries(rebuilt, originalMapgeo, extendedChannelMaterials);
+            }
+        }
         int version = originalMapgeo.Length >= 8
             ? BinaryPrimitives.ReadInt32LittleEndian(originalMapgeo.AsSpan(4, 4))
             : 0;
@@ -154,12 +172,13 @@ public static class MapGeoWriter
 
     /// <summary>Patch the edits AND validate the result still reopens. Returns null + a reason on failure.</summary>
     public static byte[]? TryWriteWithMoves(byte[] originalMapgeo, IReadOnlyList<MapGeoMesh> meshes, out string? error,
-        MapBucketGridMeshSelection? gridSelection = null)
+        MapBucketGridMeshSelection? gridSelection = null, IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         try
         {
-            var bytes = WriteWithMoves(originalMapgeo, meshes, gridSelection);
-            using var verify = new MemoryStream(bytes, writable: false);
+            var bytes = WriteWithMoves(originalMapgeo, meshes, gridSelection, extendedChannelMaterials);
+            // M859: the verify read goes through the stripped form too - LeagueToolkit cannot open the real one
+            using var verify = new MemoryStream(ExtendedChannelRule.WithoutExtendedEntries(bytes, extendedChannelMaterials), writable: false);
             _ = new EnvironmentAsset(verify); // throws if the patched mapgeo is unreadable
             error = null;
             return bytes;
