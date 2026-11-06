@@ -16,8 +16,6 @@
             BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,0,1" Padding="8,5">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-          <ToggleButton Classes="vp" Content="🗺 Map" IsChecked="{Binding BackgroundVisible}"
-                        IsVisible="{Binding HasBackground}" ToolTip.Tip="{Binding BackgroundMapName, StringFormat='Backdrop: {0}'}" />
           <ToggleButton Classes="vp" Content="🎯 Dummy" IsChecked="{Binding TargetDummyEnabled}"
                         ToolTip.Tip="Target dummy — a stand-in unit so targeted spells (Kayn R…) have somewhere to land. Drag its gizmo arrows to move it." />
           <ToggleButton Classes="vp" Content="▦ Grid" IsChecked="{Binding ShowGrid}" ToolTip.Tip="Show the reference grid" />
@@ -493,80 +491,22 @@
             <TabItem.Header><TextBlock Text="Play" FontSize="12" /></TabItem.Header>
             <ScrollViewer>
               <StackPanel Margin="10" Spacing="8">
-                  <!-- M613: control mode - right-click to move, right-click the dummy to attack, QWER to cast. -->
+                  <!-- M868: the environment. Summoner's Rift (Map11) loads by itself when a champion is shown; there is no
+                       map picker and no manual play. The simulation moves and casts; this card only says where the
+                       character stands and puts the scene back. -->
                   <Border Classes="card" IsVisible="{Binding HasActions}">
-                    <StackPanel Spacing="5">
-                      <TextBlock Classes="cardTitle" Text="CONTROL" />
-                      <CheckBox Content="Drive the character" IsChecked="{Binding ControlMode}" FontSize="11" />
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="*,Auto,Auto">
+                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="ENVIRONMENT" VerticalAlignment="Center" />
+                        <ToggleButton Grid.Column="1" Classes="vp" Content="Follow" FontSize="10" Padding="6,1" Margin="0,0,6,0"
+                                      IsChecked="{Binding ArenaFollowCamera}" ToolTip.Tip="Keep the camera on the champion and the dummy" />
+                        <Button Grid.Column="2" Classes="tool" Content="Reset scene" FontSize="10" Padding="6,1"
+                                Command="{Binding ResetSceneCommand}"
+                                ToolTip.Tip="Champion and dummy back on the stage, playback and effects stopped, camera reframed" />
+                      </Grid>
+                      <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
                       <TextBlock Text="{Binding ControlStatus}" FontSize="9" TextWrapping="Wrap"
                                  Foreground="{DynamicResource ReyAccentBrush}" />
-                      <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="3"
-                            IsVisible="{Binding ControlMode}">
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Speed" FontSize="10" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource ReyTextDimBrush}" />
-                        <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding MoveSpeed}" FontSize="10"
-                                       Minimum="10" Maximum="2000" Increment="10" FormatString="0" />
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Range" FontSize="10" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource ReyTextDimBrush}" />
-                        <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding AttackRange}" FontSize="10"
-                                       Minimum="25" Maximum="2000" Increment="25" FormatString="0" />
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Att/s" FontSize="10" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource ReyTextDimBrush}" />
-                        <NumericUpDown Grid.Row="2" Grid.Column="1" Value="{Binding AttacksPerSecond}" FontSize="10"
-                                       Minimum="0.1" Maximum="5" Increment="0.05" FormatString="0.00" />
-                      </Grid>
-                      <Button Classes="tool" Content="Reset position (S)" Command="{Binding ResetCharacterCommand}"
-                              IsVisible="{Binding ControlMode}" />
-                      <TextBlock IsVisible="{Binding ControlMode}" FontSize="9" TextWrapping="Wrap"
-                                 Foreground="{DynamicResource ReyTextDimBrush}"
-                                 Text="Speed, range and attack speed are per-champion values the editor does not read - these are editable defaults, not this champion's real numbers." />
-                    </StackPanel>
-                  </Border>
-                  <!-- M636: the ARENA - a shipped map as a floor to play on, with its navgrid driving movement -->
-                  <Border Classes="card" IsVisible="{Binding HasArenaMaps}">
-                    <StackPanel Spacing="6">
-                      <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="ARENA" VerticalAlignment="Center" />
-                        <ToggleButton Grid.Column="1" Classes="vp" Content="Follow" FontSize="10" Padding="6,1"
-                                      IsChecked="{Binding ArenaFollowCamera}" ToolTip.Tip="Keep the camera on the character while it moves" />
-                      </Grid>
-                      <TextBlock Text="Play the character on a shipped map. Movement follows the map's navigation grid."
-                                 Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <ComboBox Width="120" ItemsSource="{Binding ArenaMaps}" SelectedItem="{Binding SelectedArenaMap}" FontSize="11" />
-                        <Button Classes="tool" Content="Load" Command="{Binding LoadArenaCommand}" IsEnabled="{Binding !ArenaLoading}" />
-                        <Button Classes="tool" Content="Unload" Command="{Binding UnloadArenaCommand}" IsVisible="{Binding HasArena}" />
-                      </StackPanel>
-                      <TextBlock Text="{Binding ArenaStatus}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
-                      <StackPanel DataContext="{Binding ArenaViewport}" Spacing="4">
-                        <CheckBox Content="Props" IsChecked="{Binding ShowPropMeshes}" />
-                        <CheckBox Content="Prop animations" IsChecked="{Binding PlayPropAnimations}" />
-                        <CheckBox Content="Map particles" IsChecked="{Binding PlayAllParticles}" />
-                        <CheckBox Content="Fog" IsChecked="{Binding ShowFog}" />
-                        <CheckBox Content="Render-region meshes" IsChecked="{Binding RenderRegionsEnabled}" />
-                        <ComboBox ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}" />
-                        <TextBlock Classes="cardTitle" Text="VISIBILITY LAYERS" IsVisible="{Binding HasVisibilityAxes}" />
-                        <ItemsControl ItemsSource="{Binding VisibilityAxes}">
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                              <StackPanel>
-                                <TextBlock Text="{Binding Name}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
-                                <ComboBox ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}" FontSize="10" />
-                              </StackPanel>
-                            </DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <ItemsControl ItemsSource="{Binding MapEvents}">
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate><CheckBox Content="{Binding Label}" IsChecked="{Binding IsOn}" FontSize="10" /></DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <ItemsControl ItemsSource="{Binding BoardStageSelectors}">
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate><ComboBox ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}" FontSize="10" /></DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                      </StackPanel>
                       <TextBlock Text="{Binding StatsSummary, StringFormat='Champion: {0}'}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" TextWrapping="Wrap" />
                       <!-- M639: pin a slot's cast-range ring on the ground; a cast shows its own ring briefly anyway -->
                       <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
@@ -588,7 +528,7 @@
                       <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Classes="cardTitle" Grid.Column="0" Text="TARGET DUMMY" VerticalAlignment="Center" />
                         <Button Grid.Column="1" Classes="tool" Content="Reset" FontSize="10" Padding="6,1"
-                                Command="{Binding ResetDummyCommand}" ToolTip.Tip="Back to 350 units in front" />
+                                Command="{Binding ResetDummyCommand}" ToolTip.Tip="Back to its stage position, 500 units in front" />
                       </Grid>
                       <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" >
                         <TextBlock Grid.Column="0" Text="X" FontSize="10" VerticalAlignment="Center" Margin="0,0,3,0" Foreground="{DynamicResource ReyAxisXBrush}" />
@@ -648,77 +588,6 @@
                                 ItemsSource="{Binding SkyboxOptions}" SelectedIndex="{Binding SelectedSkyboxIndex}" />
                       <TextBlock Text="☁ cubemap · ⛰ authored dome · 🖼 sky texture. 'Custom image…' loads your own (png/jpg/tex/dds)."
                                  FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
-                    </StackPanel>
-                  </Border>
-                  <!-- M89: NVR map backdrop tuning — move the map, boost its lights, tune baked ground shading -->
-                  <Border Classes="card" IsVisible="{Binding HasBackground}">
-                    <StackPanel Spacing="6">
-                      <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Classes="cardTitle" Grid.Column="0" Text="MAP BACKDROP" VerticalAlignment="Center" />
-                        <ToggleButton Grid.Column="1" Classes="vp" Content="Show" FontSize="10" Padding="6,1"
-                                      IsChecked="{Binding BackgroundVisible}" />
-                      </Grid>
-                      <TextBlock Text="{Binding BackgroundMapName, StringFormat='Map: {0}'}"
-                                 Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" />
-
-                      <TextBlock Text="Move map (world units)" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" Margin="0,2,0,0" />
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Width="12" />
-                        <NumericUpDown Width="182" Value="{Binding BackgroundOffsetX}" Increment="50" FormatString="0" FontSize="11" />
-                      </StackPanel>
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Width="12" />
-                        <NumericUpDown Width="182" Value="{Binding BackgroundOffsetY}" Increment="20" FormatString="0" FontSize="11" />
-                      </StackPanel>
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Width="12" />
-                        <NumericUpDown Width="182" Value="{Binding BackgroundOffsetZ}" Increment="50" FormatString="0" FontSize="11" />
-                      </StackPanel>
-                      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
-                        <TextBlock Text="Rotate" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                        <Slider Minimum="0" Maximum="360" Value="{Binding BackgroundRotation, Mode=TwoWay}" Width="120" />
-                        <TextBlock Text="{Binding BackgroundRotation, StringFormat='{}{0:0}°'}" FontSize="11" VerticalAlignment="Center" />
-                      </StackPanel>
-                      <Button Classes="tool" Content="Reset position" Command="{Binding ResetBackgroundOffsetCommand}" HorizontalAlignment="Stretch"
-                              ToolTip.Tip="Back to this map's own default placement. Dominion has a hand-tuned hero-shot framing; every other map sits where the loader anchored its spawn." />
-
-                      <!-- M725: the D3D11 host has no NVR material model, so it draws the backdrop as
-                           diffuse-only geometry. It used to draw nothing at all while these controls stayed
-                           live, which reads as the backdrop being broken rather than being simpler. -->
-                      <TextBlock Text="Direct3D 11 draws the backdrop diffuse-only — no baked light, blend layers or Light.dat."
-                                 IsVisible="{Binding BackdropIsDiffuseOnly}" TextWrapping="Wrap"
-                                 Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" Margin="0,2,0,0" />
-
-                      <!-- M729: the level's authored sun and ambient, and where they came from. The packs ship without
-                           terrain.inibin, so for Dominion this names ReyEngine's built-in copy of the client's file. -->
-                      <TextBlock Text="{Binding BackgroundSunSource}" IsVisible="{Binding HasBackgroundSun}" TextWrapping="Wrap"
-                                 Foreground="{DynamicResource ReyAccent2Brush}" FontSize="10" Margin="0,4,0,0" />
-                      <CheckBox Content="Map's sun / ambient" IsChecked="{Binding BackgroundUseMapSun}" FontSize="11"
-                                IsVisible="{Binding HasBackgroundSun}"
-                                ToolTip.Tip="Light the map the way the game's own environment shader does: its authored sun direction and colour (doubled, as LIT_VS does), its ambient, and the baked vertex light below. Off falls back to a neutral reference sun." />
-
-                      <!-- M725: the enable tick the card never had. M729: both maps bake these pools - Twisted Treeline
-                           into its composite atlas, Dominion into its vertex colours - so it starts OFF on both. -->
-                      <CheckBox Content="Light.dat point lights" IsChecked="{Binding BackgroundLightsEnabled}" FontSize="11"
-                                Margin="0,4,0,0"
-                                ToolTip.Tip="Evaluate the map's Light.dat torches and braziers at runtime. Off by default: the game bakes these pools into the map (Twisted Treeline's composite atlas, Dominion's vertex colours), so turning this on counts every light twice. Every light draws when it is on." />
-                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding BackgroundLightsEnabled}">
-                        <TextBlock Text="Light" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                        <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundLightIntensity, Mode=TwoWay}" Width="120" />
-                        <TextBlock Text="{Binding BackgroundLightIntensity, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
-                      </StackPanel>
-                      <StackPanel Orientation="Horizontal" Spacing="6"
-                                  ToolTip.Tip="Scales the sun and the ambient together. 0.55 is the map's own level.">
-                        <TextBlock Text="Bright" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                        <Slider Minimum="0" Maximum="2" Value="{Binding BackgroundBrightness, Mode=TwoWay}" Width="120" />
-                        <TextBlock Text="{Binding BackgroundBrightness, StringFormat='{}{0:0.00}'}" FontSize="11" VerticalAlignment="Center" />
-                      </StackPanel>
-                      <StackPanel Orientation="Horizontal" Spacing="6"
-                                  ToolTip.Tip="Baked vertex light - the torch pools the map bakes into its vertex colours. The game multiplies them by 4.">
-                        <TextBlock Text="Ground" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" Width="42" />
-                        <Slider Minimum="0" Maximum="8" Value="{Binding BackgroundVertexLight, Mode=TwoWay}" Width="120" />
-                        <TextBlock Text="{Binding BackgroundVertexLight, StringFormat='{}{0:0.0}'}" FontSize="11" VerticalAlignment="Center" />
-                      </StackPanel>
                     </StackPanel>
                   </Border>
                   <!-- M148: legacy (NVR) map render settings — only shown when the subject IS a map. Old levels

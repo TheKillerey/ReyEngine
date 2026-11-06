@@ -67,10 +67,10 @@ public sealed partial class FirstRunViewModel : ObservableObject
         MapOk = dominion || treeline;
         MapStatus = (dominion, treeline) switch
         {
-            (true, true) => "✔ Dominion and Twisted Treeline installed — both available as Model Preview backdrops.",
-            (true, false) => "✔ Dominion installed. Twisted Treeline is also available (Settings ▸ Maps).",
-            (false, true) => "✔ Twisted Treeline installed. Dominion is also available (Settings ▸ Maps).",
-            _ => "Optional: a classic map as a 3D backdrop behind previewed champions — Dominion or Twisted Treeline (~66 MB each).",
+            (true, true) => "✔ Dominion and Twisted Treeline installed — both available in File > Open Legacy Map.",
+            (true, false) => "✔ Dominion installed. Twisted Treeline is also available (Settings ▸ Map packs).",
+            (false, true) => "✔ Twisted Treeline installed. Dominion is also available (Settings ▸ Map packs).",
+            _ => "Optional: a classic map to view on its own with Open Legacy Map — Dominion or Twisted Treeline (~66 MB each). The Character window needs none of this; it stands on Summoner's Rift from your game install.",
         };
     }
 
@@ -110,7 +110,7 @@ public sealed partial class FirstRunViewModel : ObservableObject
     }
 
     [RelayCommand]
-    /// <summary>M725: either preview environment. <paramref name="pack"/> is "Map10" for Twisted Treeline
+    /// <summary>M725: either legacy map pack (M868: for Open Legacy Map, not a preview backdrop). <paramref name="pack"/> is "Map10" for Twisted Treeline
     /// and anything else for Dominion, which keeps the old no-argument binding working as Dominion.</summary>
     private async Task DownloadMap(string? pack)
     {
@@ -126,11 +126,7 @@ public sealed partial class FirstRunViewModel : ObservableObject
             await SetupService.DownloadAndExtractAsync(url, dir, progress);
             if (SetupService.HasNvr(dir))
             {
-                _main.Settings.PreviewBackgroundMapFolder = dir;
-                _main.Settings.PreviewBackgroundEnabled = true;
-                _main.Settings.Save();
-                // M725: the loaded backdrop is cached by folder; a fresh download must not serve a stale one
-                _main.InvalidatePreviewBackground();
+                // M868: nothing to configure - the pack is not a preview backdrop any more; Open Legacy Map finds it.
                 RefreshStatus();
             }
             else MapStatus = "Extracted, but Scene\\room.nvr was not found in the package.";

@@ -60,9 +60,9 @@ public sealed partial class ThemeItemViewModel : ObservableObject
     [ObservableProperty] private bool _isSelected;
 }
 
-/// <summary>M142.8: one downloadable legacy (NVR) map pack in Settings ▸ Preview. Each pack can be
-/// downloaded on demand and picked as the model-preview backdrop, so the user chooses which classic map
-/// their skins are previewed in (Crystal Scar, Twisted Treeline, …).</summary>
+/// <summary>M142.8: one downloadable legacy (NVR) map pack in Settings ▸ Map packs. M868: the packs are no
+/// longer a Character-window backdrop (that window's environment is Map11); they are downloaded so Open
+/// Legacy Map can view them on their own.</summary>
 public sealed partial class MapPackRowViewModel : ObservableObject
 {
     public required string Name { get; init; }
@@ -70,15 +70,13 @@ public sealed partial class MapPackRowViewModel : ObservableObject
     public required string Url { get; init; }
 
     [ObservableProperty] private bool _installed;
-    [ObservableProperty] private bool _isSelected;   // currently the preview backdrop
     [ObservableProperty] private string _status = "";
     [ObservableProperty] private bool _busy;
 
-    /// <summary>Host hooks (wired by SettingsViewModel): use this pack as the backdrop / global busy gate.</summary>
-    public Action<MapPackRowViewModel>? UseAsBackdrop;
+    /// <summary>Host hook (wired by SettingsViewModel): global busy gate.</summary>
     public Func<bool>? AnyBusy;
 
-    public string ActionLabel => Installed ? "Use as backdrop" : "⬇ Download";
+    public string ActionLabel => Installed ? "Installed" : "⬇ Download";
     partial void OnInstalledChanged(bool value) => OnPropertyChanged(nameof(ActionLabel));
 
     [RelayCommand]
@@ -92,19 +90,15 @@ public sealed partial class MapPackRowViewModel : ObservableObject
                 Busy = true;
                 var progress = new Progress<string>(s => Status = s);
                 await SetupService.DownloadAndExtractAsync(Url, InstallDir, progress);
-                // M725: the download completing is not the same as the pack being usable. This used to set
-                // Installed unconditionally, so a zip that extracted to the wrong shape left the row badged
-                // "Use as backdrop" while the backdrop silently never appeared - and the only symptom was
-                // an empty viewport. Ask the same question the installed check asks.
+                // M725: the download completing is not the same as the pack being usable. Ask the same
+                // question the installed check asks.
                 Installed = SetupService.HasNvr(InstallDir);
-                if (!Installed)
-                {
-                    Status = "Downloaded, but no Scene\\room.nvr in the package - it cannot be used as a backdrop.";
-                    return;
-                }
+                Status = Installed
+                    ? "Installed. Open it with File > Open Legacy Map."
+                    : "Downloaded, but no Scene\\room.nvr in the package - Open Legacy Map cannot use it.";
+                return;
             }
-            UseAsBackdrop?.Invoke(this);
-            Status = "Selected as the preview backdrop. Save to apply.";
+            Status = "Already installed. Open it with File > Open Legacy Map.";
         }
         catch (Exception ex) { Status = $"Download failed: {ex.Message}"; }
         finally { Busy = false; }
@@ -163,16 +157,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _wwiseConsolePath = "";    // M138
     [ObservableProperty] private string _wwiseProjectPath = "";
 
-    // M88: character-preview NVR map backdrop
-    [ObservableProperty] private string _previewBackgroundMapFolder = "";
-    [ObservableProperty] private bool _previewBackgroundEnabled;
+    // M868: the M88 character-preview NVR backdrop settings are gone from this dialog. EditorSettings still
+    // carries the two fields so an existing settings.json round-trips; ToSettings passes them through.
 
-    // M92/M93 → M142.8: legacy map packs are a LIST now (Crystal Scar, Twisted Treeline, …) — each can be
-    // downloaded on demand and picked as the preview backdrop, instead of a hardcoded Map8-only button.
+    // M92/M93 → M142.8: legacy map packs are a LIST now (Dominion, Twisted Treeline) — each can be
+    // downloaded on demand for Open Legacy Map.
     public ObservableCollection<MapPackRowViewModel> MapPacks { get; } = new();
 
-    /// <summary>Build the pack rows from SetupService and wire their host hooks. Marks the row whose
-    /// install dir is the current backdrop folder as selected.</summary>
+    /// <summary>Build the pack rows from SetupService and wire their host hooks.</summary>
     private void BuildMapPacks()
     {
         MapPacks.Clear();
@@ -181,23 +173,10 @@ public sealed partial class SettingsViewModel : ObservableObject
             var row = new MapPackRowViewModel
             {
                 Name = name, InstallDir = dir, Url = url, Installed = installed,
-                IsSelected = string.Equals(PreviewBackgroundMapFolder, dir, StringComparison.OrdinalIgnoreCase),
             };
             row.AnyBusy = () => MapPacks.Any(p => p.Busy);
-            row.UseAsBackdrop = r =>
-            {
-                PreviewBackgroundMapFolder = r.InstallDir;
-                PreviewBackgroundEnabled = true;
-                foreach (var p in MapPacks) p.IsSelected = ReferenceEquals(p, r);
-            };
             MapPacks.Add(row);
         }
-    }
-
-    partial void OnPreviewBackgroundMapFolderChanged(string value)
-    {
-        foreach (var p in MapPacks)
-            p.IsSelected = string.Equals(value, p.InstallDir, StringComparison.OrdinalIgnoreCase);
     }
 
     // M72: sidebar section switching (0 General · 1 Camera · 2 Controls · 3 Theme · 4 Preview · 5 Blender)
@@ -427,8 +406,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         WwiseConsolePath = s.WwiseConsolePath;
         WwiseProjectPath = s.WwiseProjectPath;
         BlenderAddonSourceSetting = s.BlenderAddonSource;   // M841
-        PreviewBackgroundMapFolder = s.PreviewBackgroundMapFolder;
-        PreviewBackgroundEnabled = s.PreviewBackgroundEnabled;
         BuildMapPacks();   // M142.8: downloadable/selectable legacy map packs (reflects the folder above)
 
         // theme: reflect + live-apply (LoadFrom also runs on Reset to Defaults)
@@ -463,7 +440,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             ThemeAccent = LookSettings().ThemeAccent, BackgroundImagePath = LookSettings().BackgroundImagePath,   // M683
             BackgroundImageOpacity = LookSettings().BackgroundImageOpacity, BackgroundGlass = LookSettings().BackgroundGlass,
             BackgroundImageStretch = BackgroundStretchIndex,
-            PreviewBackgroundMapFolder = PreviewBackgroundMapFolder, PreviewBackgroundEnabled = PreviewBackgroundEnabled,
+            PreviewBackgroundMapFolder = _source.PreviewBackgroundMapFolder, PreviewBackgroundEnabled = _source.PreviewBackgroundEnabled,   // M868: no longer edited here
             ProjectsDirectory = ProjectsDirectory.Trim(),
             WwiseConsolePath = WwiseConsolePath.Trim(), WwiseProjectPath = WwiseProjectPath.Trim(),
             BlenderAddonSource = BlenderAddonSourceSetting.Trim(),   // M841

@@ -109,16 +109,22 @@ public sealed class BackdropEnvironmentTests
     }
 
     [Fact]
-    public void UnloadingAnArenaPutsTheConfiguredBackdropBack()
+    public void TheCharacterWindowHasNoNvrBackdropWiringLeft()
     {
+        // M868: Dominion / Twisted Treeline are not a Character-window backdrop any more. The packs stay (Open
+        // Legacy Map views them); the host path that streamed one behind a champion is gone.
         string? arena = Source("src", "ReyEngine.App", "ViewModels", "MeshPreviewViewModel.Arena.cs");
-        string? host = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.Characters.cs");
-        if (arena is null || host is null) return;
+        string? host = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs");
+        string? chars = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.Characters.cs");
+        string? xaml = Source("src", "ReyEngine.App", "Views", "MeshPreviewWindow.axaml");
+        if (arena is null || host is null || chars is null || xaml is null) return;
 
-        // the view model asks; the host, which owns the loader and the cache, answers
-        Assert.Contains("public Func<Task>? ReapplyBackdrop;", arena);
-        Assert.Contains("await reapply()", arena);
-        Assert.Contains("MeshPreview.ReapplyBackdrop = ApplyPreviewBackgroundAsync;", host);
+        Assert.DoesNotContain("ReapplyBackdrop", arena);
+        Assert.DoesNotContain("ReapplyBackdrop", chars);
+        Assert.DoesNotContain("ApplyPreviewBackgroundAsync", host);
+        Assert.DoesNotContain("PreviewBackgroundEnabled", host);
+        Assert.DoesNotContain("MAP BACKDROP", xaml);
+        Assert.DoesNotContain("Content=\"🗺 Map\"", xaml);
     }
 
     [Fact]

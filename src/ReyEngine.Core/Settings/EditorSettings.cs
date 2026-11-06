@@ -66,6 +66,8 @@ public sealed class EditorSettings
     public bool AutoUpdateHashes { get; set; } = true;
 
     // ---- character-preview backdrop (M88) ----
+    // M868: NOT READ any more - the Character window stands on Summoner's Rift (Map11) and has no NVR backdrop.
+    // Kept only so an existing settings.json round-trips unchanged.
     /// <summary>Path to a legacy League LEVELS/&lt;Map&gt; folder (containing Scene/room.nvr) used as the
     /// 3D backdrop behind previewed characters. Empty disables the feature.</summary>
     public string PreviewBackgroundMapFolder { get; set; } = "";

@@ -15,54 +15,84 @@ using ReyEngine.Formats.MapGeo;
 namespace ReyEngine.App.ViewModels;
 
 /// <summary>
-/// M636: the ARENA - play the character on a shipped map of the user's choosing.
+/// M636: the ARENA - the character on a shipped map, with the map's navigation grid under him.
 ///
-/// <para>What this is: the map's geometry as a floor beside the champion, its navigation grid deciding
-/// where a right-click may send him and how high the ground is under his feet, an A* route along that
-/// grid at the champion's own authored move speed, the target dummy standing on the same floor, and every
-/// spell this window already casts - now with the map under it.</para>
+/// <para>M868: the Character window no longer offers a map picker or manual play. Its one environment is
+/// Riot's Summoner's Rift (Map11), loaded automatically the first time a champion is shown, kept for
+/// the rest of the window's life, and framed on a fixed stage (<see cref="ArenaStage"/>). What the
+/// arena provides is unchanged: the map's geometry as a floor, its navgrid deciding where a unit may stand and how
+/// high the ground is, an A* route along that grid at the champion's own authored move speed, the target
+/// dummy on the same floor, and every spell this window already casts. The automated simulation drives
+/// all of it from code.</para>
 ///
-/// <para>What this is NOT, said plainly because the request was "a full playable character like in
-/// game": Riot's ability logic is not in the data. <c>Scripts.wad.client</c> holds 53,908 files, and the
-/// spell scripts in it are Lua 5.1 bytecode STUBS - Aatrox's Q is 60 bytes, an empty chunk; his R is 566
-/// bytes of constant tags (NotSingleTargetSpell, IsDamagingSpell, a buff icon path). Damage, dashes,
-/// buffs, crowd control and passives are compiled into the game client. What the bin does author - move
-/// speed, attack range and speed, cast ranges, targeting kinds, cooldowns, mana, cast frames, missile
-/// speeds - is what the arena uses, and nothing here is invented to stand in for the rest.</para>
+/// <para>What this is NOT: Riot's ability logic is not in the data. <c>Scripts.wad.client</c> holds 53,908
+/// files, and the spell scripts in it are Lua 5.1 bytecode STUBS - Aatrox's Q is 60 bytes, an empty
+/// chunk. Damage, dashes, buffs, crowd control and passives are compiled into the game client. What the
+/// bin does author - move speed, attack range and speed, cast ranges, targeting kinds, cooldowns, mana,
+/// cast frames, missile speeds - is what the arena uses, and nothing here is invented to stand in for the
+/// rest.</para>
 /// </summary>
 public sealed partial class MeshPreviewViewModel
 {
     // ---- host wiring (the main window owns the install, the hash database and the readers) ----
 
-    /// <summary>Everything the loader needs from the host, handed over once per load of the window.</summary>
+    /// <summary>Everything the loader needs from the host, handed over once per load of the window.
+    /// <paramref name="LoadScene"/> is for a host with no map viewport to hand over (and for tests): it
+    /// produces the finished scene for a map WAD, and is used when <paramref name="LoadViewport"/> is null.</summary>
     public sealed record ArenaHost(
         string? GameDirectory,
         ReyEngine.Core.Hashing.IHashResolver Resolver,
         Func<uint, string?> ResolveBinName,
         Func<ulong, string?> ResolveWadPath,
-        Func<string, Task<MainWindowViewModel>>? LoadViewport = null);
+        Func<string, Task<MainWindowViewModel>>? LoadViewport = null,
+        Func<string, Task<ArenaScene>>? LoadScene = null);
 
     private ArenaHost? _arenaHost;
 
-    /// <summary>M725: idempotent. This runs on EVERY character load, and it used to Clear() the map list
-    /// each time - which drops the selection, so a user who had picked Map12 and then loaded another
-    /// champion silently got Map11 back. The list only depends on the install, so rebuild it only when the
-    /// install actually offers something different, and keep a selection that is still valid.</summary>
-    public void ConfigureArena(ArenaHost host)
+    /// <summary>The map every character is shown on: Summoner's Rift as the client ships it.</summary>
+    public const string EnvironmentMapKey = "Map11";
+
+    /// <summary>The one-line description the Play tab shows once the environment is up.</summary>
+    public const string EnvironmentLine = "Environment: Summoner's Rift (Map11)";
+
+    /// <summary>True when the install has Map11.wad.client, i.e. the default environment can load.</summary>
+    public bool EnvironmentAvailable { get; private set; }
+
+    private Task _environmentTask = Task.CompletedTask;
+
+    /// <summary>The environment load that <see cref="ConfigureArena"/> started, so a caller (or a test) can
+    /// wait for it. Completed when nothing is loading.</summary>
+    public Task EnvironmentTask => _environmentTask;
+
+    /// <summary>How many times the environment has actually been loaded, for the "once per window session"
+    /// rule: a character or skin change must leave this where it was.</summary>
+    public int EnvironmentLoadCount { get; private set; }
+
+    /// <summary>
+    /// Runs on EVERY character load. Hands over the host, then makes sure Map11 is the environment:
+    /// loads it when it is not up yet, does nothing when it is (a different champion or skin is the same map).
+    /// Without Map11 in the install the preview stays empty and <see cref="ArenaStatus"/> says so in one line.
+    /// <paramref name="loadEnvironment"/> is false for a subject that is not a character (a prop, a clipless
+    /// mesh), which has no use for a stage.
+    /// </summary>
+    public void ConfigureArena(ArenaHost host, bool loadEnvironment = true)
     {
         _arenaHost = host;
-        var available = ArenaLoader.AvailableMaps(host.GameDirectory).ToList();
-        if (!available.SequenceEqual(ArenaMaps, StringComparer.OrdinalIgnoreCase))
+        EnvironmentAvailable = ArenaLoader.WadPathFor(host.GameDirectory, EnvironmentMapKey) is not null;
+        OnPropertyChanged(nameof(EnvironmentAvailable));
+        if (!loadEnvironment) { LeaveStage(); return; }   // a prop or bare mesh: no stage under or around it
+        if (!EnvironmentAvailable)
         {
-            string? keep = SelectedArenaMap;
-            ArenaMaps.Clear();
-            foreach (var key in available) ArenaMaps.Add(key);
-            // put the user's pick back if the new install still has it
-            SelectedArenaMap = keep is not null && ArenaMaps.Contains(keep, StringComparer.OrdinalIgnoreCase) ? keep : null;
+            if (_arena is null) ArenaStatus = "Environment: none - Map11 is not in the game install.";
+            return;
         }
-        SelectedArenaMap ??= ArenaMaps.FirstOrDefault(m => m.Equals("Map11", StringComparison.OrdinalIgnoreCase))
-                             ?? ArenaMaps.FirstOrDefault();
-        OnPropertyChanged(nameof(HasArenaMaps));
+        // A load that failed for this install is not retried on every character click; the failure line stays.
+        if (_environmentFailedFor is { } failed)
+        {
+            if (string.Equals(failed, host.GameDirectory ?? "", StringComparison.OrdinalIgnoreCase)) return;
+            _environmentFailedFor = null;
+        }
+        _environmentTask = EnsureEnvironmentAsync();
     }
 
     /// <summary>M636: the champion's own numbers, off its CharacterRecord (ChampionStatsReader). Applied to
@@ -85,10 +115,7 @@ public sealed partial class MeshPreviewViewModel
 
     // ---- the arena itself ----
 
-    public ObservableCollection<string> ArenaMaps { get; } = new();
-    public bool HasArenaMaps => ArenaMaps.Count > 0;
-
-    [ObservableProperty] private string? _selectedArenaMap;
+    /// <summary>The Environment line of the Play tab: what is loaded, loading, missing or failed.</summary>
     [ObservableProperty] private string _arenaStatus = "";
     [ObservableProperty] private bool _arenaLoading;
     [ObservableProperty] private bool _arenaFollowCamera = true;
@@ -208,24 +235,105 @@ public sealed partial class MeshPreviewViewModel
 
     private bool _arenaOwnsBackdrop;
 
-    [RelayCommand]
-    private async Task LoadArenaAsync()
+    /// <summary>The champion/dummy placement the loaded map defines; null until a map is up.</summary>
+    private ArenaStage? _stage;
+
+    /// <summary>True when the environment is up and still the viewport's backdrop. The legacy-map viewer
+    /// clears the backdrop (<see cref="SetBackground"/>) when it takes the window over, which leaves
+    /// <c>_arena</c> set and the floor gone; that case is "not intact", so the next champion reloads it.</summary>
+    private bool EnvironmentIntact => _arena is not null && _arenaOwnsBackdrop && HasBackground;
+
+    // The environment while a non-character subject is shown: loaded, kept, not drawn, not owning the character.
+    private ArenaScene? _parkedScene;
+    private MainWindowViewModel? _parkedViewport;
+
+    /// <summary>False once the stage was left or the window closed. A load that finishes after that parks its
+    /// result instead of applying it (no control timer against a closed window, no stage under a legacy map).</summary>
+    private bool _stageWanted;
+
+    /// <summary>The install a load failed for. A failed load is not retried on every character click; it is
+    /// retried when the game directory changes.</summary>
+    private string? _environmentFailedFor;
+
+    /// <summary>
+    /// M868: leave the stage. A non-character subject (a legacy map, a prop, a bare mesh) is on screen, and the
+    /// stage must not leak into it: no control tick, no dummy, no follow camera, and no Map11 drawn under or around
+    /// the subject. The loaded environment is PARKED, not thrown away - the next character brings it back
+    /// without reading the map again.
+    /// </summary>
+    public void LeaveStage()
     {
-        if (_arenaHost is not { } host || SelectedArenaMap is not { Length: > 0 } key || ArenaLoading) return;
+        _stageWanted = false;
+        if (_arena is not { } scene) return;
+
+        _pendingAttackTarget = null;
+        _waypoints.Clear();
+        CancelPendingCast();
+        _controller.Stop();
+        ControlMode = false;
+        TargetDummyEnabled = false;
+
+        _parkedScene = scene;
+        _parkedViewport = ArenaViewport;
+        _arena = null;
+        ArenaViewport = null;
+        RebuildSceneProps();
+        SetArenaBackdrop(null);                  // gives the backdrop placement back and clears the floor
+
+        // a subject is drawn at ModelPosition/ModelYaw: leave them at the origin
+        _controller.Teleport(Vector3.Zero, 0f);
+        CharacterPosition = Vector3.Zero;
+        CharacterYaw = 0;
+        RangeRingSlot = null;
+        _rangeRingCastSlot = -1;
+        RefreshRangeRing();
+        OnPropertyChanged(nameof(HasArena));
+        OnPropertyChanged(nameof(ArenaName));
+    }
+
+    /// <summary>
+    /// Make Map11 the environment: a no-op while it is loading or already up, a restore when it was parked, a
+    /// load otherwise. The map is loaded ONCE per window session - a different champion or skin goes through
+    /// here and returns at once.
+    /// </summary>
+    public Task EnsureEnvironmentAsync()
+    {
+        _stageWanted = true;
+        if (ArenaLoading) return _environmentTask;
+        if (EnvironmentIntact)
+        {
+            if (!ControlMode) ControlMode = true;   // the window was closed and reopened: the stage is still there
+            return Task.CompletedTask;
+        }
+        if (_parkedScene is { } parked)
+        {
+            ArenaViewport = _parkedViewport;
+            _parkedScene = null; _parkedViewport = null;
+            ApplyEnvironment(parked);
+            return Task.CompletedTask;
+        }
+        return LoadEnvironmentAsync();
+    }
+
+    private async Task LoadEnvironmentAsync()
+    {
+        string key = EnvironmentMapKey;
+        if (_arenaHost is not { } host || ArenaLoading) return;
         string? wad = ArenaLoader.WadPathFor(host.GameDirectory, key);
-        if (wad is null) { ArenaStatus = $"{key}.wad.client is not in the game install."; return; }
+        if (wad is null) { ArenaStatus = "Environment: none - Map11 is not in the game install."; return; }
 
         ArenaLoading = true;
-        ArenaStatus = $"Loading {key}…";
+        EnvironmentLoadCount++;
+        ArenaStatus = "Environment: loading Summoner's Rift (Map11)...";
+        MainWindowViewModel? viewport = null;
+        bool applied = false;
         try
         {
             ArenaScene scene;
             if (host.LoadViewport is { } loadViewport)
             {
-                var previous = ArenaViewport;
-                ArenaViewport = await loadViewport(wad);
-                previous?.ReleaseArenaViewport();
-                var background = ArenaViewport.ArenaBackground(key);
+                viewport = await loadViewport(wad);
+                var background = viewport.ArenaBackground(key);
                 var mesh = background.Mesh;
                 var min = new Vector3(float.MaxValue);
                 var max = new Vector3(float.MinValue);
@@ -234,10 +342,14 @@ public sealed partial class MeshPreviewViewModel
                     var p = new Vector3(mesh.Positions[i], mesh.Positions[i + 1], mesh.Positions[i + 2]);
                     min = Vector3.Min(min, p); max = Vector3.Max(max, p);
                 }
-                var arenaNav = ArenaViewport.ArenaNavGrid;
+                var arenaNav = viewport.ArenaNavGrid;
                 scene = new ArenaScene(key, background,
                     new PropMesh(key, mesh.Positions, mesh.Normals, mesh.Uvs, mesh.Indices, new List<PropSubmesh>()),
                     arenaNav, ArenaLoader.SpawnFor(arenaNav, min, max), min, max, mesh.SubMeshes.Count, 0, 0, 0);
+            }
+            else if (host.LoadScene is { } loadScene)
+            {
+                scene = await loadScene(wad);
             }
             else
             {
@@ -247,80 +359,123 @@ public sealed partial class MeshPreviewViewModel
                 foreach (var l in lines) LogDx11?.Invoke("Arena", l);
             }
 
-            // M667: the apply is breadcrumbed step by step. A session log ended exactly here - after the
-            // loader's own lines and before anything else - with the process gone and no crash.log, which
-            // means a native fault rather than a managed exception. Every data-level cause was measured
-            // and ruled out (mesh channels, index range, submesh ranges, and all 17 textures sized
-            // correctly), so what is left is the apply and the GL upload it triggers. These say which.
-            LogDx11?.Invoke("Arena", $"{key}: applying scene - props");
-            _arena = scene;
-            _waypoints.Clear();
-            RebuildSceneProps();
-            LogDx11?.Invoke("Arena", $"{key}: applying scene - backdrop "
-                + $"({scene.Background.Mesh.VertexCount:n0} verts, {scene.Background.Mesh.SubMeshes.Count} submeshes)");
-            SetArenaBackdrop(scene.Background);   // M665: the map draws as the backdrop, before the champion
-            LogDx11?.Invoke("Arena", $"{key}: backdrop handed to the viewport");
-
-            // The champion on the spawn, the dummy 400 units into the map on walkable ground, the camera
-            // on him. Control mode on: the arena is for playing, and its status line says how.
-            _controller.Teleport(scene.Spawn, 0f);
-            CharacterPosition = scene.Spawn;
-            CharacterYaw = 0;
-            var dummyAt = scene.Spawn + new Vector3(400f, 0f, 0f);
-            if (scene.Nav is { } nav)
+            _environmentFailedFor = null;
+            if (!_stageWanted)
             {
-                dummyAt = NavGridPath.SnapToWalkable(nav, dummyAt, maxRadiusCells: 20);
-                dummyAt.Y = NavGridPath.GroundHeight(nav, dummyAt);
+                // The window closed, or a non-character subject took over, while this was loading. Keep the
+                // result for the next character; start no timer and draw nothing.
+                _parkedScene = scene; _parkedViewport = viewport;
+                applied = true;
+                ArenaStatus = EnvironmentLine + " (ready)";
+                return;
             }
-            TargetDummyEnabled = true;
-            DummyX = dummyAt.X; DummyY = dummyAt.Y; DummyZ = dummyAt.Z;
-            LogDx11?.Invoke("Arena", $"{key}: dummy placed, enabling control");
-            ControlMode = true;
-            FocusPoint = scene.Spawn;
-            LogDx11?.Invoke("Arena", $"{key}: applied.");
 
-            ArenaStatus = $"{scene.MapKey}: {scene.GroupsDrawn} groups, "
-                          + (scene.HasNavGrid ? "navgrid movement" : "flat floor, no navgrid")
-                          + (scene.LightmappedGroups > 0 ? $", {scene.LightmappedGroups} baked-lit" : ", no baked light")
-                          + (scene.TexturesMissing > 0 ? $", {scene.TexturesMissing} texture(s) missing" : "")
-                          + ". Right-click to move, the dummy to attack, Q W E R to cast.";
-            OnPropertyChanged(nameof(HasArena));
-            OnPropertyChanged(nameof(ArenaName));
+            var previous = ArenaViewport;
+            ArenaViewport = viewport;
+            if (!ReferenceEquals(previous, viewport)) previous?.ReleaseArenaViewport();
+            applied = true;
+            ApplyEnvironment(scene);
         }
         catch (Exception ex)
         {
-            ArenaStatus = $"{key}: {ex.Message}";
+            // M868: a failure is remembered (no retry on every click) and a half-built viewport is released.
+            _environmentFailedFor = host.GameDirectory ?? "";
+            if (!applied) viewport?.ReleaseArenaViewport();
+            else
+            {
+                _arena = null; _stage = null;
+                var half = ArenaViewport; ArenaViewport = null;
+                if (!ReferenceEquals(half, viewport)) half?.ReleaseArenaViewport();
+                viewport?.ReleaseArenaViewport();
+                try { SetArenaBackdrop(null); RebuildSceneProps(); } catch { /* the failure above is the one to report */ }
+            }
+            ArenaStatus = $"Environment: {key} could not be loaded - {ex.Message}";
             LogDx11?.Invoke("Arena", $"{key}: {ex}");
         }
         finally { ArenaLoading = false; }
     }
 
-    /// <summary>M725: host hook - reload and re-attach the configured Dominion / Twisted Treeline backdrop.
-    /// The view model cannot do it itself: the loader, the settings and the cache all live on the host.</summary>
-    public Func<Task>? ReapplyBackdrop;
-
-    [RelayCommand]
-    private async Task UnloadArena()
+    /// <summary>Put a scene on screen: the floor, the stage, the dummy, the camera, and the control gate.</summary>
+    private void ApplyEnvironment(ArenaScene scene)
     {
-        _arena = null;
-        ArenaViewport?.ReleaseArenaViewport();
-        ArenaViewport = null;
+        string key = scene.MapKey;
+        // M667: the apply is breadcrumbed step by step. A session log ended exactly here - after the
+        // loader's own lines and before anything else - with the process gone and no crash.log, which
+        // means a native fault rather than a managed exception. Every data-level cause was measured
+        // and ruled out (mesh channels, index range, submesh ranges, and all 17 textures sized
+        // correctly), so what is left is the apply and the GL upload it triggers. These say which.
+        LogDx11?.Invoke("Arena", $"{key}: applying scene - props");
+        _arena = scene;
         _waypoints.Clear();
         RebuildSceneProps();
-        SetArenaBackdrop(null);   // M665: and give the backdrop back to whatever owned it
-        ArenaStatus = "";
+        LogDx11?.Invoke("Arena", $"{key}: applying scene - backdrop "
+            + $"({scene.Background.Mesh.VertexCount:n0} verts, {scene.Background.Mesh.SubMeshes.Count} submeshes)");
+        SetArenaBackdrop(scene.Background);   // M665: the map draws as the backdrop, before the champion
+        LogDx11?.Invoke("Arena", $"{key}: backdrop handed to the viewport");
+
+        // M868: the fixed stage - champion, facing, dummy, camera - then the stage owns the character.
+        _stage = ArenaStage.For(scene.MapKey, scene.Nav, scene.BoundsMin, scene.BoundsMax);
+        TargetDummyEnabled = true;
+        PlaceOnStage();
+        LogDx11?.Invoke("Arena", $"{key}: stage at {_stage.Champion}, yaw {_stage.Yaw:0.###}, dummy {_stage.Dummy}");
+        ControlMode = true;
+        LogDx11?.Invoke("Arena", $"{key}: applied.");
+
+        ArenaStatus = EnvironmentLine
+                      + (scene.HasNavGrid ? "" : " - flat floor, no navgrid")
+                      + (scene.TexturesMissing > 0 ? $" - {scene.TexturesMissing} texture(s) missing" : "");
         OnPropertyChanged(nameof(HasArena));
         OnPropertyChanged(nameof(ArenaName));
+    }
 
-        // M725: "whatever owned it" was nothing. SetArenaBackdrop(null) clears the mesh and the champion
-        // load path is the only thing that ever streams the NVR room back in, so unloading an arena left the
-        // viewer standing in empty space with no visible way to get an environment back until the next
-        // character was loaded. Ask the host to put the configured backdrop back.
-        if (ReapplyBackdrop is { } reapply)
+    /// <summary>Champion, facing and dummy onto the stage, and the camera onto both of them.</summary>
+    private void PlaceOnStage()
+    {
+        var stage = _stage ?? ArenaStage.Origin;
+        _controller.Teleport(stage.Champion, stage.Yaw);
+        CharacterPosition = stage.Champion;
+        CharacterYaw = stage.Yaw;
+        if (_stage is not null || TargetDummyEnabled)
         {
-            try { await reapply(); }
-            catch (Exception ex) { LogDx11?.Invoke("Arena", $"backdrop could not be restored: {ex.Message}"); }
+            DummyX = stage.Dummy.X; DummyY = stage.Dummy.Y; DummyZ = stage.Dummy.Z;
         }
+        RebuildDummyProps();   // the dummy turns to the champion's NEW position even if it did not move itself
+        FrameScene();
+    }
+
+    /// <summary>
+    /// Frame the champion and the dummy together: the camera looks at their midpoint (<see cref="CameraFocus"/>).
+    /// The window's follow camera takes it from here, and <see cref="SceneFrameCount"/> tells it to snap to
+    /// the new target instead of easing there, so a reset never leaves the camera sliding.
+    /// </summary>
+    private void FrameScene()
+    {
+        FocusPoint = CameraFocus;
+        SceneFrameCount++;
+    }
+
+    /// <summary>The point the camera frames: the middle of the champion and the dummy, or the champion alone.</summary>
+    public Vector3 CameraFocus => TargetDummyPosition is { } dummy ? (CharacterPosition + dummy) * 0.5f : CharacterPosition;
+
+    /// <summary>Bumped whenever the scene is (re)framed; the window snaps its camera on a change.</summary>
+    public int SceneFrameCount { get; private set; }
+
+    /// <summary>
+    /// Restore the scene to how it opened: champion on the stage point facing the stage direction, the dummy
+    /// back in front of him, playback, effects and sounds stopped, any walk or pending cast cancelled, the
+    /// idle pose back, and the camera reframed. This supersedes the old "Reset position".
+    /// </summary>
+    [RelayCommand]
+    public void ResetScene()
+    {
+        StopEvent();                       // playback, scheduled sounds, the playing clip
+        SelectedVfx = null;
+        _castPlan = null;
+        _castBusyUntil = DateTime.MinValue;
+        _rangeRingCastSlot = -1;
+        PlaceOnStage();
+        StopMovement();                    // walk, attack, pending cast; the controller; back to idle
+        RefreshRangeRing();
     }
 
     /// <summary>Where the viewport should look. Set on spawn and, while following, every control tick.</summary>

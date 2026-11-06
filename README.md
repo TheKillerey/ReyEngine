@@ -126,7 +126,7 @@ New to modding? The [Start Here](https://github.com/TheKillerey/ReyEngine/wiki/S
 - **Recolor Textures** adjusts map surfaces, placed mobs / animated props and baked lightmaps together, with presets and `.cube` colour grades always re-derived from Riot's originals.
 - **Lighting**: sun, sky and lightmap brightness, classic Riot `Light.dat` point lights, and lightmap / lightgrid baking.
 - **Bucket grids**: view the real 3D culling bake, and regenerate grids after editing geometry.
-- **Classic NVR maps**: the old-format Dominion / Crystal Scar loads with faithful four-blend ground shading — used as the Model Preview backdrop (separate ~66 MB [map asset pack](https://github.com/TheKillerey/ReyEngine/releases/tag/maps)).
+- **Classic NVR maps**: the old-format Dominion / Crystal Scar loads with faithful four-blend ground shading — viewable on their own with File > Open Legacy Map (separate ~66 MB [map asset pack](https://github.com/TheKillerey/ReyEngine/releases/tag/maps)).
 - **Cinematic Capture** flies a keyframed camera through the map and exports a smooth PNG sequence — the clips above were made with it.
 </details>
 

@@ -135,7 +135,7 @@ public sealed class CastControlTests
         preview.CastAbility(0, null);
         Assert.Null(preview.SelectedAction);
         Assert.Equal(0f, (float)preview.CharacterYaw);
-        Assert.Contains("cursor", preview.ControlStatus);
+        Assert.Contains("aim point", preview.ControlStatus);
         preview.StopControl();
     }
 }

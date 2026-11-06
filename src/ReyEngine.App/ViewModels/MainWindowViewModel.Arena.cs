@@ -19,7 +19,11 @@ public sealed partial class MainWindowViewModel
         {
             arena.Project = Project;
             arena.LoadWad(wad);
-            arena._showPropMeshes = true;
+            // M868: minimal overhead, no distracting map effects. The Character window stages the champion on
+            // the bare terrain: no placed props (and so no prop animations), no map particles, no distance
+            // fog. These are the viewport's defaults for a freshly constructed MainWindowViewModel except
+            // fog, which defaults on, so it is turned off here. Nothing in the Character window turns them back on.
+            arena.ShowFog = false;
             if (ProjectMode)
             {
                 arena.ProjectMode = true;
@@ -34,8 +38,6 @@ public sealed partial class MainWindowViewModel
                 ?? throw new InvalidOperationException("No map geometry found.");
             if (arena.TryResolveEntry(geo.PathHash, out var entry)) await arena.LoadMapGeoAsync(entry);
             if (arena.CurrentMesh is null) throw new InvalidOperationException("The arena map could not be loaded.");
-            arena.PlayAllParticles = true;
-            await arena.RefreshPropMeshesAsync();
             return arena;
         }
         catch { arena.ReleaseArenaViewport(); throw; }

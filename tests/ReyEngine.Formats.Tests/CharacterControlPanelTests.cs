@@ -147,13 +147,14 @@ public sealed class CharacterControlPanelTests
     }
 
     [Fact]
-    public void ResettingPutsTheCharacterBackAtTheOrigin()
+    public void ResettingTheSceneWithNoMapPutsTheCharacterBackAtTheOrigin()
     {
+        // M868: "Reset position" is gone; Reset scene replaces it. With no map loaded the stage is the origin.
         var preview = Preview();
         preview.ControlMode = true;
         preview.OrderMove(new Vector3(900, 0, 900));
 
-        preview.ResetCharacterCommand.Execute(null);
+        preview.ResetSceneCommand.Execute(null);
 
         Assert.Equal(Vector3.Zero, preview.CharacterPosition);
         Assert.Equal(0d, preview.CharacterYaw, 3);
@@ -161,14 +162,14 @@ public sealed class CharacterControlPanelTests
     }
 
     [Fact]
-    public void EveryControlBindingInTheWindowResolves()
+    public void EveryBindingInTheEnvironmentCardResolves()
     {
         if (RepoRoot() is not { } root) return;
         string xaml = Path.Combine(root, "src", "ReyEngine.App", "Views", "MeshPreviewWindow.axaml");
         if (!File.Exists(xaml)) return;
 
-        var card = Regex.Match(File.ReadAllText(xaml), @"Text=""CONTROL""(.|\n)*?</Border>");
-        Assert.True(card.Success, "the CONTROL card is missing from MeshPreviewWindow.axaml");
+        var card = Regex.Match(File.ReadAllText(xaml), @"Text=""ENVIRONMENT""(.|\n)*?</Border>");
+        Assert.True(card.Success, "the ENVIRONMENT card is missing from MeshPreviewWindow.axaml");
 
         var missing = new List<string>();
         foreach (Match m in Regex.Matches(card.Value, @"\{Binding\s+!?([A-Za-z_][A-Za-z0-9_]*)"))
@@ -179,7 +180,7 @@ public sealed class CharacterControlPanelTests
         }
 
         Assert.True(missing.Count == 0,
-            "bound in the CONTROL card but not on the view model: " + string.Join(", ", missing.Distinct()));
+            "bound in the ENVIRONMENT card but not on the view model: " + string.Join(", ", missing.Distinct()));
     }
 
     [Fact]

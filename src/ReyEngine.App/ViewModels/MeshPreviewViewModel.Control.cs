@@ -9,17 +9,21 @@ using ReyEngine.Formats.Characters;
 namespace ReyEngine.App.ViewModels;
 
 /// <summary>
-/// M613: driving the character the way the game does — right-click the ground to walk, right-click the
-/// dummy to attack it, Q/W/E/R to cast.
+/// M613: a character that can be driven - walk to a point, attack the dummy, cast a slot.
 ///
-/// <para>Off by default and behind a toggle. The preview's left-drag orbit, middle-drag pan and gizmo
-/// are how every other part of this window works, and quietly repurposing them would break the tool for
-/// everyone not using this. Control mode only claims the RIGHT button, which nothing else used.</para>
+/// <para>M868: there is no longer a user-facing way to do this. The "Drive the character" toggle, the
+/// right-click move/attack orders and the Q/W/E/R keys are gone from the Character window; the automated
+/// simulation (M869) is what moves and casts. This file is the code-driven surface it uses:
+/// <see cref="OrderMove"/>, <see cref="OrderAttack"/>, <see cref="CastAbility"/> and the control tick that
+/// walks the controller, plays the attack composite and keeps the character on the navgrid's ground.</para>
 ///
-/// <para>This is a preview harness, not a game. No pathfinding, no collision, no cooldowns, no damage.
-/// Movement speed, attack range and attack speed are editable defaults rather than looked-up facts —
-/// they are per-champion values that live in the spell and character records the editor does not
-/// read.</para>
+/// <para><see cref="ControlMode"/> is the gate, and it now means "something other than the user owns the
+/// character": the environment turns it on when the Map11 stage is up (and off when the window closes),
+/// and a simulation may set it itself. No control binds to it.</para>
+///
+/// <para>This is a preview harness, not a game. No collision, no cooldowns, no damage. Movement speed,
+/// attack range and attack speed are the champion's authored values (<see cref="SetStats"/>) or the
+/// controller defaults.</para>
 /// </summary>
 public sealed partial class MeshPreviewViewModel
 {
@@ -32,6 +36,8 @@ public sealed partial class MeshPreviewViewModel
     /// stamp over the ability on the very next frame and no cast would ever be visible.</summary>
     private DateTime _castBusyUntil = DateTime.MinValue;
 
+    /// <summary>True while the stage (or a simulation) owns the character. Not a user setting - nothing in
+    /// the window binds to it. Orders and casts are ignored while it is off.</summary>
     [ObservableProperty] private bool _controlMode;
     [ObservableProperty] private Vector3 _characterPosition;
     [ObservableProperty] private double _characterYaw;
@@ -66,7 +72,7 @@ public sealed partial class MeshPreviewViewModel
             _lastControlTick = DateTime.UtcNow;
             _controlTimer ??= CreateTimer();
             _controlTimer.Start();
-            ControlStatus = "Right-click the ground to move, the dummy to attack. Q W E R cast.";
+            ControlStatus = "Stage ready.";
         }
         else
         {
@@ -120,7 +126,7 @@ public sealed partial class MeshPreviewViewModel
         PlayKind(CharacterActionKind.Idle);
     }
 
-    /// <summary>Right-click on the ground: walk there.</summary>
+    /// <summary>Walk to a ground point (code-driven; the right-click that used to call this is gone).</summary>
     public void OrderMove(Vector3 groundPoint)
     {
         if (!ControlMode) return;
@@ -129,7 +135,7 @@ public sealed partial class MeshPreviewViewModel
         _castBusyUntil = DateTime.MinValue;    // a move order cancels the cast, as it does in game
     }
 
-    /// <summary>Right-click on the dummy: walk into range and keep attacking it.</summary>
+    /// <summary>Walk into range of a target and keep attacking it.</summary>
     public void OrderAttack(Vector3 target)
     {
         if (!ControlMode) return;
@@ -153,8 +159,8 @@ public sealed partial class MeshPreviewViewModel
 
     private (int Slot, Vector3? Cursor)? _pendingCast;
 
-    /// <summary>Q/W/E/R, as 0..3. <paramref name="cursorGround"/> is the ground point under the mouse when
-    /// the key went down - the only aim a player has in game. Directional casts require a ground hit. The spell's
+    /// <summary>Q/W/E/R, as 0..3. <paramref name="cursorGround"/> is the ground point the cast is aimed at
+    /// (the cursor, for a player; the scenario's aim point, for the simulation). Directional casts require one. The spell's
     /// authored targeting kind decides what that point means (SpellAim); its cooldown gates the cast; a
     /// plain location cast beyond range walks into range first and fires on arrival.</summary>
     public void CastAbility(int slot, Vector3? cursorGround = null)
@@ -172,7 +178,7 @@ public sealed partial class MeshPreviewViewModel
         bool self = ability?.TargetingKind is { } kind
             && (kind.Equals("Self", StringComparison.OrdinalIgnoreCase) || kind.Equals("SelfAoe", StringComparison.OrdinalIgnoreCase));
         if (cursorGround is null && !self)
-        { ControlStatus = "Move the cursor onto the arena ground to cast."; return; }
+        { ControlStatus = "This ability needs an aim point."; return; }
         var cursor = cursorGround ?? CharacterPosition;
         var plan = SpellAim.Plan(ability, CharacterPosition, cursor, dummy);
 
@@ -217,9 +223,9 @@ public sealed partial class MeshPreviewViewModel
     private Vector3 Forward() =>
         new(MathF.Sin(_controller.Facing), 0f, MathF.Cos(_controller.Facing));
 
-    /// <summary>A manual order (right-click) cancels a cast that was still walking into range, as it does
-    /// in game. Called by the window before it issues the order, so the walk itself - which goes through
-    /// the same OrderMove - cannot cancel its own cast.</summary>
+    /// <summary>A new order cancels a cast that was still walking into range, as it does in game. Call it
+    /// before issuing the order, so the walk itself - which goes through the same OrderMove - cannot cancel
+    /// its own cast.</summary>
     public void CancelPendingCast() => _pendingCast = null;
 
     /// <summary>Called by the control tick: the walk-into-range cast fires once the walk is over.</summary>
@@ -347,22 +353,11 @@ public sealed partial class MeshPreviewViewModel
         return items;
     }
 
-    /// <summary>Put the character back at the origin facing forward.</summary>
-    [RelayCommand]
-    private void ResetCharacter()
-    {
-        StopMovement();
-        var spawn = _arena?.Spawn ?? Vector3.Zero;
-        _controller.Teleport(spawn);
-        CharacterPosition = spawn;
-        CharacterYaw = 0;
-        _castBusyUntil = DateTime.MinValue;
-    }
-
     /// <summary>Stop the control timer when the window closes — a DispatcherTimer holding this view
     /// model alive would keep ticking against a viewport that is gone.</summary>
     public void StopControl()
     {
+        _stageWanted = false;   // a load still in flight parks its result instead of starting a timer against a closed window
         _controlTimer?.Stop();
         ControlMode = false;
     }

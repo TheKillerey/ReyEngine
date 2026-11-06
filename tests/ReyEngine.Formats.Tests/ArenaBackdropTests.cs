@@ -114,13 +114,15 @@ public sealed class ArenaBackdropTests
         Assert.Contains("SetArenaBackdrop(scene.Background)", src);
     }
 
-    /// <summary>An arena owns the backdrop; the champion load path must not stream its NVR room over it.</summary>
+    /// <summary>M868: nothing streams an NVR room over the arena any more - the champion load path no longer
+    /// has a backdrop step at all.</summary>
     [Fact]
-    public void TheChampionBackdropPathStandsAsideForAnArena()
+    public void TheChampionLoadPathHasNoBackdropStep()
     {
         var src = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.cs");
         if (src.Length == 0) return;
-        Assert.Contains("if (MeshPreview.ArenaOwnsBackdrop) return;", src);
+        Assert.DoesNotContain("ApplyPreviewBackgroundAsync", src);
+        Assert.DoesNotContain("InvalidatePreviewBackground", src);
     }
 
     /// <summary>

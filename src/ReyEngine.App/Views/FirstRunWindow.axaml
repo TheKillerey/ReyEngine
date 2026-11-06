@@ -71,14 +71,14 @@
           </StackPanel>
         </Border>
 
-        <!-- 4 · Dominion map -->
+        <!-- 4 · legacy map packs (M868: for Open Legacy Map; not a preview backdrop) -->
         <Border Classes="settingsCard">
           <StackPanel Spacing="8">
-            <TextBlock Classes="settingsTitle" Text="4 · PREVIEW MAP  (optional)" />
+            <TextBlock Classes="settingsTitle" Text="4 · LEGACY MAPS  (optional)" />
             <TextBlock Text="{Binding MapStatus}" FontSize="12" TextWrapping="Wrap"
                        Foreground="{DynamicResource ReyTextBrush}" />
             <!-- M725: both environments. Twisted Treeline was downloadable in Settings and absent here, so
-                 a first run implied Dominion was the only backdrop there is. Always offered, because
+                 a first run implied Dominion was the only legacy map there is. Always offered, because
                  having one installed is no reason to hide the other. -->
             <Button Content="⬇ Download Dominion (Map8)"
                     Command="{Binding DownloadMapCommand}" CommandParameter="Map8"

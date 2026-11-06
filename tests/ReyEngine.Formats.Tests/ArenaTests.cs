@@ -131,16 +131,21 @@ public sealed class ArenaTests
     }
 
     [Fact]
-    public void ARightClickOnTheArenaGoesThroughTheGridBeforeThePlane()
+    public void TheWindowNoLongerTurnsClicksOrKeysIntoOrders()
     {
+        // M868: manual play is gone. The right button and Q/W/E/R/S do nothing in the Character window; the
+        // code-driven surface (OrderMove, OrderAttack, CastAbility) stays on the view model for the simulation.
         var window = Source("src", "ReyEngine.App", "Views", "MeshPreviewWindow.axaml.cs");
-        if (window is null) return;
-        // M637 folded the ground pick into TryGroundPoint, which the cast keys use too: the arena's
-        // height field first, the character's plane only when there is no arena.
-        Assert.Contains("if (vm.TryArenaGroundHit(origin, dir, out point)) return true;", window);
-        Assert.Contains("if (!vm.OrderMoveOnArena(point)) vm.OrderMove(point);", window);
-        Assert.Contains("TryGroundPoint(cursor, vm, out var aim)", window);
-        Assert.Contains("vm.CastAbility(slot, aim);", window);
+        var vm = Source("src", "ReyEngine.App", "ViewModels", "MeshPreviewViewModel.Control.cs");
+        if (window is null || vm is null) return;
+        Assert.DoesNotContain("OrderAttack", window);
+        Assert.DoesNotContain("OrderMove", window);
+        Assert.DoesNotContain("CastAbility", window);
+        Assert.DoesNotContain("CancelPendingCast", window);
+        Assert.DoesNotContain("IsRightButtonPressed", window);
+        Assert.DoesNotContain("Key.Q", window);
+        Assert.Contains("public void CastAbility(int slot", vm);
+        Assert.Contains("public void OrderMove(Vector3 groundPoint)", vm);
     }
 
     [Fact]

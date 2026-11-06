@@ -235,8 +235,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         };
     }
 
-    public void Show(string title, MeshAsset mesh, SkeletonAsset? skeleton, IReadOnlyList<TextureImage?>? textures)
+    /// <param name="keepStage">M868: true only for a character, which stands on the Map11 stage. Anything else
+    /// (a legacy map, a prop, a bare mesh) leaves the stage first - see <see cref="LeaveStage"/>.</param>
+    public void Show(string title, MeshAsset mesh, SkeletonAsset? skeleton, IReadOnlyList<TextureImage?>? textures, bool keepStage = false)
     {
+        if (!keepStage) LeaveStage();
         Title = title;
         Mesh = mesh;
         Skeleton = skeleton;
@@ -546,8 +549,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         if (!_dummyMeshTried) { _dummyMeshTried = true; _dummyMesh = LoadDummyMesh?.Invoke(); }
         if (_dummyMesh is null) { DummyProps = null; OnPropertyChanged(nameof(DummyCubePosition)); return; }
 
-        // Face the champion (at the origin), the way a unit would face its attacker.
-        float yaw = MathF.Atan2(-pos.X, -pos.Z);
+        // Face the champion where he stands now, the way a unit would face its attacker.
+        float yaw = MathF.Atan2(CharacterPosition.X - pos.X, CharacterPosition.Z - pos.Z);
         var transform = System.Numerics.Matrix4x4.CreateRotationY(yaw)
                         * System.Numerics.Matrix4x4.CreateTranslation(pos);
         DummyProps = new PropRenderSet(new[] { new PropInstanceData(_dummyMesh, transform) });
@@ -577,7 +580,14 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ResetDummy() { DummyX = 350; DummyY = 0; DummyZ = 0; }
+    private void ResetDummy()
+    {
+        // M868: back to where the stage put it (500 units in front of the champion on Map11), else the
+        // old 350 units along +X.
+        var at = _stage?.Dummy ?? new System.Numerics.Vector3(350f, 0f, 0f);
+        DummyX = at.X; DummyY = at.Y; DummyZ = at.Z;
+        FocusPoint = CameraFocus;
+    }
 
     /// <summary>Riot's naming convention for target-attached systems — "_tar" (e.g. Kayn_Base_Primary_
     /// R_tar_enemy). Verified against Kayn: matches exactly the systems the game plays on the target.</summary>

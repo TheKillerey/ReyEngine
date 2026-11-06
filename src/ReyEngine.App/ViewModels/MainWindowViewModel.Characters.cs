@@ -123,10 +123,13 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         // around a map depended on whether the thing you last clicked had animations.
         if (_resolver is { } resolver)
         {
+            // M868: and Map11 loads itself here, once, for a character (a skn under characters/) - not for a
+            // prop. A later champion or skin through this same call finds it already up and does nothing.
+            bool character = skn.IsResolved
+                             && skn.Path.Replace('\\', '/').Contains("/characters/", StringComparison.OrdinalIgnoreCase);
             MeshPreview.ConfigureArena(new MeshPreviewViewModel.ArenaHost(
-                Project.GameDirectory, resolver, ResolveBinName, ResolveWadPath, CreateArenaViewport));
-            // M725: put the configured NVR backdrop back when an arena is unloaded.
-            MeshPreview.ReapplyBackdrop = ApplyPreviewBackgroundAsync;
+                Project.GameDirectory, resolver, ResolveBinName, ResolveWadPath, CreateArenaViewport),
+                loadEnvironment: character);
         }
 
         if (allClips is not { Count: > 0 } || !skn.IsResolved) return Array.Empty<CharacterAction>();
