@@ -219,6 +219,16 @@ public static class VfxSystemResolver
     // leave the parked table and are declared here for the preview-coverage reflection.
     private static readonly uint F_translationOverride = HashAlgorithms.Fnv1a("translationOverride");
     private static readonly uint F_scaleOverride       = HashAlgorithms.Fnv1a("scaleOverride");
+    // M852: bindWeight makes live particles follow their emitter (VfxParticleSimulator.SetWorldTransform), so it
+    // leaves the parked table and is declared here for the preview-coverage reflection.
+    private static readonly uint F_bindWeight          = HashAlgorithms.Fnv1a("bindWeight");
+    // M863: isUniformScale and useNavmeshMask are consumed (the simulator, the MASKED permutation), so they leave the parked table and are declared here.
+    private static readonly uint F_isUniformScale      = HashAlgorithms.Fnv1a("isUniformScale");
+    private static readonly uint F_useNavmeshMask      = HashAlgorithms.Fnv1a("useNavmeshMask");
+    // M853: rateByVelocityFunction and MaximumRateByVelocity set a trail emitter's rate (VfxParticleSimulator), so they
+    // leave the parked table too.
+    private static readonly uint F_rateByVelocity      = HashAlgorithms.Fnv1a("rateByVelocityFunction");
+    private static readonly uint F_maxRateByVelocity   = HashAlgorithms.Fnv1a("MaximumRateByVelocity");
     private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
     // M185 (2.15) the Linger curve set. Class VfxLingerDefinitionData = 0x9b19f2b5.
     private static readonly uint F_linger              = HashAlgorithms.Fnv1a("Linger");
@@ -564,7 +574,10 @@ public static class VfxSystemResolver
             PaletteAddressMode: ReadPaletteAddressMode(p),
             Linger: ReadLinger(p),
             ParticleLingerType: GetU8(p, F_particleLingerType) ?? -1,
-            EmissionSurface: ReadEmissionSurface(p));
+            EmissionSurface: ReadEmissionSurface(p),
+            CustomMaterialLink: Get(p, F_customMaterial) is BinTreeStruct cmat && Get(cmat.Properties, F_cmMaterial) is BinTreeObjectLink cml ? cml.Value : 0u,   // M861
+            HostSubmeshes: primClass == C_primAttachedMesh && prim is BinTreeStruct hp && Get(hp.Properties, F_meshDef) is BinTreeStruct hm
+                ? ReadHostSubmeshes(hm.Properties) : null);   // M860
     }
 
     private static readonly uint F_emissionMeshName = HashAlgorithms.Fnv1a("emissionMeshName");
@@ -607,6 +620,19 @@ public static class VfxSystemResolver
         }
         // empty, the unnamed surface class, or a mesh surface naming no mesh (SRU_Foutain_Waterfall_Bloom)
         return new VfxEmissionSurface(VfxEmissionSurfaceKind.Host);
+    }
+
+    private static readonly uint F_customMaterial = HashAlgorithms.Fnv1a("CustomMaterial");
+    private static readonly uint F_cmMaterial = HashAlgorithms.Fnv1a("Material");
+    private static readonly uint F_submeshesToDraw = HashAlgorithms.Fnv1a("mSubmeshesToDraw");
+    private static readonly uint F_submeshesToDrawAlways = HashAlgorithms.Fnv1a("mSubmeshesToDrawAlways");
+
+    /// <summary>M860: both submesh lists of an attached mesh's mMesh, as one mask (the difference between "draw" and "draw
+    /// always" is not known; the union is what the effect can show).</summary>
+    private static IReadOnlyList<uint>? ReadHostSubmeshes(IReadOnlyDictionary<uint, BinTreeProperty> mesh)
+    {
+        var all = ReadHashList(Get(mesh, F_submeshesToDraw)).Concat(ReadHashList(Get(mesh, F_submeshesToDrawAlways))).Distinct().ToList();
+        return all.Count == 0 ? null : all;
     }
 
     private static IReadOnlyList<uint> ReadHashList(BinTreeProperty? list) => list is BinTreeContainer c
@@ -1134,7 +1160,7 @@ public static class VfxSystemResolver
             SliceTechniqueRange          = GetF32(p, PF("sliceTechniqueRange")),
             IsTexturePixelated           = GetBoolOrNull(p, PF("isTexturePixelated")),
 
-            IsUniformScale               = GetBoolOrNull(p, PF("isUniformScale")),
+            IsUniformScale               = GetBoolOrNull(p, F_isUniformScale),
             IsLocalOrientation           = GetBoolOrNull(p, PF("isLocalOrientation")),
             ParticleIsLocalOrientation   = GetBoolOrNull(p, PF("particleIsLocalOrientation")),
             IsEmitterSpace               = GetBoolOrNull(p, PF("IsEmitterSpace")),
@@ -1145,12 +1171,13 @@ public static class VfxSystemResolver
             TranslationOverride          = GetVec3(p, F_translationOverride),   // M795: VfxEmitterOverride
             ScaleOverride                = GetVec3(p, F_scaleOverride),
             IsFollowingTerrain           = GetBoolOrNull(p, PF("isFollowingTerrain")),
-            UseNavmeshMask               = GetBoolOrNull(p, PF("useNavmeshMask")),
+            UseNavmeshMask               = GetBoolOrNull(p, F_useNavmeshMask),
             BirthRotationalAcceleration  = ReadCurve3(p, PF("birthRotationalAcceleration"))?.Constant,
 
-            BindWeight                   = ReadCurveF(p, PF("bindWeight"))?.Constant,
-            RateByVelocityFunction       = ReadValueVec2(Get(p, PF("rateByVelocityFunction"))),
-            MaximumRateByVelocity        = GetOptionalF32(p, PF("MaximumRateByVelocity")),
+            BindWeightCurve              = ReadCurveF(p, F_bindWeight),
+            BindWeight                   = ReadCurveF(p, F_bindWeight)?.Constant,
+            RateByVelocityFunction       = ReadValueVec2(Get(p, F_rateByVelocity)),
+            MaximumRateByVelocity        = GetOptionalF32(p, F_maxRateByVelocity),
             ParticlesShareRandomValue    = GetBoolOrNull(p, PF("ParticlesShareRandomValue")),
             DirectionVelocityScale       = GetF32(p, PF("directionVelocityScale")),
             DirectionVelocityMinScale    = GetF32(p, PF("directionVelocityMinScale")),

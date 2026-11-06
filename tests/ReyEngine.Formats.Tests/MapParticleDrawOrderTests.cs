@@ -35,9 +35,9 @@ public sealed class MapParticleDrawOrderTests
     {
         string src = Driver();
 
-        // four registration sites - quad, Riot mesh, legacy mesh, ribbon - and not one of them talks to the
-        // renderer directly any more. A fifth channel added later will be ordered by construction.
-        Assert.Equal(4, src.Split("Register(mat, def);").Length - 1 + (src.Split("Register(riotMat, def);").Length - 1));
+        // five registration sites - quad, Riot mesh, legacy mesh, ribbon and (M860) the host's body - and not one of them talks to the
+        // renderer directly any more. A further channel added later will be ordered by construction.
+        Assert.Equal(5, src.Split("Register(mat, def);").Length - 1 + (src.Split("Register(riotMat, def);").Length - 1));
 
         // exactly one AddMaterial in the whole driver, and it is the sorted flush. More than one means a
         // channel has slipped back out of the order.

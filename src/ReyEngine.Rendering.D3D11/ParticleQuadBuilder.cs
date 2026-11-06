@@ -27,6 +27,10 @@ public static class ParticleQuadBuilder
     /// erosionDrive(18) scaleZ(19, M778 - VfxPrimitiveRay's ground offset along its own axis).</summary>
     public const int Stride = 20;
     public const int OffPos = 0, OffSizeX = 3, OffSizeY = 4, OffColor = 5, OffRot = 9, OffFrame = 10;
+    /// <summary>M862 follow-up: how far above the floor a projected decal sits. The floors the hosts draw stand at y = 0 (the arena's flat
+    /// floor and the character window's ground), and a decal in that very plane z-fights it.</summary>
+    public const float GroundDecalLift = 1f;
+
     public const int OffVel = 12, OffEuler = 15, OffErosion = 18, OffScaleZ = 19;
 
     /// <summary>An orthonormal billboard basis facing <paramref name="toCamera"/>. Falls back to fixed axes
@@ -50,7 +54,13 @@ public static class ParticleQuadBuilder
         Vector3 PlacementForward,
         /// <summary>M778: VfxPrimitiveRay - a streak along the particle's own rotated +Z axis, base-to-tip
         /// rather than centred on the particle. See Append for the geometry.</summary>
-        bool Ray = false)
+        bool Ray = false,
+        /// <summary>M862: VfxPrimitivePlanarProjection - the quad lies flat in the placement's horizontal plane (right and forward
+        /// flattened onto XZ), spun about the vertical by the particle's own spin, instead of facing the camera.</summary>
+        bool Projected = false,
+        /// <summary>M862: where a projected quad lands. NaN keeps the emitter's own height (a placed decal is authored on the ground);
+        /// a number is the ground plane the host knows - the character window's floor at the character's feet.</summary>
+        float ProjectionGroundY = float.NaN)
     {
         /// <summary>Plain camera billboard - what every emitter got before M238.</summary>
         public static QuadOrientation Billboard => default;
@@ -136,6 +146,22 @@ public static class ParticleQuadBuilder
             var basisR = right;
             var basisU = up;
             var basisN = normal;
+            // M862 follow-up: only where the host knows its ground. A map has none (ProjectionGroundY is NaN), and a decal laid flat at the
+            // emitter's own height would float over or sink into sloped terrain - so a map keeps the billboard until a terrain projection exists.
+            if (orientation.Projected && !float.IsNaN(orientation.ProjectionGroundY))
+            {
+                // M862: a decal on the ground. The projector looks down, so the footprint is the placement's own horizontal plane and the
+                // billboard spin turns it about the vertical. The preview has no scene depth to project onto, so it lands on a plane.
+                static Vector3 Flat(Vector3 v, Vector3 fallback)
+                {
+                    v.Y = 0f;
+                    return v.LengthSquared() > 1e-8f ? Vector3.Normalize(v) : fallback;
+                }
+                basisR = Flat(orientation.PlacementRight, Vector3.UnitX);
+                basisU = Flat(orientation.PlacementForward, Vector3.UnitZ);
+                basisN = Vector3.UnitY;
+                pos.Y = orientation.ProjectionGroundY;
+            }
             if (orientation.ArbitraryQuad)
             {
                 var euler = new Vector3(instances[o + OffEuler], instances[o + OffEuler + 1], instances[o + OffEuler + 2]);

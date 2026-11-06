@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using ReyEngine.App.ViewModels;
@@ -231,13 +232,62 @@ public static class VfxPlaybackSim
 
     /// <summary>M755: does anything in this playback - children included - emit from a host? Decides
     /// whether a viewport pays for CPU-skinning the character at all.</summary>
-    public static bool NeedsHost(VfxPlayback? playback) =>
-        playback is not null && playback.Items.Any(i => NeedsHost(i, 0));
+    /// <param name="includeHostMeshes">M860: an attached-mesh emitter draws the host's body - the Direct3D 11 host does that, the OpenGL viewport
+    /// skips them, and passes false so it does not pose a character it never uses.</param>
+    public static bool NeedsHost(VfxPlayback? playback, bool includeHostMeshes = true) =>
+        playback is not null && playback.Items.Any(i => NeedsHost(i, 0, includeHostMeshes));
 
-    private static bool NeedsHost(VfxPlaybackItem item, int depth) =>
-        item.System.Emitters.Any(e => e.EmissionSurface?.NeedsHost == true)
+    private static bool NeedsHost(VfxPlaybackItem item, int depth, bool includeHostMeshes) =>
+        item.System.Emitters.Any(e => e.EmissionSurface?.NeedsHost == true || (includeHostMeshes && e.IsHostMesh))
         || (depth < 4 && item.EmitterChildren is { } kids
-            && kids.Any(list => list is not null && list.Any(k => NeedsHost(k, depth + 1))));
+            && kids.Any(list => list is not null && list.Any(k => NeedsHost(k, depth + 1, includeHostMeshes))));
+
+    /// <summary>M854: ceiling on live child systems, in both viewports. Every parent particle can ask for one, so an
+    /// emitter at a few hundred particles a second would otherwise accumulate simulators until the frame rate dies.</summary>
+    public const int MaxLiveChildSims = 48;
+
+    /// <summary>M854: a child is retired on a timer rather than when it runs dry - a looping child would otherwise live
+    /// forever, one per parent particle, and never be collected.</summary>
+    public const float ChildSimMaxAge = 6f;
+
+    /// <summary>M854 (from M180/M708): drain the child spawns one parent simulator queued since the last call, each paired
+    /// with the child item it asks for. Shared by both viewports so the GL and the D3D11 host cannot read the queue
+    /// differently.
+    ///
+    /// <para>The child list on <paramref name="item"/> is indexed by AUTHORED emitter, and <c>sim.Emitters</c> is only the
+    /// visual subset - SetSystem drops every emitter IsVisual refuses. Indexing by the simulator's own position hands an
+    /// emitter the children of a different one as soon as anything before it is dropped (M708), so the index goes through
+    /// <see cref="AuthoredIndex"/>. The queue is always drained, also when the item has no children, so a consumer that
+    /// ignores it cannot let it grow.</para></summary>
+    public static List<(VfxPlaybackItem Child, Vector3 Position)> TakeChildSpawns(VfxPlaybackItem item, VfxParticleSimulator sim)
+    {
+        var result = new List<(VfxPlaybackItem, Vector3)>();
+        var perEmitter = item.EmitterChildren;
+        for (int e = 0; e < sim.Emitters.Count; e++)
+        {
+            var spawns = sim.Emitters[e].TakeChildSpawns();
+            if (spawns.Count == 0 || perEmitter is null) continue;
+            int authored = AuthoredIndex(item.System, sim.Emitters[e].Def);
+            if (authored < 0 || authored >= perEmitter.Count) continue;
+            if (perEmitter[authored] is not { } childItems || childItems.Count == 0) continue;
+            foreach (var sp in spawns)
+            {
+                if (sp.ChildIndex < 0 || sp.ChildIndex >= childItems.Count) continue;
+                result.Add((childItems[sp.ChildIndex], sp.Position));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>M854: the simulator for one spawned child, placed at its spawn point. The seed mixes the live child count
+    /// the way the GL viewport always did, so two children of one system do not run in lockstep.</summary>
+    public static VfxParticleSimulator CreateChildSim(VfxPlaybackItem child, Vector3 position, int liveChildren)
+    {
+        var sim = new VfxParticleSimulator(HashCode.Combine(child.System.PathHash, liveChildren));
+        sim.SetSystem(child.System, Matrix4x4.CreateTranslation(position));
+        ApplyEmissionSurfaces(sim, child);   // M754
+        return sim;
+    }
 
     /// <summary>Map a live emitter state back to its AUTHORED index - the index every per-emitter list on a
     /// <see cref="VfxPlaybackItem"/> is aligned to. By REFERENCE, because SetSystem drops non-visual

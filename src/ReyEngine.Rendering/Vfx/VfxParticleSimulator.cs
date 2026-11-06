@@ -51,6 +51,9 @@ public sealed class VfxParticleSimulator
         /// stands - and replace the emitter's point instead of being added to it.</summary>
         public bool EmissionInWorld;
         internal float SpawnAccum;
+        /// <summary>M853: where the emitter stood at the previous step, for its speed (rateByVelocityFunction).</summary>
+        internal Vector3 LastBasePos;
+        internal bool HaveLastBase;
         /// <summary>M174 (2.14): per-instance start jitter from HasVariableStartTime (3,973 emitters).
         /// Without it, every repeat of an effect fires in lockstep and reads as mechanical.</summary>
         internal float StartOffset;
@@ -83,16 +86,6 @@ public sealed class VfxParticleSimulator
             return copy;
         }
 
-        /// <summary>M177 (2.5): the ribbon points behind particle <paramref name="index"/>, oldest first.
-        /// Empty for every non-trail emitter. Exposed because the ribbon is generated rather than
-        /// authored, so it is the only way to inspect what a trail actually became.</summary>
-        public ReadOnlySpan<Vector3> GetTrail(int index)
-        {
-            if (index < 0 || index >= Particles.Count) return default;
-            var p = Particles[index];
-            return p.History is { } h ? h.AsSpan(0, Math.Min(p.HistoryCount, h.Length)) : default;
-        }
-
         /// <summary>Packed instance data for the renderer: 18 floats per particle:
         /// position, size, color, rotation/frame, age/velocity, and Euler rotation.</summary>
         public float[] Instances = System.Array.Empty<float>();
@@ -122,15 +115,6 @@ public sealed class VfxParticleSimulator
         public float FramePhase, FrameRate;
         public float ColorRandom;   // M68: stable per-particle 0..1 roll for the colour-gradient variant axis
 
-        /// <summary>M177 (2.5): where this particle has been, oldest first, for trail emitters only. Null
-        /// on every other particle, so nothing is allocated for the 94% of emitters that have no ribbon.
-        ///
-        /// A reference field inside a struct looks odd, but it is what makes this work: Particle is copied
-        /// in and out of the list by value on every update, and a reference member survives that copy
-        /// while a growable collection per particle would not.</summary>
-        public Vector3[]? History;
-        public int HistoryCount;
-
         /// <summary>M185 (2.15): the age at which this particle entered the linger phase, and how long
         /// that phase lasts. LingerWindow &lt;= 0 means the particle is not lingering.</summary>
         public float LingerStart, LingerWindow;
@@ -147,11 +131,6 @@ public sealed class VfxParticleSimulator
     /// frame-rate guard, not a Riot behaviour, and it is applied at SCHEDULING time so a consumer that
     /// never drains the queue cannot grow it without bound either.</summary>
     private const int MaxChildSpawnsPerFrame = 16;
-
-    /// <summary>M177: ribbon points per particle. Fixed rather than growable so a long-lived particle
-    /// cannot creep upward in memory, and because the sampling below spaces points to span the authored
-    /// cutoff length whatever the particle's speed - so more points would buy smoothness, not reach.</summary>
-    internal const int TrailPoints = 48;
 
     public IReadOnlyList<EmitterState> Emitters => _emitters;
     private readonly List<EmitterState> _emitters = new();
@@ -383,16 +362,47 @@ public sealed class VfxParticleSimulator
     public void SetWorldTransform(Matrix4x4 worldTransform)
     {
         var inverse = InverseOf(worldTransform);
-        foreach (var s in _emitters) PlaceEmitter(s, worldTransform, inverse);
+        foreach (var s in _emitters)
+        {
+            var previous = s.World;
+            PlaceEmitter(s, worldTransform, inverse);
+            FollowEmitter(s, previous);
+        }
         // M183: the beam endpoints hang off BasePos and the placement basis, both of which just moved -
         // M116 missiles re-anchor through here every frame, so a beam on a travelling system has to
         // follow rather than stay where it was first resolved.
         ResolveBeams();
     }
 
+    /// <summary>M852: bindWeight. A live particle of an emitter that authors it moves with the emitter's frame by that
+    /// fraction of the frame's change (translation and rotation about the emitter origin; the matrix delta
+    /// previous^-1 * current). 1 = fully bound (a missile's body rides its emitter), 0 or absent = world space (the
+    /// smoke it leaves behind). The weight is a ValueFloat sampled over the particle's normalised age, like the
+    /// other over-life curves; its per-particle probability table is not applied. Velocity is left alone: the
+    /// particle keeps its own motion relative to the emitter, which a bound particle then adds to the emitter's.</summary>
+    private static void FollowEmitter(EmitterState s, in Matrix4x4 previous)
+    {
+        var extras = s.Def.Extras;
+        if (extras is null || s.Particles.Count == 0) return;
+        var curve = extras.BindWeightCurve ?? (extras.BindWeight is { } w ? VfxCurveF.Const(w) : (VfxCurveF?)null);
+        if (curve is not { } weights) return;
+        if (previous == s.World) return;
+        if (!Matrix4x4.Invert(previous, out var previousInverse)) return;
+        var delta = previousInverse * s.World;
+        for (int i = 0; i < s.Particles.Count; i++)
+        {
+            var p = s.Particles[i];
+            float t = float.IsPositiveInfinity(p.Life) || p.Life <= 0f ? 0f : Math.Clamp(p.Age / p.Life, 0f, 1f);
+            float weight = Math.Clamp(weights.Sample(t), 0f, 1f);
+            if (weight <= 0f) continue;
+            p.Pos = Vector3.Lerp(p.Pos, Vector3.Transform(p.Pos, delta), weight);
+            s.Particles[i] = p;
+        }
+    }
+
     public void Reset()
     {
-        foreach (var s in _emitters) { s.Particles.Clear(); s.SpawnAccum = 0; s.Age = 0; s.BurstDone = false; s.FirstEmissionDone = false; s.InstanceCount = 0; s.Stopped = false; }
+        foreach (var s in _emitters) { s.Particles.Clear(); s.SpawnAccum = 0; s.Age = 0; s.BurstDone = false; s.FirstEmissionDone = false; s.HaveLastBase = false; s.InstanceCount = 0; s.Stopped = false; }
         LiveParticleCount = 0;
         _stopped = false;   // M185: replaying a stopped system starts it running again
     }
@@ -500,6 +510,17 @@ public sealed class VfxParticleSimulator
                     ? Math.Clamp((s.Age - d.TimeBeforeFirstEmission) / d.EmitterLifetime.Value, 0f, 1f)
                     : 0f;
                 float rate = MathF.Max(0f, d.Rate.Sample(emitterT));
+                // M853: rateByVelocityFunction REPLACES the rate by the emitter's speed - speed * x + y particles a
+                // second, at most MaximumRateByVelocity (300 where unset). LTK Manager's engine reading (emit.ts
+                // rateOf); a function of (0, 0) is "unauthored". Applied to TRAIL emitters only: that is what the
+                // field is for (a missile's trail lays particles down by distance, and Jinx W's authors a rate of 1
+                // a second, which strings nothing), and 15,504 emitters carry it, so every other primitive keeps its
+                // authored rate until it is seen against the game.
+                if (d.Trail is not null && d.Extras?.RateByVelocityFunction is { } byVelocity && (byVelocity.X != 0f || byVelocity.Y != 0f))
+                {
+                    float speed = s.HaveLastBase && dt > 0f ? Vector3.Distance(s.BasePos, s.LastBasePos) / dt : 0f;
+                    rate = MathF.Max(0f, MathF.Min(d.Extras.MaximumRateByVelocity ?? 300f, speed * byVelocity.X + byVelocity.Y));
+                }
                 // M801: a continuous emitter at rate 0 still emits ONE particle, at its first emission - which is
                 // what an emitter that authors no `rate` is, the schema default being 0 (VfxSystemResolver). The
                 // 406 such visual emitters in the game are attached meshes, flashes, shockwaves and immortal
@@ -514,8 +535,15 @@ public sealed class VfxParticleSimulator
                     if (rate <= 0f) Spawn(s);
                 }
                 s.SpawnAccum += rate * dt;
+                // M853: mMaxAddedPerFrame caps how many particles a trail emitter adds in one step (0 = no cap).
+                // The trail is the strand of this emitter's particles, so the cap is a cap on spawns - the field
+                // as LTK Manager's engine reading uses it (emit.ts capped()). What a capped step leaves over is
+                // dropped, as a capped burst is, rather than paid back next frame.
+                int most = d.Trail is { MaxAddedPerFrame: > 0 } cap ? cap.MaxAddedPerFrame : int.MaxValue;
+                int added = 0;
                 while (s.SpawnAccum >= 1f && s.Particles.Count < MaxParticlesPerEmitter)
                 {
+                    if (added++ >= most) { s.SpawnAccum -= MathF.Floor(s.SpawnAccum); break; }
                     Spawn(s);
                     s.SpawnAccum -= 1f;
                 }
@@ -523,13 +551,7 @@ public sealed class VfxParticleSimulator
             }
         }
 
-        // M177: spacing between ribbon points, so TrailPoints of them cover the authored cutoff, and the
-        // per-frame budget of new points. An unauthored budget fills the whole ribbon in one frame, which
-        // is the behaviour a teleporting particle needs; a budget of 0 would freeze the trail entirely.
-        float trailStep = d.Trail is { } tr ? tr.EffectiveCutoff / (TrailPoints - 1) : 0f;
-        int trailBudget = d.Trail is { } tb && tb.MaxAddedPerFrame > 0
-            ? Math.Min(tb.MaxAddedPerFrame, TrailPoints)
-            : TrailPoints;
+        s.LastBasePos = s.BasePos; s.HaveLastBase = true;
 
         // integrate + cull
         for (int i = s.Particles.Count - 1; i >= 0; i--)
@@ -579,46 +601,6 @@ public sealed class VfxParticleSimulator
                 var angularStep = p.BirthOrbitalVelocity * dt;
                 var orbit = Quaternion.CreateFromYawPitchRoll(angularStep.Y, angularStep.X, angularStep.Z);
                 p.Pos = s.BasePos + Vector3.TransformNormal(Vector3.Transform(localRelative, orbit), s.World);
-            }
-            // M177 (2.5): record where the ribbon has been, at EXACTLY trailStep spacing so that
-            // TrailPoints of them span the authored cutoff.
-            //
-            // The spacing has to be exact, not "append the current position once the particle has moved
-            // far enough". That cheaper version overshoots by however far the particle travelled in the
-            // frame that crossed the threshold, which makes the ribbon's length depend on its SPEED:
-            // measured, a 1,000-unit cutoff produced 1,018 units at 50 u/s and 1,567 at 2,000 u/s, and
-            // every authored cutoff overshot. Walking the segment and inserting points at the exact
-            // interval removes the frame rate and the speed from the result entirely.
-            //
-            // Inserting several points in one frame is also what mMaxAddedPerFrame is for - the field only
-            // makes sense if the engine can add more than one, which is a small confirmation that this is
-            // the right shape.
-            if (p.History is { } hist && trailStep > 0f)
-            {
-                if (p.HistoryCount == 0)
-                {
-                    hist[0] = p.Pos;
-                    p.HistoryCount = 1;
-                }
-                else
-                {
-                    for (int added = 0; added < trailBudget; added++)
-                    {
-                        var last = hist[p.HistoryCount - 1];
-                        var delta = p.Pos - last;
-                        float dist = delta.Length();
-                        if (dist < trailStep) break;
-                        var next = last + delta * (trailStep / dist);
-                        if (p.HistoryCount < hist.Length) hist[p.HistoryCount++] = next;
-                        else
-                        {
-                            // Full: drop the oldest point and slide the rest down. TrailPoints is small
-                            // and this only runs once the ribbon is at full length, so the copy is cheap.
-                            Array.Copy(hist, 1, hist, 0, hist.Length - 1);
-                            hist[^1] = next;
-                        }
-                    }
-                }
             }
             p.Rot += p.RotVel * dt;
             // M174 (1.9): rotation0 is an IntegratedValueVector3 - it accumulates rather than setting an
@@ -873,8 +855,6 @@ public sealed class VfxParticleSimulator
                 : 0f,
             FrameRate = d.BirthFrameRate?.SampleBirth(_rng) ?? d.FrameRate ?? 0f,
             ColorRandom = (float)_rng.NextDouble(),
-            // M177 (2.5): only trail emitters carry a ribbon buffer.
-            History = d.Trail is not null ? new Vector3[TrailPoints] : null,
         });
 
         // M180 (2.7): children spawn at particle BIRTH unless childEmitOnDeath says otherwise. That

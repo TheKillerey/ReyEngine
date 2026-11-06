@@ -82,13 +82,22 @@ public sealed class ChildSpawnIndexTests
     [Fact]
     public void TheChildSpawnLoopRemapsToTheAuthoredIndex()
     {
-        string? src = Source("src", "ReyEngine.App", "Views", "ViewportControl.cs");
+        // M854: the loop moved out of the GL viewport into VfxPlaybackSim.TakeChildSpawns, which both viewports now call
+        string? src = Source("src", "ReyEngine.App", "Services", "VfxPlaybackSim.cs");
         Assert.NotNull(src);
-        int remap = src!.IndexOf("int authored = Services.VfxPlaybackSim.AuthoredIndex(item.System, sim.Emitters[e].Def);",
-            StringComparison.Ordinal);
+        int remap = src!.IndexOf("int authored = AuthoredIndex(item.System, sim.Emitters[e].Def);", StringComparison.Ordinal);
         Assert.True(remap > 0, "the child spawn loop does not remap to the authored emitter");
-        Assert.Contains("if (perEmitter[authored] is not { } childItems", src);
+        Assert.Contains("perEmitter[authored] is not { } childItems", src);
         // and it no longer reads the list at the simulator's own position
         Assert.DoesNotContain("perEmitter[e]", src);
+
+        // both hosts drain through it, and neither re-implements the indexing
+        foreach (var host in new[] { new[] { "src", "ReyEngine.App", "Views", "ViewportControl.cs" }, new[] { "src", "ReyEngine.App", "Services", "D3D11MapParticles.cs" } })
+        {
+            string? hostSrc = Source(host);
+            Assert.NotNull(hostSrc);
+            Assert.Contains("VfxPlaybackSim.TakeChildSpawns(item, sim)", hostSrc);
+            Assert.DoesNotContain("perEmitter[e]", hostSrc);
+        }
     }
 }

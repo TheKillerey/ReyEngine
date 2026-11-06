@@ -379,7 +379,9 @@ public static class Dx11CharacterScene
                 out var report, slice.VsDesc, slice.PsDesc, StateDescription.Geometry);
             if (mat is null)
             {
-                scene.Failures.Add($"{slice.Material}: {report.Error ?? "pipeline creation failed"}");
+                // a cached scene is committed again on every rebuild (M861's custom materials, every child spawn): said once
+                string failure = $"{slice.Material}: {report.Error ?? "pipeline creation failed"}";
+                if (!scene.Failures.Contains(failure)) scene.Failures.Add(failure);
                 continue;
             }
 

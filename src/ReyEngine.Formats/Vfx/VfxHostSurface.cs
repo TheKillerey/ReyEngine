@@ -35,6 +35,16 @@ public sealed class VfxHostSurface
     public MeshAsset Mesh { get; }
     public VfxSurfaceSampler Sampler { get; }
 
+    /// <summary>M860: where the character stands (the world transform's origin) - an attached-mesh emitter scales the body about it.</summary>
+    public Vector3 Origin { get; private set; }
+
+    /// <summary>M860: the skinned body in world space, three floats per vertex, as of the last <see cref="Pose"/>.</summary>
+    public void CopyWorldPositions(float[] destination)
+    {
+        for (int v = 0; v < _world.Length && v * 3 + 2 < destination.Length; v++)
+        { destination[v * 3] = _world[v].X; destination[v * 3 + 1] = _world[v].Y; destination[v * 3 + 2] = _world[v].Z; }
+    }
+
     private VfxHostSurface(MeshAsset mesh, VfxSurfaceSampler sampler)
     {
         Mesh = mesh;
@@ -60,6 +70,7 @@ public sealed class VfxHostSurface
         if (_posed && key.Equals(_last)) return;
         _last = key;
         _posed = true;
+        Origin = Vector3.Transform(Vector3.Zero, world);
 
         float[] src = Mesh.Positions;
         if (skeleton is not null && Mesh.CanSkin)

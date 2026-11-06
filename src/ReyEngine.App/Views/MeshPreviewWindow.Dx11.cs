@@ -218,6 +218,8 @@ public partial class MeshPreviewWindow
         _dx11.BoneGlobals = vm.CurrentBoneGlobals();
         _dx11.BoneModelWorld = vm.ModelWorld;
         _dx11.EmissionHost = vm.PosedEmissionHost();   // M755: the character as an emission surface
+        _dx11.ProjectionGroundY = ReyEngine.Rendering.D3D11.ParticleQuadBuilder.GroundDecalLift;   // M862: decals land just above the floor at the character's feet (the floor is y = 0)
+        _dx11.HostSubmeshVisible = vm.SubmeshVisible;   // M860: the host's body follows the character's own visibility
         _dx11.BeamTarget = vm.TargetDummyPosition;
 
         // M628: the target dummy itself. Two halves, exactly as the GL viewport has always had them, and

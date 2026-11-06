@@ -77,6 +77,11 @@ public sealed record VfxPlaybackItem(
     /// meshes are: decoding a .scb on the render thread mid frame is a stall.</summary>
     public IReadOnlyList<ReyEngine.Formats.Vfx.VfxSurfaceSampler?>? EmitterEmissionSurfaces { get; init; }
 
+    /// <summary>M861: per emitter, the Riot material scene (shader, samplers, parameters) its <c>CustomMaterial</c> links, prepared over
+    /// the emitter's own mesh - or null where the emitter links none, has no mesh, or the material did not resolve. Aligned to the
+    /// system's emitter list.</summary>
+    public IReadOnlyList<ReyEngine.App.Services.PreparedCharacterScene?>? EmitterCustomMaterials { get; init; }
+
     /// <summary>M91: seconds after playback start before this system begins simulating — clip events
     /// fire at their authored StartFrame instead of all at clip start.</summary>
     public float StartDelay { get; init; }

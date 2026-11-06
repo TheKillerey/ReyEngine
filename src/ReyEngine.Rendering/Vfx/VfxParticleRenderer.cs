@@ -389,6 +389,9 @@ public sealed class VfxParticleRenderer
         foreach (var es in sim.Emitters.OrderBy(static e => ReyEngine.Formats.Vfx.VfxDrawOrder.KeyFor(e.Def)))
         {
             if (es.InstanceCount == 0) continue;
+            // M860: an attached mesh draws the host character, which this viewport does not do (the Direct3D 11 host does) -
+            // and it must not fall back to the 1-unit billboard it used to be.
+            if (es.Def.IsHostMesh) continue;
             // M711: before the branch, so the mesh and ribbon paths get it too.
             ApplyDepthTest(es.Def);
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
@@ -400,7 +403,7 @@ public sealed class VfxParticleRenderer
             // reflectionDefinition is among them, so mesh-first preserves the M174 (1.5) behaviour those
             // rely on. That ordering is a DECISION (no regression), not a measurement.
             if (es.Def.Beam is not null) { RenderBeamEmitter(es, viewProj, camPos); continue; }
-            // M177 (2.5): trail emitters draw a ribbon through the particle's own motion history.
+            // M177 (2.5): trail emitters draw one ribbon through their particles in birth order (M853).
             if (es.Def.Trail is not null) { RenderTrailEmitter(es, viewProj, camPos); continue; }
             if (es.Texture == 0) continue;
             // M720: one definition with the Direct3D 11 recipe - a block that names a normal map.
@@ -1300,11 +1303,11 @@ public sealed class VfxParticleRenderer
         _gl.BindVertexArray(_vao);
     }
 
-    /// <summary>M177 (2.5): build and draw one emitter's trail ribbons.
+    /// <summary>M177 (2.5): build and draw one emitter's trail ribbon (M853: one strand through its particles).
     ///
-    /// The geometry is generated here, from where each particle has been - it is not in the bin. Riot's
+    /// The geometry is generated here, from where the emitter's particles are - it is not in the bin. Riot's
     /// trail payload only says how long the ribbon may get, how often its texture repeats along that
-    /// length, and how many points may be appended per frame.
+    /// length, and how many particles may be added per frame.
     ///
     /// Two segment-orientation cases, matching the two primitive classes: a CameraTrail twists so the
     /// ribbon always faces the viewer, an ArbitraryTrail holds the placement's own up axis. That split is
@@ -1429,47 +1432,153 @@ public sealed class VfxParticleRenderer
         return k;
     }
 
-    /// <summary>M364: assemble a whole TRAIL emitter's ribbons into <paramref name="buf"/>, growing it if
-    /// needed; returns the write cursor (floats, not vertices).
+    /// <summary>M853: assemble a TRAIL emitter's ribbon into <paramref name="buf"/>, growing it if needed;
+    /// returns the write cursor (floats, not vertices).
     ///
-    /// <para>Extracted so the D3D11 host can draw the same trails. It has to live HERE rather than be
-    /// reimplemented there for a hard reason, not a stylistic one: the per-particle history this walks
-    /// (<c>EmitterState.Particles</c>) is <c>internal</c> to this assembly, so no amount of care in the App
-    /// layer could reproduce it. That the two renderers now share the assembly step as well as the extruder
-    /// is the point - a trail that differs between them can no longer be a divergence, only a bug in one
-    /// place.</para></summary>
+    /// <para>ONE ribbon per emitter, strung through its live particles in the order they were born - the
+    /// game's trail (LTK Manager's Trails.tsx reads the engine the same way: the emitter's particles are the
+    /// points of one strand, each point's width and colour that particle's). Until M853 each particle carried
+    /// a ribbon of ITS OWN past positions, which draws nothing for a particle that does not move - and the
+    /// particles of a missile's trail are born at the emitter and left behind, so every trail in the game
+    /// built zero ribbons (ribbons=0 for Ezreal Q and R, Jinx R and W, Jhin R and Thresh Q).</para>
+    ///
+    /// <para>Shared by the GL host and the D3D11 host (D3D11MapParticles.TickRibbonSlices): it reads the
+    /// simulator's own packed instances, so what a point's position, width and colour are is exactly what a
+    /// sprite of the same emitter would be. <see cref="BuildTrailStrand"/> is the pure part.</para></summary>
     public static int BuildTrailRibbon(ref float[] buf, VfxParticleSimulator.EmitterState es, Vector3 camPos)
     {
         if (es.Def.Trail is not { } trail) return 0;
+        int n = es.Particles.Count;
+        // the instances are rebuilt every step, so a count that disagrees is a frame the host asked too early
+        if (n < 2 || es.InstanceCount != n || es.Instances.Length < n * Stride) return 0;
 
-        int quadCount = 0;
-        foreach (var p in es.Particles) if (p.HistoryCount >= 2) quadCount += p.HistoryCount - 1;
-        if (quadCount == 0) return 0;
-
-        int needed = quadCount * 6 * TrailStride;
-        if (buf.Length < needed) buf = new float[Math.Max(needed, 4096)];
-
-        float tiling = trail.EffectiveTiling;
-        int k = 0;
-        for (int pi = 0; pi < es.Particles.Count; pi++)
+        var points = _strandPoints; var widths = _strandWidths; var colours = _strandColours;
+        if (points.Length < n) { points = _strandPoints = new Vector3[n * 2]; widths = _strandWidths = new float[n * 2]; colours = _strandColours = new Vector4[n * 2]; }
+        var inst = es.Instances;
+        for (int i = 0; i < n; i++)
         {
-            var p = es.Particles[pi];
-            if (p.HistoryCount < 2 || p.History is not { } hist) continue;
+            int o = i * Stride;
+            points[i] = new Vector3(inst[o], inst[o + 1], inst[o + 2]);
+            widths[i] = MathF.Max(MathF.Abs(inst[o + 3]) * 0.5f, 1e-3f);
+            colours[i] = new Vector4(inst[o + 5], inst[o + 6], inst[o + 7], inst[o + 8]);
+        }
 
-            // Colour and width come from the same per-particle values the billboard path uses, so a trail
-            // emitter's colour-over-life curve drives the ribbon exactly as it would drive a sprite.
-            int o = pi * Stride;
-            float r = 1f, g = 1f, b = 1f, a = 1f, halfWidth = 8f;
-            if (o + 8 < es.Instances.Length && pi < es.InstanceCount)
+        int needed = (n - 1) * 6 * TrailStride;
+        if (buf.Length < needed) buf = new float[Math.Max(needed, 4096)];
+        return BuildTrailStrand(buf, 0, points.AsSpan(0, n), widths.AsSpan(0, n), colours.AsSpan(0, n), trail,
+            es.Def.IsArbitraryTrail, es.PlacementUp, es.PlacementForward, camPos);
+    }
+
+    [ThreadStatic] private static Vector3[]? _strandPointsTs;
+    [ThreadStatic] private static float[]? _strandWidthsTs;
+    [ThreadStatic] private static Vector4[]? _strandColoursTs;
+    private static Vector3[] _strandPoints { get => _strandPointsTs ??= new Vector3[64]; set => _strandPointsTs = value; }
+    private static float[] _strandWidths { get => _strandWidthsTs ??= new float[64]; set => _strandWidthsTs = value; }
+    private static Vector4[] _strandColours { get => _strandColoursTs ??= new Vector4[64]; set => _strandColoursTs = value; }
+
+    /// <summary>The particles either side of a trail point that smoothing averages. LTK Manager's table by effects
+    /// quality is 0,1,2,3,3 - this is the top of it; the viewport has no quality setting.</summary>
+    internal const int TrailSmoothingReach = 3;
+
+    private static Vector3 PlacedPoint(ReadOnlySpan<Vector3> points, int at, int reach)
+    {
+        if (reach == 0) return points[at];
+        int from = Math.Max(at - reach, 0), to = Math.Min(at + reach, points.Length - 1);
+        var sum = Vector3.Zero;
+        for (int e = from; e <= to; e++) sum += points[e];
+        return sum / (to - from + 1);
+    }
+
+    /// <summary>M853: extrude one strand - <paramref name="points"/> oldest first, with each point's half-width and
+    /// colour - into a triangle list at <paramref name="buf"/>[<paramref name="k"/>..]; returns the new cursor.
+    /// <paramref name="buf"/> needs (points - 1) * 6 * <see cref="TrailStride"/> floats.
+    ///
+    /// <para>The walk follows LTK Manager's <c>writeTrail</c> (the engine's trail as it reads it):
+    /// <c>mSmoothingMode</c> 1 walks newest to oldest and 2 oldest to newest, so U opens at zero on that end;
+    /// either box-filters the interior points over <see cref="TrailSmoothingReach"/> particles each side and
+    /// mitres each joint to the bisector of its two sides; 0 draws the raw points. <c>mCutoff</c> ends the walk
+    /// once that length has been covered (EffectiveCutoff: junk such as -1 or 2^36 falls back to 1,000). U is the arc length walked over
+    /// <c>mBirthTilingSize.x</c> (the default trail mode - the "wake" mode that runs U on the emitter's odometer
+    /// is not implemented). A camera trail's sides lie across the view, an arbitrary trail's across the
+    /// placement's up axis.</para></summary>
+    public static int BuildTrailStrand(float[] buf, int k, ReadOnlySpan<Vector3> points, ReadOnlySpan<float> halfWidth,
+        ReadOnlySpan<Vector4> colour, VfxTrailDefinition trail, bool arbitrary, Vector3 up, Vector3 forward, Vector3 camPos)
+    {
+        int n = points.Length;
+        if (n < 2 || halfWidth.Length < n || colour.Length < n) return k;
+
+        bool backToFront = trail.SmoothingMode == 2;
+        bool smoothed = trail.SmoothingMode != 0;
+        int start = backToFront ? 0 : n - 1;
+        int step = backToFront ? 1 : -1;
+        float tiling = trail.EffectiveTiling;
+        float cutoff = trail.EffectiveCutoff;
+
+        float walked = 0f;
+        bool haveLast = false;
+        Vector3 last = default, lastAcross = default, lastSide = Vector3.UnitX;
+        Vector3 prevLeft = default, prevRight = default; Vector4 prevColour = default; float prevU = 0f;
+        for (int seen = 0; seen < n; seen++)
+        {
+            int at = start + seen * step;
+            bool first = !haveLast;
+            // the oldest particle is never filtered, and neither is the first of the walk
+            var pos = PlacedPoint(points, at, smoothed && !first && at != 0 ? TrailSmoothingReach : 0);
+            if (!first)
             {
-                halfWidth = MathF.Abs(es.Instances[o + 3]) * 0.5f;
-                r = es.Instances[o + 5]; g = es.Instances[o + 6]; b = es.Instances[o + 7]; a = es.Instances[o + 8];
+                float segment = Vector3.Distance(pos, last);
+                if (segment < 1e-4f) continue;   // a point on top of the last has no direction and no width
+                walked += segment;
+                if (cutoff <= walked) break;
             }
-            if (halfWidth < 1e-3f) halfWidth = 1e-3f;
 
-            var colour = new Vector4(r, g, b, a);
-            k = BuildRibbon(buf, k, hist.AsSpan(0, p.HistoryCount), halfWidth, colour, colour,
-                tiling, null, es.Def.IsArbitraryTrail, es.PlacementUp, es.PlacementForward, camPos);
+            // the first point of the walk faces the next one; a strand whose leading points sit on each other has
+            // skipped to its last index by now and has no next point to face
+            if (first && (at + step < 0 || at + step >= n)) break;
+            Vector3 tangent = first ? PlacedPoint(points, at + step, 0) - pos : pos - last;
+            if (tangent.LengthSquared() < 1e-8f) continue;
+            tangent = Vector3.Normalize(tangent);
+
+            Vector3 across;
+            if (arbitrary)
+            {
+                across = Vector3.Cross(tangent, up);
+                if (across.LengthSquared() < 1e-8f) across = Vector3.Cross(tangent, forward);
+            }
+            else
+            {
+                across = Vector3.Cross(tangent, camPos - pos);
+                if (across.LengthSquared() < 1e-8f) across = Vector3.Cross(tangent, Vector3.UnitY);
+            }
+            across = across.LengthSquared() < 1e-8f ? lastSide : Vector3.Normalize(across);
+            lastSide = across;
+
+            // the mitre: this side turned halfway toward the last, and the side itself where the two are opposite
+            var rawAcross = across;
+            if (smoothed && !first)
+            {
+                var bisector = across + lastAcross;
+                across = bisector.LengthSquared() > 1e-8f ? Vector3.Normalize(bisector) : rawAcross;
+            }
+
+            float half = halfWidth[at];
+            float u = walked / tiling;
+            var left = pos - across * half;
+            var right = pos + across * half;
+            var col = colour[at];
+            if (!first)
+            {
+                void Vert(Vector3 position, float uu, float vv, Vector4 c)
+                {
+                    buf[k++] = position.X; buf[k++] = position.Y; buf[k++] = position.Z;
+                    buf[k++] = uu; buf[k++] = vv;
+                    buf[k++] = c.X; buf[k++] = c.Y; buf[k++] = c.Z; buf[k++] = c.W;
+                }
+                Vert(prevLeft, prevU, 0f, prevColour); Vert(prevRight, prevU, 1f, prevColour); Vert(right, u, 1f, col);
+                Vert(prevLeft, prevU, 0f, prevColour); Vert(right, u, 1f, col); Vert(left, u, 0f, col);
+            }
+            prevLeft = left; prevRight = right; prevColour = col; prevU = u;
+            last = pos; lastAcross = rawAcross; haveLast = true;
         }
         return k;
     }

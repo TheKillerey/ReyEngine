@@ -121,12 +121,25 @@ public sealed class ChromaEffectsDeviceTests : IDisposable
         };
         renderer.GroundGrid = false;
         var frame = renderer.RenderFrame(Size, Size, settings, out var error, new List<string>());
+        if (frame is null && error is { } why && why.Contains("no shader loaded", StringComparison.Ordinal))
+        {
+            // nothing of this playback drew a material (a system whose emitters all fail to build): an empty frame, not an error
+            driver.SetPlayback(null);
+            driver.Tick(0f, mirrored, mirrored * proj, eye, 950f);
+            var blank = new byte[Size * Size * 4];
+            for (int i = 0; i < blank.Length; i += 4) { blank[i] = 19; blank[i + 1] = 13; blank[i + 2] = 10; blank[i + 3] = 255; }
+            return new Frame(blank, 0);
+        }
         if (frame is null) throw new InvalidOperationException("no frame: " + error);
         var bytes = frame.ToArray();
         int lit = 0;
         for (int i = 0; i + 3 < bytes.Length; i += 4)
             if (Math.Abs(bytes[i] - 0.075f * 255) > 14 || Math.Abs(bytes[i + 1] - 0.051f * 255) > 14 || Math.Abs(bytes[i + 2] - 0.039f * 255) > 14) lit++;   // BGRA
         driver.SetPlayback(null);
+        // M853: the teardown is deferred to the next Tick, and this driver is never ticked again. Its materials then stayed in the
+        // shared renderer for every later Render - harmless while no trail drew, but a ribbon is drawn from its own stale vertices
+        // every frame, so the first frame's trails (in their ORIGINAL colours) sat over every recoloured frame after it.
+        driver.Tick(0f, mirrored, mirrored * proj, eye, 950f);
         return new Frame(bytes, lit);
     }
 

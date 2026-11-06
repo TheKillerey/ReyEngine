@@ -183,12 +183,45 @@ public sealed class D3D11MapParticles
     /// builders grow it to fit - a long trail can need far more than the initial guess.</summary>
     private float[] _ribbonVerts = Array.Empty<float>();
 
+    // ---- M854: child systems -----------------------------------------------------------------------
+    //
+    // A particle of a parent emitter can ask for a child system (VfxChildParticleSet), and the simulator only SCHEDULES
+    // those (EmitterState.TakeChildSpawns - it is graphics-free by design). Only the GL viewport ever drained the queue, so
+    // on this backend - the default one - no child ever spawned: 37,047 emitters in 20,069 systems, the Jinx R rocket's
+    // child among them.
+    //
+    // The billboard slices of every child system the playback can reach are built at Rebuild from a TEMPLATE (a simulator
+    // that is never stepped), because a slice is keyed by emitter definition and a spawn must not build materials; a live
+    // child then only adds its emitter states to those slices. A child's mesh and ribbon emitters are per instance (see
+    // MeshSlice and RibbonSlice), so those are built when the child spawns and released when it is retired.
+
+    /// <summary>One live child system: its simulator and everything built for it that must be released with it.</summary>
+    private sealed class ChildSim
+    {
+        public required VfxPlaybackItem Item { get; init; }
+        public required VfxParticleSimulator Sim { get; init; }
+        public float Age;
+        public readonly List<PreviewMaterial> Materials = new();
+        /// <summary>Billboard materials built at spawn: they belong to a shared slice that outlives this child.</summary>
+        public readonly HashSet<PreviewMaterial> QuadMaterials = new(ReferenceEqualityComparer.Instance);
+    }
+    private readonly List<ChildSim> _children = new();
+    private readonly HashSet<VfxParticleSimulator> _childSet = new(ReferenceEqualityComparer.Instance);
+    private VfxD3D11EmitterPipeline.Tocs? _tocs;
+
+    /// <summary>Live child systems spawned by the playing particles (M854).</summary>
+    public int ChildSystems => _children.Count;
+
+    /// <summary>The camera gate's answer for a placement, or - for a spawned child - that it is alive.</summary>
+    private bool IsLive(VfxParticleSimulator owner) => _activeSet.Contains(owner) || _childSet.Contains(owner);
+
     public D3D11MapParticles(ShaderPreviewRenderer renderer, ShaderCacheReader cache,
         int maxQuads = DefaultMaxQuads)
     {
         _renderer = renderer;
         _cache = cache;
         _maxQuads = Math.Max(1, maxQuads);
+        _cycle.Restarted = RetireAllChildren;   // M854
     }
 
     // ---------------------------------------------------------------- state the UI reads
@@ -246,6 +279,12 @@ public sealed class D3D11MapParticles
     // never sets them - the map viewport, the character window - gets EXACTLY today's Tick.
     private readonly VfxPreviewCycle _cycle = new();
 
+    /// <summary>M854: the cycle restarted the parents; the children belong to the run that ended.</summary>
+    private void RetireAllChildren()
+    {
+        for (int i = _children.Count - 1; i >= 0; i--) { RetireChild(_children[i]); _children.RemoveAt(i); }
+    }
+
     /// <summary>Every (item, simulator) pair this playback holds, rebuilt once per <see cref="Rebuild"/> -
     /// the rig re-anchors ALL of them regardless of the camera gate, matching ViewportControl's own loop
     /// over its full item cache. Reused every <see cref="Tick"/> rather than projected from <see cref="_sims"/>
@@ -259,6 +298,14 @@ public sealed class D3D11MapParticles
 
     /// <summary>M185: the manual Stop toggle. False everywhere except the Particle Editor's preview.</summary>
     public bool Stopped { get; set; }
+
+    /// <summary>M862: the ground plane a VfxPrimitivePlanarProjection lands on, or null to keep each emitter's own height. A host that
+    /// knows its floor (the character window: the character's feet) sets it; a map leaves it null.</summary>
+    public float? ProjectionGroundY { get; set; }
+
+    /// <summary>M860: which submeshes of the host are shown (the character window's own list); null = all. The attached-mesh body
+    /// draws only the submeshes that are, so hiding a part of the character hides its shell too.</summary>
+    public IReadOnlyList<bool>? HostSubmeshVisible { get; set; }
 
     /// <summary>M186: the auto-stop loop. False everywhere except the Particle Editor's preview, which
     /// opens with it on to match the GL editor's own default.</summary>
@@ -330,6 +377,7 @@ public sealed class D3D11MapParticles
     public void StopAll()
     {
         foreach (var sim in _sims.Values) sim.Stop();
+        foreach (var child in _children) child.Sim.Stop();   // M854
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -381,10 +429,18 @@ public sealed class D3D11MapParticles
                 _renderer.ReleaseRiotMeshGeometry(id);
         }
         _meshSlices.Clear();
+        if (!meshGeometryAlreadyReleased)
+            foreach (var hs in _hostSlices.Where(h => h.GeometryId >= 0)) _renderer.ReleaseMeshGeometry(hs.GeometryId);   // M860
+        _hostSlices.Clear();
+        if (!meshGeometryAlreadyReleased)
+            foreach (var cs in _customSlices) _renderer.ReleaseRiotMeshGeometry(cs.GeometryId);   // M861
+        _customSlices.Clear();
         // M782: ribbons are NOT released by ClearMaterials, so these ids are still ours either way.
         foreach (int id in _ribbonSlices.Select(s => s.RibbonId).Distinct())
             _renderer.ReleaseRibbon(id);
         _ribbonSlices.Clear();
+        _children.Clear(); _childSet.Clear();   // M854: their materials and geometry went with the ones released above
+        _tocs = null;
         _liveBySlice.Clear();
         _travelElapsed.Clear();   // M630: elapsed flight belongs to the sims being discarded
         _byEmitter.Clear();
@@ -408,6 +464,7 @@ public sealed class D3D11MapParticles
             BuildReport = tocError ?? "the particle shaders could not be read";
             return;
         }
+        _tocs = tocs;
         // M640: the mesh pair is optional - its absence degrades mesh emitters to the M283 path, visibly.
         string? meshTocError = null;
         _meshTocs = UseRiotMeshShaders ? VfxD3D11EmitterPipeline.ReadMeshTocs(_cache, out meshTocError) : null;
@@ -418,6 +475,7 @@ public sealed class D3D11MapParticles
         int emptySystems = 0, failedPipelines = 0;
         var systems = new Dictionary<uint, (string Name, int Placements, int Emitters)>();
 
+        var templates = new HashSet<VfxPlaybackItem>(ReferenceEqualityComparer.Instance);
         foreach (var item in pb.Items)
         {
             // M266: seed, transform, tint and start delay all come from the one shared contract - see
@@ -432,83 +490,14 @@ public sealed class D3D11MapParticles
             systems[item.System.PathHash] = (item.System.Name, tally.Placements + 1, sim.Emitters.Count);
 
             foreach (var es in sim.Emitters)
-            {
-                var def = es.Def;
-                // M364: beams and trails are ribbon strips, not billboards. They used to be skipped here
-                // with exactly that reason recorded; they now build a ribbon slice of their own.
-                if (def.Beam is not null || def.Trail is not null)
-                {
-                    if (def.Beam is not null && def.IsMeshPrimitive && item.BeamTarget is not null
-                        && BuildMeshSlice(item, sim, es, def, tocs, sb)) continue;
-                    if (!BuildRibbonSlice(item, sim, es, def, tocs, sb)) SkippedBeamTrailEmitters++;
-                    continue;
-                }
+                BuildEmitter(item, sim, es, tocs, sb, ref failedPipelines, template: false);
 
-                // M283: mesh-primitive emitters draw their own .skn through the renderer's mesh pipeline.
-                // The decoded mesh has been on the playback item all along - it is what GL draws - and this
-                // path simply never read it, so the emitter was counted as skipped and nothing appeared.
-                if (def.IsMeshPrimitive)
-                {
-                    if (!BuildMeshSlice(item, sim, es, def, tocs, sb)) SkippedMeshEmitters++;
-                    continue;
-                }
-
-                if (_byEmitter.TryGetValue(def, out var existing))
-                {
-                    existing.Sources.Add((sim, es));
-                    continue;
-                }
-                if (_noPipeline.Contains(def)) continue;
-
-                var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
-                    sampler => ResolveSprite(sampler, item, def), sb);
-                if (mat is null)
-                {
-                    // The per-emitter detail is already in sb; name the emitter so the reason has a subject.
-                    sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline");
-                    failedPipelines++;
-                    _noPipeline.Add(def);
-                    continue;
-                }
-
-                Register(mat, def);
-                var slice = new Slice { Material = mat, Def = def };
-                slice.Sources.Add((sim, es));
-                _byEmitter[def] = slice;
-                _slices.Add(slice);
-            }
+            // M854: the billboard slices of the children this placement can spawn, so a spawn finds them built.
+            BuildChildTemplates(item, tocs, sb, ref failedPipelines, templates);
         }
 
-        // M710: the draw order of this host, at the one moment it exists. Everything above only BUILT
-        // materials; a material that does not write depth is drawn in the order the renderer was handed it,
-        // so this loop is the picture's order and nothing downstream can change it.
-        //
-        // M709 established the key: the ground layer first, then the authored pass, with a stable sort
-        // leaving authored order as the tiebreak. Four channels register from four different places and
-        // draw from one list, so they are ordered together here rather than four times over.
-        //
-        // The scope is a documented divergence from the OpenGL viewport, which sorts inside one simulator.
-        // This host shares one slice per emitter DEFINITION across every placement of it - that sharing is
-        // the whole reason the map can carry thousands of placements - so it cannot sort per placement
-        // without multiplying the draw count by the placement count. It sorts across the map instead.
-        //
-        // M720: and so it takes only the first two keys. The blend rank and the render-flags byte order
-        // emitters inside one system; across a map they would pull every NONE emitter of a pass ahead of
-        // every other system's ADD, because the engine key that keeps systems apart - their position - is one
-        // neither renderer has. Registration order, which is system by system, breaks the tie instead.
-        foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyAcrossSystems(e.Def)))
-            _renderer.AddMaterial(pending.Mat);
-        _pending.Clear();
-
-        // The slice list takes the SAME key, so the quad budget's ranges and its thinning follow the order
-        // the frame actually draws in. Pack thins the last slices first, and "last" is meant to be the
-        // draws on top; under a different key from the one above it would have meant something else.
-        //
-        // OrderBy is stable; List.Sort is not, and an unstable sort here would reshuffle same-key emitters
-        // from frame to frame, which for additive draws IS the image.
-        _slices = _slices.OrderBy(static s => VfxDrawOrder.KeyAcrossSystems(s.Def)).ToList();
-        foreach (var sl in _slices) _liveBySlice.Add(sl.Live);
-        if (_ranges.Length < _slices.Count) _ranges = new PackedRange[_slices.Count];
+        FlushPending();
+        RefreshSliceTables();
 
         var head = new StringBuilder();
         head.AppendLine($"{N(Placements)} placement(s) over {N(systems.Count)} system(s), "
@@ -616,7 +605,7 @@ public sealed class D3D11MapParticles
         // only drawable emitter is a beam has no quad slices at all, and testing _slices alone would read
         // as "nothing to do" and freeze it.
         if (_playback is not { } pb
-            || (_slices.Count == 0 && _meshSlices.Count == 0 && _ribbonSlices.Count == 0)) return;
+            || (_slices.Count == 0 && _meshSlices.Count == 0 && _ribbonSlices.Count == 0 && _hostSlices.Count == 0 && _customSlices.Count == 0)) return;
 
         phase.Restart();
         UpdateActive(pb, mirrorInclusiveViewProj, cameraPosition, cameraDistance);
@@ -653,8 +642,12 @@ public sealed class D3D11MapParticles
             VfxPlaybackSim.AttachHost(sim, _emissionHost);   // M755
             sim.Update(dt);
         }
+        // M854: the children the parents' particles asked for during that step - the same drain the GL viewport runs
+        // (ViewportControl.SpawnQueuedChildren, through VfxPlaybackSim.TakeChildSpawns)
+        foreach (var (item, sim) in _active) SpawnQueuedChildren(item, sim);
+        TickChildren(dt);
         SimulateMs = phase.Elapsed.TotalMilliseconds;
-        phase.Restart(); TickMeshSlices(); MeshMs = phase.Elapsed.TotalMilliseconds;
+        phase.Restart(); TickMeshSlices(); TickHostSlices(); TickCustomSlices(); MeshMs = phase.Elapsed.TotalMilliseconds;
         phase.Restart(); TickRibbonSlices(cameraPosition); RibbonMs = phase.Elapsed.TotalMilliseconds;
 
         var (right, up, normal) = VfxBillboardBasis.FromView(mirrorInclusiveView);
@@ -668,7 +661,7 @@ public sealed class D3D11MapParticles
             sl.Live.Clear();
             foreach (var (owner, state) in sl.Sources)
             {
-                if (!_activeSet.Contains(owner) || state.InstanceCount == 0) continue;
+                if (!IsLive(owner) || state.InstanceCount == 0) continue;
                 sl.Live.Add(state);
                 requested += state.InstanceCount;
             }
@@ -679,7 +672,7 @@ public sealed class D3D11MapParticles
         phase.Restart();
         int quads = Pack(_liveBySlice, _maxQuads, _verts, _indices,
             right, up, normal, _ranges, out int vertexCount, out int indexCount,
-            out int packRequested, out int truncated);
+            out int packRequested, out int truncated, ProjectionGroundY ?? float.NaN);
 
         PackMs = phase.Elapsed.TotalMilliseconds;
         QuadsRequested = packRequested;
@@ -831,7 +824,7 @@ public sealed class D3D11MapParticles
         {
             var mat = ms.Material;
             var es = ms.State;
-            bool live = _activeSet.Contains(ms.Owner) && es.InstanceCount > 0;
+            bool live = IsLive(ms.Owner) && es.InstanceCount > 0;
             mat.Visible = live;
             if (!live) continue;
 
@@ -950,6 +943,389 @@ public sealed class D3D11MapParticles
         return true;
     }
 
+    /// <summary>M854: build what one emitter draws. <paramref name="template"/> builds only the shared billboard slice
+    /// (no source, no mesh, no ribbon): the emitter belongs to a simulator that is never stepped.</summary>
+    private void BuildEmitter(VfxPlaybackItem item, VfxParticleSimulator sim, VfxParticleSimulator.EmitterState es,
+        VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb, ref int failedPipelines, bool template,
+        ChildSim? owner = null)
+    {
+        var def = es.Def;
+        // M364: beams and trails are ribbon strips, not billboards. They used to be skipped here
+        // with exactly that reason recorded; they now build a ribbon slice of their own.
+        if (def.Beam is not null || def.Trail is not null)
+        {
+            if (template) return;
+            if (def.Beam is not null && def.IsMeshPrimitive && item.BeamTarget is not null
+                && BuildMeshSlice(item, sim, es, def, tocs, sb)) return;
+            if (!BuildRibbonSlice(item, sim, es, def, tocs, sb)) SkippedBeamTrailEmitters++;
+            return;
+        }
+
+        // M860: an attached mesh with no mesh file draws the host character; without one it draws nothing (not a 1-unit dot)
+        if (def.IsHostMesh)
+        {
+            if (template) return;
+            if (!BuildHostSlice(item, sim, es, def, tocs, sb)) SkippedMeshEmitters++;
+            return;
+        }
+
+        // M283: mesh-primitive emitters draw their own .skn through the renderer's mesh pipeline.
+        // The decoded mesh has been on the playback item all along - it is what GL draws - and this
+        // path simply never read it, so the emitter was counted as skipped and nothing appeared.
+        if (def.IsMeshPrimitive)
+        {
+            if (template) return;
+            // M861: the material the emitter links, through Riot's shader path, instead of the particle mesh shader
+            if (def.CustomMaterialLink != 0 && def.Beam is null && BuildCustomMaterialSlice(item, sim, es, def, sb)) return;
+            if (!BuildMeshSlice(item, sim, es, def, tocs, sb)) SkippedMeshEmitters++;
+            return;
+        }
+
+        if (_byEmitter.TryGetValue(def, out var existing))
+        {
+            if (!template) existing.Sources.Add((sim, es));
+            return;
+        }
+        if (_noPipeline.Contains(def)) return;
+
+        var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
+            sampler => ResolveSprite(sampler, item, def), sb);
+        if (mat is null)
+        {
+            // The per-emitter detail is already in sb; name the emitter so the reason has a subject.
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline");
+            failedPipelines++;
+            _noPipeline.Add(def);
+            return;
+        }
+
+        Register(mat, def);
+        owner?.QuadMaterials.Add(mat);   // the slice is shared and stays; a later child of the same definition joins it
+        var slice = new Slice { Material = mat, Def = def };
+        if (!template) slice.Sources.Add((sim, es));
+        _byEmitter[def] = slice;
+        _slices.Add(slice);
+    }
+
+    /// <summary>M854: build the billboard slices of every child system <paramref name="item"/> can spawn, to the depth the
+    /// playback resolved them. <paramref name="seen"/> is the one guard that matters: the item graph is finite (the resolver
+    /// caps the depth and refuses an ancestor), and an item reachable twice is built once.</summary>
+    private void BuildChildTemplates(VfxPlaybackItem item, VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb,
+        ref int failedPipelines, HashSet<VfxPlaybackItem> seen)
+    {
+        if (item.EmitterChildren is not { } perEmitter) return;
+        foreach (var list in perEmitter)
+        {
+            if (list is null) continue;
+            foreach (var child in list)
+            {
+                if (!seen.Add(child)) continue;
+                var template = new VfxParticleSimulator(1);
+                template.SetSystem(child.System, Matrix4x4.Identity);
+                foreach (var es in template.Emitters)
+                    BuildEmitter(child, template, es, tocs, sb, ref failedPipelines, template: true);
+                BuildChildTemplates(child, tocs, sb, ref failedPipelines, seen);
+            }
+        }
+    }
+
+    /// <summary>M710 (moved here by M854): the draw order of this host, at the one moment it exists. Everything above only
+    /// BUILT materials; a material that does not write depth is drawn in the order the renderer was handed it, so this is
+    /// the picture's order. Run once at the end of a rebuild, and again for what a spawned child built - which then draws
+    /// after everything the rebuild registered.</summary>
+    private void FlushPending()
+    {
+        foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyAcrossSystems(e.Def)))
+            _renderer.AddMaterial(pending.Mat);
+        _pending.Clear();
+    }
+
+    /// <summary>The slice list takes the SAME key (M710), so the quad budget's ranges and its thinning follow the order the
+    /// frame actually draws in. OrderBy is stable; List.Sort is not, and an unstable sort would reshuffle same-key emitters
+    /// from frame to frame, which for additive draws IS the image.</summary>
+    private void RefreshSliceTables()
+    {
+        _slices = _slices.OrderBy(static s => VfxDrawOrder.KeyAcrossSystems(s.Def)).ToList();
+        _liveBySlice.Clear();
+        foreach (var sl in _slices) _liveBySlice.Add(sl.Live);
+        if (_ranges.Length < _slices.Count) _ranges = new PackedRange[_slices.Count];
+    }
+
+    /// <summary>M854: drain the child spawns one simulator queued and start the children, up to the shared ceiling.</summary>
+    private void SpawnQueuedChildren(VfxPlaybackItem item, VfxParticleSimulator sim)
+    {
+        foreach (var (childItem, position) in VfxPlaybackSim.TakeChildSpawns(item, sim))
+        {
+            if (_children.Count >= VfxPlaybackSim.MaxLiveChildSims || _tocs is not { } tocs) return;
+            var csim = VfxPlaybackSim.CreateChildSim(childItem, position, _children.Count);
+            VfxPlaybackSim.ApplySimulationAssets(csim, childItem);
+            var child = new ChildSim { Item = childItem, Sim = csim };
+
+            int slicesBefore = _slices.Count;
+            var sb = new StringBuilder();
+            int failed = 0;
+            foreach (var es in csim.Emitters)
+                BuildEmitter(childItem, csim, es, tocs, sb, ref failed, template: false, child);
+            foreach (var pending in _pending) if (!child.QuadMaterials.Contains(pending.Mat)) child.Materials.Add(pending.Mat);   // the mesh and ribbon materials built just now
+            FlushPending();
+            if (_slices.Count != slicesBefore) RefreshSliceTables();
+
+            _children.Add(child);
+            _childSet.Add(csim);
+        }
+    }
+
+    private void TickChildren(float dt)
+    {
+        // index loop: SpawnQueuedChildren appends, and a grandchild starts on the next frame
+        for (int i = _children.Count - 1; i >= 0; i--)
+        {
+            var c = _children[i];
+            c.Age += dt;
+            if (c.Age > VfxPlaybackSim.ChildSimMaxAge) { RetireChild(c); _children.RemoveAt(i); continue; }
+            if (Stopped) c.Sim.Stop();
+            c.Sim.SetBeamTarget(_beamTarget);
+            VfxPlaybackSim.AttachHost(c.Sim, _emissionHost);
+            c.Sim.Update(dt);
+            SpawnQueuedChildren(c.Item, c.Sim);
+        }
+    }
+
+    /// <summary>Take a child out of the draw: its emitter states leave the shared slices and what was built for it is released.</summary>
+    private void RetireChild(ChildSim c)
+    {
+        _childSet.Remove(c.Sim);
+        foreach (var sl in _slices) sl.Sources.RemoveAll(src => ReferenceEquals(src.Owner, c.Sim));
+        for (int i = _meshSlices.Count - 1; i >= 0; i--)
+        {
+            var ms = _meshSlices[i];
+            if (!ReferenceEquals(ms.Owner, c.Sim)) continue;
+            if (ms.GeometryId >= 0) _renderer.ReleaseMeshGeometry(ms.GeometryId);
+            if (ms.RiotGeometryId >= 0) _renderer.ReleaseRiotMeshGeometry(ms.RiotGeometryId);
+            _meshSlices.RemoveAt(i);
+        }
+        for (int i = _customSlices.Count - 1; i >= 0; i--)
+        {
+            var cs = _customSlices[i];
+            if (!ReferenceEquals(cs.Owner, c.Sim)) continue;
+            var gone = new HashSet<PreviewMaterial>(cs.Materials, ReferenceEqualityComparer.Instance);
+            _renderer.RemoveMaterials(m => gone.Contains(m));
+            _mine.ExceptWith(gone);
+            _renderer.ReleaseRiotMeshGeometry(cs.GeometryId);
+            _customSlices.RemoveAt(i);
+        }
+        for (int i = _hostSlices.Count - 1; i >= 0; i--)
+        {
+            if (!ReferenceEquals(_hostSlices[i].Owner, c.Sim)) continue;
+            if (_hostSlices[i].GeometryId >= 0) _renderer.ReleaseMeshGeometry(_hostSlices[i].GeometryId);
+            _hostSlices.RemoveAt(i);
+        }
+        for (int i = _ribbonSlices.Count - 1; i >= 0; i--)
+        {
+            if (!ReferenceEquals(_ribbonSlices[i].Owner, c.Sim)) continue;
+            _renderer.ReleaseRibbon(_ribbonSlices[i].RibbonId);
+            _ribbonSlices.RemoveAt(i);
+        }
+        if (c.Materials.Count > 0)
+        {
+            var mine = new HashSet<PreviewMaterial>(c.Materials, ReferenceEqualityComparer.Instance);
+            _renderer.RemoveMaterials(m => mine.Contains(m));
+            _mine.ExceptWith(mine);
+        }
+    }
+
+    // ---- M860: attached meshes (the effect IS the character, re-skinned) ----------------------------------
+
+    /// <summary>An AttachedMesh emitter that names no mesh file: it draws the HOST character's own skinned body with the
+    /// emitter's material. One per emitter instance, like <see cref="MeshSlice"/>. The geometry is the host's mesh limited to
+    /// the submeshes the emitter's mask lists (all of them without a mask), created the first Tick a host exists and
+    /// re-posed every frame from the host's skinned world positions.</summary>
+    private sealed class HostSlice
+    {
+        public required PreviewMaterial Material { get; init; }
+        public required VfxEmitterDefinition Def { get; init; }
+        public required VfxParticleSimulator Owner { get; init; }
+        public required VfxParticleSimulator.EmitterState State { get; init; }
+        public int GeometryId = -1;
+        public ReyEngine.Formats.Meshes.MeshAsset? Mesh;
+        public float[] Positions = Array.Empty<float>();
+        public float[] Instances = Array.Empty<float>();
+        /// <summary>The visibility the geometry's index set was built for; a change rebuilds it.</summary>
+        public string VisibilityKey = "";
+    }
+    private readonly List<HostSlice> _hostSlices = new();
+
+    /// <summary>How many host-mesh emitters drew last frame; 0 with emitters present means no character is hosting them.</summary>
+    public int HostMeshEmittersDrawn { get; private set; }
+
+    private bool BuildHostSlice(VfxPlaybackItem item, VfxParticleSimulator sim, VfxParticleSimulator.EmitterState es,
+        VfxEmitterDefinition def, VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb)
+    {
+        if (ResolveSprite("TEXTURE", item, def) is not { } sprite || VfxPlaybackSim.IsStandIn(sprite.Key))
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: attached mesh with no texture - not drawn");
+            return false;
+        }
+        var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
+            sampler => ResolveSprite(sampler, item, def), sb);
+        if (mat is null)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline (attached mesh)");
+            return false;
+        }
+        mat.UsesDynamicMesh = false;
+        mat.CullBackFaces = !def.DisableBackfaceCull;
+        mat.Visible = false;   // until a host exists
+        Register(mat, def);
+        _hostSlices.Add(new HostSlice { Material = mat, Def = def, Owner = sim, State = es });
+        return true;
+    }
+
+    private void TickHostSlices()
+    {
+        HostMeshEmittersDrawn = 0;
+        foreach (var hs in _hostSlices)
+        {
+            var mat = hs.Material;
+            var es = hs.State;
+            if (!IsLive(hs.Owner) || es.InstanceCount == 0 || _emissionHost is not { } host) { mat.Visible = false; continue; }
+
+            string visKey = HostSubmeshVisible is { } vis ? string.Concat(vis.Select(v => v ? '1' : '0')) : "";
+            if (hs.GeometryId < 0 || !ReferenceEquals(hs.Mesh, host.Mesh) || hs.VisibilityKey != visKey)
+            {
+                if (hs.GeometryId >= 0) _renderer.ReleaseMeshGeometry(hs.GeometryId);
+                hs.GeometryId = -1;
+                var mesh = host.Mesh;
+                var keepMask = VfxEmissionSurfaceLoader.SubmeshFilter(mesh, hs.Def.HostSubmeshes);
+                // M860 follow-up: and only the submeshes the character window shows
+                var shown = HostSubmeshVisible;
+                Func<int, bool>? keepShown = null;
+                if (shown is not null)
+                {
+                    var ranges = mesh.SubMeshes.Select((s, i) => (First: s.StartIndex / 3, End: (s.StartIndex + s.IndexCount) / 3, Visible: i >= shown.Count || shown[i])).ToList();
+                    keepShown = t => { foreach (var r in ranges) if (t >= r.First && t < r.End) return r.Visible; return true; };
+                }
+                Func<int, bool>? keep = keepMask is null ? keepShown : keepShown is null ? keepMask : t => keepMask(t) && keepShown(t);
+                uint[] indices = mesh.Indices;
+                if (keep is not null)
+                {
+                    var kept = new List<uint>();
+                    for (int t = 0; t < mesh.Indices.Length / 3; t++)
+                        if (keep(t)) { kept.Add(mesh.Indices[t * 3]); kept.Add(mesh.Indices[t * 3 + 1]); kept.Add(mesh.Indices[t * 3 + 2]); }
+                    indices = kept.ToArray();
+                }
+                if (indices.Length == 0) { mat.Visible = false; continue; }
+                hs.GeometryId = _renderer.CreateMeshGeometry(mesh.Positions, mesh.Uvs, indices);
+                if (hs.GeometryId < 0) { mat.Visible = false; continue; }
+                hs.Mesh = mesh;
+                hs.VisibilityKey = visKey;
+                hs.Positions = new float[mesh.VertexCount * 3];
+                mat.MeshGeometryId = hs.GeometryId;
+            }
+
+            // The body, skinned and placed by the character window (CPU skinning of the same pose the palette poses the drawn mesh with)
+            host.CopyWorldPositions(hs.Positions);
+            _renderer.UpdateMeshGeometryPositions(hs.GeometryId, hs.Positions);
+
+            // One draw per particle, the geometry already in world space: the transform is identity and the particle's size scales
+            // the body about the character's origin (the emitter's authored scale is a slight inflation of the body, 1.01-1.1),
+            // which is a translation of origin * (1 - scale). Rotation is dropped - the body is not turned by the particle.
+            int stride = ParticleQuadBuilder.Stride, n = es.InstanceCount;
+            if (hs.Instances.Length < n * stride) hs.Instances = new float[n * stride];
+            Array.Copy(es.Instances, hs.Instances, n * stride);
+            for (int i = 0; i < n; i++)
+            {
+                int o = i * stride;
+                float s = hs.Instances[o + ParticleQuadBuilder.OffSizeX];
+                if (MathF.Abs(s) < 0.01f) s = 1f;
+                hs.Instances[o + ParticleQuadBuilder.OffSizeX] = s;
+                var shift = host.Origin * (1f - s);
+                hs.Instances[o + ParticleQuadBuilder.OffPos] = shift.X;
+                hs.Instances[o + ParticleQuadBuilder.OffPos + 1] = shift.Y;
+                hs.Instances[o + ParticleQuadBuilder.OffPos + 2] = shift.Z;
+                hs.Instances[o + ParticleQuadBuilder.OffRot] = 0f;
+                hs.Instances[o + ParticleQuadBuilder.OffEuler] = 0f;
+                hs.Instances[o + ParticleQuadBuilder.OffEuler + 1] = 0f;
+                hs.Instances[o + ParticleQuadBuilder.OffEuler + 2] = 0f;
+            }
+            mat.MeshInstances = hs.Instances;
+            mat.MeshInstanceCount = n;
+            mat.MeshRight = Vector3.UnitX; mat.MeshUp = Vector3.UnitY; mat.MeshForward = Vector3.UnitZ;
+            mat.MeshUvOffset = hs.Def.UvScrollRate * es.EmitterAge;
+            mat.MeshUvOffsetMult = hs.Def.TextureMultUvScrollRate * es.EmitterAge;
+            var div = hs.Def.TexDiv;
+            mat.MeshTexDiv = new Vector2(div.X > 0 ? div.X : 1f, div.Y > 0 ? div.Y : 1f);
+            var divMult = hs.Def.TextureMultTexDiv;
+            mat.MeshTexDivMult = new Vector2(divMult.X > 0 ? divMult.X : 1f, divMult.Y > 0 ? divMult.Y : 1f);
+            mat.Visible = true;
+            HostMeshEmittersDrawn++;
+        }
+    }
+
+    // ---- M861: a mesh emitter whose CustomMaterial links a Riot material ----------------------------------
+
+    /// <summary>A mesh emitter drawn with the material it links instead of the particle mesh shader: Riot's own shader, textures and
+    /// parameters for that StaticMaterialDef, over the emitter's mesh, once per particle - the path a placed prop takes
+    /// (<see cref="Dx11CharacterScene"/> + <see cref="PreviewMaterial.CharacterInstances"/>). Per emitter instance, like
+    /// <see cref="MeshSlice"/>.</summary>
+    private sealed class CustomSlice
+    {
+        public required VfxParticleSimulator Owner { get; init; }
+        public required VfxParticleSimulator.EmitterState State { get; init; }
+        public required int GeometryId { get; init; }
+        public readonly List<PreviewMaterial> Materials = new();
+        public readonly List<Matrix4x4> Instances = new();
+    }
+    private readonly List<CustomSlice> _customSlices = new();
+
+    /// <summary>How many custom-material mesh emitters drew last frame.</summary>
+    public int CustomMaterialEmittersDrawn { get; private set; }
+
+    private bool BuildCustomMaterialSlice(VfxPlaybackItem item, VfxParticleSimulator sim, VfxParticleSimulator.EmitterState es,
+        VfxEmitterDefinition def, StringBuilder sb)
+    {
+        int idx = VfxPlaybackSim.AuthoredIndex(item.System, def);
+        if (item.EmitterCustomMaterials is not { } scenes || idx < 0 || idx >= scenes.Count || scenes[idx] is not { } scene) return false;
+        int rid = _renderer.CreateRiotMeshGeometry(scene.Mesh);
+        if (rid < 0)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: custom material - the mesh would not upload; drawn with the particle shader");
+            return false;
+        }
+        var slice = new CustomSlice { Owner = sim, State = es, GeometryId = rid };
+        var mats = Dx11CharacterScene.CommitSlices(_renderer, scene, m =>
+        {
+            m.RiotMeshGeometryId = rid;
+            m.CharacterInstances = slice.Instances;
+        });
+        foreach (var why in scene.Failures) sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: {why}");
+        if (mats.Count == 0)
+        {
+            _renderer.ReleaseRiotMeshGeometry(rid);
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: custom material built no pipeline; drawn with the particle shader");
+            return false;
+        }
+        foreach (var m in mats) { m.Visible = false; _mine.Add(m); slice.Materials.Add(m); }
+        _customSlices.Add(slice);
+        return true;
+    }
+
+    private void TickCustomSlices()
+    {
+        CustomMaterialEmittersDrawn = 0;
+        foreach (var cs in _customSlices)
+        {
+            var es = cs.State;
+            bool live = IsLive(cs.Owner) && es.InstanceCount > 0;
+            foreach (var m in cs.Materials) m.Visible = live;
+            if (!live) continue;
+            cs.Instances.Clear();
+            for (int i = 0; i < es.InstanceCount; i++)
+                cs.Instances.Add(VfxCustomMaterial.ParticleWorld(es.Instances, i, es.PlacementRight, es.PlacementUp, es.PlacementForward));
+            CustomMaterialEmittersDrawn++;
+        }
+    }
+
     /// <summary>M364: re-extrude every live ribbon. Unlike the billboard slices this cannot be skipped when
     /// the camera has not moved - a trail's shape follows its particles, and a camera-facing trail twists
     /// with the view as well.</summary>
@@ -959,17 +1335,17 @@ public sealed class D3D11MapParticles
         foreach (var rs in _ribbonSlices)
         {
             var mat = rs.Material;
-            if (!_activeSet.Contains(rs.Owner)) { mat.Visible = false; continue; }
+            if (!IsLive(rs.Owner)) { mat.Visible = false; continue; }
 
-            // Assembled by the GL renderer's own builders. Not a shared style choice - the per-particle
-            // history a trail walks is internal to that assembly, so this is the only way to get the same
+            // Assembled by the GL renderer's own builders. Not a shared style choice - the emitter's particles
+            // a trail strings together are internal to that assembly, so this is the only way to get the same
             // geometry rather than a second implementation of it.
             int k = rs.IsBeam
                 ? ReyEngine.Rendering.Vfx.VfxParticleRenderer.BuildBeamRibbon(ref _ribbonVerts, rs.State, cameraPosition)
                 : ReyEngine.Rendering.Vfx.VfxParticleRenderer.BuildTrailRibbon(ref _ribbonVerts, rs.State, cameraPosition);
 
-            // k == 0 is the ordinary early state, not a failure: a trail whose particles have not moved far
-            // enough has no history to extrude yet, and a beam whose endpoints did not resolve has nowhere
+            // k == 0 is the ordinary early state, not a failure: a trail with fewer than two live particles
+            // has no strand to extrude yet, and a beam whose endpoints did not resolve has nowhere
             // to go. Either way the slice is simply invisible this frame.
             if (k == 0) { mat.Visible = false; continue; }
 
@@ -1086,7 +1462,7 @@ public sealed class D3D11MapParticles
         IReadOnlyList<IReadOnlyList<VfxParticleSimulator.EmitterState>> slices, int maxQuads,
         PreviewVertex[] verts, uint[] indices, Vector3 right, Vector3 up, Vector3 normal,
         PackedRange[] ranges, out int vertexCount, out int indexCount,
-        out int requested, out int slicesTruncated)
+        out int requested, out int slicesTruncated, float projectionGroundY = float.NaN)
     {
         requested = 0;
         foreach (var sources in slices)
@@ -1131,7 +1507,8 @@ public sealed class D3D11MapParticles
 
                 var orient = new ParticleQuadBuilder.QuadOrientation(
                     es.Def.IsArbitraryQuad, es.Def.IsDirectionOriented,
-                    es.PlacementRight, es.PlacementUp, es.PlacementForward, es.Def.IsRay);
+                    es.PlacementRight, es.PlacementUp, es.PlacementForward, es.Def.IsRay,
+                    es.Def.IsPlanarProjection, projectionGroundY);   // M862
 
                 // M634: the authored UV scrolls, baked into the vertices because quad_vs has no constant
                 // for them. The multiplier's matters most: 184 of the 401 multiplier emitters across eight

@@ -273,8 +273,26 @@ public sealed record VfxEmitterDefinition(
     bool TextureMultUvScrollClamp = false,
     /// <summary>M754: the surface particles are born on - a mesh, a skeleton, or the host character. Null
     /// for the 99.5% of emitters that name none.</summary>
-    VfxEmissionSurface? EmissionSurface = null)
+    VfxEmissionSurface? EmissionSurface = null,
+    /// <summary>M860: the submeshes of the HOST character an AttachedMesh emitter draws - FNV-1a hashes of submesh names, from
+    /// the primitive's mMesh (mSubmeshesToDraw, mSubmeshesToDrawAlways). Empty or null: every submesh. Only meaningful when
+    /// <see cref="IsHostMesh"/>.</summary>
+    IReadOnlyList<uint>? HostSubmeshes = null,
+    /// <summary>M861: the object hash of the StaticMaterialDef this emitter's <c>CustomMaterial</c> (VfxMaterialDefinitionData) links, or 0.
+    /// 4,703 emitters; the material's own shader and samplers then draw the emitter's mesh instead of the particle mesh shader.</summary>
+    uint CustomMaterialLink = 0)
 {
+    /// <summary>M860: a VfxPrimitiveAttachedMesh that names no mesh FILE - the emitter draws the character it is attached to,
+    /// with its own material. 62,906 emitters; they used to become a 1-unit billboard. The schema gives the primitive one
+    /// field of its own (UseAvatarSpecificSubmeshMask) and the mesh definition the submesh lists; there is no mesh to
+    /// load, so what is drawn is the host's own skinned mesh.</summary>
+    public bool IsHostMesh => !IsMeshPrimitive && PrimitiveClass == AttachedMeshClass;
+
+    /// <summary>M862: a VfxPrimitivePlanarProjection - a decal projected down onto whatever lies below it (1,154 emitters), not a quad facing the camera.</summary>
+    public bool IsPlanarProjection => PrimitiveClass == PlanarProjectionClass;
+    private static readonly uint PlanarProjectionClass = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a("VfxPrimitivePlanarProjection");
+    private static readonly uint AttachedMeshClass = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
+
     /// <summary>M707: this emitter authors NO base texture path at all.
     ///
     /// The distinction a renderer needs is "never asked for one" against "asked for one that did not
@@ -782,11 +800,11 @@ public sealed record VfxTrailDefinition(
     /// maximum observed is 68,719,476,736 (2^36). <see cref="EffectiveCutoff"/> is what callers should
     /// use.</summary>
     float Cutoff,
-    /// <summary>mSmoothingMode, {1, 2}. Meaning UNKNOWN - both values occur (12,183 samples) and nothing
-    /// in the data distinguishes them. Parsed and carried so the editor can show it; the geometry builder
-    /// does not branch on it, which is the honest thing to do with an unresolved enum.</summary>
+    /// <summary>mSmoothingMode, {1, 2} in the data (0 = off). M853, from LTK Manager's engine reading: 1 walks the strand
+    /// newest to oldest and 2 oldest to newest, so U opens at zero on that end and mCutoff truncates from it; either
+    /// box-filters the points and mitres the joints. Applied by VfxParticleRenderer.BuildTrailStrand.</summary>
     int SmoothingMode,
-    /// <summary>mMaxAddedPerFrame - how many ribbon points may be appended per frame. Median 50.</summary>
+    /// <summary>mMaxAddedPerFrame - the most particles the trail emitter spawns in one step (M853); 0 = no cap. Median 50.</summary>
     int MaxAddedPerFrame)
 {
     /// <summary>The ribbon length to actually use. Rejects the -1 and 2^36 outliers and falls back to the

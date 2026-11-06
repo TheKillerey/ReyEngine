@@ -130,6 +130,12 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// Null for a map, and for a character window whose playback has no such emitter.</summary>
     public ReyEngine.Formats.Vfx.VfxHostSurface? EmissionHost { get; set; }
 
+    /// <summary>M862: the floor a projected decal lands on (the character window sets 0, the character's feet); null keeps each emitter's own height.</summary>
+    public float? ProjectionGroundY { get; set; }
+
+    /// <summary>M860: per-submesh visibility of the hosted character; the attached-mesh body follows it.</summary>
+    public IReadOnlyList<bool>? HostSubmeshVisible { get; set; }
+
     /// <summary>M630: where beams terminate. Null leaves the simulator to resolve them from the emitter's
     /// own authored target offset, which is what a map wants.</summary>
     public System.Numerics.Vector3? BeamTarget { get; set; }
@@ -695,6 +701,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         Particles?.SetBoneGlobals(BoneGlobals, BoneModelWorld);
         Particles?.SetBeamTarget(BeamTarget);
         Particles?.SetEmissionHost(EmissionHost);   // M755
+        if (Particles is not null) { Particles.ProjectionGroundY = ProjectionGroundY; Particles.HostSubmeshVisible = HostSubmeshVisible; }   // M862, M860
         // Gated on the DRIVER existing, not on it having a playback. SetPlayback(null) only marks the
         // driver dirty - the teardown that calls RemoveMaterials lives in Tick's Rebuild - so gating on
         // HasPlayback made retraction unreachable: switching Play All off left the last frame's quads

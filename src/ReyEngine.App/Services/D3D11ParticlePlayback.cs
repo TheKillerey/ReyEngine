@@ -331,7 +331,8 @@ public sealed class D3D11ParticlePlayback
             // PLACEMENT frame, which the simulator computed when the system was placed.
             var orient = new ParticleQuadBuilder.QuadOrientation(
                 es.Def.IsArbitraryQuad, es.Def.IsDirectionOriented,
-                es.PlacementRight, es.PlacementUp, es.PlacementForward, es.Def.IsRay);
+                es.PlacementRight, es.PlacementUp, es.PlacementForward, es.Def.IsRay,
+                es.Def.IsPlanarProjection, ParticleQuadBuilder.GroundDecalLift);   // M862: the effect preview stands on the ground plane
 
             // M719: this host passed no uv transform at all - not even M634's scroll - so a scrolling sprite
             // stood still in the preview window while it moved on the map. The same factory as the map host.

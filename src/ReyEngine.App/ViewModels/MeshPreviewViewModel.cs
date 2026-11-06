@@ -182,6 +182,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveErosionTextures;   // M174 (2.1)
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolvePaletteTextures;   // M175 (2.6)
     public Func<VfxSystemDefinition, IReadOnlyList<CubemapImage?>>? ResolveReflectionCubemaps;   // M181 (2.12)
+    /// <summary>M861: the Riot material scenes of the system's emitters that link a CustomMaterial, over their meshes.</summary>
+    public Func<VfxSystemDefinition, IReadOnlyList<Formats.Meshes.StaticMeshData?>?, IReadOnlyList<Services.PreparedCharacterScene?>?>? ResolveCustomMaterials;
     public Func<VfxSystemDefinition, IReadOnlyList<StaticMeshData?>?>? ResolveMeshes;
     /// <summary>M754: the surfaces emitters are born on.</summary>
     public Func<VfxSystemDefinition, IReadOnlyList<VfxSurfaceSampler?>?>? ResolveEmissionSurfaces;
@@ -1182,28 +1184,16 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// system object-hashes - different keyspaces - so it established nothing. The cap is what guarantees
     /// termination, not the data.</summary>
     private IReadOnlyList<IReadOnlyList<VfxPlaybackItem>?>? ResolveChildren(VfxSystemDefinition sys, int depth)
-    {
-        if (depth >= MaxChildDepth) return null;
-        List<IReadOnlyList<VfxPlaybackItem>?>? perEmitter = null;
-        for (int i = 0; i < sys.Emitters.Count; i++)
-        {
-            var set = sys.Emitters[i].Children;
-            List<VfxPlaybackItem>? items = null;
-            if (set is not null)
-                foreach (var id in set.Children)
-                {
-                    VfxSystemDefinition? child = null;
-                    if (id.EffectKey != 0 && _vfxResourceMap.TryGetValue(id.EffectKey, out var mapped))
-                        _vfxDefs.TryGetValue(mapped, out child);
-                    if (child is null && id.EffectLink != 0) _vfxDefs.TryGetValue(id.EffectLink, out child);
-                    if (child is null && id.EffectKey != 0) _vfxDefs.TryGetValue(id.EffectKey, out child);
-                    if (child is null) continue;
-                    (items ??= new()).Add(BuildItem(child, System.Numerics.Vector3.Zero, depth + 1));
-                }
-            if (items is not null) (perEmitter ??= NullList(sys.Emitters.Count))[i] = items;
-        }
-        return perEmitter;
-    }
+        // M854: shared with the Particle Editor, deeper than 2 (292 chains in the game go three or more levels deep) and with
+        // an ancestor check; see VfxChildResolver.
+        => Services.VfxChildResolver.Resolve(sys, depth,
+            hash => _vfxDefs.TryGetValue(hash, out var def) ? def : null,
+            key => _vfxResourceMap.TryGetValue(key, out var mapped) ? mapped : null,
+            (child, childDepth) => BuildItem(child, System.Numerics.Vector3.Zero, childDepth),
+            _childChain);
+
+    /// <summary>M854: the system hashes on the path from the played system to the one being resolved.</summary>
+    private readonly HashSet<uint> _childChain = new();
 
     private static List<IReadOnlyList<VfxPlaybackItem>?> NullList(int n)
     {
@@ -1211,10 +1201,6 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         for (int i = 0; i < n; i++) l.Add(null);
         return l;
     }
-
-    /// <summary>Children of children are resolved one level deep and no further. Deeper chains are rare,
-    /// and the cost of getting recursion wrong here is an editor that hangs on preview.</summary>
-    private const int MaxChildDepth = 2;
 
     /// <summary>M180: build a playback item with all its texture stages and its resolved children.
     ///
@@ -1243,7 +1229,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             EmitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
             EmitterChildren: ResolveChildren(def, depth),
             EmitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def))
-            { EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def) });   // M754; M826: through the effects recolour the card shows, if any
+            {
+                EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def),
+                EmitterCustomMaterials = def.Emitters.Any(e => e.CustomMaterialLink != 0)
+                    ? ResolveCustomMaterials?.Invoke(def, ResolveMeshes?.Invoke(def)) : null,   // M861
+            });   // M754; M826: through the effects recolour the card shows, if any
 
     public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
         IReadOnlyDictionary<uint, uint>? resourceMap = null)

@@ -5787,6 +5787,11 @@ float4 psmain(VOut i) : SV_Target
             if (mat.RibbonId is not null)
             {
                 if (DrawRibbon(mat, Matrix4x4.Multiply(view, proj))) DrawCalls++;
+                // M853: the ribbon binds its own vertex buffer and input layout, so what the loop thought was bound is
+                // stale - exactly as after a mesh draw above. Without this every billboard drawn AFTER a ribbon in
+                // the same frame read the ribbon's buffer and vanished (Jinx W's ground glows went the moment its
+                // trails began to draw; no ribbon had drawn before, so nothing showed the omission).
+                boundSource = -1;
                 continue;
             }
 
