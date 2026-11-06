@@ -89,6 +89,22 @@ public sealed class MapMaterialFactoryTests
             SafeBinTree.Parse(result!).Objects[H("LegacyPort/Test/Material")].ClassHash);
     }
 
+    /// <summary>M864: StaticMaterialDef.type is U8 since Riot build 8159717 (schema default 1). A U32 is dropped by the client as the wrong
+    /// type, the material takes type 1, and the Shader Test Map crashed in game the moment such a mesh came into view.</summary>
+    [Fact]
+    public void ShaderAuthoredMaterialWritesTypeAsU8Zero()
+    {
+        var target = Write(new BinTreeObject(0x100u, H("MapSunProperties"), Array.Empty<BinTreeProperty>()));
+        var shader = new LeagueShaderDef("Shaders/StaticMesh/Test", "StaticMesh", new(), new(), new());
+
+        var result = MapMaterialFactory.CreateFromShader(target, "Maps/Test/Material", shader, out var error, samplerOverrides: null);
+
+        Assert.Null(error);
+        var type = SafeBinTree.Parse(result!).Objects[H("Maps/Test/Material")].Properties[H("type")];
+        var u8 = Assert.IsType<BinTreeU8>(type);
+        Assert.Equal((byte)0, u8.Value);
+    }
+
     [Fact]
     public void ReimportRemovesStaleLegacyMaterialsEvenWhenOldBuildUsedWrongClass()
     {

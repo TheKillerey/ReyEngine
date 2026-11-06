@@ -471,7 +471,10 @@ public static class MapMaterialFactory
             var props = new List<BinTreeProperty>
             {
                 new BinTreeU64(F("name"), BinWireNormalizer.NameHash(newName)),
-                new BinTreeU32(F("type"), 0),
+                // M864: U8, not U32. Riot's schema moved StaticMaterialDef.type from U32 to U8 (build 8159717), and its default is 1. Every shipped
+                // material writes `type: u8 = 0`. Written as U32 the client drops the field as the wrong type and takes the default 1, a material
+                // type whose draw supplies no WORLD_MATRIX ("Missing shader constant WORLD_MATRIX" at load, then a crash when the mesh first draws).
+                new BinTreeU8(F("type"), 0),
                 new BinTreeContainer(F("techniques"), BinPropertyType.Embedded, new BinTreeProperty[] { technique }),
             };
             if (macroValues.Count > 0)
