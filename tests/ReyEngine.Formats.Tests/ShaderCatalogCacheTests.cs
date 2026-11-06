@@ -113,4 +113,47 @@ public class ShaderCatalogCacheTests : IDisposable
 
         Assert.Equal("", ShaderCatalogLoader.StampFor(Path.Combine(_dir, "missing.wad.client")));
     }
+
+    // ---- M855: hash-table identity ----
+
+    private static ShaderCatalog WithUnresolved(params uint[] hashes) => new()
+    {
+        Environment = "Live",
+        GameDirectory = @"C:\Game",
+        SourceStamp = "100:200",
+        UnresolvedObjects = hashes.ToList(),
+        Shaders = new() { new LeagueShaderDef("Shaders/StaticMesh/A", "StaticMesh", new(), new(), new()) },
+    };
+
+    /// <summary>THE M855 BUG. PixelMatrix (0x907d17f5) was unnamed when the cache was written; the same
+    /// Global.wad stamp then kept the 351-shader catalogue forever.</summary>
+    [Fact]
+    public void A_cache_with_unnamed_shaders_rebuilds_once_their_names_resolve()
+    {
+        string p = Write(WithUnresolved(0x907d17f5u));
+        Func<uint, string?> better = h => h == 0x907d17f5u ? "Shaders/SkinnedMesh/PixelMatrix" : null;
+        Assert.Null(ShaderCatalogCache.Load(p, @"C:\Game", "100:200", better));
+    }
+
+    [Fact]
+    public void A_cache_with_unnamed_shaders_is_kept_while_they_stay_unnamed()
+    {
+        string p = Write(WithUnresolved(0x907d17f5u));
+        Assert.NotNull(ShaderCatalogCache.Load(p, @"C:\Game", "100:200", _ => null));
+    }
+
+    [Fact]
+    public void A_cache_that_never_recorded_its_unnamed_objects_rebuilds_once()
+    {
+        string p = Write(Catalog(@"C:\Game", "100:200", "Shaders/StaticMesh/A"));   // UnresolvedObjects == null
+        Assert.Null(ShaderCatalogCache.Load(p, @"C:\Game", "100:200", _ => null));
+    }
+
+    [Fact]
+    public void The_unnamed_list_survives_the_json_round_trip()
+    {
+        string p = Write(WithUnresolved(1u, 2u));
+        var back = ShaderCatalogCache.Load(p, @"C:\Game", "100:200");
+        Assert.Equal(new uint[] { 1, 2 }, back!.UnresolvedObjects);
+    }
 }

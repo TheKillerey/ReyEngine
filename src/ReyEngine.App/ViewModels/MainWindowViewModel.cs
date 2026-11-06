@@ -16137,11 +16137,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var cachePath = ShaderCatalogCachePath(environment);
         string stamp = ShaderCatalogLoader.StampFor(wad);
-        var cached = await Task.Run(() => ShaderCatalogCache.Load(cachePath, gameDir, stamp));
+        var cached = await Task.Run(() => ShaderCatalogCache.Load(cachePath, gameDir, stamp, h => ResolveBinName(h)));
         if (cached is not null) { SetShaderCatalog(environment, cached); return; }
         if (File.Exists(cachePath))
             _log.Info("Shader", $"{environment}: the cached shader catalogue came from a different build of "
-                              + "Global.wad — rescanning. A Riot patch used to leave it stale.");
+                              + "Global.wad or before some shader names resolved - rescanning.");
 
         _log.Info("Shader", $"Reading {environment} shader definitions…");
         var catalog = await Task.Run(() =>
