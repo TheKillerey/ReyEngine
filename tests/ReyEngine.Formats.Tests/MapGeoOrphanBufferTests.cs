@@ -51,7 +51,7 @@ public sealed class MapGeoOrphanBufferTests
         var withTwo = MapGeoMeshAppender.Append(riot, new[] { Quad(0f), Quad(500f) }, out var appendError);
         Assert.True(withTwo is not null, appendError);
         Assert.True(MapGeoBinary.TryReadEditable(withTwo!, out var before));
-        int first = before.Meshes.Count - 2;
+        int first = MapGeoMeshAppender.InsertionIndex(original.Meshes.Count);   // M866: the first quad sits before the final mesh
 
         var removed = MapGeoMeshRemover.Remove(withTwo!, new[] { first }, out var removeError);
         Assert.True(removed is not null, removeError);
@@ -89,7 +89,7 @@ public sealed class MapGeoOrphanBufferTests
         // recreate the Halloween file's state: meshes appended, then removed the pre-M768 way (records only)
         var withTwo = MapGeoMeshAppender.Append(riot, new[] { Quad(0f), Quad(500f) }, out _)!;
         Assert.True(MapGeoBinary.TryReadEditable(withTwo, out var map));
-        map.Meshes.RemoveRange(map.Meshes.Count - 2, 2);
+        map.Meshes.RemoveRange(MapGeoMeshAppender.InsertionIndex(map.Meshes.Count - 2), 2);   // M866: the appended two sit before the final mesh
         var orphaned = map.Write();
         Assert.True(MapGeoBinary.TryReadEditable(orphaned, out var check));
         Assert.Equal(2, check.UnreferencedVertexBuffers().Count);

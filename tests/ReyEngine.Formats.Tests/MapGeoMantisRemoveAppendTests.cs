@@ -115,8 +115,10 @@ public sealed class MapGeoMantisRemoveAppendTests(ITestOutputHelper output)
         Assert.True(MapGeoBinary.TryReadEditable(appended!, out var back, ext));
         Assert.Equal(count + 1, back.Meshes.Count);
         Assert.Equal(extended, back.Meshes.Count(m => m.HasExtendedChannel && m.ExtendedChannelValue == Marker));
-        Assert.False(back.Meshes[^1].HasExtendedChannel);
-        Assert.Equal(other, back.Meshes[^1].Submeshes[0].Material);
+        // M866: the added mesh goes before the final mesh, which stays last
+        Assert.False(back.Meshes[^2].HasExtendedChannel);
+        Assert.Equal(other, back.Meshes[^2].Submeshes[0].Material);
+        Assert.Equal(before.Meshes[^1].Submeshes[0].Material, back.Meshes[^1].Submeshes[0].Material);
         // and LeagueToolkit (the client-side reader the editor validates against) reads the spliced file through its stripped form
         using var env = new EnvironmentAsset(new MemoryStream(ExtendedChannelRule.WithoutExtendedEntries(appended!, ext), false));
         Assert.Equal(count + 1, env.Meshes.Count);

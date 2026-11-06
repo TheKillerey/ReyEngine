@@ -26,6 +26,22 @@ public static class MapGeoMeshAppender
 {
     private const int MaxU16Vertices = 65535;   // mapgeo index buffers are u16 — hard cap per mesh
 
+    /// <summary>
+    /// M866: where <see cref="Append"/> puts the new mesh records - BEFORE the file's final mesh, never after it.
+    ///
+    /// <para>Measured in game (League 16.22, Map11 base_srx, replay self-test, 2026-11-06): a mapgeo whose LAST mesh is an appended one
+    /// crashes the client early in loading (League of Legends.exe+0x1139cd9, a read of null+0x60), whatever that mesh is - a mesh written by
+    /// this appender, a raw quad, even a byte-identical copy of Riot's own mesh 0. The same copy placed second-to-last loads and draws, and
+    /// so does a mesh this appender wrote once it is followed by the file's original final mesh. Why the final record matters is not known;
+    /// the file ending on its own last mesh is what every working file has in common.</para>
+    /// </summary>
+    public static int InsertionIndex(int existingMeshCount) => existingMeshCount > 0 ? existingMeshCount - 1 : 0;
+
+    /// <summary>M866: an index into the mesh list as it was BEFORE <see cref="Append"/> added <paramref name="addedCount"/> meshes, as it
+    /// is after: only the former final mesh moves (behind the new ones).</summary>
+    public static int RemapExistingIndex(int index, int existingMeshCount, int addedCount) =>
+        addedCount > 0 && existingMeshCount > 0 && index == existingMeshCount - 1 ? index + addedCount : index;
+
     /// <param name="extendedChannelMaterials">M865: the materials whose mesh records carry the 48-byte Mantis channel block
     /// (<see cref="ExtendedChannelRule.From"/>). Without it the walker reads every record as 40 bytes and desyncs on the
     /// first Mantis mesh. A NEW mesh on such a material is refused: this writer emits the 40-byte record only.</param>
@@ -72,14 +88,16 @@ public static class MapGeoMeshAppender
             w.Write(mapgeo, s.IndexBufferCountOffset + 4, s.MeshCountOffset - (s.IndexBufferCountOffset + 4));
             foreach (var m in meshes) WriteIndexBuffer(w, m, s.Version);
 
-            // ---- mesh records ----
+            // ---- mesh records: the existing ones up to the final one, the new ones, then the final one (M866, see InsertionIndex) ----
             w.Write((uint)(s.MeshCount + meshes.Count));
-            w.Write(mapgeo, s.MeshCountOffset + 4, s.TailOffset - (s.MeshCountOffset + 4));
+            int splitAt = s.MeshCount > 0 ? s.MeshRecordStarts[s.MeshCount - 1] : s.TailOffset;
+            w.Write(mapgeo, s.MeshCountOffset + 4, splitAt - (s.MeshCountOffset + 4));
             for (int i = 0; i < meshes.Count; i++)
                 WriteMeshRecord(w, meshes[i], s,
                     declId: s.VertexDeclCount + i,
                     vbId: s.VertexBufferCount + i,
                     ibId: s.IndexBufferCount + i);
+            w.Write(mapgeo, splitAt, s.TailOffset - splitAt);
 
             // ---- tail: bucket grids + planar reflectors, byte-exact ----
             w.Write(mapgeo, s.TailOffset, mapgeo.Length - s.TailOffset);

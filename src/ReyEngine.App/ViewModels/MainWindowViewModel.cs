@@ -11382,7 +11382,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 bytes = moved;
             }
 
-            // 2) append the imported meshes (surgical splice), then regenerate bucket grids over ALL
+            // 2) Blender-style pending deletion: remove the selected mesh records and (M768) the buffers only
+            // they used - LTK Manager refuses a mapgeo with an unreferenced vertex buffer. Bucket grids are then
+            // rebuilt from the remaining environment meshes.
+            //
+            // M866: BEFORE the append, in the index space the editor showed (nothing above changes the record count).
+            // Appended meshes go before the file's final mesh, because a file that ENDS on an appended mesh crashes
+            // the game at load; deleting the final mesh after the append would leave exactly that layout.
+            if (removedIndices.Count > 0)
+            {
+                var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError, extendedChannels);
+                if (stripped is null) { _log.Error("MapGeo", $"Could not remove selected meshes: {removeError}"); return; }
+                var remainingMap = await Task.Run(() => MapGeoDecoder.Decode(stripped, extendedChannels));
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection, extendedChannels);
+            }
+
+            // 3) append the imported meshes (surgical splice), then regenerate bucket grids over ALL
             //    triangles (new geometry included) so the game culls the added meshes correctly.
             if (added.Count > 0)
             {
@@ -11395,13 +11410,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var reMap = await Task.Run(() => MapGeoDecoder.Decode(appended, extendedChannels));
                 WarnIfAddedMeshesWillNotDrawInGame(added.Select(a => a.Material));
 
-                // M123: the appended meshes are the LAST N — give them their chosen layer masks
-                // before the grids bake per-face visibility from the mesh flags.
+                // M123: give the appended meshes their chosen layer masks before the grids bake per-face visibility from the mesh flags.
+                // M866: they sit just before the file's final mesh (MapGeoMeshAppender.InsertionIndex), not at the end.
                 bool anyMask = added.Any(a => a.VisibilityMask != 255);
+                int firstAdded = MapGeoMeshAppender.InsertionIndex(reMap.Meshes.Count - added.Count);
                 if (anyMask && reMap.Meshes.Count >= added.Count)
                 {
                     for (int i = 0; i < added.Count; i++)
-                        reMap.Meshes[reMap.Meshes.Count - added.Count + i].VisibilityEdit = added[i].VisibilityMask;
+                        reMap.Meshes[firstAdded + i].VisibilityEdit = added[i].VisibilityMask;
                     var layered = MapGeoLayerWriter.TryWriteLayerEdits(appended, reMap.Meshes, out var lErr);
                     if (layered is not null) { appended = layered; reMap = await Task.Run(() => MapGeoDecoder.Decode(appended, extendedChannels)); }
                     else _log.Warn("MapGeo", $"Added-mesh layers not applied: {lErr}");
@@ -11409,7 +11425,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection, extendedChannels);
             }
 
-            // 2b) M105: bucket grids bake per-face visibility masks from the mesh flags, so layer-only
+            // 3b) M105: bucket grids bake per-face visibility masks from the mesh flags, so layer-only
             //     saves must regenerate them too (moves/appends above already did).
             //
             //     M585: and so must anything that changes GEOMETRY. A bucket grid carries its own baked
@@ -11422,17 +11438,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             {
                 var reMap2 = await Task.Run(() => MapGeoDecoder.Decode(bytes, extendedChannels));
                 bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection, extendedChannels);
-            }
-
-            // 3) Blender-style pending deletion: remove the selected mesh records and (M768) the buffers only
-            // they used - LTK Manager refuses a mapgeo with an unreferenced vertex buffer. Bucket grids are then
-            // rebuilt from the remaining environment meshes.
-            if (removedIndices.Count > 0)
-            {
-                var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError, extendedChannels);
-                if (stripped is null) { _log.Error("MapGeo", $"Could not remove selected meshes: {removeError}"); return; }
-                var remainingMap = await Task.Run(() => MapGeoDecoder.Decode(stripped, extendedChannels));
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection, extendedChannels);
             }
 
             // M768: whatever produced them, no save writes buffers no mesh references.
