@@ -6889,6 +6889,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.Animation.ClipLoader = DecodeAnimation;
         MeshPreview.LoadDummyMesh = () => Services.TargetDummyLoader.Get(Project.GameDirectory, _resolver,
             m => _log.Warn("Preview", m));   // M115: Riot's practice dummy from Map11.wad
+        MeshPreview.LoadSimulationDefinition = LoadSimulationDefinitionAsync;   // M869: the champion's ability simulation data
         MeshPreview.LoadSkybox = LoadSkyboxAtAsync;   // M122: same catalogue, its own pick
         MeshPreview.ResolveTextures = ResolveSystemTextures;
         // M634: the multiplier / mask stage. Wired for the particle editor (above) and the map viewport

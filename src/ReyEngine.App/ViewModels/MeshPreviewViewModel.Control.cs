@@ -357,6 +357,7 @@ public sealed partial class MeshPreviewViewModel
     /// model alive would keep ticking against a viewport that is gone.</summary>
     public void StopControl()
     {
+        StopSimulation();       // M869
         _stageWanted = false;   // a load still in flight parks its result instead of starting a timer against a closed window
         _controlTimer?.Stop();
         ControlMode = false;

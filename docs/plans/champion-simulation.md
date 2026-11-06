@@ -42,6 +42,30 @@ Facts that bound the scope (measured, see memory `arena-playground-m636`, `spell
 6. **In-app validation.** `ReyEngine.App.exe --simcheck <champ|all>` runs the real preview pipeline headless on D3D11, renders
    sampled frames per ability, measures particle coverage and hit timing, and updates the tracker.
 
+## Adapter evidence (measured 2026-11-06, build 16.22.8348910)
+
+Tag census over the 173 definitions (root abilities): `Trait_PlayerSelectedDashDirection` 59 (dash), `PositiveEffect_Teleport` 16
+(blink), `Trait_ChannelSpell` 42, `Trait_RecastOrReplaceSpell` 91, `Trait_Transformation` 8, `Trait_Pet` 7, `Trait_CreateClone` 4,
+`Trait_CreateTerrain` 6, `Trait_Toggle` 7, `Trait_Trap` 7, `PositiveEffect_Boon` 66, `Trait_Shield` 54, `Trait_ActiveHeal` 66.
+Targeting kinds: Self 171, Location 162, direction 81, SelfAoe 71, Area 69, LocationClamped 37, TargetOrLocation 18, Cone 13,
+AreaClamped 11, Target 4, DragDirection 3, WallDetection 2, TerrainLocation 1, TerrainType 1, none 244.
+
+Kalista (`Kalista.wad.client`):
+- W Sentinel is a character of its own: `Characters/KalistaSpawn` (record `kalistaspawn.bin`: move speed 560, unit tags
+  `Minion_Summon | Minion`), base skin `kalistaspawn/skins/skin0.bin` -> `KalistaSpawn.skn/.skl`, graph `Characters/KalistaSpawn/Animations/Skin0`;
+  skins 24/29/30 have their own. KalistaW: Area targeting, castRange 5000, clip Spell2, mCastTime 0.5. W systems: W_Avatar, W_Alerted, W_Glow.
+- E: target systems numbered `Kalista_Base_E_Spear_tar`, `E_SpearTar01..09` (stack counts), caster `E_Spear_out*`.
+- R: `KalistaRx` (Self, clip Spell4_Call), children `KalistaRAlly` (speed 700), `KalistaRAllyDash`, `KalistaRMis` (Kalista_Base_R_aestheticmis 1500),
+  `KalistaRAllyStun*`; systems R_AOE, R_Ally_FadeOut, R_Ally_Vanish_Cone, R_tar. Needs an ally.
+- Passive: `KalistaPassiveDashSpell` / `KalistaPassiveDashSpellActual` (hop after an attack); systems P_BladeFall, P_Blade_Hero_Left/Right.
+- `KalistaAltar` character (skin30 only) holds the altar spear.
+
+Talon (`Talon.wad.client`): E = `TalonE` (Location, castRange 6000, display 725, clip Spell2, spellCastTime 0.25, total 1.0) with
+DataValues `WallJumpDistance` 625 and `WallLockoutWidth` 1250, child `TalonEHop` (Self) and `TalonE2`. W = `TalonW` with
+`TalonWMissileOne` / `TalonWMissileTwo` (out and back). R = `TalonR` with `TalonRMisOne` / `TalonRMisTwo`, `TalonRStealth`.
+Q = `TalonQ` with `TalonQAttack` / `TalonQDashAttack`. Passive = `TalonPassive*` (Stack, Bleed, Attack).
+The M868 stage point has a wall 559 units south (navgrid), inside E's 725 display range.
+
 ## Milestones
 
 | M | Scope | State |

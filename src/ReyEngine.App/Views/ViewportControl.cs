@@ -134,6 +134,12 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticlePaused));         // M46: freeze the sim
     /// <summary>M185 (2.15): stop emitting and run the linger teardown. Distinct from Pause, which
     /// freezes time - a stopped system keeps advancing so its shutdown curves can actually play.</summary>
+    /// <summary>M869: run the effects on real time (times <see cref="ParticleSpeed"/>, frozen by <see cref="ParticlePaused"/>)
+    /// even while a clip is selected. The Character window's ability simulation sets it for the length of a run: a cast clip
+    /// ends before its missiles land, and on the animation's clock the effects would stop with it. False everywhere else, so
+    /// the M726 rule (effects follow the clip's clock) is unchanged.</summary>
+    public static readonly StyledProperty<bool> ParticleFreeClockProperty =
+        AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticleFreeClock));
     public static readonly StyledProperty<bool> ParticleStoppedProperty =
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ParticleStopped));
     /// <summary>M186 (2.15): stop each cycle automatically so the Linger teardown plays without the user
@@ -399,6 +405,7 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool PlayPropAnimations { get => GetValue(PlayPropAnimationsProperty); set => SetValue(PlayPropAnimationsProperty, value); }
     public double ParticleSpeed { get => GetValue(ParticleSpeedProperty); set => SetValue(ParticleSpeedProperty, value); }
     public bool ParticlePaused { get => GetValue(ParticlePausedProperty); set => SetValue(ParticlePausedProperty, value); }
+    public bool ParticleFreeClock { get => GetValue(ParticleFreeClockProperty); set => SetValue(ParticleFreeClockProperty, value); }
     public bool ParticleStopped { get => GetValue(ParticleStoppedProperty); set => SetValue(ParticleStoppedProperty, value); }
     public bool ParticleAutoStop { get => GetValue(ParticleAutoStopProperty); set => SetValue(ParticleAutoStopProperty, value); }
     public ReyEngine.Formats.Vfx.VfxPreviewRig? ParticleRig
@@ -1445,7 +1452,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 prend.CaptureDepth(w, h);
             float dt = _particleClock.IsRunning ? (float)_particleClock.Elapsed.TotalSeconds : 1f / 60f;
             _particleClock.Restart();
-            if (AnimationClip is not null)
+            if (AnimationClip is not null && !ParticleFreeClock)
             {
                 // M726: while a CLIP is playing, the effects run on the animation's clock rather than on
                 // wall time. They are cues on that timeline - pausing the animation used to leave them

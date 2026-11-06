@@ -24,6 +24,22 @@ public static class TargetDummyLoader
     private static PropMesh? _cached;
     private static bool _attempted;
 
+    /// <summary>
+    /// M869: the red variant's colour map is a dark wood-and-straw brown (measured: mean RGB 51,47,37 of 255, brightest texel 231). The
+    /// prop pipeline lights it with the map's own sun, which darkens it further, and against the Summoner's Rift floor it read as a thin
+    /// dark silhouette. The editor stand-in only has to be readable, so its diffuse is lifted by a fixed gain; Riot's file is untouched.
+    /// </summary>
+    public const float DiffuseGain = 2.4f;
+
+    private static TextureImage Brighten(TextureImage source)
+    {
+        var rgba = (byte[])source.Rgba.Clone();
+        for (int i = 0; i + 3 < rgba.Length; i += 4)
+            for (int c = 0; c < 3; c++)
+                rgba[i + c] = (byte)Math.Min(255f, rgba[i + c] * DiffuseGain + 0.5f);
+        return new TextureImage(source.Width, source.Height, rgba);
+    }
+
     public static PropMesh? Get(string? gameDirectory, IHashResolver resolver, Action<string>? warn = null)
     {
         if (_attempted) return _cached;
@@ -55,7 +71,7 @@ public static class TargetDummyLoader
 
             var mesh = SkinnedMeshDecoder.Decode(skn);
             var skeleton = skl is null ? null : SkeletonDecoder.Decode(skl);
-            TextureImage? diffuse = tex is null ? null : TextureDecoder.Decode(tex);
+            TextureImage? diffuse = tex is null ? null : Brighten(TextureDecoder.Decode(tex));
 
             AnimationClip? idle = null;
             if (skeleton is not null

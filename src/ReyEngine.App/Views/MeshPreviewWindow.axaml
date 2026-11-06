@@ -174,6 +174,9 @@
                              AnimationTime="{Binding AnimationTime}"
                              ParticlePlayback="{Binding Playback}"
                              ParticleReplayToken="{Binding ParticleReplayToken}"
+                             ParticleSpeed="{Binding SimEffectiveSpeed}"
+                             ParticlePaused="{Binding SimEffectivePaused}"
+                             ParticleFreeClock="{Binding SimDrivesParticles}"
                              ParticleRig="{Binding Rig}"
                              Skybox="{Binding Skybox}"
                              TargetDummyPosition="{Binding DummyCubePosition}"
@@ -366,7 +369,7 @@
                                  FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" IsVisible="{Binding Animation.HasClip}" />
                       <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding Animation.HasClip}">
                         <TextBlock Text="Speed" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="11" VerticalAlignment="Center" />
-                        <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="110" />
+                        <Slider Minimum="0.1" Maximum="2" Value="{Binding Animation.Speed, Mode=TwoWay}" Width="110" IsEnabled="{Binding !SimRunning}" />
                         <TextBlock Text="{Binding Animation.Speed, StringFormat='{}{0:0.0}x'}" FontSize="11" VerticalAlignment="Center" />
                       </StackPanel>
                     </StackPanel>
@@ -491,6 +494,64 @@
             <TabItem.Header><TextBlock Text="Play" FontSize="12" /></TabItem.Header>
             <ScrollViewer>
               <StackPanel Margin="10" Spacing="8">
+                  <!-- M869: SIMULATION. The champion's abilities, generated from its own data (M867); Play runs one on the stage with the
+                       clip, the spell composite, the dash/blink the tags prove and the hit on the dummy, then puts the scene back.
+                       Showcase plays P, Q, W, E, R and the extras in order. Pause and Speed act on the pose, the movement, the hit
+                       times and the effects together. -->
+                  <Border Classes="card" IsVisible="{Binding HasActions}">
+                    <StackPanel Spacing="6">
+                      <TextBlock Classes="cardTitle" Text="SIMULATION" />
+                      <TextBlock Text="{Binding SimSummary}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" TextWrapping="Wrap" />
+                      <ListBox ItemsSource="{Binding SimAbilities}" SelectedItem="{Binding SimSelected, Mode=TwoWay}"
+                               IsVisible="{Binding HasSimulation}"
+                               MaxHeight="260" Background="Transparent" BorderThickness="0">
+                        <ListBox.ItemTemplate>
+                          <DataTemplate x:DataType="vm:SimAbilityRowViewModel">
+                            <Grid ColumnDefinitions="Auto,34,*,Auto,Auto" Margin="0,1">
+                              <Border Grid.Column="0" Width="{Binding Indent}" />
+                              <TextBlock Grid.Column="1" Text="{Binding Key}" FontSize="11" VerticalAlignment="Center"
+                                         Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+                              <TextBlock Grid.Column="2" Text="{Binding Name}" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                              <StackPanel Grid.Column="3" Margin="6,0" VerticalAlignment="Center" ToolTip.Tip="{Binding Reasons}">
+                                <TextBlock Text="{Binding StatusText}" FontSize="9" IsVisible="{Binding IsComplete}" Foreground="{DynamicResource ReySuccessBrush}" />
+                                <TextBlock Text="{Binding StatusText}" FontSize="9" IsVisible="{Binding IsIncomplete}" Foreground="{DynamicResource ReyWarningBrush}" />
+                                <TextBlock Text="{Binding StatusText}" FontSize="9" IsVisible="{Binding IsBlocked}" Foreground="{DynamicResource ReyErrorBrush}" />
+                              </StackPanel>
+                              <Button Grid.Column="4" Classes="tool" Content="Play" FontSize="10" Padding="6,1"
+                                      Command="{Binding PlayCommand}" ToolTip.Tip="Run this ability on the stage" />
+                            </Grid>
+                          </DataTemplate>
+                        </ListBox.ItemTemplate>
+                      </ListBox>
+                      <WrapPanel Orientation="Horizontal" IsVisible="{Binding HasSimulation}">
+                        <Button Classes="tool" Content="Play selected" FontSize="10" Padding="6,1" Margin="0,0,4,4"
+                                Command="{Binding PlaySimulationSelectedCommand}" />
+                        <Button Classes="tool" Content="Showcase" FontSize="10" Padding="6,1" Margin="0,0,4,4"
+                                Command="{Binding ShowcaseSimulationCommand}" ToolTip.Tip="P, Q, W, E, R and the extras, one after the other, the scene reset between" />
+                        <Button Classes="tool" Content="Replay" FontSize="10" Padding="6,1" Margin="0,0,4,4"
+                                Command="{Binding ReplaySimulationCommand}" ToolTip.Tip="Run the last ability again from a clean scene" />
+                        <Button Classes="tool" Content="{Binding SimPauseLabel}" FontSize="10" Padding="6,1" Margin="0,0,4,4"
+                                Command="{Binding ToggleSimulationPauseCommand}" ToolTip.Tip="Freeze or continue the pose, the movement and the effects" />
+                        <Button Classes="tool" Content="Stop / Reset" FontSize="10" Padding="6,1" Margin="0,0,4,4"
+                                Command="{Binding StopSimulationAndResetCommand}" ToolTip.Tip="Stop, clear the effects and put the champion and the dummies back" />
+                      </WrapPanel>
+                      <Grid ColumnDefinitions="Auto,*" IsVisible="{Binding HasSimulation}">
+                        <TextBlock Grid.Column="0" Text="Speed" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"
+                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                        <ComboBox Grid.Column="1" HorizontalAlignment="Left" MinWidth="90" FontSize="10"
+                                  ItemsSource="{Binding SimSpeedLabels}" SelectedIndex="{Binding SimSpeedIndex, Mode=TwoWay}" />
+                      </Grid>
+                      <TextBlock Text="{Binding SimStatusLine}" FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ReyAccentBrush}" />
+                      <TextBlock Text="{Binding SimNotes}" FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <ItemsControl ItemsSource="{Binding SimLog}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="x:String">
+                            <TextBlock Text="{Binding}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextTrimming="CharacterEllipsis" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </Border>
                   <!-- M868: the environment. Summoner's Rift (Map11) loads by itself when a champion is shown; there is no
                        map picker and no manual play. The simulation moves and casts; this card only says where the
                        character stands and puts the scene back. -->
@@ -538,9 +599,11 @@
                         <TextBlock Grid.Column="4" Text="Z" FontSize="10" VerticalAlignment="Center" Margin="5,0,3,0" Foreground="{DynamicResource ReyAxisZBrush}" />
                         <TextBox Grid.Column="5" Text="{Binding DummyZ, StringFormat='{}{0:0.#}'}" FontSize="10" Padding="3,1" />
                       </Grid>
+                      <CheckBox Content="Move dummy (show the gizmo)" IsChecked="{Binding MoveDummyEnabled}" FontSize="10"
+                                ToolTip.Tip="Show the translate gizmo on the dummy so it can be dragged. Off by default: the stage and the simulation place it." />
                       <CheckBox Content="Play selected VFX at dummy" IsChecked="{Binding PlaySelectedAtDummy}" FontSize="10"
                                 ToolTip.Tip="Force the manually picked system onto the dummy. Systems named *_tar* go there automatically." />
-                      <TextBlock Text="Drag the gizmo arrows in the viewport to move it. Target-bound systems (*_tar*) land here automatically."
+                      <TextBlock Text="Tick Move dummy, then drag the gizmo arrows in the viewport. Target-bound systems (*_tar*) land here automatically."
                                  FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
                     </StackPanel>
                   </Border>

@@ -211,6 +211,10 @@ public partial class MeshPreviewWindow
         // show the same effect at the same age rather than two independent simulations.
         _dx11.ShaderCache = vm.Dx11ShaderCache;
         if (vm.ArenaViewport is null) _dx11.ParticlePlayback = vm.Playback;
+        // M869: one time scale for the simulation: zero while paused, else the speed. The surface multiplies only its LIVE particle
+        // step by it (a capture steps by the shot's own delta), so the cast, the missile flight and the clip events slow or freeze
+        // together with the pose and the simulation clock.
+        _dx11.ParticleTimeScale = vm.SimParticleTimeScale;
 
         // M630: the two things that make a spell land where it should. Clip particle events ride their
         // bone, and beams terminate at the dummy - both pushed per frame, because the pose changes every

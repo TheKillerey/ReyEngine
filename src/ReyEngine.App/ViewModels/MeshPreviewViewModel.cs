@@ -239,6 +239,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// (a legacy map, a prop, a bare mesh) leaves the stage first - see <see cref="LeaveStage"/>.</param>
     public void Show(string title, MeshAsset mesh, SkeletonAsset? skeleton, IReadOnlyList<TextureImage?>? textures, bool keepStage = false)
     {
+        StopSimulation();   // M869: a run belongs to the skin it started on; a new mesh or skin ends it
         if (!keepStage) LeaveStage();
         Title = title;
         Mesh = mesh;
@@ -528,7 +529,12 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         TargetDummyEnabled ? new System.Numerics.Vector3((float)DummyX, (float)DummyY, (float)DummyZ) : null;
 
     /// <summary>Gizmo pivot (bound by the preview window) — the dummy is the only gizmo user here.</summary>
-    public System.Numerics.Vector3? DummyGizmoPivot => TargetDummyPosition;
+    public System.Numerics.Vector3? DummyGizmoPivot => MoveDummyEnabled ? TargetDummyPosition : null;
+
+    /// <summary>M869: the dummy's translate gizmo is hidden while the stage and the simulation own the scene (it covered the dummy);
+    /// this turns it on for someone who wants to drag the dummy.</summary>
+    [ObservableProperty] private bool _moveDummyEnabled;
+    partial void OnMoveDummyEnabledChanged(bool value) => OnPropertyChanged(nameof(DummyGizmoPivot));
 
     // ---- M115: render Riot's practice-tool dummy instead of the cube when its assets load ----
 
@@ -831,7 +837,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         string? casterBone = CasterBoneOrNull;
         foreach (var h in ev.CasterSystems) if (Make(h, caster, aim, null, casterBone) is { } i) items.Add(i);
         if (hitAt is { } hit)
-            foreach (var h in ev.TargetSystems) if (Make(h, hit, caster, null) is { } i) items.Add(i);
+            foreach (var h in ev.TargetSystems)
+                if (Make(h, hit, caster, null) is { } i)
+                    // M869: a simulated ability lands its impact when the planner says the hit happens (a missile's arrival), not at t=0
+                    items.Add(_simHitDelay is { } hitDelay ? i with { StartDelay = hitDelay } : i);
         foreach (var h in ev.MissileSystems)
             if (Make(h, caster, flightEnd, flightEnd) is { } i)
             {
@@ -939,6 +948,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// playing SFX/VO into the void.</summary>
     public void OnWindowClosed()
     {
+        StopSimulation();                     // M869: the run, its timer and the ally dummy
         StopEvent();                          // event bundle + playback + sound schedule
         SelectedVfx = null;
         Animation.SelectedAnimation = null;   // stops the clip drive

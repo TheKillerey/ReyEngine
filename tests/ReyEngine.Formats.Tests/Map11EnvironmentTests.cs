@@ -541,7 +541,9 @@ public sealed class Map11EnvironmentTests(Xunit.Abstractions.ITestOutputHelper o
             .GetMembers(BindingFlags.Public | BindingFlags.Instance)
             .Select(m => m.Name).ToHashSet();
         var missing = new List<string>();
-        foreach (string region in new[] { header, tabs })
+        // M869: the SIMULATION card's ability rows are a DataTemplate over SimAbilityRowViewModel; their bindings belong to the row.
+        // The probe in .codex_tmp/M869UiProbe resolves those at runtime.
+        foreach (string region in new[] { header, Regex.Replace(tabs, @"<DataTemplate.*?</DataTemplate>", "", RegexOptions.Singleline) })
             foreach (Match m in Regex.Matches(region, @"\{Binding\s+!?([A-Za-z_][A-Za-z0-9_]*)"))
                 if (!members.Contains(m.Groups[1].Value)) missing.Add(m.Groups[1].Value);
 

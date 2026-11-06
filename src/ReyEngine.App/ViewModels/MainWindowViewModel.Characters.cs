@@ -3,6 +3,7 @@ using ReyEngine.Core.Assets;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Characters;
+using ReyEngine.Formats.Characters.Simulation;
 using ReyEngine.Formats.Meta;
 
 namespace ReyEngine.App.ViewModels;
@@ -180,6 +181,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                         + $"{abilities.Count(a => a.CastFrame > 0f || a.CastTimeSeconds > 0f)} with authored cast timing.");
             }
             else MeshPreview.SetAbilities(Array.Empty<AbilitySlot>());
+            MeshPreview.BeginSimulation(character);   // M869: lazy, once per champion; a second skin finds it loaded
             _log.Info("Character",
                 $"{character}: {actions.Count(a => a.HasClip)}/{actions.Count} actions have an animation"
                 + (spells.Count > 0 ? $", {spells.Count} abilities named from the record." : ", no champion record."));
@@ -396,6 +398,21 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
         string wanted = Path.GetFullPath(wadPath);
         return mounts.Fallback.Concat(mounts.Mounts).OfType<WadMount>()
             .Any(m => string.Equals(Path.GetFullPath(m.Location), wanted, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>M869: the simulation definition of a champion (folder name): the cached JSON when it matches this generator and game
+    /// build, else generated from the champion WAD. Off the UI thread; the file write is best effort.</summary>
+    private async Task<ChampionSimDefinition?> LoadSimulationDefinitionAsync(string champion)
+    {
+        string? final = GameReferenceLibrary.FindFinalDirectory(Project.GameDirectory);
+        if (final is null) return null;
+        var resolver = _resolver;
+        var result = await Task.Run(() => Services.ChampionSimLoader.Load(final, champion, resolver, ResolveBinName, ResolveWadPath));
+        if (result.Definition is null)
+            _log.Warn("Simulation", $"{champion}: {result.Error ?? "no definition"}");
+        else
+            _log.Info("Simulation", $"{champion}: {result.Definition.Abilities.Count} abilities ({(result.FromCache ? "cached" : "generated")}, game {result.Definition.GameVersion}).");
+        return result.Definition;
     }
 
     /// <summary>M812: this champion WAD is the one the Character window has open now, and this is the install it came from.</summary>

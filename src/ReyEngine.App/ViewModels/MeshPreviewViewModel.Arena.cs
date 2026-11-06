@@ -150,6 +150,12 @@ public sealed partial class MeshPreviewViewModel
         else if (UseDx11Preview && Dx11BackdropFailed && BackgroundVisible && BackdropProp() is { } backdrop)
             list.Add(new PropInstanceData(backdrop, BackdropWorld));
         if (DummyProps is { } dummy) list.AddRange(dummy.Instances);
+        // M869: the ally dummy, while a simulated ability needs one. The same mesh as the enemy, turned toward the champion.
+        if (SimAllyPosition is { } ally && _dummyMesh is not null)
+        {
+            float yaw = MathF.Atan2(CharacterPosition.X - ally.X, CharacterPosition.Z - ally.Z);
+            list.Add(new PropInstanceData(_dummyMesh, Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(ally)));
+        }
         SceneProps = list.Count > 0 ? new PropRenderSet(list) : null;
     }
 
@@ -264,6 +270,7 @@ public sealed partial class MeshPreviewViewModel
     public void LeaveStage()
     {
         _stageWanted = false;
+        ClearSimulation();                     // M869: a run must not outlive the stage it plays on, nor a champion's list a prop
         if (_arena is not { } scene) return;
 
         _pendingAttackTarget = null;
@@ -455,7 +462,17 @@ public sealed partial class MeshPreviewViewModel
     }
 
     /// <summary>The point the camera frames: the middle of the champion and the dummy, or the champion alone.</summary>
-    public Vector3 CameraFocus => TargetDummyPosition is { } dummy ? (CharacterPosition + dummy) * 0.5f : CharacterPosition;
+    public Vector3 CameraFocus
+    {
+        get
+        {
+            // M869: the ally dummy, when an ability brought one, is part of the picture
+            var sum = CharacterPosition; int n = 1;
+            if (TargetDummyPosition is { } dummy) { sum += dummy; n++; }
+            if (SimAllyPosition is { } ally) { sum += ally; n++; }
+            return sum / n;
+        }
+    }
 
     /// <summary>Bumped whenever the scene is (re)framed; the window snaps its camera on a change.</summary>
     public int SceneFrameCount { get; private set; }

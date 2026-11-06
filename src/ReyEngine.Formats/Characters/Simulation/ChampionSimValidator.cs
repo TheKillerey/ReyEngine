@@ -123,12 +123,16 @@ public static class ChampionSimValidator
             || a.Missiles.Any(m => m.Effect?.Visual == true)
             || a.ClipParticleEvents.Any(e => e.System?.Visual == true);
         if (!visible && subCasts.Any(sc => Validate(sc).Status != SimStatus.Blocked)) visible = true;
+        // A passive with no clip and no systems of its own is normal (many champions' passives are stat rules or buffs the game
+        // draws from elsewhere): it is a gap in the data, not a broken ability.
+        bool ownVisualMissing = !visible && passive;
         checks.Add(new ValidationCheck("visible", visible,
-            visible ? "a clip or a visible effect exists" : "no clip and no visible effect",
-            visible ? null : new[] { "visible.none" }));
+            visible ? "a clip or a visible effect exists"
+            : passive ? "no visual of its own in the data" : "no clip and no visible effect",
+            visible ? null : new[] { passive ? "visible.passiveNone" : "visible.none" }));
 
         var reasons = checks.Where(c => !c.Passed).Select(c => $"{c.Name}: {c.Detail}").ToList();
-        SimStatus status = !visible ? SimStatus.Blocked : reasons.Count == 0 ? SimStatus.Complete : SimStatus.Incomplete;
+        SimStatus status = !visible && !ownVisualMissing ? SimStatus.Blocked : reasons.Count == 0 ? SimStatus.Complete : SimStatus.Incomplete;
         return new AbilityValidation(a.Key, status, checks, reasons);
     }
 }
