@@ -90,6 +90,16 @@ public sealed class ShaderCatalog
     /// </summary>
     public string SourceStamp { get; init; } = "";
 
+    /// <summary>
+    /// M855: hashes of the shaders.bin objects whose name did NOT resolve when this was scanned. Such an
+    /// object is skipped (an unnamed shader cannot be referenced from a material's shader path), so a
+    /// catalogue built with old hash tables silently lacks it - measured: <c>Shaders/SkinnedMesh/PixelMatrix</c>
+    /// ships and renders but was missing from the cache, which the Global.wad stamp alone kept forever.
+    /// A cache is only trusted while none of these resolves yet. <c>null</c> means the cache predates the
+    /// field (unknown), which rebuilds once.
+    /// </summary>
+    public List<uint>? UnresolvedObjects { get; init; }
+
     public List<LeagueShaderDef> Shaders { get; init; } = new();
 
     public IEnumerable<string> Categories =>
@@ -124,9 +134,13 @@ public static class ShaderCatalogLoader
 
             var tree = BinTreeIo.Read(wad.Extract(entry));
             var shaders = new List<LeagueShaderDef>();
+            var unresolved = new List<uint>();
             foreach (var (hash, obj) in tree.Objects)
             {
-                string name = resolveBinName(hash) ?? $"0x{hash:x8}";
+                // M855: remember the objects we could not name so the cache can notice better tables.
+                string? resolved = resolveBinName(hash);
+                if (resolved is null) unresolved.Add(hash);
+                string name = resolved ?? $"0x{hash:x8}";
                 if (!name.StartsWith("Shaders/", StringComparison.OrdinalIgnoreCase)) continue;
                 shaders.Add(Parse(name, obj, resolveBinName));
             }
@@ -136,6 +150,7 @@ public static class ShaderCatalogLoader
                 Environment = environment,
                 GameDirectory = gameDirectory,
                 SourceStamp = StampFor(globalWadPath),   // M475
+                UnresolvedObjects = unresolved,           // M855
                 Shaders = shaders,
             };
         }
@@ -229,7 +244,13 @@ public static class ShaderCatalogCache
     /// path is identical before and after. Pass "" only where no source file can be identified; that
     /// disables the check and restores the old behaviour deliberately rather than by omission.
     /// </param>
-    public static ShaderCatalog? Load(string path, string gameDirectory, string expectedStamp)
+    /// <param name="resolveBinName">
+    /// M855: the CURRENT bin-name resolver. When given, a cache whose scan left objects unnamed is rejected
+    /// as soon as any of them resolves (the hash tables improved), and a cache that never recorded its
+    /// unnamed objects is rejected once. Omit to skip this check.
+    /// </param>
+    public static ShaderCatalog? Load(string path, string gameDirectory, string expectedStamp,
+        Func<uint, string?>? resolveBinName = null)
     {
         try
         {
@@ -242,6 +263,12 @@ public static class ShaderCatalogCache
             // field existed has an empty stamp and therefore rebuilds once.
             if (expectedStamp.Length > 0 && !string.Equals(c.SourceStamp, expectedStamp, StringComparison.Ordinal))
                 return null;
+            if (resolveBinName is not null)
+            {
+                if (c.UnresolvedObjects is null) return null;
+                foreach (uint h in c.UnresolvedObjects)
+                    if (resolveBinName(h) is not null) return null;
+            }
             return c;
         }
         catch { return null; }

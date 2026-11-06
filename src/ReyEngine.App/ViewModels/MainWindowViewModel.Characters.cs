@@ -223,7 +223,8 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 resolveBinName: ResolveBinName,
                 resolveWadPath: ResolveWadPath,
                 fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader,
-                driverState: driverState);   // M647: which of the skin's conditions to draw
+                driverState: driverState,   // M647: which of the skin's conditions to draw
+                hostBin: CharacterHostBin(binPath, bin));   // M857: materials only the open map's bin holds
 
             if (scene is null) return (null, "The mesh would not decode for D3D11.");
 
@@ -237,15 +238,61 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                                    + $"  idx {slice.Start}+{slice.Count}"
                                    + $"  {slice.Textures.Count} texture(s)"
                                    + (slice.Hidden ? "  HIDDEN by initialSubmeshToHide" : "")
-                                   + (slice.UsedFallbackShader ? "  (stand-in shader)" : ""));
+                                   + (slice.UsedFallbackShader ? "  (stand-in shader)" : "")
+                                   + (slice.IsOutline ? "  (outline pass)" : ""));
             return (scene, scene.Slices.Count > 0
-                ? $"{scene.Slices.Count} of {scene.SubmeshCount} submesh(es) resolved"
+                ? $"{scene.Slices.Count(s => !s.IsOutline)} of {scene.SubmeshCount} submesh(es) resolved"
+                  + (scene.Slices.Any(s => s.IsOutline) ? $", {scene.Slices.Count(s => s.IsOutline)} outline pass(es)" : "")
                 : "No materials resolved - " + (scene.Failures.Count > 0 ? scene.Failures[0] : "the skin bin was not found"));
         }
         catch (Exception ex)
         {
             return (null, ex.Message);
         }
+    }
+
+    /// <summary>M857: the (map, skin) the last <see cref="CharacterHostBin"/> answered for, so a skin that is
+    /// rebuilt on every material edit does not re-parse the map's 4.6 MB bin each time.</summary>
+    private sealed record CharacterHostEntry(string Key, Formats.Materials.LoadedBin? Host);
+    private volatile CharacterHostEntry? _characterHostCache;   // one immutable reference, written from Task.Run threads
+
+    /// <summary>
+    /// M857: the open map's own bin as a host for a character's materials. A skin such as
+    /// <c>srx_banner_hero</c> points <c>skinMeshProperties.material</c> at a StaticMaterialDef that lives in
+    /// map11.bin - no dependency of the skin carries it - so the Character preview, which passed no host, drew
+    /// it as a 100% white stand-in while the same skin as a map prop (M805) drew Riot's shader. Only the
+    /// materials the skin links from the map bin are kept; null when no map is open, the skin links nothing
+    /// there, or the map names no shipping bin (the skin then resolves exactly as before).
+    /// </summary>
+    /// <param name="skinBytes">The skin bin actually being drawn (the editor's edited copy when there is one) - the
+    /// host materials are chosen from IT, not from the shipped bin.</param>
+    private Formats.Materials.LoadedBin? CharacterHostBin(string? skinBinPath, byte[]? skinBytes = null)
+    {
+        string? mapPath = _currentMapEntry?.Path;
+        if (mapPath is null || skinBinPath is null) return null;
+        // keyed by CONTENT too: a project edit to the map bin or to the skin bin must not be answered from before it
+        string? mapBinPath = MapBinPathFor(mapPath);
+        byte[]? mapBytes = mapBinPath is null ? null : ReadAssetByPath(mapBinPath);
+        string key = mapPath + "|" + skinBinPath + "|" + ContentStamp(mapBytes) + "|" + ContentStamp(skinBytes);
+        var c = _characterHostCache;
+        if (c is not null && string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase)) return c.Host;
+
+        string skin = skinBinPath.Replace("\\", "/");
+        if (skin.StartsWith("data/", StringComparison.OrdinalIgnoreCase)) skin = skin[5..];
+        if (skin.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) skin = skin[..^4];
+        Formats.Materials.LoadedBin? host = null;
+        try { host = LoadHostMaterials(new[] { skin }, mapPath, out string note, mapBytes, skinBytes); if (host is not null) _log.Info("D3D11", $"{skinBinPath}: host bin{note}."); }
+        catch (Exception ex) { _log.Warn("D3D11", $"{skinBinPath}: the map's bin could not host its materials: {ex.Message}"); }
+        _characterHostCache = new CharacterHostEntry(key, host);
+        return host;
+    }
+
+    private static string ContentStamp(byte[]? data)
+    {
+        if (data is null) return "-";
+        uint h = 2166136261u;
+        foreach (byte b in data) { h ^= b; h *= 16777619u; }
+        return $"{data.Length}:{h:x8}";
     }
 
     /// <summary>M676: the D3D11 scene for a placed prop - Riot's shaders, the skin's textures, parameters and

@@ -9,6 +9,11 @@ namespace ReyEngine.Formats.Materials;
 
 public enum MaterialSourceKind { ChampionSkin, MapMaterials }
 
+/// <summary>M858: one submesh's outline pass - the submesh is drawn a second time with <see cref="Material"/>
+/// (Jade_CharacterOutline: an outline shell). <paramref name="Source"/> is "materialOverride" when the skin's
+/// entry named the material itself, "category" when it came from the CharacterOutlineCategory.</summary>
+public sealed record OutlinePass(string Submesh, MaterialBinding Material, string Source);
+
 /// <summary>
 /// A material-centric editable view over a champion skin .bin or a map .materials.bin. Wraps a
 /// live (mutable) LeagueToolkit BinTree; texture-slot paths and numeric params reference the
@@ -21,6 +26,9 @@ public sealed class MaterialDocument
 {
     private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
     private static readonly uint StaticMaterialDefClass = HashAlgorithms.Fnv1a("StaticMaterialDef");   // M805
+    /// <summary>M858: <c>CharacterOutlineCategory</c> - an object holding one <c>Material</c> link, which a skin's
+    /// <c>OutlineCategorySubmeshes</c> entry names. Class hash 0x5d7c19de in Riot's schema.</summary>
+    public static readonly uint OutlineCategoryClass = HashAlgorithms.Fnv1a("CharacterOutlineCategory");
     private readonly BinTree _tree;
 
     public MaterialSourceKind Kind { get; }
@@ -30,6 +38,15 @@ public sealed class MaterialDocument
     /// <see cref="Materials"/> because these are properties of the SKIN rather than of any one material -
     /// they apply across every submesh that does not override them.</summary>
     public SkinMeshProperties? SkinMesh { get; private set; }
+
+    /// <summary>M858: the extra outline pass of each submesh the skin lists under
+    /// <c>skinMeshProperties.OutlineCategorySubmeshes</c>. Empty for a skin with none, and for an entry whose
+    /// material cannot be found - <see cref="OutlineNotes"/> then says why. The bindings are ALSO in
+    /// <see cref="Materials"/> (with no submeshes of their own), so they show in the material list, read-only when linked.</summary>
+    public IReadOnlyList<OutlinePass> OutlinePasses { get; private init; } = Array.Empty<OutlinePass>();
+
+    /// <summary>M858: one sentence per outline entry that could not be resolved.</summary>
+    public IReadOnlyList<string> OutlineNotes { get; private init; } = Array.Empty<string>();
     public bool IsDirty => Materials.Any(m => m.IsDirty);
 
     private MaterialDocument(BinTree tree, MaterialSourceKind kind, IReadOnlyList<MaterialBinding> materials)
@@ -211,6 +228,7 @@ public sealed class MaterialDocument
 
         // Champion: default diffuse + reverse map material-object -> submesh(es) from materialOverride.
         var assignment = new Dictionary<uint, List<string>>();
+        var outlineEntries = new List<(uint Category, uint Override, string[] Submeshes)>();   // M858
         uint? defaultMaterialHash = null;
         SkinMeshProperties? pendingSkinMesh = null;
         if (champion)
@@ -275,6 +293,18 @@ public sealed class MaterialDocument
                                 new List<TextureSlot> { new("texture", inlineTex, null, resolveWadPath) }, new List<MaterialParameter>()));
                     }
                 }
+
+                // M858: OutlineCategorySubmeshes - [{ category -> CharacterOutlineCategory, materialOverride,
+                // Submeshes "a b c" }]. Read here, resolved below once the linked bins are in reach.
+                if (Field(smp.Properties, "OutlineCategorySubmeshes") is BinTreeContainer outlines)
+                    foreach (var el in outlines.Elements)
+                    {
+                        if (el is not BinTreeStruct oe) continue;
+                        uint cat = Field(oe.Properties, "category") is BinTreeObjectLink cl ? cl.Value : 0u;
+                        uint ovr = Field(oe.Properties, "materialOverride") is BinTreeObjectLink ol ? ol.Value : 0u;
+                        var names = Skeletons.ChampionAnimationData.SplitSubmeshList((Field(oe.Properties, "Submeshes") as BinTreeString)?.Value);
+                        if (names.Length > 0) outlineEntries.Add((cat, ovr, names));
+                    }
                 break;
             }
         }
@@ -285,31 +315,74 @@ public sealed class MaterialDocument
         // path/name, and only for links this bin leaves unresolved - an object present locally always
         // wins even if a same-named one exists in a dependency.
         var linkedMaterials = new Dictionary<uint, (BinTreeObject Obj, string From)>();
+
+        // M858: the linked bins, parsed lazily and ONCE - the outline categories and the missing materials both
+        // look through them, and a Jade skin's dependencies are eight multi-skin bins.
+        var depTrees = new List<(string Dep, BinTree Tree)>();
+        var depNames = tree.Dependencies.Where(d => !string.IsNullOrWhiteSpace(d)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        int depNext = 0;
+        IEnumerable<(string Dep, BinTree Tree)> DependencyTrees()
+        {
+            for (int i = 0; ; i++)
+            {
+                if (i >= depTrees.Count)
+                {
+                    bool loaded = false;
+                    while (!loaded && readBin is not null && depNext < depNames.Count)
+                    {
+                        string dep = depNames[depNext++];
+                        byte[]? depBytes;
+                        try { depBytes = readBin(dep); } catch { depBytes = null; }
+                        if (depBytes is not { Length: > 0 }) continue;
+                        try { depTrees.Add((dep, SafeBinTree.Parse(depBytes))); loaded = true; }
+                        catch { /* a dependency that will not parse resolves nothing */ }
+                    }
+                    if (!loaded) yield break;
+                }
+                yield return depTrees[i];
+            }
+        }
+
+        // M858: the material each outline entry draws - its own materialOverride, else the category's Material.
+        // A category is an object like any other: this bin first, then a dependency, then the host (Jade's lives
+        // in map453.bin, which is why a Jade skin outlines only where that map's bin is loaded).
+        var outlineNotes = new List<string>();
+        var outlineMaterialOf = new List<(string[] Submeshes, uint Material, string Source)>();
+        if (champion)
+            foreach (var (cat, ovr, names) in outlineEntries)
+            {
+                string who = string.Join(' ', names);
+                if (ovr != 0) { outlineMaterialOf.Add((names, ovr, "materialOverride")); continue; }
+                if (cat == 0) { outlineNotes.Add($"outline {who}: no category and no materialOverride"); continue; }
+                BinTreeObject? catObj = null;
+                if (!tree.Objects.TryGetValue(cat, out catObj))
+                {
+                    foreach (var (_, dt) in DependencyTrees()) if (dt.Objects.TryGetValue(cat, out catObj)) break;
+                    if (catObj is null && hostBin is not null) hostBin.Tree.Objects.TryGetValue(cat, out catObj);
+                }
+                if (catObj is null || (catObj.ClassHash != OutlineCategoryClass && !string.Equals(resolve(catObj.ClassHash), "CharacterOutlineCategory", StringComparison.OrdinalIgnoreCase)))
+                { outlineNotes.Add($"outline {who}: category 0x{cat:x8} is in none of the skin bin, its dependencies or the host bin"); continue; }
+                if (Field(catObj.Properties, "Material") is BinTreeObjectLink catMat && catMat.Value != 0)
+                    outlineMaterialOf.Add((names, catMat.Value, "category"));
+                else outlineNotes.Add($"outline {who}: category 0x{cat:x8} names no Material");
+            }
+
         if (champion && (readBin is not null || hostBin is not null))   // M805: or a host bin alone
         {
             var missing = new HashSet<uint>();
             if (defaultMaterialHash is { } dmh && dmh != 0 && !tree.Objects.ContainsKey(dmh)) missing.Add(dmh);
             foreach (var link in assignment.Keys)
                 if (link != 0 && !tree.Objects.ContainsKey(link)) missing.Add(link);
+            foreach (var (_, outlineHash, _) in outlineMaterialOf)   // M858
+                if (outlineHash != 0 && !tree.Objects.ContainsKey(outlineHash)) missing.Add(outlineHash);
 
             if (missing.Count > 0 && readBin is not null)
             {
-                // Dependency paths are case-insensitive (WAD lookups hash the lowercased path); dedupe on
-                // that basis so a bin listing the same dependency twice with different casing is read once.
-                var seenDeps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var dep in tree.Dependencies)
+                // Dependency paths are case-insensitive (WAD lookups hash the lowercased path); the shared
+                // enumerator above dedupes on that basis so a dependency listed twice is read once.
+                foreach (var (dep, depTree) in DependencyTrees())
                 {
                     if (missing.Count == 0) break;
-                    if (string.IsNullOrWhiteSpace(dep) || !seenDeps.Add(dep)) continue;
-
-                    byte[]? depBytes;
-                    try { depBytes = readBin(dep); } catch { depBytes = null; }
-                    if (depBytes is not { Length: > 0 }) continue;
-
-                    BinTree depTree;
-                    try { depTree = SafeBinTree.Parse(depBytes); }
-                    catch { continue; }
-
                     foreach (var hash in missing.ToList())
                     {
                         if (!depTree.Objects.TryGetValue(hash, out var obj)) continue;
@@ -543,7 +616,23 @@ public sealed class MaterialDocument
         foreach (var b in materials) b.Profile = MaterialProfiles.Classify(b, kind);
 
         // (see Reclassify below — the profile is re-derived when the render state is edited)
-        return new MaterialDocument(tree, kind, materials) { Issues = issues, SkinMesh = pendingSkinMesh };
+        // M858: bind each outline entry to its material. One pass per (submesh, material), in file order.
+        var outlinePasses = new List<OutlinePass>();
+        foreach (var (names, hash, source) in outlineMaterialOf)
+        {
+            var found = materials.FirstOrDefault(m => m.ObjectPathHash == hash && m.IsStaticMaterialDef);
+            if (found is null)
+            {
+                outlineNotes.Add($"outline {string.Join(' ', names)}: material 0x{hash:x8} ({source}) is in none of the skin bin, its dependencies or the host bin");
+                continue;
+            }
+            foreach (string sub in names)
+                if (!outlinePasses.Any(p => p.Submesh.Equals(sub, StringComparison.OrdinalIgnoreCase) && ReferenceEquals(p.Material, found)))
+                    outlinePasses.Add(new OutlinePass(sub, found, source));
+        }
+
+        return new MaterialDocument(tree, kind, materials)
+        { Issues = issues, SkinMesh = pendingSkinMesh, OutlinePasses = outlinePasses, OutlineNotes = outlineNotes };
     }
 
     private static BinTreeProperty? Field(IReadOnlyDictionary<uint, BinTreeProperty> props, string name)

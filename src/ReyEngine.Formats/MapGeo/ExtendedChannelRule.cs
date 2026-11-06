@@ -46,16 +46,33 @@ public static class ExtendedChannelRule
     /// </summary>
     /// <param name="materialsBin">The map's <c>*.materials.bin</c> bytes.</param>
     /// <param name="resolve">Hash-to-name resolver, as <see cref="MaterialDocument.Parse"/> wants it.</param>
-    public static IReadOnlySet<string> From(byte[] materialsBin, Func<uint, string?> resolve)
+    /// <param name="readMapGeo">M859: the mapgeo's own bytes, read only when a material that selects the extended
+    /// reader has no name in the hash tables. Since 16.21 a material's <c>name</c> is an XXH3 hash, so a mod's own
+    /// Mantis material (a path no table knows) came out as <c>0x...</c>, the set held that instead of the path the
+    /// mapgeo's submeshes carry, no mesh matched, and the file was read with the 40-byte block - the editor then
+    /// failed on the first extended mesh with "vertexCount must be greater than 0". The mapgeo cannot be PARSED
+    /// to find those names (that is the very question), but its strings can be scanned: see
+    /// <see cref="NamesFromStrings"/>.</param>
+    public static IReadOnlySet<string> From(byte[] materialsBin, Func<uint, string?> resolve, Func<byte[]?>? readMapGeo = null)
     {
         var set = new HashSet<string>(StringComparer.Ordinal);
         if (materialsBin is null || materialsBin.Length == 0) return set;
         try
         {
             var doc = MaterialDocument.Parse(materialsBin, resolve);
+            var unnamed = new List<MaterialBinding>();
             foreach (var m in doc.Materials)
-                if (IsExtendedShader(m.RenderShader ?? m.ShaderName) && m.Name.Length > 0)
-                    set.Add(m.Name);
+            {
+                if (!IsExtendedShader(m.RenderShader ?? m.ShaderName) || m.Name.Length == 0) continue;
+                if (m.ObjectPathHash != 0 && m.Name == $"0x{m.ObjectPathHash:x8}") unnamed.Add(m);   // no table names it
+                else set.Add(m.Name);
+            }
+            if (unnamed.Count > 0)
+            {
+                var names = NamesFromStrings(unnamed.Select(m => m.ObjectPathHash).ToHashSet(), materialsBin, readMapGeo);
+                foreach (var m in unnamed)
+                    if (names.TryGetValue(m.ObjectPathHash, out var text)) set.Add(text);
+            }
         }
         catch
         {
@@ -63,6 +80,135 @@ public static class ExtendedChannelRule
             // reproduces the default reader, which is right for every file Riot ships.
         }
         return set;
+    }
+
+    /// <summary>
+    /// M859: the text of material paths the hash tables do not know, found among the strings the project itself
+    /// holds - the materials.bin's string values, then the mapgeo's own length-prefixed strings. A material's
+    /// object key is the FNV-1a of its path (the same relation M847 uses), so a string is accepted only when its hash
+    /// IS the key of a wanted material; nothing is guessed.
+    /// </summary>
+    public static Dictionary<uint, string> NamesFromStrings(IReadOnlySet<uint> wanted, byte[] materialsBin, Func<byte[]?>? readMapGeo)
+    {
+        var found = new Dictionary<uint, string>();
+        // FNV-1a here is case-insensitive, so two spellings of one path share a key. The set this feeds is compared
+        // Ordinal against the mapgeo's own submesh strings, so the mapgeo's spelling must win over the bin's.
+        void Offer(string text, bool authoritative)
+        {
+            if (text.Length == 0) return;
+            uint a = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(text), b = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1aRaw(text);
+            if (wanted.Contains(a)) { if (authoritative) found[a] = text; else found.TryAdd(a, text); }
+            if (wanted.Contains(b)) { if (authoritative) found[b] = text; else found.TryAdd(b, text); }
+        }
+
+        try
+        {
+            var tree = ReyEngine.Formats.Meta.SafeBinTree.Parse(materialsBin);
+            foreach (var obj in tree.Objects.Values) WalkStrings(obj.Properties.Values, t => Offer(t, false));
+        }
+        catch { /* the materials.bin was already parsed once to get here; a second failure only loses this source */ }
+
+        if (readMapGeo is not null)
+        {
+            byte[]? geo = null;
+            try { geo = readMapGeo(); } catch { }
+            if (geo is { Length: > 8 })
+                ScanLengthPrefixedStrings(geo, t => Offer(t, true));
+        }
+        return found;
+    }
+
+    private static void WalkStrings(IEnumerable<LeagueToolkit.Core.Meta.BinTreeProperty> props, Action<string> offer)
+    {
+        foreach (var p in props)
+            switch (p)
+            {
+                case LeagueToolkit.Core.Meta.Properties.BinTreeString s: offer(s.Value); break;
+                case LeagueToolkit.Core.Meta.Properties.BinTreeStruct st: WalkStrings(st.Properties.Values, offer); break;
+                case LeagueToolkit.Core.Meta.Properties.BinTreeContainer c: WalkStrings(c.Elements, offer); break;
+                case LeagueToolkit.Core.Meta.Properties.BinTreeMap m:
+                    foreach (var kv in m) WalkStrings(new[] { kv.Key, kv.Value }, offer);
+                    break;
+            }
+    }
+
+    /// <summary>Every <c>u32 length + printable-ASCII</c> run in <paramref name="data"/> (1..260 bytes). The mapgeo
+    /// stores material, texture and path strings this way; a false positive is harmless because the caller only keeps
+    /// a string whose hash matches a wanted key.</summary>
+    internal static void ScanLengthPrefixedStrings(byte[] data, Action<string> offer)
+    {
+        for (int i = 0; i + 5 <= data.Length; i++)
+        {
+            byte first = data[i + 4];
+            if (first < 0x20 || first > 0x7e) continue;
+            uint n = (uint)(data[i] | data[i + 1] << 8 | data[i + 2] << 16 | data[i + 3] << 24);
+            if (n == 0 || n > 260 || i + 4 + n > data.Length) continue;
+            bool ok = true;
+            for (int j = 0; j < n; j++)
+            {
+                byte c = data[i + 4 + j];
+                if (c < 0x20 || c > 0x7e) { ok = false; break; }
+            }
+            if (ok) offer(System.Text.Encoding.ASCII.GetString(data, i + 4, (int)n));
+        }
+    }
+
+    /// <summary>
+    /// M859 follow-up: why a save that combines a 48-byte (extended channel) mapgeo with edits whose writers still
+    /// assume the 40-byte block must be refused, or null when it is safe. Moves, material swaps, removals and
+    /// bucket-grid rebuilds know the extended set; added meshes (the appender walks the mesh section and writes no
+    /// extended entry), layer edits (LeagueToolkit on the raw bytes), face edits and extrude/inset (the editable
+    /// reader without the set) and Blender reshapes do not.
+    /// </summary>
+    public static string? RefuseCombinedSave(IReadOnlySet<string>? extendedChannelMaterials,
+        bool addedMeshes, bool layerEdits, bool faceEdits, bool grows, bool reshapes)
+    {
+        if (extendedChannelMaterials is not { Count: > 0 }) return null;
+        var what = new List<string>();
+        if (addedMeshes) what.Add("added meshes");
+        if (layerEdits) what.Add("layer edits");
+        if (faceEdits) what.Add("face edits");
+        if (grows) what.Add("extrude/inset");
+        if (reshapes) what.Add("Blender reshapes");
+        if (what.Count == 0) return null;
+        return "This map uses the 48-byte (extended) mesh channel block (Mantis materials: "
+               + string.Join(", ", extendedChannelMaterials.Take(3)) + (extendedChannelMaterials.Count > 3 ? ", ..." : "")
+               + $"), and the writers for {string.Join(", ", what)} do not handle it yet - saving would corrupt the mapgeo. "
+               + "Nothing was written. Save mesh moves, material swaps and removals on their own.";
+    }
+
+    /// <summary>
+    /// M859: put back what <see cref="WithoutExtendedEntries"/> took out. <paramref name="strippedEdited"/> is the
+    /// stripped file after an edit that leaves the mesh list alone (a move, a bucket-grid rebuild);
+    /// <paramref name="original"/> is the file before the strip. Each mesh gets its extended entry back with the
+    /// texture and value it had - not a guess from its materials - so the result differs from
+    /// <paramref name="strippedEdited"/> by exactly those entries.
+    /// </summary>
+    /// <returns>The file with the extended entries restored, or <paramref name="strippedEdited"/> unchanged when
+    /// the original had none. Throws when the two files do not describe the same meshes: writing a file whose
+    /// channel blocks are wrong is the crash this rule exists to prevent.</returns>
+    public static byte[] WithExtendedEntries(byte[] strippedEdited, byte[] original, IReadOnlySet<string> extendedChannelMaterials)
+    {
+        ArgumentNullException.ThrowIfNull(strippedEdited);
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(extendedChannelMaterials);
+        if (extendedChannelMaterials.Count == 0) return strippedEdited;
+        if (!MapGeoBinary.TryReadEditable(original, out var source, extendedChannelMaterials)
+            || !source.Meshes.Any(m => m.HasExtendedChannel))
+            return strippedEdited;
+        if (!MapGeoBinary.TryReadEditable(strippedEdited, out var target, null))
+            throw new InvalidDataException("The edited mapgeo could not be re-read to restore its extended channel entries.");
+        if (target.Meshes.Count != source.Meshes.Count)
+            throw new InvalidDataException(
+                $"The edited mapgeo has {target.Meshes.Count} meshes but the original had {source.Meshes.Count}; the extended channel entries cannot be restored by index.");
+
+        for (int i = 0; i < source.Meshes.Count; i++)
+        {
+            target.Meshes[i].HasExtendedChannel = source.Meshes[i].HasExtendedChannel;
+            target.Meshes[i].ExtendedChannelTexture = source.Meshes[i].ExtendedChannelTexture;
+            target.Meshes[i].ExtendedChannelValue = source.Meshes[i].ExtendedChannelValue;
+        }
+        return target.Write();
     }
 
     /// <summary>

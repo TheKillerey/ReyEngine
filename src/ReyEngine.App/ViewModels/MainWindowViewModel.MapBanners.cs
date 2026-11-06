@@ -151,11 +151,15 @@ public sealed partial class MainWindowViewModel
     /// <see cref="LoadedBin"/> holding only those - the whole bin is about 4.6 MB and is parsed once, here, and dropped.
     /// Null when the map names no shipping bin or the skins link nothing in it; <paramref name="note"/> then says so.
     /// M806: shared with the level props (MainWindowViewModel.LevelProps.cs), whose shipped skins link nothing there.</summary>
-    private LoadedBin? LoadHostMaterials(IEnumerable<string> skins, string? mapPath, out string note)
+    /// <param name="mapBinBytes">The map bin already read by the caller (null = read it here).</param>
+    /// <param name="skinBinOverride">With exactly one skin: the bin to choose host materials from instead of the shipped one.</param>
+    private LoadedBin? LoadHostMaterials(IEnumerable<string> skins, string? mapPath, out string note,
+        byte[]? mapBinBytes = null, byte[]? skinBinOverride = null)
     {
         note = "";
         string? binPath = mapPath is null ? null : MapBinPathFor(mapPath);
-        if (binPath is null || ReadAssetByPath(binPath) is not { } bytes)
+        byte[]? bytes0 = binPath is null ? null : mapBinBytes ?? ReadAssetByPath(binPath);
+        if (binPath is null || bytes0 is not { } bytes)
         {
             note = $" (the map's shipping bin {binPath ?? "(none for this map path)"} was not found, so materials only it holds could not be resolved)";
             return null;
@@ -166,9 +170,11 @@ public sealed partial class MainWindowViewModel
 
         // exactly the materials the skins resolve to there - found by the same rule the resolvers use
         var keep = new Dictionary<uint, BinTreeObject>();
-        foreach (string skin in skins.Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+        var skinList = skins.Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        foreach (string skin in skinList)
         {
-            if (ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin") is not { } skinBin) continue;
+            byte[]? skinBin0 = skinList.Count == 1 && skinBinOverride is not null ? skinBinOverride : ReadAssetByPath("data/" + skin.ToLowerInvariant() + ".bin");
+            if (skinBin0 is not { } skinBin) continue;
             try
             {
                 foreach (var m in MaterialDocument.Parse(skinBin, ResolveBinName, ResolveWadPath, ReadAssetByPath, whole).Materials)
@@ -177,8 +183,16 @@ public sealed partial class MainWindowViewModel
             }
             catch { /* a skin that will not parse resolves nothing; its placements are counted as unresolved */ }
         }
+        int materialsKept = keep.Count;
+        // M858: the outline categories a skin's OutlineCategorySubmeshes link live in the host bin too (Jade's in
+        // map453.bin); the materials above resolved through them in the whole bin, and the small host built
+        // here must still hold them or the skin cannot find its outline again.
+        foreach (var (hash, obj) in whole.Tree.Objects)
+            if (obj.ClassHash == MaterialDocument.OutlineCategoryClass) keep[hash] = obj;
+        // Categories count: a skin whose only link into this bin is an outline category (its material comes from
+        // elsewhere) still needs it, so "nothing needed" means no material AND no category.
         if (keep.Count == 0) { note = $" (no material from {binPath} needed)"; return null; }
-        note = $" ({keep.Count} material(s) from {binPath})";
+        note = $" ({materialsKept} material(s), {keep.Count - materialsKept} outline categories from {binPath})";
         return new LoadedBin(binPath, new BinTree(keep.Values.ToList(), Array.Empty<string>()));
     }
 

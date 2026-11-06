@@ -4474,6 +4474,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <para>An empty set is the safe answer whenever the bin cannot be read: it reproduces the default
     /// reader, which is correct for all 207 mapgeo files Riot ships.</para>
     /// </summary>
+    private byte[]? ReadMapGeoBytesForNames(string mapGeoPath)
+    {
+        if (_currentMapBytes is { } open && string.Equals(_currentMapEntry?.Path, mapGeoPath, StringComparison.OrdinalIgnoreCase)) return open;
+        return TryResolveEntry(HashAlgorithms.WadPath(mapGeoPath), out var geo) ? ReadAsset(geo.PathHash) : null;
+    }
+
     private IReadOnlySet<string> ExtendedChannelMaterialsFor(string? mapGeoPath)
     {
         var empty = (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal);
@@ -4481,7 +4487,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         try
         {
             if (!TryResolveMaterialsBin(mapGeoPath, out var binEntry)) return empty;
-            var set = Formats.MapGeo.ExtendedChannelRule.From(ReadAsset(binEntry.PathHash), ResolveBinName);
+            // M859: the mapgeo's own bytes ride along so a custom-named Mantis material (a path no hash table knows)
+            // is found by the strings the mapgeo itself carries. Read only when such a material exists.
+            var set = Formats.MapGeo.ExtendedChannelRule.From(ReadAsset(binEntry.PathHash), ResolveBinName, () => ReadMapGeoBytesForNames(mapGeoPath));
             if (set.Count > 0)
                 _log.Info("Map", $"{set.Count} material(s) use the extended mesh channel block: "
                                  + string.Join(", ", set.Take(4)));
@@ -8216,23 +8224,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// name the tables already give. Rebuilt when the open map changes.</summary>
     private IReadOnlyDictionary<uint, string> MapGeoNamesByKey()
     {
+        // Reached from any thread (ResolveBinName runs off the UI thread at startup): one immutable record, swapped as one reference.
         var map = _currentMap;
         var cached = _namesByMapKey;
-        if (cached.Map == map) return cached.Names;
+        if (ReferenceEquals(cached.Map, map)) return cached.Names;
         var names = new Dictionary<uint, string>();
         if (map is not null)
-            foreach (var g in map.Groups)
+        {
+            MapGeoGroup[] groups;
+            try { groups = map.Groups.ToArray(); }
+            catch (InvalidOperationException) { return cached.Names; }   // changed under us: answer from the last good snapshot, cache nothing
+            foreach (var g in groups)
                 if (!string.IsNullOrEmpty(g.Material))
                 {
                     names.TryAdd(HashAlgorithms.Fnv1a(g.Material), g.Material);
                     names.TryAdd(HashAlgorithms.Fnv1aRaw(g.Material), g.Material);
                 }
-        _namesByMapKey = (map, names);
+        }
+        _namesByMapKey = new MapKeyNames(map, names);
         return names;
     }
 
-    private (MapGeoAsset? Map, IReadOnlyDictionary<uint, string> Names) _namesByMapKey =
-        (null, new Dictionary<uint, string>());
+    private sealed record MapKeyNames(MapGeoAsset? Map, IReadOnlyDictionary<uint, string> Names);
+    private volatile MapKeyNames _namesByMapKey = new(null, new Dictionary<uint, string>());
 
     /// <summary>
     /// M590: hash to WAD PATH — the 64-bit counterpart of <see cref="ResolveBinName"/>.
@@ -11281,6 +11295,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             byte[] bytes = _currentMapBytes;
             // M848: every bucket-grid rebuild below uses the same mesh selection.
             var gridSelection = await BucketGridSelectionForAsync(entry.Path);
+            // M859: which materials make the client read the 48-byte channel block. LeagueToolkit cannot open such a
+            // file, so the move and bucket-grid writers read a stripped copy and put those entries back.
+            var extendedChannels = ExtendedChannelMaterialsFor(entry.Path);
+            // M859 follow-up: refuse, before anything is written, a combination whose writers assume the 40-byte block.
+            if (Formats.MapGeo.ExtendedChannelRule.RefuseCombinedSave(extendedChannels, added.Count > 0, hasLayers, hasFaces, hasGrows, hasReshapes) is { } refusal)
+            { _log.Error("MapGeo", refusal); Status = "Save refused: 48-byte mapgeo with unsupported edits."; return; }
 
             // M517: material edits before everything else. They REWRITE the file (a material name is a
             // length-prefixed string, so a longer one moves every byte after it), which invalidates any
@@ -11356,7 +11376,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // 1) mesh moves (rebuilds bucket grids for the moved geometry)
             if (hasMoves)
             {
-                var moved = MapGeoWriter.TryWriteWithMoves(bytes, map.Meshes, out var mErr, gridSelection);
+                var moved = MapGeoWriter.TryWriteWithMoves(bytes, map.Meshes, out var mErr, gridSelection, extendedChannels);
                 if (moved is null) { _log.Error("MapGeo", $"Could not save mesh moves: {mErr}"); return; }
                 bytes = moved;
             }
@@ -11371,7 +11391,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var appended = MapGeoMeshAppender.Append(bytes, newMeshes, out var aErr);
                 if (appended is null) { _log.Error("MapGeo", $"Could not append meshes: {aErr}"); return; }
 
-                var reMap = await Task.Run(() => MapGeoDecoder.Decode(appended));
+                var reMap = await Task.Run(() => MapGeoDecoder.Decode(appended, extendedChannels));
                 WarnIfAddedMeshesWillNotDrawInGame(added.Select(a => a.Material));
 
                 // M123: the appended meshes are the LAST N — give them their chosen layer masks
@@ -11382,10 +11402,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     for (int i = 0; i < added.Count; i++)
                         reMap.Meshes[reMap.Meshes.Count - added.Count + i].VisibilityEdit = added[i].VisibilityMask;
                     var layered = MapGeoLayerWriter.TryWriteLayerEdits(appended, reMap.Meshes, out var lErr);
-                    if (layered is not null) { appended = layered; reMap = await Task.Run(() => MapGeoDecoder.Decode(appended)); }
+                    if (layered is not null) { appended = layered; reMap = await Task.Run(() => MapGeoDecoder.Decode(appended, extendedChannels)); }
                     else _log.Warn("MapGeo", $"Added-mesh layers not applied: {lErr}");
                 }
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection);
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(appended, reMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection, extendedChannels);
             }
 
             // 2b) M105: bucket grids bake per-face visibility masks from the mesh flags, so layer-only
@@ -11399,8 +11419,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             //     meshes blinking out as the camera turned.
             if ((hasLayers || hasReshapes || hasFaces || hasGrows) && !hasMoves && added.Count == 0)
             {
-                var reMap2 = await Task.Run(() => MapGeoDecoder.Decode(bytes));
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection);
+                var reMap2 = await Task.Run(() => MapGeoDecoder.Decode(bytes, extendedChannels));
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(bytes, reMap2, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection, extendedChannels);
             }
 
             // 3) Blender-style pending deletion: remove the selected mesh records and (M768) the buffers only
@@ -11408,14 +11428,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // rebuilt from the remaining environment meshes.
             if (removedIndices.Count > 0)
             {
-                var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError, ExtendedChannelMaterialsFor(entry.Path));
+                var stripped = MapGeoMeshRemover.Remove(bytes, removedIndices, out var removeError, extendedChannels);
                 if (stripped is null) { _log.Error("MapGeo", $"Could not remove selected meshes: {removeError}"); return; }
-                var remainingMap = await Task.Run(() => MapGeoDecoder.Decode(stripped));
-                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection);
+                var remainingMap = await Task.Run(() => MapGeoDecoder.Decode(stripped, extendedChannels));
+                bytes = MapGeoWriter.WriteWithRegeneratedBucketGrids(stripped, remainingMap, SaveBakeSize(), SaveBakeMin(), SaveBakeMax(), gridSelection, extendedChannels);
             }
 
             // M768: whatever produced them, no save writes buffers no mesh references.
-            bytes = Formats.MapGeo.MapGeoBinary.CompactOrphans(bytes, ExtendedChannelMaterialsFor(entry.Path), out int orphanVb, out int orphanIb);
+            bytes = Formats.MapGeo.MapGeoBinary.CompactOrphans(bytes, extendedChannels, out int orphanVb, out int orphanIb);
             if (orphanVb + orphanIb > 0)
                 _log.Info("MapGeo", $"Dropped {orphanVb} vertex and {orphanIb} index buffer(s) no mesh uses.");
 
@@ -16137,11 +16157,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
         var cachePath = ShaderCatalogCachePath(environment);
         string stamp = ShaderCatalogLoader.StampFor(wad);
-        var cached = await Task.Run(() => ShaderCatalogCache.Load(cachePath, gameDir, stamp));
+        var cached = await Task.Run(() => ShaderCatalogCache.Load(cachePath, gameDir, stamp, h => ResolveBinName(h)));
         if (cached is not null) { SetShaderCatalog(environment, cached); return; }
         if (File.Exists(cachePath))
             _log.Info("Shader", $"{environment}: the cached shader catalogue came from a different build of "
-                              + "Global.wad — rescanning. A Riot patch used to leave it stale.");
+                              + "Global.wad or before some shader names resolved - rescanning.");
 
         _log.Info("Shader", $"Reading {environment} shader definitions…");
         var catalog = await Task.Run(() =>
