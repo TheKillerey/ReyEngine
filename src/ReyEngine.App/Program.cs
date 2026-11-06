@@ -7,8 +7,11 @@ namespace ReyEngine.App;
 internal static class Program
 {
     [STAThread]
-    public static void Main(string[] args)
+    public static int Main(string[] args)
     {
+        // M867: the headless champion simulation generator runs before any Avalonia, settings or project state exists.
+        if (SimGenCommand.Handles(args)) return SimGenCommand.Run(args);
+
         // M140.2: the app had no crash net — an unhandled exception died silently. Record it so a
         // crash leaves a readable stack behind (%AppData%/ReyEngine/crash.log).
         AppDomain.CurrentDomain.UnhandledException += (_, e) => WriteCrash(e.ExceptionObject as Exception);
@@ -23,6 +26,7 @@ internal static class Program
         try { BuildAvaloniaApp().StartWithClassicDesktopLifetime(args); }
         catch (Exception ex) { WriteCrash(ex); throw; }
         finally { ViewModels.MainWindowViewModel.SessionLog?.Dispose(); }
+        return 0;
     }
 
     private static void WriteCrash(Exception? ex)

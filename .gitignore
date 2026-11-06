@@ -17,6 +17,8 @@ obj/
 # M367: LeagueToolkit meta-class dump. Fetched, not vendored - it ships no licence and is
 # re-dumped every patch, so a committed copy would be both a redistribution and stale.
 /data/meta/
+# M867: generated champion simulation definitions - regenerated per game build by --simgen or on demand.
+/data/champion_sims/
 
 ## Keep dictionary folder docs
 !/data/hashes/README.md

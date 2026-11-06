@@ -41,7 +41,14 @@ public sealed record AbilityMissile(
     uint MissileEffectKey,
     uint HitEffectKey,
     MissileMotion Motion,
-    float Width);
+    float Width)
+{
+    /// <summary>M867: the older flat <c>missileSpeed</c> field of the spell, when the spell authors one. Kalista's
+    /// Q missile spell (<c>KalistaMysticShotMisTrue</c>) has a <c>mMissileEffectKey</c> and <c>missileSpeed</c> 2400
+    /// but no <c>mMissileSpec</c> at all, so <see cref="Motion"/> is unknown for it. 0 when absent. The preview
+    /// ignores this; the simulation definition reports it as a separate, labelled source.</summary>
+    public float LegacySpeed { get; init; }
+}
 
 /// <summary>One of Q/W/E/R, and everything the spell records say about how it is cast.</summary>
 public sealed record AbilitySlot(
@@ -104,6 +111,27 @@ public sealed record AbilitySlot(
     /// <summary><c>mSpellTags</c>, Riot's trait strings: <c>Trait_Ultimate</c>,
     /// <c>Trait_PlayerSelectedDashDirection</c>, <c>Trait_Target_Directional</c>. Empty when absent (9 of 692).</summary>
     public IReadOnlyList<string> Tags { get; init; } = Array.Empty<string>();
+
+    // ---- M867: raw spell facts the simulation definition records without interpreting -----------------
+
+    /// <summary><c>mAffectsTypeFlags</c> of the root spell, raw. Not decoded: which bit means "enemy champions" or
+    /// "allies" has not been researched, so nothing may read a meaning into it yet. Null when absent.</summary>
+    public uint? AffectsTypeFlags { get; init; }
+
+    /// <summary>The root spell's <c>flags</c>, raw. Null when absent.</summary>
+    public uint? SpellFlags { get; init; }
+
+    /// <summary><c>spellCastTime</c> (seconds) as authored, or null. A different field from <c>mCastTime</c>.</summary>
+    public float? SpellCastTime { get; init; }
+
+    /// <summary><c>spellTotalTime</c> (seconds) as authored, or null.</summary>
+    public float? SpellTotalTime { get; init; }
+
+    /// <summary>The root spell's <c>mScriptName</c>, or "" when absent.</summary>
+    public string ScriptName { get; init; } = "";
+
+    /// <summary>The object path hash of the root spell (the <c>spells</c> link), 0 when none.</summary>
+    public uint RootSpellHash { get; init; }
 
     /// <summary>Riot's "no range limit": 132 of 661 authored ranges are exactly 25,000, and everything at
     /// or above 20,000 (139) is a dash, a self-cast or a global, not a distance anyone measured.</summary>
@@ -223,6 +251,26 @@ public sealed record AttackSpell(
     }
 }
 
+/// <summary>M867: one child spell of an ability (a sub-cast, a missile spell, a marker). Everything is as the child
+/// authors it; a child owns no range or targeting of the slot.</summary>
+public sealed record AbilityChildSpell(
+    string Name,
+    uint PathHash,
+    string? AnimationName,
+    float CastFrame,
+    bool UseAnimatorFramerate,
+    float CastTimeSeconds,
+    AbilityMissile? Missile);
+
+/// <summary>M867: an ability of the champion record. <paramref name="Key"/> is "P", "Q", "W", "E", "R" or, for any
+/// further <c>mAbilities</c> entry, "X". <paramref name="Slot"/> carries the root spell's casting envelope.</summary>
+public sealed record AbilityRecordData(
+    string Key,
+    string AbilityName,
+    string SpellEntry,
+    AbilitySlot Slot,
+    IReadOnlyList<AbilityChildSpell> Children);
+
 public static class ChampionSpellData
 {
     private static readonly uint ClassCharacterRecord = HashAlgorithms.Fnv1a("CharacterRecord");
@@ -257,6 +305,15 @@ public static class ChampionSpellData
     private static readonly uint FCastConeDistance = HashAlgorithms.Fnv1a("castConeDistance");
     private static readonly uint FAnimationName = HashAlgorithms.Fnv1a("mAnimationName");
     private static readonly uint FSpellTags = HashAlgorithms.Fnv1a("mSpellTags");
+    private static readonly uint FAffectsTypeFlags = HashAlgorithms.Fnv1a("mAffectsTypeFlags");
+    private static readonly uint FSpellFlags = HashAlgorithms.Fnv1a("flags");
+    private static readonly uint FSpellCastTime = HashAlgorithms.Fnv1a("spellCastTime");
+    private static readonly uint FSpellTotalTime = HashAlgorithms.Fnv1a("spellTotalTime");
+    private static readonly uint FLegacyMissileSpeed = HashAlgorithms.Fnv1a("missileSpeed");
+    private static readonly uint FAbilities = HashAlgorithms.Fnv1a("mAbilities");
+    private static readonly uint FPassiveSpell = HashAlgorithms.Fnv1a("mCharacterPassiveSpell");
+    private static readonly uint FPassiveLuaName = HashAlgorithms.Fnv1a("passiveLuaName");
+    private static readonly uint FAbilityName = HashAlgorithms.Fnv1a("mName");
 
     /// <summary>
     /// The 14 targeting classes Riot ships, by hash. Measured over all 692 slots: 588 author a
@@ -306,6 +363,99 @@ public static class ChampionSpellData
             // A record that will not parse costs the composite its data, not the preview its character.
             return Array.Empty<AbilitySlot>();
         }
+    }
+
+    // ---- M867: the whole ability set of a record --------------------------------------------------------
+
+    /// <summary>
+    /// M867: every ability the champion record declares, with its child spells - the passive, the four slots and any
+    /// further <c>mAbilities</c> entry (Kalista's record lists five; the fifth IS the passive).
+    ///
+    /// <para>Keys: "P" for <c>mCharacterPassiveSpell</c>, "Q".."R" for the four <c>spells</c> in order, then the
+    /// remaining <c>mAbilities</c> as "X" in record order. An ability is matched to its root spell by the
+    /// <c>mRootSpell</c> link, never by name - the same rule <see cref="Read"/> uses. Returns an empty list when the
+    /// record cannot be read.</para>
+    /// </summary>
+    public static IReadOnlyList<AbilityRecordData> ReadAll(byte[] recordBin, string? characterName = null)
+    {
+        try
+        {
+            var tree = BinTreeIo.Read(recordBin);
+            if (PickRecord(tree, characterName) is not { } record) return Array.Empty<AbilityRecordData>();
+
+            var result = new List<AbilityRecordData>();
+            var usedRoots = new HashSet<uint>();
+
+            uint passiveRoot = Get(record.Properties, FPassiveSpell) is BinTreeObjectLink pl ? pl.Value : 0u;
+            string passiveName = Get(record.Properties, FPassiveLuaName) is BinTreeString pn ? pn.Value : "";
+            if (passiveRoot != 0 || passiveName.Length > 0)
+            {
+                result.Add(MakeRecord(tree, 4, "P", passiveName, passiveRoot));
+                if (passiveRoot != 0) usedRoots.Add(passiveRoot);
+            }
+
+            if (Get(record.Properties, FSpellNames) is BinTreeContainer names)
+            {
+                var links = Get(record.Properties, FSpells) as BinTreeContainer;
+                for (int i = 0; i < names.Elements.Count && i < 4; i++)
+                {
+                    string entry = names.Elements[i] is BinTreeString s ? s.Value : "";
+                    uint root = links is not null && i < links.Elements.Count && links.Elements[i] is BinTreeObjectLink l ? l.Value : 0u;
+                    result.Add(MakeRecord(tree, i, "QWER"[i].ToString(), entry, root));
+                    if (root != 0) usedRoots.Add(root);
+                }
+            }
+            // slot order P, Q, W, E, R
+            result = result.OrderBy(r => r.Key == "P" ? -1 : r.Slot.Index).ToList();
+
+            if (Get(record.Properties, FAbilities) is BinTreeContainer abilities)
+            {
+                int extra = 0;
+                foreach (var element in abilities.Elements)
+                {
+                    if (element is not BinTreeObjectLink al || !tree.Objects.TryGetValue(al.Value, out var ability)) continue;
+                    if (Get(ability.Properties, FRootSpell) is not BinTreeObjectLink rl || usedRoots.Contains(rl.Value)) continue;
+                    string name = Get(ability.Properties, FAbilityName) is BinTreeString an ? an.Value : "";
+                    usedRoots.Add(rl.Value);
+                    result.Add(MakeRecord(tree, 5 + extra++, "X", name, rl.Value));
+                }
+            }
+            return result;
+        }
+        catch
+        {
+            return Array.Empty<AbilityRecordData>();
+        }
+    }
+
+    private static AbilityRecordData MakeRecord(BinTree tree, int index, string label, string entry, uint root)
+    {
+        var slot = ReadSlot(tree, index, label, entry, root);
+        string abilityName = "";
+        var children = new List<AbilityChildSpell>();
+        foreach (var ability in tree.Objects.Values)
+        {
+            if (ability.ClassHash != ClassAbility) continue;
+            if (root == 0 || Get(ability.Properties, FRootSpell) is not BinTreeObjectLink link || link.Value != root) continue;
+            if (Get(ability.Properties, FAbilityName) is BinTreeString an) abilityName = an.Value;
+            if (Get(ability.Properties, FChildSpells) is BinTreeContainer cs)
+                foreach (var element in cs.Elements)
+                {
+                    if (element is not BinTreeObjectLink child || child.Value == root) continue;
+                    if (!tree.Objects.TryGetValue(child.Value, out var spellObject)) continue;
+                    var spell = Spell(spellObject);
+                    string name = Get(spellObject.Properties, FScriptName) is BinTreeString sn ? sn.Value : "";
+                    children.Add(new AbilityChildSpell(
+                        name, child.Value,
+                        AnimationNameOf(spell),
+                        spell is null ? 0f : F32(spell, FCastFrame),
+                        spell is not null && Get(spell.Properties, FUseAnimatorFps) is BinTreeBool { Value: true },
+                        spell is null ? 0f : F32(spell, FCastTime),
+                        spell is null ? null : ReadMissile(spellObject, spell)));
+                }
+            break;
+        }
+        return new AbilityRecordData(label, abilityName, entry, slot, children);
     }
 
     // ---- M638: the basic attacks -----------------------------------------------------------------
@@ -414,9 +564,11 @@ public static class ChampionSpellData
         return first;
     }
 
-    private static AbilitySlot ReadSlot(BinTree tree, int index, string entry, uint rootSpell)
+    private static AbilitySlot ReadSlot(BinTree tree, int index, string entry, uint rootSpell) =>
+        ReadSlot(tree, index, index is >= 0 and < 4 ? "QWER"[index].ToString() : "?", entry, rootSpell);
+
+    private static AbilitySlot ReadSlot(BinTree tree, int index, string slot, string entry, uint rootSpell)
     {
-        string slot = index is >= 0 and < 4 ? "QWER"[index].ToString() : "?";
         var missiles = new List<AbilityMissile>();
         float castFrame = 0f, castTime = 0f;
         bool animatorFps = false;
@@ -466,6 +618,13 @@ public static class ChampionSpellData
             CastConeDistance = data is null ? 0f : F32(data, FCastConeDistance),
             AnimationName = AnimationNameOf(data),
             Tags = StringsOf(data, FSpellTags),
+            AffectsTypeFlags = data is not null && Get(data.Properties, FAffectsTypeFlags) is BinTreeU32 af ? af.Value : null,
+            SpellFlags = data is not null && Get(data.Properties, FSpellFlags) is BinTreeU32 fl ? fl.Value : null,
+            SpellCastTime = data is not null && Get(data.Properties, FSpellCastTime) is BinTreeF32 sc ? sc.Value : null,
+            SpellTotalTime = data is not null && Get(data.Properties, FSpellTotalTime) is BinTreeF32 st ? st.Value : null,
+            ScriptName = tree.Objects.TryGetValue(rootSpell, out var rootObject)
+                         && Get(rootObject.Properties, FScriptName) is BinTreeString rsn ? rsn.Value : "",
+            RootSpellHash = rootSpell,
         };
     }
 
@@ -488,7 +647,7 @@ public static class ChampionSpellData
         }
 
         string name = Get(spellObject.Properties, FScriptName) is BinTreeString sn ? sn.Value : "";
-        return new AbilityMissile(name, missileKey, hitKey, motion, width);
+        return new AbilityMissile(name, missileKey, hitKey, motion, width) { LegacySpeed = F32(spell, FLegacyMissileSpeed) };
     }
 
     /// <summary>
