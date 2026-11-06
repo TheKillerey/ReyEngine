@@ -84,7 +84,9 @@ public sealed class VfxHostMeshTests
     public void ThePlaybackAsksForAHostBecauseOfAHostMeshEmitter()
     {
         var system = new VfxSystemDefinition(PathHash: 1, Name: "avatar", ParticlePath: "", Emitters: new[] { HostEmitter() });
-        Assert.True(VfxPlaybackSim.NeedsHost(new VfxPlayback(new[] { new VfxPlaybackItem(system, Vector3.Zero, new TextureImage?[1]) })));
+        var playback = new VfxPlayback(new[] { new VfxPlaybackItem(system, Vector3.Zero, new TextureImage?[1]) });
+        Assert.True(VfxPlaybackSim.NeedsHost(playback));
+        Assert.False(VfxPlaybackSim.NeedsHost(playback, includeHostMeshes: false));   // the GL viewport draws no host body, so it poses none
     }
 
     [Fact]
@@ -112,6 +114,14 @@ public sealed class VfxHostMeshTests
 
         driver.SetEmissionHost(VfxHostSurface.For(Body()));
         for (int i = 0; i < 3; i++) driver.Tick(1f / 30f, mirrored, mirrored * proj, eye, 400f);
+        Assert.Equal(1, driver.HostMeshEmittersDrawn);
+
+        // the character's own visibility: with every submesh hidden the shell has nothing to draw, with one shown it is back
+        driver.HostSubmeshVisible = new[] { false, false };
+        for (int i = 0; i < 2; i++) driver.Tick(1f / 30f, mirrored, mirrored * proj, eye, 400f);
+        Assert.Equal(0, driver.HostMeshEmittersDrawn);
+        driver.HostSubmeshVisible = new[] { true, false };
+        for (int i = 0; i < 2; i++) driver.Tick(1f / 30f, mirrored, mirrored * proj, eye, 400f);
         Assert.Equal(1, driver.HostMeshEmittersDrawn);
         driver.SetPlayback(null);
         driver.Tick(0f, mirrored, mirrored * proj, eye, 400f);

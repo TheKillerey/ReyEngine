@@ -303,6 +303,10 @@ public sealed class D3D11MapParticles
     /// knows its floor (the character window: the character's feet) sets it; a map leaves it null.</summary>
     public float? ProjectionGroundY { get; set; }
 
+    /// <summary>M860: which submeshes of the host are shown (the character window's own list); null = all. The attached-mesh body
+    /// draws only the submeshes that are, so hiding a part of the character hides its shell too.</summary>
+    public IReadOnlyList<bool>? HostSubmeshVisible { get; set; }
+
     /// <summary>M186: the auto-stop loop. False everywhere except the Particle Editor's preview, which
     /// opens with it on to match the GL editor's own default.</summary>
     public bool AutoStop { get; set; }
@@ -1146,6 +1150,8 @@ public sealed class D3D11MapParticles
         public ReyEngine.Formats.Meshes.MeshAsset? Mesh;
         public float[] Positions = Array.Empty<float>();
         public float[] Instances = Array.Empty<float>();
+        /// <summary>The visibility the geometry's index set was built for; a change rebuilds it.</summary>
+        public string VisibilityKey = "";
     }
     private readonly List<HostSlice> _hostSlices = new();
 
@@ -1184,12 +1190,22 @@ public sealed class D3D11MapParticles
             var es = hs.State;
             if (!IsLive(hs.Owner) || es.InstanceCount == 0 || _emissionHost is not { } host) { mat.Visible = false; continue; }
 
-            if (hs.GeometryId < 0 || !ReferenceEquals(hs.Mesh, host.Mesh))
+            string visKey = HostSubmeshVisible is { } vis ? string.Concat(vis.Select(v => v ? '1' : '0')) : "";
+            if (hs.GeometryId < 0 || !ReferenceEquals(hs.Mesh, host.Mesh) || hs.VisibilityKey != visKey)
             {
                 if (hs.GeometryId >= 0) _renderer.ReleaseMeshGeometry(hs.GeometryId);
                 hs.GeometryId = -1;
                 var mesh = host.Mesh;
-                var keep = VfxEmissionSurfaceLoader.SubmeshFilter(mesh, hs.Def.HostSubmeshes);
+                var keepMask = VfxEmissionSurfaceLoader.SubmeshFilter(mesh, hs.Def.HostSubmeshes);
+                // M860 follow-up: and only the submeshes the character window shows
+                var shown = HostSubmeshVisible;
+                Func<int, bool>? keepShown = null;
+                if (shown is not null)
+                {
+                    var ranges = mesh.SubMeshes.Select((s, i) => (First: s.StartIndex / 3, End: (s.StartIndex + s.IndexCount) / 3, Visible: i >= shown.Count || shown[i])).ToList();
+                    keepShown = t => { foreach (var r in ranges) if (t >= r.First && t < r.End) return r.Visible; return true; };
+                }
+                Func<int, bool>? keep = keepMask is null ? keepShown : keepShown is null ? keepMask : t => keepMask(t) && keepShown(t);
                 uint[] indices = mesh.Indices;
                 if (keep is not null)
                 {
@@ -1202,6 +1218,7 @@ public sealed class D3D11MapParticles
                 hs.GeometryId = _renderer.CreateMeshGeometry(mesh.Positions, mesh.Uvs, indices);
                 if (hs.GeometryId < 0) { mat.Visible = false; continue; }
                 hs.Mesh = mesh;
+                hs.VisibilityKey = visKey;
                 hs.Positions = new float[mesh.VertexCount * 3];
                 mat.MeshGeometryId = hs.GeometryId;
             }

@@ -232,13 +232,15 @@ public static class VfxPlaybackSim
 
     /// <summary>M755: does anything in this playback - children included - emit from a host? Decides
     /// whether a viewport pays for CPU-skinning the character at all.</summary>
-    public static bool NeedsHost(VfxPlayback? playback) =>
-        playback is not null && playback.Items.Any(i => NeedsHost(i, 0));
+    /// <param name="includeHostMeshes">M860: an attached-mesh emitter draws the host's body - the Direct3D 11 host does that, the OpenGL viewport
+    /// skips them, and passes false so it does not pose a character it never uses.</param>
+    public static bool NeedsHost(VfxPlayback? playback, bool includeHostMeshes = true) =>
+        playback is not null && playback.Items.Any(i => NeedsHost(i, 0, includeHostMeshes));
 
-    private static bool NeedsHost(VfxPlaybackItem item, int depth) =>
-        item.System.Emitters.Any(e => e.EmissionSurface?.NeedsHost == true || e.IsHostMesh)
+    private static bool NeedsHost(VfxPlaybackItem item, int depth, bool includeHostMeshes) =>
+        item.System.Emitters.Any(e => e.EmissionSurface?.NeedsHost == true || (includeHostMeshes && e.IsHostMesh))
         || (depth < 4 && item.EmitterChildren is { } kids
-            && kids.Any(list => list is not null && list.Any(k => NeedsHost(k, depth + 1))));
+            && kids.Any(list => list is not null && list.Any(k => NeedsHost(k, depth + 1, includeHostMeshes))));
 
     /// <summary>M854: ceiling on live child systems, in both viewports. Every parent particle can ask for one, so an
     /// emitter at a few hundred particles a second would otherwise accumulate simulators until the frame rate dies.</summary>

@@ -47,10 +47,21 @@ public sealed class VfxPlanarProjectionTests
     }
 
     [Fact]
-    public void WithoutAGroundThePlacedDecalKeepsItsOwnHeight()
+    public void OnAMapWithNoGroundTheDecalStaysABillboard()
     {
-        var q = Quad(new ParticleQuadBuilder.QuadOrientation(false, false, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ, Projected: true), new Vector3(0, 7, 0));
-        Assert.All(q.Verts.Take(4), v => Assert.Equal(7f, v.Position.Y, 3));
+        // ProjectionGroundY is NaN on a map: a flat decal at the emitter's own height would float over or sink into sloped terrain
+        var q = Quad(new ParticleQuadBuilder.QuadOrientation(false, false, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ, Projected: true), new Vector3(0, 80, 0));
+        var billboard = Quad(default, new Vector3(0, 80, 0));
+        for (int i = 0; i < 4; i++) Assert.Equal(billboard.Verts[i].Position.Y, q.Verts[i].Position.Y, 3);
+    }
+
+    [Fact]
+    public void TheHostsLiftTheDecalOffTheFloorTheyDraw()
+    {
+        Assert.InRange(ParticleQuadBuilder.GroundDecalLift, 0.1f, 5f);
+        var q = Quad(new ParticleQuadBuilder.QuadOrientation(false, false, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ,
+            Projected: true, ProjectionGroundY: ParticleQuadBuilder.GroundDecalLift), new Vector3(0, 80, 0));
+        Assert.All(q.Verts.Take(4), v => Assert.Equal(ParticleQuadBuilder.GroundDecalLift, v.Position.Y, 3));
     }
 
     [Fact]

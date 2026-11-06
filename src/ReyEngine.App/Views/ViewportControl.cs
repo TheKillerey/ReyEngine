@@ -2269,7 +2269,7 @@ public sealed class ViewportControl : OpenGlControlBase
         if (!ReferenceEquals(_hostNeedFor, ParticlePlayback))
         {
             _hostNeedFor = ParticlePlayback;
-            _hostNeeded = Services.VfxPlaybackSim.NeedsHost(ParticlePlayback);
+            _hostNeeded = Services.VfxPlaybackSim.NeedsHost(ParticlePlayback, includeHostMeshes: false);   // M860: GL draws no host body
         }
         if (!_hostNeeded || Mesh is not { CanSkin: true } mesh || Skeleton is not { } skeleton) return null;
         if (!ReferenceEquals(_emissionHostMesh, mesh))

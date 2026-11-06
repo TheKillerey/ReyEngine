@@ -27,6 +27,10 @@ public static class ParticleQuadBuilder
     /// erosionDrive(18) scaleZ(19, M778 - VfxPrimitiveRay's ground offset along its own axis).</summary>
     public const int Stride = 20;
     public const int OffPos = 0, OffSizeX = 3, OffSizeY = 4, OffColor = 5, OffRot = 9, OffFrame = 10;
+    /// <summary>M862 follow-up: how far above the floor a projected decal sits. The floors the hosts draw stand at y = 0 (the arena's flat
+    /// floor and the character window's ground), and a decal in that very plane z-fights it.</summary>
+    public const float GroundDecalLift = 1f;
+
     public const int OffVel = 12, OffEuler = 15, OffErosion = 18, OffScaleZ = 19;
 
     /// <summary>An orthonormal billboard basis facing <paramref name="toCamera"/>. Falls back to fixed axes
@@ -142,7 +146,9 @@ public static class ParticleQuadBuilder
             var basisR = right;
             var basisU = up;
             var basisN = normal;
-            if (orientation.Projected)
+            // M862 follow-up: only where the host knows its ground. A map has none (ProjectionGroundY is NaN), and a decal laid flat at the
+            // emitter's own height would float over or sink into sloped terrain - so a map keeps the billboard until a terrain projection exists.
+            if (orientation.Projected && !float.IsNaN(orientation.ProjectionGroundY))
             {
                 // M862: a decal on the ground. The projector looks down, so the footprint is the placement's own horizontal plane and the
                 // billboard spin turns it about the vertical. The preview has no scene depth to project onto, so it lands on a plane.
@@ -154,7 +160,7 @@ public static class ParticleQuadBuilder
                 basisR = Flat(orientation.PlacementRight, Vector3.UnitX);
                 basisU = Flat(orientation.PlacementForward, Vector3.UnitZ);
                 basisN = Vector3.UnitY;
-                if (!float.IsNaN(orientation.ProjectionGroundY)) pos.Y = orientation.ProjectionGroundY;
+                pos.Y = orientation.ProjectionGroundY;
             }
             if (orientation.ArbitraryQuad)
             {
