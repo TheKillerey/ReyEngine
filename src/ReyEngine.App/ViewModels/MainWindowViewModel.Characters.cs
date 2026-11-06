@@ -224,7 +224,7 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 resolveWadPath: ResolveWadPath,
                 fallbackShader: Services.Dx11CharacterScene.DefaultCharacterShader,
                 driverState: driverState,   // M647: which of the skin's conditions to draw
-                hostBin: CharacterHostBin(binPath));   // M857: materials only the open map's bin holds
+                hostBin: CharacterHostBin(binPath, bin));   // M857: materials only the open map's bin holds
 
             if (scene is null) return (null, "The mesh would not decode for D3D11.");
 
@@ -253,7 +253,8 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
 
     /// <summary>M857: the (map, skin) the last <see cref="CharacterHostBin"/> answered for, so a skin that is
     /// rebuilt on every material edit does not re-parse the map's 4.6 MB bin each time.</summary>
-    private (string Key, Formats.Materials.LoadedBin? Host)? _characterHostCache;
+    private sealed record CharacterHostEntry(string Key, Formats.Materials.LoadedBin? Host);
+    private volatile CharacterHostEntry? _characterHostCache;   // one immutable reference, written from Task.Run threads
 
     /// <summary>
     /// M857: the open map's own bin as a host for a character's materials. A skin such as
@@ -263,21 +264,35 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     /// materials the skin links from the map bin are kept; null when no map is open, the skin links nothing
     /// there, or the map names no shipping bin (the skin then resolves exactly as before).
     /// </summary>
-    private Formats.Materials.LoadedBin? CharacterHostBin(string? skinBinPath)
+    /// <param name="skinBytes">The skin bin actually being drawn (the editor's edited copy when there is one) - the
+    /// host materials are chosen from IT, not from the shipped bin.</param>
+    private Formats.Materials.LoadedBin? CharacterHostBin(string? skinBinPath, byte[]? skinBytes = null)
     {
         string? mapPath = _currentMapEntry?.Path;
         if (mapPath is null || skinBinPath is null) return null;
-        string key = mapPath + "|" + skinBinPath;
-        if (_characterHostCache is { } c && string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase)) return c.Host;
+        // keyed by CONTENT too: a project edit to the map bin or to the skin bin must not be answered from before it
+        string? mapBinPath = MapBinPathFor(mapPath);
+        byte[]? mapBytes = mapBinPath is null ? null : ReadAssetByPath(mapBinPath);
+        string key = mapPath + "|" + skinBinPath + "|" + ContentStamp(mapBytes) + "|" + ContentStamp(skinBytes);
+        var c = _characterHostCache;
+        if (c is not null && string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase)) return c.Host;
 
         string skin = skinBinPath.Replace("\\", "/");
         if (skin.StartsWith("data/", StringComparison.OrdinalIgnoreCase)) skin = skin[5..];
         if (skin.EndsWith(".bin", StringComparison.OrdinalIgnoreCase)) skin = skin[..^4];
         Formats.Materials.LoadedBin? host = null;
-        try { host = LoadHostMaterials(new[] { skin }, mapPath, out string note); if (host is not null) _log.Info("D3D11", $"{skinBinPath}: host bin{note}."); }
+        try { host = LoadHostMaterials(new[] { skin }, mapPath, out string note, mapBytes, skinBytes); if (host is not null) _log.Info("D3D11", $"{skinBinPath}: host bin{note}."); }
         catch (Exception ex) { _log.Warn("D3D11", $"{skinBinPath}: the map's bin could not host its materials: {ex.Message}"); }
-        _characterHostCache = (key, host);
+        _characterHostCache = new CharacterHostEntry(key, host);
         return host;
+    }
+
+    private static string ContentStamp(byte[]? data)
+    {
+        if (data is null) return "-";
+        uint h = 2166136261u;
+        foreach (byte b in data) { h ^= b; h *= 16777619u; }
+        return $"{data.Length}:{h:x8}";
     }
 
     /// <summary>M676: the D3D11 scene for a placed prop - Riot's shaders, the skin's textures, parameters and

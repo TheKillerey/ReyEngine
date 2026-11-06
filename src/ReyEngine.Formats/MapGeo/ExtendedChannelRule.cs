@@ -91,27 +91,29 @@ public static class ExtendedChannelRule
     public static Dictionary<uint, string> NamesFromStrings(IReadOnlySet<uint> wanted, byte[] materialsBin, Func<byte[]?>? readMapGeo)
     {
         var found = new Dictionary<uint, string>();
-        void Offer(string text)
+        // FNV-1a here is case-insensitive, so two spellings of one path share a key. The set this feeds is compared
+        // Ordinal against the mapgeo's own submesh strings, so the mapgeo's spelling must win over the bin's.
+        void Offer(string text, bool authoritative)
         {
             if (text.Length == 0) return;
             uint a = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(text), b = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1aRaw(text);
-            if (wanted.Contains(a)) found.TryAdd(a, text);
-            if (wanted.Contains(b)) found.TryAdd(b, text);
+            if (wanted.Contains(a)) { if (authoritative) found[a] = text; else found.TryAdd(a, text); }
+            if (wanted.Contains(b)) { if (authoritative) found[b] = text; else found.TryAdd(b, text); }
         }
 
         try
         {
             var tree = ReyEngine.Formats.Meta.SafeBinTree.Parse(materialsBin);
-            foreach (var obj in tree.Objects.Values) WalkStrings(obj.Properties.Values, Offer);
+            foreach (var obj in tree.Objects.Values) WalkStrings(obj.Properties.Values, t => Offer(t, false));
         }
         catch { /* the materials.bin was already parsed once to get here; a second failure only loses this source */ }
 
-        if (found.Count < wanted.Count && readMapGeo is not null)
+        if (readMapGeo is not null)
         {
             byte[]? geo = null;
             try { geo = readMapGeo(); } catch { }
             if (geo is { Length: > 8 })
-                ScanLengthPrefixedStrings(geo, Offer);
+                ScanLengthPrefixedStrings(geo, t => Offer(t, true));
         }
         return found;
     }
@@ -149,6 +151,30 @@ public static class ExtendedChannelRule
             }
             if (ok) offer(System.Text.Encoding.ASCII.GetString(data, i + 4, (int)n));
         }
+    }
+
+    /// <summary>
+    /// M859 follow-up: why a save that combines a 48-byte (extended channel) mapgeo with edits whose writers still
+    /// assume the 40-byte block must be refused, or null when it is safe. Moves, material swaps, removals and
+    /// bucket-grid rebuilds know the extended set; added meshes (the appender walks the mesh section and writes no
+    /// extended entry), layer edits (LeagueToolkit on the raw bytes), face edits and extrude/inset (the editable
+    /// reader without the set) and Blender reshapes do not.
+    /// </summary>
+    public static string? RefuseCombinedSave(IReadOnlySet<string>? extendedChannelMaterials,
+        bool addedMeshes, bool layerEdits, bool faceEdits, bool grows, bool reshapes)
+    {
+        if (extendedChannelMaterials is not { Count: > 0 }) return null;
+        var what = new List<string>();
+        if (addedMeshes) what.Add("added meshes");
+        if (layerEdits) what.Add("layer edits");
+        if (faceEdits) what.Add("face edits");
+        if (grows) what.Add("extrude/inset");
+        if (reshapes) what.Add("Blender reshapes");
+        if (what.Count == 0) return null;
+        return "This map uses the 48-byte (extended) mesh channel block (Mantis materials: "
+               + string.Join(", ", extendedChannelMaterials.Take(3)) + (extendedChannelMaterials.Count > 3 ? ", ..." : "")
+               + $"), and the writers for {string.Join(", ", what)} do not handle it yet - saving would corrupt the mapgeo. "
+               + "Nothing was written. Save mesh moves, material swaps and removals on their own.";
     }
 
     /// <summary>

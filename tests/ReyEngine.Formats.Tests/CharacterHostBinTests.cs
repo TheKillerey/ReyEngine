@@ -33,7 +33,7 @@ public sealed class CharacterHostBinTests(ITestOutputHelper output)
     {
         string src = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.Characters.cs");
         if (src.Length == 0) return;
-        Assert.Contains("hostBin: CharacterHostBin(binPath)", src);
+        Assert.Contains("hostBin: CharacterHostBin(binPath, bin)", src);
         Assert.Contains("LoadHostMaterials(new[] { skin }, mapPath", src);
     }
 

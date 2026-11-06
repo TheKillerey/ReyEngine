@@ -8224,23 +8224,29 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// name the tables already give. Rebuilt when the open map changes.</summary>
     private IReadOnlyDictionary<uint, string> MapGeoNamesByKey()
     {
+        // Reached from any thread (ResolveBinName runs off the UI thread at startup): one immutable record, swapped as one reference.
         var map = _currentMap;
         var cached = _namesByMapKey;
-        if (cached.Map == map) return cached.Names;
+        if (ReferenceEquals(cached.Map, map)) return cached.Names;
         var names = new Dictionary<uint, string>();
         if (map is not null)
-            foreach (var g in map.Groups)
+        {
+            MapGeoGroup[] groups;
+            try { groups = map.Groups.ToArray(); }
+            catch (InvalidOperationException) { return cached.Names; }   // changed under us: answer from the last good snapshot, cache nothing
+            foreach (var g in groups)
                 if (!string.IsNullOrEmpty(g.Material))
                 {
                     names.TryAdd(HashAlgorithms.Fnv1a(g.Material), g.Material);
                     names.TryAdd(HashAlgorithms.Fnv1aRaw(g.Material), g.Material);
                 }
-        _namesByMapKey = (map, names);
+        }
+        _namesByMapKey = new MapKeyNames(map, names);
         return names;
     }
 
-    private (MapGeoAsset? Map, IReadOnlyDictionary<uint, string> Names) _namesByMapKey =
-        (null, new Dictionary<uint, string>());
+    private sealed record MapKeyNames(MapGeoAsset? Map, IReadOnlyDictionary<uint, string> Names);
+    private volatile MapKeyNames _namesByMapKey = new(null, new Dictionary<uint, string>());
 
     /// <summary>
     /// M590: hash to WAD PATH — the 64-bit counterpart of <see cref="ResolveBinName"/>.
@@ -11292,6 +11298,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M859: which materials make the client read the 48-byte channel block. LeagueToolkit cannot open such a
             // file, so the move and bucket-grid writers read a stripped copy and put those entries back.
             var extendedChannels = ExtendedChannelMaterialsFor(entry.Path);
+            // M859 follow-up: refuse, before anything is written, a combination whose writers assume the 40-byte block.
+            if (Formats.MapGeo.ExtendedChannelRule.RefuseCombinedSave(extendedChannels, added.Count > 0, hasLayers, hasFaces, hasGrows, hasReshapes) is { } refusal)
+            { _log.Error("MapGeo", refusal); Status = "Save refused: 48-byte mapgeo with unsupported edits."; return; }
 
             // M517: material edits before everything else. They REWRITE the file (a material name is a
             // length-prefixed string, so a longer one moves every byte after it), which invalidates any

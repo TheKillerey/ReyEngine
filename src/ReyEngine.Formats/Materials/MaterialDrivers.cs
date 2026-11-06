@@ -431,7 +431,7 @@ public static class MaterialDrivers
                 float f = state.FractionFor(name);
                 string clip = name == 0 ? "any clip" : resolve(name) ?? $"0x{name:x8}";
                 return new(V(f), state.ClipName is null
-                    ? $"no clip is playing -> {clip} reads fraction 0"
+                    ? $"no clip playing; assumed fraction 0 ({clip})"
                     : $"clip '{state.ClipName}' at {Fmt(state.ClipFraction)} -> {clip} reads {Fmt(f)}");
             }
 
