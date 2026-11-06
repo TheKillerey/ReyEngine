@@ -288,6 +288,9 @@ public sealed record VfxEmitterDefinition(
     /// load, so what is drawn is the host's own skinned mesh.</summary>
     public bool IsHostMesh => !IsMeshPrimitive && PrimitiveClass == AttachedMeshClass;
 
+    /// <summary>M862: a VfxPrimitivePlanarProjection - a decal projected down onto whatever lies below it (1,154 emitters), not a quad facing the camera.</summary>
+    public bool IsPlanarProjection => PrimitiveClass == PlanarProjectionClass;
+    private static readonly uint PlanarProjectionClass = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a("VfxPrimitivePlanarProjection");
     private static readonly uint AttachedMeshClass = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
 
     /// <summary>M707: this emitter authors NO base texture path at all.

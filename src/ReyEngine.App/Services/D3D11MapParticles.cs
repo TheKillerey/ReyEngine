@@ -299,6 +299,10 @@ public sealed class D3D11MapParticles
     /// <summary>M185: the manual Stop toggle. False everywhere except the Particle Editor's preview.</summary>
     public bool Stopped { get; set; }
 
+    /// <summary>M862: the ground plane a VfxPrimitivePlanarProjection lands on, or null to keep each emitter's own height. A host that
+    /// knows its floor (the character window: the character's feet) sets it; a map leaves it null.</summary>
+    public float? ProjectionGroundY { get; set; }
+
     /// <summary>M186: the auto-stop loop. False everywhere except the Particle Editor's preview, which
     /// opens with it on to match the GL editor's own default.</summary>
     public bool AutoStop { get; set; }
@@ -664,7 +668,7 @@ public sealed class D3D11MapParticles
         phase.Restart();
         int quads = Pack(_liveBySlice, _maxQuads, _verts, _indices,
             right, up, normal, _ranges, out int vertexCount, out int indexCount,
-            out int packRequested, out int truncated);
+            out int packRequested, out int truncated, ProjectionGroundY ?? float.NaN);
 
         PackMs = phase.Elapsed.TotalMilliseconds;
         QuadsRequested = packRequested;
@@ -1441,7 +1445,7 @@ public sealed class D3D11MapParticles
         IReadOnlyList<IReadOnlyList<VfxParticleSimulator.EmitterState>> slices, int maxQuads,
         PreviewVertex[] verts, uint[] indices, Vector3 right, Vector3 up, Vector3 normal,
         PackedRange[] ranges, out int vertexCount, out int indexCount,
-        out int requested, out int slicesTruncated)
+        out int requested, out int slicesTruncated, float projectionGroundY = float.NaN)
     {
         requested = 0;
         foreach (var sources in slices)
@@ -1486,7 +1490,8 @@ public sealed class D3D11MapParticles
 
                 var orient = new ParticleQuadBuilder.QuadOrientation(
                     es.Def.IsArbitraryQuad, es.Def.IsDirectionOriented,
-                    es.PlacementRight, es.PlacementUp, es.PlacementForward, es.Def.IsRay);
+                    es.PlacementRight, es.PlacementUp, es.PlacementForward, es.Def.IsRay,
+                    es.Def.IsPlanarProjection, projectionGroundY);   // M862
 
                 // M634: the authored UV scrolls, baked into the vertices because quad_vs has no constant
                 // for them. The multiplier's matters most: 184 of the 401 multiplier emitters across eight

@@ -37,6 +37,7 @@ public static class VfxPrimitiveSupport
     private static readonly uint AttachedMesh = HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
 
     private static readonly uint Mesh = HashAlgorithms.Fnv1a("VfxPrimitiveMesh");
+    private static readonly uint PlanarProjection = HashAlgorithms.Fnv1a("VfxPrimitivePlanarProjection");
 
     /// <summary>
     /// M717: this emitter is drawn by the client through <c>quad_ps_fixedalphauv</c>, which compiles
@@ -76,6 +77,10 @@ public static class VfxPrimitiveSupport
             return "Attached mesh: when this primitive names a mesh file the preview draws that mesh. Otherwise it draws the host "
                  + "character's own skinned body with this emitter's material, limited by the submesh mask where one is authored - "
                  + "in the Direct3D 11 Character window; with no character host (and in the OpenGL preview) it draws nothing, no longer a stand-in billboard.";
+        // M862: projected onto the ground in the Direct3D 11 preview only
+        if (classHash == PlanarProjection)
+            return "Planar projection: the Direct3D 11 preview lays it flat on the ground plane as a decal (the character window's floor, "
+                 + "or the emitter's own height on a map); the OpenGL preview still draws it as a camera-facing billboard.";
         if (classHash == NonRenderable)
             return "League draws nothing for this primitive. The preview has no case for it and falls back to a "
                  + "camera-facing billboard, so it shows something the game does not.";

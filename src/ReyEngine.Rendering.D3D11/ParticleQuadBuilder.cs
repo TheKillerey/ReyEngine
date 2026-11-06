@@ -50,7 +50,13 @@ public static class ParticleQuadBuilder
         Vector3 PlacementForward,
         /// <summary>M778: VfxPrimitiveRay - a streak along the particle's own rotated +Z axis, base-to-tip
         /// rather than centred on the particle. See Append for the geometry.</summary>
-        bool Ray = false)
+        bool Ray = false,
+        /// <summary>M862: VfxPrimitivePlanarProjection - the quad lies flat in the placement's horizontal plane (right and forward
+        /// flattened onto XZ), spun about the vertical by the particle's own spin, instead of facing the camera.</summary>
+        bool Projected = false,
+        /// <summary>M862: where a projected quad lands. NaN keeps the emitter's own height (a placed decal is authored on the ground);
+        /// a number is the ground plane the host knows - the character window's floor at the character's feet.</summary>
+        float ProjectionGroundY = float.NaN)
     {
         /// <summary>Plain camera billboard - what every emitter got before M238.</summary>
         public static QuadOrientation Billboard => default;
@@ -136,6 +142,20 @@ public static class ParticleQuadBuilder
             var basisR = right;
             var basisU = up;
             var basisN = normal;
+            if (orientation.Projected)
+            {
+                // M862: a decal on the ground. The projector looks down, so the footprint is the placement's own horizontal plane and the
+                // billboard spin turns it about the vertical. The preview has no scene depth to project onto, so it lands on a plane.
+                static Vector3 Flat(Vector3 v, Vector3 fallback)
+                {
+                    v.Y = 0f;
+                    return v.LengthSquared() > 1e-8f ? Vector3.Normalize(v) : fallback;
+                }
+                basisR = Flat(orientation.PlacementRight, Vector3.UnitX);
+                basisU = Flat(orientation.PlacementForward, Vector3.UnitZ);
+                basisN = Vector3.UnitY;
+                if (!float.IsNaN(orientation.ProjectionGroundY)) pos.Y = orientation.ProjectionGroundY;
+            }
             if (orientation.ArbitraryQuad)
             {
                 var euler = new Vector3(instances[o + OffEuler], instances[o + OffEuler + 1], instances[o + OffEuler + 2]);
