@@ -222,6 +222,10 @@ public static class VfxSystemResolver
     // M852: bindWeight makes live particles follow their emitter (VfxParticleSimulator.SetWorldTransform), so it
     // leaves the parked table and is declared here for the preview-coverage reflection.
     private static readonly uint F_bindWeight          = HashAlgorithms.Fnv1a("bindWeight");
+    // M853: rateByVelocityFunction and MaximumRateByVelocity set a trail emitter's rate (VfxParticleSimulator), so they
+    // leave the parked table too.
+    private static readonly uint F_rateByVelocity      = HashAlgorithms.Fnv1a("rateByVelocityFunction");
+    private static readonly uint F_maxRateByVelocity   = HashAlgorithms.Fnv1a("MaximumRateByVelocity");
     private static readonly uint F_paletteAddressMode  = HashAlgorithms.Fnv1a("PaletteTextureAddressMode");
     // M185 (2.15) the Linger curve set. Class VfxLingerDefinitionData = 0x9b19f2b5.
     private static readonly uint F_linger              = HashAlgorithms.Fnv1a("Linger");
@@ -1153,8 +1157,8 @@ public static class VfxSystemResolver
 
             BindWeightCurve              = ReadCurveF(p, F_bindWeight),
             BindWeight                   = ReadCurveF(p, F_bindWeight)?.Constant,
-            RateByVelocityFunction       = ReadValueVec2(Get(p, PF("rateByVelocityFunction"))),
-            MaximumRateByVelocity        = GetOptionalF32(p, PF("MaximumRateByVelocity")),
+            RateByVelocityFunction       = ReadValueVec2(Get(p, F_rateByVelocity)),
+            MaximumRateByVelocity        = GetOptionalF32(p, F_maxRateByVelocity),
             ParticlesShareRandomValue    = GetBoolOrNull(p, PF("ParticlesShareRandomValue")),
             DirectionVelocityScale       = GetF32(p, PF("directionVelocityScale")),
             DirectionVelocityMinScale    = GetF32(p, PF("directionVelocityMinScale")),

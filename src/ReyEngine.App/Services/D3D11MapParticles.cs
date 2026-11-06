@@ -961,15 +961,15 @@ public sealed class D3D11MapParticles
             var mat = rs.Material;
             if (!_activeSet.Contains(rs.Owner)) { mat.Visible = false; continue; }
 
-            // Assembled by the GL renderer's own builders. Not a shared style choice - the per-particle
-            // history a trail walks is internal to that assembly, so this is the only way to get the same
+            // Assembled by the GL renderer's own builders. Not a shared style choice - the emitter's particles
+            // a trail strings together are internal to that assembly, so this is the only way to get the same
             // geometry rather than a second implementation of it.
             int k = rs.IsBeam
                 ? ReyEngine.Rendering.Vfx.VfxParticleRenderer.BuildBeamRibbon(ref _ribbonVerts, rs.State, cameraPosition)
                 : ReyEngine.Rendering.Vfx.VfxParticleRenderer.BuildTrailRibbon(ref _ribbonVerts, rs.State, cameraPosition);
 
-            // k == 0 is the ordinary early state, not a failure: a trail whose particles have not moved far
-            // enough has no history to extrude yet, and a beam whose endpoints did not resolve has nowhere
+            // k == 0 is the ordinary early state, not a failure: a trail with fewer than two live particles
+            // has no strand to extrude yet, and a beam whose endpoints did not resolve has nowhere
             // to go. Either way the slice is simply invisible this frame.
             if (k == 0) { mat.Visible = false; continue; }
 

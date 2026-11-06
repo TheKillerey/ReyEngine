@@ -259,7 +259,8 @@ public static class VfxParkedEmitterFields
         "isFollowingTerrain", "useNavmeshMask",
         "birthRotationalAcceleration",
         // M852: bindWeight is gone from here - it moves live particles with their emitter.
-        "rateByVelocityFunction", "MaximumRateByVelocity", "ParticlesShareRandomValue",
+        // M853: rateByVelocityFunction and MaximumRateByVelocity are gone from here - they set a trail emitter's rate.
+        "ParticlesShareRandomValue",
         "directionVelocityScale", "directionVelocityMinScale",
         // M754: emissionMeshName and emissionMeshScale are gone from here - particles are born on the mesh.
         // The normal flag stays: it is read and deliberately not applied (see VfxEmissionSurface).
