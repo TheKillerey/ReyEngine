@@ -238,9 +238,11 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                                    + $"  idx {slice.Start}+{slice.Count}"
                                    + $"  {slice.Textures.Count} texture(s)"
                                    + (slice.Hidden ? "  HIDDEN by initialSubmeshToHide" : "")
-                                   + (slice.UsedFallbackShader ? "  (stand-in shader)" : ""));
+                                   + (slice.UsedFallbackShader ? "  (stand-in shader)" : "")
+                                   + (slice.IsOutline ? "  (outline pass)" : ""));
             return (scene, scene.Slices.Count > 0
-                ? $"{scene.Slices.Count} of {scene.SubmeshCount} submesh(es) resolved"
+                ? $"{scene.Slices.Count(s => !s.IsOutline)} of {scene.SubmeshCount} submesh(es) resolved"
+                  + (scene.Slices.Any(s => s.IsOutline) ? $", {scene.Slices.Count(s => s.IsOutline)} outline pass(es)" : "")
                 : "No materials resolved - " + (scene.Failures.Count > 0 ? scene.Failures[0] : "the skin bin was not found"));
         }
         catch (Exception ex)

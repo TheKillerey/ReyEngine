@@ -178,6 +178,11 @@ public sealed partial class MainWindowViewModel
             catch { /* a skin that will not parse resolves nothing; its placements are counted as unresolved */ }
         }
         if (keep.Count == 0) { note = $" (no material from {binPath} needed)"; return null; }
+        // M858: the outline categories a skin's OutlineCategorySubmeshes link live in the host bin too (Jade's in
+        // map453.bin); the materials above resolved through them in the whole bin, and the small host built
+        // here must still hold them or the skin cannot find its outline again.
+        foreach (var (hash, obj) in whole.Tree.Objects)
+            if (obj.ClassHash == MaterialDocument.OutlineCategoryClass) keep[hash] = obj;
         note = $" ({keep.Count} material(s) from {binPath})";
         return new LoadedBin(binPath, new BinTree(keep.Values.ToList(), Array.Empty<string>()));
     }

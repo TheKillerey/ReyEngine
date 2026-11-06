@@ -32,7 +32,12 @@ public sealed record CharacterSlice(
     MaterialProfile Profile,
     /// <summary>M724: which mesh submesh this slice draws, so runtime visibility can address it. -1 on a
     /// slice built by a path that has no per-submesh visibility of its own (map props).</summary>
-    int SubmeshIndex = -1);
+    int SubmeshIndex = -1)
+{
+    /// <summary>M858: this slice is a submesh's outline pass (<c>OutlineCategorySubmeshes</c>) - the same
+    /// triangles drawn a second time with the outline material, after every base slice.</summary>
+    public bool IsOutline { get; init; }
+}
 
 /// <summary>Everything the scene needs that does not touch D3D.</summary>
 public sealed class PreparedCharacterScene
@@ -269,6 +274,24 @@ public static class Dx11CharacterScene
             scene.Slices.Clear();       // Slices is `init`-only - reorder the existing list in place
             scene.Slices.AddRange(reordered);
             sb.AppendLine($"submeshRenderOrder applied: {string.Join(' ', order)}");
+        }
+
+        // M858: the outline pass. Riot lists, per skin, which submeshes get a second draw with an outline
+        // material (Jade_CharacterOutline: Outline_Width, Outline_CameraDepthOffset, Outline_Color). It is appended
+        // AFTER the base slices, so it lands behind them in submission order, and carries the same SubmeshIndex so
+        // every hide that reaches the submesh reaches its outline.
+        if (document is not null)
+        {
+            foreach (string note in document.OutlineNotes) sb.AppendLine("   " + note);
+            foreach (var pass in document.OutlinePasses)
+            {
+                int at = mesh.SubMeshes.ToList().FindIndex(m => m.Material.Equals(pass.Submesh, StringComparison.OrdinalIgnoreCase));
+                if (at < 0) { sb.AppendLine($"   outline {pass.Submesh}: the mesh has no such submesh"); continue; }
+                var outline = BuildSlice(mesh.SubMeshes[at], pass.Material, cache, perms, fallbackShader: null, scene, sb, state);
+                if (outline is null) continue;
+                scene.Slices.Add(outline with { SubmeshIndex = at, IsOutline = true });
+                sb.AppendLine($"   outline {pass.Submesh} -> {pass.Material.Name.Split('/').Last()} ({pass.Source})");
+            }
         }
 
         // Every distinct texture the scene will ask for, decoded once. Failures are recorded rather than
