@@ -273,8 +273,19 @@ public sealed record VfxEmitterDefinition(
     bool TextureMultUvScrollClamp = false,
     /// <summary>M754: the surface particles are born on - a mesh, a skeleton, or the host character. Null
     /// for the 99.5% of emitters that name none.</summary>
-    VfxEmissionSurface? EmissionSurface = null)
+    VfxEmissionSurface? EmissionSurface = null,
+    /// <summary>M860: the submeshes of the HOST character an AttachedMesh emitter draws - FNV-1a hashes of submesh names, from
+    /// the primitive's mMesh (mSubmeshesToDraw, mSubmeshesToDrawAlways). Empty or null: every submesh. Only meaningful when
+    /// <see cref="IsHostMesh"/>.</summary>
+    IReadOnlyList<uint>? HostSubmeshes = null)
 {
+    /// <summary>M860: a VfxPrimitiveAttachedMesh that names no mesh FILE - the emitter draws the character it is attached to,
+    /// with its own material. 62,906 emitters; they used to become a 1-unit billboard. The schema gives the primitive one
+    /// field of its own (UseAvatarSpecificSubmeshMask) and the mesh definition the submesh lists; there is no mesh to
+    /// load, so what is drawn is the host's own skinned mesh.</summary>
+    public bool IsHostMesh => !IsMeshPrimitive && PrimitiveClass == AttachedMeshClass;
+    private static readonly uint AttachedMeshClass = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
+
     /// <summary>M707: this emitter authors NO base texture path at all.
     ///
     /// The distinction a renderer needs is "never asked for one" against "asked for one that did not

@@ -421,6 +421,9 @@ public sealed class D3D11MapParticles
                 _renderer.ReleaseRiotMeshGeometry(id);
         }
         _meshSlices.Clear();
+        if (!meshGeometryAlreadyReleased)
+            foreach (var hs in _hostSlices.Where(h => h.GeometryId >= 0)) _renderer.ReleaseMeshGeometry(hs.GeometryId);   // M860
+        _hostSlices.Clear();
         // M782: ribbons are NOT released by ClearMaterials, so these ids are still ours either way.
         foreach (int id in _ribbonSlices.Select(s => s.RibbonId).Distinct())
             _renderer.ReleaseRibbon(id);
@@ -591,7 +594,7 @@ public sealed class D3D11MapParticles
         // only drawable emitter is a beam has no quad slices at all, and testing _slices alone would read
         // as "nothing to do" and freeze it.
         if (_playback is not { } pb
-            || (_slices.Count == 0 && _meshSlices.Count == 0 && _ribbonSlices.Count == 0)) return;
+            || (_slices.Count == 0 && _meshSlices.Count == 0 && _ribbonSlices.Count == 0 && _hostSlices.Count == 0)) return;
 
         phase.Restart();
         UpdateActive(pb, mirrorInclusiveViewProj, cameraPosition, cameraDistance);
@@ -633,7 +636,7 @@ public sealed class D3D11MapParticles
         foreach (var (item, sim) in _active) SpawnQueuedChildren(item, sim);
         TickChildren(dt);
         SimulateMs = phase.Elapsed.TotalMilliseconds;
-        phase.Restart(); TickMeshSlices(); MeshMs = phase.Elapsed.TotalMilliseconds;
+        phase.Restart(); TickMeshSlices(); TickHostSlices(); MeshMs = phase.Elapsed.TotalMilliseconds;
         phase.Restart(); TickRibbonSlices(cameraPosition); RibbonMs = phase.Elapsed.TotalMilliseconds;
 
         var (right, up, normal) = VfxBillboardBasis.FromView(mirrorInclusiveView);
@@ -947,6 +950,14 @@ public sealed class D3D11MapParticles
             return;
         }
 
+        // M860: an attached mesh with no mesh file draws the host character; without one it draws nothing (not a 1-unit dot)
+        if (def.IsHostMesh)
+        {
+            if (template) return;
+            if (!BuildHostSlice(item, sim, es, def, tocs, sb)) SkippedMeshEmitters++;
+            return;
+        }
+
         // M283: mesh-primitive emitters draw their own .skn through the renderer's mesh pipeline.
         // The decoded mesh has been on the playback item all along - it is what GL draws - and this
         // path simply never read it, so the emitter was counted as skipped and nothing appeared.
@@ -1080,6 +1091,12 @@ public sealed class D3D11MapParticles
             if (ms.RiotGeometryId >= 0) _renderer.ReleaseRiotMeshGeometry(ms.RiotGeometryId);
             _meshSlices.RemoveAt(i);
         }
+        for (int i = _hostSlices.Count - 1; i >= 0; i--)
+        {
+            if (!ReferenceEquals(_hostSlices[i].Owner, c.Sim)) continue;
+            if (_hostSlices[i].GeometryId >= 0) _renderer.ReleaseMeshGeometry(_hostSlices[i].GeometryId);
+            _hostSlices.RemoveAt(i);
+        }
         for (int i = _ribbonSlices.Count - 1; i >= 0; i--)
         {
             if (!ReferenceEquals(_ribbonSlices[i].Owner, c.Sim)) continue;
@@ -1091,6 +1108,121 @@ public sealed class D3D11MapParticles
             var mine = new HashSet<PreviewMaterial>(c.Materials, ReferenceEqualityComparer.Instance);
             _renderer.RemoveMaterials(m => mine.Contains(m));
             _mine.ExceptWith(mine);
+        }
+    }
+
+    // ---- M860: attached meshes (the effect IS the character, re-skinned) ----------------------------------
+
+    /// <summary>An AttachedMesh emitter that names no mesh file: it draws the HOST character's own skinned body with the
+    /// emitter's material. One per emitter instance, like <see cref="MeshSlice"/>. The geometry is the host's mesh limited to
+    /// the submeshes the emitter's mask lists (all of them without a mask), created the first Tick a host exists and
+    /// re-posed every frame from the host's skinned world positions.</summary>
+    private sealed class HostSlice
+    {
+        public required PreviewMaterial Material { get; init; }
+        public required VfxEmitterDefinition Def { get; init; }
+        public required VfxParticleSimulator Owner { get; init; }
+        public required VfxParticleSimulator.EmitterState State { get; init; }
+        public int GeometryId = -1;
+        public ReyEngine.Formats.Meshes.MeshAsset? Mesh;
+        public float[] Positions = Array.Empty<float>();
+        public float[] Instances = Array.Empty<float>();
+    }
+    private readonly List<HostSlice> _hostSlices = new();
+
+    /// <summary>How many host-mesh emitters drew last frame; 0 with emitters present means no character is hosting them.</summary>
+    public int HostMeshEmittersDrawn { get; private set; }
+
+    private bool BuildHostSlice(VfxPlaybackItem item, VfxParticleSimulator sim, VfxParticleSimulator.EmitterState es,
+        VfxEmitterDefinition def, VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb)
+    {
+        if (ResolveSprite("TEXTURE", item, def) is not { } sprite || VfxPlaybackSim.IsStandIn(sprite.Key))
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: attached mesh with no texture - not drawn");
+            return false;
+        }
+        var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
+            sampler => ResolveSprite(sampler, item, def), sb);
+        if (mat is null)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline (attached mesh)");
+            return false;
+        }
+        mat.UsesDynamicMesh = false;
+        mat.CullBackFaces = !def.DisableBackfaceCull;
+        mat.Visible = false;   // until a host exists
+        Register(mat, def);
+        _hostSlices.Add(new HostSlice { Material = mat, Def = def, Owner = sim, State = es });
+        return true;
+    }
+
+    private void TickHostSlices()
+    {
+        HostMeshEmittersDrawn = 0;
+        foreach (var hs in _hostSlices)
+        {
+            var mat = hs.Material;
+            var es = hs.State;
+            if (!IsLive(hs.Owner) || es.InstanceCount == 0 || _emissionHost is not { } host) { mat.Visible = false; continue; }
+
+            if (hs.GeometryId < 0 || !ReferenceEquals(hs.Mesh, host.Mesh))
+            {
+                if (hs.GeometryId >= 0) _renderer.ReleaseMeshGeometry(hs.GeometryId);
+                hs.GeometryId = -1;
+                var mesh = host.Mesh;
+                var keep = VfxEmissionSurfaceLoader.SubmeshFilter(mesh, hs.Def.HostSubmeshes);
+                uint[] indices = mesh.Indices;
+                if (keep is not null)
+                {
+                    var kept = new List<uint>();
+                    for (int t = 0; t < mesh.Indices.Length / 3; t++)
+                        if (keep(t)) { kept.Add(mesh.Indices[t * 3]); kept.Add(mesh.Indices[t * 3 + 1]); kept.Add(mesh.Indices[t * 3 + 2]); }
+                    indices = kept.ToArray();
+                }
+                if (indices.Length == 0) { mat.Visible = false; continue; }
+                hs.GeometryId = _renderer.CreateMeshGeometry(mesh.Positions, mesh.Uvs, indices);
+                if (hs.GeometryId < 0) { mat.Visible = false; continue; }
+                hs.Mesh = mesh;
+                hs.Positions = new float[mesh.VertexCount * 3];
+                mat.MeshGeometryId = hs.GeometryId;
+            }
+
+            // The body, skinned and placed by the character window (CPU skinning of the same pose the palette poses the drawn mesh with)
+            host.CopyWorldPositions(hs.Positions);
+            _renderer.UpdateMeshGeometryPositions(hs.GeometryId, hs.Positions);
+
+            // One draw per particle, the geometry already in world space: the transform is identity and the particle's size scales
+            // the body about the character's origin (the emitter's authored scale is a slight inflation of the body, 1.01-1.1),
+            // which is a translation of origin * (1 - scale). Rotation is dropped - the body is not turned by the particle.
+            int stride = ParticleQuadBuilder.Stride, n = es.InstanceCount;
+            if (hs.Instances.Length < n * stride) hs.Instances = new float[n * stride];
+            Array.Copy(es.Instances, hs.Instances, n * stride);
+            for (int i = 0; i < n; i++)
+            {
+                int o = i * stride;
+                float s = hs.Instances[o + ParticleQuadBuilder.OffSizeX];
+                if (MathF.Abs(s) < 0.01f) s = 1f;
+                hs.Instances[o + ParticleQuadBuilder.OffSizeX] = s;
+                var shift = host.Origin * (1f - s);
+                hs.Instances[o + ParticleQuadBuilder.OffPos] = shift.X;
+                hs.Instances[o + ParticleQuadBuilder.OffPos + 1] = shift.Y;
+                hs.Instances[o + ParticleQuadBuilder.OffPos + 2] = shift.Z;
+                hs.Instances[o + ParticleQuadBuilder.OffRot] = 0f;
+                hs.Instances[o + ParticleQuadBuilder.OffEuler] = 0f;
+                hs.Instances[o + ParticleQuadBuilder.OffEuler + 1] = 0f;
+                hs.Instances[o + ParticleQuadBuilder.OffEuler + 2] = 0f;
+            }
+            mat.MeshInstances = hs.Instances;
+            mat.MeshInstanceCount = n;
+            mat.MeshRight = Vector3.UnitX; mat.MeshUp = Vector3.UnitY; mat.MeshForward = Vector3.UnitZ;
+            mat.MeshUvOffset = hs.Def.UvScrollRate * es.EmitterAge;
+            mat.MeshUvOffsetMult = hs.Def.TextureMultUvScrollRate * es.EmitterAge;
+            var div = hs.Def.TexDiv;
+            mat.MeshTexDiv = new Vector2(div.X > 0 ? div.X : 1f, div.Y > 0 ? div.Y : 1f);
+            var divMult = hs.Def.TextureMultTexDiv;
+            mat.MeshTexDivMult = new Vector2(divMult.X > 0 ? divMult.X : 1f, divMult.Y > 0 ? divMult.Y : 1f);
+            mat.Visible = true;
+            HostMeshEmittersDrawn++;
         }
     }
 

@@ -383,6 +383,16 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
     internal string? EmissionNote(int emitterIndex)
     {
         if (SelectedSystem is not { } node || !_defs.TryGetValue(node.Entry.PathHash, out var def)) return null;
+        if (emitterIndex >= 0 && emitterIndex < def.Emitters.Count && def.Emitters[emitterIndex].IsHostMesh)
+        {
+            // M860: an attached mesh draws the character it is attached to, with this emitter's material
+            var mask = def.Emitters[emitterIndex].HostSubmeshes;
+            string which = mask is { Count: > 0 } ? $"{mask.Count} submesh(es) of it" : "all of it";
+            return HostMesh is null
+                ? "Attached mesh: this emitter draws the character it is attached to (" + which + ") with its own material, skinned to the character's pose. "
+                  + "There is no character host here, so nothing is drawn - pick a character host in the RIG panel."
+                : $"Attached mesh: draws {which} of the host {HostName} with this emitter's material. Direct3D 11 preview only; the OpenGL preview does not draw it.";
+        }
         if (emitterIndex < 0 || emitterIndex >= def.Emitters.Count || def.Emitters[emitterIndex].EmissionSurface is not { } s) return null;
         string file = System.IO.Path.GetFileName(s.MeshPath ?? s.SkeletonPath ?? "");
         string what = s.Kind switch

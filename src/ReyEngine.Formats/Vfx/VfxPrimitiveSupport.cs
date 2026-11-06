@@ -32,7 +32,7 @@ public static class VfxPrimitiveSupport
     };
 
     /// <summary>VfxPrimitiveAttachedMesh only gains geometry when it names a mesh FILE. Most instances
-    /// carry a submesh mask of the host model instead and stay billboards, which is a property of the
+    /// carry a submesh mask of the host model instead and draw the host's body (M860), which is a property of the
     /// individual emitter rather than of the class - so it gets its own sentence.</summary>
     private static readonly uint AttachedMesh = HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
 
@@ -73,8 +73,9 @@ public static class VfxPrimitiveSupport
     {
         if (Drawn.ContainsKey(classHash)) return null;
         if (classHash == AttachedMesh)
-            return "Attached mesh: the preview draws it as a mesh only when this primitive names a mesh file. "
-                 + "The common case carries a submesh mask of the host model instead and stays a billboard.";
+            return "Attached mesh: when this primitive names a mesh file the preview draws that mesh. Otherwise it draws the host "
+                 + "character's own skinned body with this emitter's material, limited by the submesh mask where one is authored - "
+                 + "in the Direct3D 11 Character window; with no character host (and in the OpenGL preview) it draws nothing, no longer a stand-in billboard.";
         if (classHash == NonRenderable)
             return "League draws nothing for this primitive. The preview has no case for it and falls back to a "
                  + "camera-facing billboard, so it shows something the game does not.";

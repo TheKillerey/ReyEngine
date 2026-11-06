@@ -571,7 +571,9 @@ public static class VfxSystemResolver
             PaletteAddressMode: ReadPaletteAddressMode(p),
             Linger: ReadLinger(p),
             ParticleLingerType: GetU8(p, F_particleLingerType) ?? -1,
-            EmissionSurface: ReadEmissionSurface(p));
+            EmissionSurface: ReadEmissionSurface(p),
+            HostSubmeshes: primClass == C_primAttachedMesh && prim is BinTreeStruct hp && Get(hp.Properties, F_meshDef) is BinTreeStruct hm
+                ? ReadHostSubmeshes(hm.Properties) : null);   // M860
     }
 
     private static readonly uint F_emissionMeshName = HashAlgorithms.Fnv1a("emissionMeshName");
@@ -614,6 +616,17 @@ public static class VfxSystemResolver
         }
         // empty, the unnamed surface class, or a mesh surface naming no mesh (SRU_Foutain_Waterfall_Bloom)
         return new VfxEmissionSurface(VfxEmissionSurfaceKind.Host);
+    }
+
+    private static readonly uint F_submeshesToDraw = HashAlgorithms.Fnv1a("mSubmeshesToDraw");
+    private static readonly uint F_submeshesToDrawAlways = HashAlgorithms.Fnv1a("mSubmeshesToDrawAlways");
+
+    /// <summary>M860: both submesh lists of an attached mesh's mMesh, as one mask (the difference between "draw" and "draw
+    /// always" is not known; the union is what the effect can show).</summary>
+    private static IReadOnlyList<uint>? ReadHostSubmeshes(IReadOnlyDictionary<uint, BinTreeProperty> mesh)
+    {
+        var all = ReadHashList(Get(mesh, F_submeshesToDraw)).Concat(ReadHashList(Get(mesh, F_submeshesToDrawAlways))).Distinct().ToList();
+        return all.Count == 0 ? null : all;
     }
 
     private static IReadOnlyList<uint> ReadHashList(BinTreeProperty? list) => list is BinTreeContainer c

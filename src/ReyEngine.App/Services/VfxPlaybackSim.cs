@@ -236,7 +236,7 @@ public static class VfxPlaybackSim
         playback is not null && playback.Items.Any(i => NeedsHost(i, 0));
 
     private static bool NeedsHost(VfxPlaybackItem item, int depth) =>
-        item.System.Emitters.Any(e => e.EmissionSurface?.NeedsHost == true)
+        item.System.Emitters.Any(e => e.EmissionSurface?.NeedsHost == true || e.IsHostMesh)
         || (depth < 4 && item.EmitterChildren is { } kids
             && kids.Any(list => list is not null && list.Any(k => NeedsHost(k, depth + 1))));
 

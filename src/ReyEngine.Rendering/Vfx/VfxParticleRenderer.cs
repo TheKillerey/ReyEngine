@@ -389,6 +389,9 @@ public sealed class VfxParticleRenderer
         foreach (var es in sim.Emitters.OrderBy(static e => ReyEngine.Formats.Vfx.VfxDrawOrder.KeyFor(e.Def)))
         {
             if (es.InstanceCount == 0) continue;
+            // M860: an attached mesh draws the host character, which this viewport does not do (the Direct3D 11 host does) -
+            // and it must not fall back to the 1-unit billboard it used to be.
+            if (es.Def.IsHostMesh) continue;
             // M711: before the branch, so the mesh and ribbon paths get it too.
             ApplyDepthTest(es.Def);
             // M47: mesh-primitive emitters draw their .scb/.sco geometry instead of billboards
