@@ -253,10 +253,12 @@ public static class VfxParkedEmitterFields
         // M720: WriteAlphaOnly is gone from here - the engine writes no colour for it, and neither do we.
         "doesCastShadow", "colorblindVisibility", "StencilReferenceId",
         "falloffTexture", "modulationFactor", "censorModulateValue", "sliceTechniqueRange", "isTexturePixelated",
-        "isUniformScale", "isLocalOrientation", "particleIsLocalOrientation", "IsEmitterSpace",
+        // M863: isUniformScale is gone from here - the simulator collapses the scale to one axis for it (VfxParticleSimulator).
+        "isLocalOrientation", "particleIsLocalOrientation", "IsEmitterSpace",
         "isRotationEnabled", "hasPostRotateOrientation", "postRotateOrientationAxis", "rotationOverride",
         // M795: translationOverride and scaleOverride are gone from here - they place and size the emitter.
-        "isFollowingTerrain", "useNavmeshMask",
+        // M863: useNavmeshMask is gone from here - it compiles the MASKED permutation (VfxShaderFlags).
+        "isFollowingTerrain",
         "birthRotationalAcceleration",
         // M852: bindWeight is gone from here - it moves live particles with their emitter.
         // M853: rateByVelocityFunction and MaximumRateByVelocity are gone from here - they set a trail emitter's rate.

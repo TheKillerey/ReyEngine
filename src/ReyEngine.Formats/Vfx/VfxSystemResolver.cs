@@ -222,6 +222,9 @@ public static class VfxSystemResolver
     // M852: bindWeight makes live particles follow their emitter (VfxParticleSimulator.SetWorldTransform), so it
     // leaves the parked table and is declared here for the preview-coverage reflection.
     private static readonly uint F_bindWeight          = HashAlgorithms.Fnv1a("bindWeight");
+    // M863: isUniformScale and useNavmeshMask are consumed (the simulator, the MASKED permutation), so they leave the parked table and are declared here.
+    private static readonly uint F_isUniformScale      = HashAlgorithms.Fnv1a("isUniformScale");
+    private static readonly uint F_useNavmeshMask      = HashAlgorithms.Fnv1a("useNavmeshMask");
     // M853: rateByVelocityFunction and MaximumRateByVelocity set a trail emitter's rate (VfxParticleSimulator), so they
     // leave the parked table too.
     private static readonly uint F_rateByVelocity      = HashAlgorithms.Fnv1a("rateByVelocityFunction");
@@ -1157,7 +1160,7 @@ public static class VfxSystemResolver
             SliceTechniqueRange          = GetF32(p, PF("sliceTechniqueRange")),
             IsTexturePixelated           = GetBoolOrNull(p, PF("isTexturePixelated")),
 
-            IsUniformScale               = GetBoolOrNull(p, PF("isUniformScale")),
+            IsUniformScale               = GetBoolOrNull(p, F_isUniformScale),
             IsLocalOrientation           = GetBoolOrNull(p, PF("isLocalOrientation")),
             ParticleIsLocalOrientation   = GetBoolOrNull(p, PF("particleIsLocalOrientation")),
             IsEmitterSpace               = GetBoolOrNull(p, PF("IsEmitterSpace")),
@@ -1168,7 +1171,7 @@ public static class VfxSystemResolver
             TranslationOverride          = GetVec3(p, F_translationOverride),   // M795: VfxEmitterOverride
             ScaleOverride                = GetVec3(p, F_scaleOverride),
             IsFollowingTerrain           = GetBoolOrNull(p, PF("isFollowingTerrain")),
-            UseNavmeshMask               = GetBoolOrNull(p, PF("useNavmeshMask")),
+            UseNavmeshMask               = GetBoolOrNull(p, F_useNavmeshMask),
             BirthRotationalAcceleration  = ReadCurve3(p, PF("birthRotationalAcceleration"))?.Constant,
 
             BindWeightCurve              = ReadCurveF(p, F_bindWeight),

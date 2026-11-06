@@ -82,6 +82,16 @@ public static class VfxPreviewCoverage
             + "on an attached mesh (which draws the host's body with the emitter's texture) and in the OpenGL preview it is not applied. "
             + "The edit is saved to the .bin and the game will use it.",
 
+        // M863: the trail fields M853 applies, and the two it only partly applies.
+        [HashAlgorithms.Fnv1a("mTrailMode")] =
+            "Parsed, not applied. Shipped data authors WAKE (1), which runs the texture's U on the emitter's odometer so it stays pinned to the "
+            + "path; the preview always runs U on the length of the ribbon, so the texture slides with the trail instead.",
+        [HashAlgorithms.Fnv1a("rateByVelocityFunction")] =
+            "Applied to TRAIL emitters only (speed x first + second particles a second, replacing the rate - M853). On any other primitive the "
+            + "preview keeps the authored rate. The edit is saved to the .bin and the game will use it.",
+        [HashAlgorithms.Fnv1a("MaximumRateByVelocity")] =
+            "Applied to trail emitters only, as the cap of rateByVelocityFunction (300 where unset); on other primitives the preview keeps the authored rate.",
+
         [HashAlgorithms.Fnv1a("particleLingerType")] =
             "Parsed but unused. M185 measured it as largely independent of the Linger struct - 19,406 Linger "
             + "structs carry no type and 11,347 type values sit on emitters with no Linger struct - so nothing "

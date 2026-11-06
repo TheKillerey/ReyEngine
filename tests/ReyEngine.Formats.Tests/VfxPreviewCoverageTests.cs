@@ -183,4 +183,31 @@ public class VfxPreviewCoverageTests
         Assert.NotNull(neverRead);
         Assert.NotEqual(parked, neverRead);
     }
+    [Theory]
+    // M863: consumed by a renderer stage, so a badge saying "not rendered" would be a lie
+    [InlineData("isUniformScale")]
+    [InlineData("useNavmeshMask")]
+    [InlineData("bindWeight")]
+    [InlineData("mCutoff")]
+    [InlineData("mSmoothingMode")]
+    [InlineData("mMaxAddedPerFrame")]
+    [InlineData("CustomMaterial")]
+    public void FieldsARendererStageConsumesAreNotBadgedAsIgnored(string field)
+    {
+        Assert.DoesNotContain(field, VfxParkedEmitterFields.Names);
+        Assert.True(VfxPreviewCoverage.IsParsed(H(field)), $"'{field}' is not a resolver constant, so the editor would badge it as not read");
+    }
+
+    [Theory]
+    // M863: partly applied or not applied - the badge says exactly that
+    [InlineData("mTrailMode", "pinned")]
+    [InlineData("rateByVelocityFunction", "TRAIL")]
+    [InlineData("MaximumRateByVelocity", "trail")]
+    [InlineData("CustomMaterial", "MESH")]
+    public void PartlyAppliedFieldsSayWhereTheyApply(string field, string fragment)
+    {
+        var note = VfxPreviewCoverage.IgnoredNote(H(field));
+        Assert.NotNull(note);
+        Assert.Contains(fragment, note!);
+    }
 }
