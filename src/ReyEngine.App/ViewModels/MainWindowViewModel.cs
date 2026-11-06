@@ -11389,7 +11389,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var newMeshes = added.Select(a => new NewMapMesh(
                     a.Material, a.Positions, a.Normals, a.Uvs,
                     System.Array.ConvertAll(a.Indices, i => (ushort)i), a.Transform)).ToList();
-                var appended = MapGeoMeshAppender.Append(bytes, newMeshes, out var aErr);
+                var appended = MapGeoMeshAppender.Append(bytes, newMeshes, out var aErr, extendedChannels);   // M865
                 if (appended is null) { _log.Error("MapGeo", $"Could not append meshes: {aErr}"); return; }
 
                 var reMap = await Task.Run(() => MapGeoDecoder.Decode(appended, extendedChannels));

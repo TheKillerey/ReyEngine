@@ -56,6 +56,11 @@ public static class MapGeoMaterialWriter
             }
         }
 
+        // M865: a swap across the Mantis set changes the record layout - a mesh that now uses a Mantis material needs the 48-byte
+        // entry, one that no longer does must lose it. Without this the file disagreed with the set every later reader (the move
+        // and bucket-grid writers, the remover's walker) is given, and a delete in the same save failed.
+        if (extendedChannelMaterials is { Count: > 0 }) ExtendedChannelRule.Apply(binary, extendedChannelMaterials);
+
         try { return binary.Write(); }
         catch (Exception ex) { error = $"Mapgeo could not be rewritten: {ex.Message}"; return null; }
     }

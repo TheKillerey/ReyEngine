@@ -20,7 +20,7 @@ public static class MapGeoMeshRemover
         if (meshIndices.Count == 0) return mapgeo;
         try
         {
-            var sections = MapGeoMeshAppender.WalkSections(mapgeo);
+            var sections = MapGeoMeshAppender.WalkSections(mapgeo, extendedChannelMaterials);   // M865: Mantis records are 48 bytes
             var remove = meshIndices.ToHashSet();
             if (remove.Any(i => i < 0 || i >= sections.MeshCount))
             {
@@ -51,7 +51,9 @@ public static class MapGeoMeshRemover
             editable.Compact();
             var result = editable.Write();
 
-            using var verify = new MemoryStream(result, writable: false);
+            // M865: LeagueToolkit reads only the 40-byte block, so a file with Mantis records is checked through its stripped form
+            byte[] forLtk = extendedChannelMaterials is { Count: > 0 } ? ExtendedChannelRule.WithoutExtendedEntries(result, extendedChannelMaterials) : result;
+            using var verify = new MemoryStream(forLtk, writable: false);
             using var env = new EnvironmentAsset(verify);
             if (env.Meshes.Count != sections.MeshCount - remove.Count)
             {

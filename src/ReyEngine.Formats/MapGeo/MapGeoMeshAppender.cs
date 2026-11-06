@@ -26,14 +26,23 @@ public static class MapGeoMeshAppender
 {
     private const int MaxU16Vertices = 65535;   // mapgeo index buffers are u16 — hard cap per mesh
 
-    public static byte[]? Append(byte[] mapgeo, IReadOnlyList<NewMapMesh> meshes, out string? error)
+    /// <param name="extendedChannelMaterials">M865: the materials whose mesh records carry the 48-byte Mantis channel block
+    /// (<see cref="ExtendedChannelRule.From"/>). Without it the walker reads every record as 40 bytes and desyncs on the
+    /// first Mantis mesh. A NEW mesh on such a material is refused: this writer emits the 40-byte record only.</param>
+    public static byte[]? Append(byte[] mapgeo, IReadOnlyList<NewMapMesh> meshes, out string? error,
+        IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         error = null;
         if (meshes.Count == 0) return mapgeo;
         try
         {
-            var s = WalkSections(mapgeo);
-
+            if (extendedChannelMaterials is { Count: > 0 } && meshes.FirstOrDefault(m => extendedChannelMaterials.Contains(m.MaterialName)) is { } mantis)
+            {
+                error = $"An added mesh uses '{mantis.MaterialName}', a Mantis material: its mesh record needs the 48-byte channel block and "
+                        + "Texcoord6/Texcoord7 streams, which an added mesh does not have. Add it with another material, save, then switch the material.";
+                return null;
+            }
+            var s = WalkSections(mapgeo, extendedChannelMaterials);
             foreach (var m in meshes)
             {
                 if (m.Positions.Length / 3 > MaxU16Vertices)
@@ -205,7 +214,7 @@ public static class MapGeoMeshAppender
         IReadOnlyList<int> MeshRecordStarts,
         IReadOnlyList<int> MeshRecordEnds);
 
-    internal static Sections WalkSections(byte[] d)
+    internal static Sections WalkSections(byte[] d, IReadOnlySet<string>? extendedChannelMaterials = null)
     {
         int p = 0;
         if (d.Length < 8 || d[0] != 'O' || d[1] != 'E' || d[2] != 'G' || d[3] != 'M')
@@ -246,7 +255,7 @@ public static class MapGeoMeshAppender
         for (int i = 0; i < meshCount; i++)
         {
             meshStarts.Add(p);
-            SkipMeshRecord(d, ref p, version);
+            SkipMeshRecord(d, ref p, version, extendedChannelMaterials);
             meshEnds.Add(p);
         }
 
@@ -255,8 +264,9 @@ public static class MapGeoMeshAppender
             meshStarts, meshEnds);
     }
 
-    private static void SkipMeshRecord(byte[] d, ref int p, int version)
+    private static void SkipMeshRecord(byte[] d, ref int p, int version, IReadOnlySet<string>? extendedChannelMaterials)
     {
+        bool extended = false;
         p += 4;                                   // vertexCount
         int vdCount = ReadI32(d, ref p);          // vertexDeclarationCount
         p += 4;                                   // vertexDeclarationID
@@ -271,7 +281,8 @@ public static class MapGeoMeshAppender
         for (int i = 0; i < prims; i++)
         {
             p += 4;                               // materialHash
-            SkipString(d, ref p);                 // materialName
+            string material = ReadString(d, ref p);   // materialName
+            if (extendedChannelMaterials is { Count: > 0 } && extendedChannelMaterials.Contains(material)) extended = true;
             p += 16;                              // startIndex, indexCount, minVertex, maxVertex
         }
 
@@ -288,7 +299,8 @@ public static class MapGeoMeshAppender
 
         SkipLightChannel(d, ref p);               // baked light
         SkipLightChannel(d, ref p);               // stationary light
-        if (version is >= 12 and < 17) SkipLightChannel(d, ref p);   // baked paint (older layout)
+        // M865: the Mantis entry {string, u32}, exactly where MapGeoBinary.Read takes it (after the stationary light channel)
+        if (extended) { SkipString(d, ref p); p += 4; }        if (version is >= 12 and < 17) SkipLightChannel(d, ref p);   // baked paint (older layout)
         if (version >= 17)
         {
             int overrides = ReadI32(d, ref p);
@@ -301,6 +313,15 @@ public static class MapGeoMeshAppender
     {
         int len = ReadI32(d, ref p);
         p += len + 16;                            // texture bytes + scale/bias floats
+    }
+
+    private static string ReadString(byte[] d, ref int p)
+    {
+        int len = ReadI32(d, ref p);
+        if (len < 0 || p + len > d.Length) throw new InvalidDataException("string overruns file (walker desynced).");
+        string value = System.Text.Encoding.UTF8.GetString(d, p, len);
+        p += len;
+        return value;
     }
 
     private static void SkipString(byte[] d, ref int p)
