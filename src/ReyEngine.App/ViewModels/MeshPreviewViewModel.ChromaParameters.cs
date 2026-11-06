@@ -207,6 +207,11 @@ public sealed partial class MeshPreviewViewModel
             try { snapshot = await Task.Run(() => read(skinBin, ownedNow, recipeTransform), token); }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) { snapshot = new ChromaParameterSnapshot(Array.Empty<ChromaParameterInfo>(), "The colour parameters could not be read: " + ex.Message); }
+            lock (_chromaApply) Apply(snapshot, token);   // the texture and effect prepares may be finishing at the same time (see _chromaApply)
+        }
+
+        void Apply(ChromaParameterSnapshot? snapshot, CancellationToken token)
+        {
             if (generation != Volatile.Read(ref _chromaGeneration) || token.IsCancellationRequested) return;
             if (snapshot is null) return;
 

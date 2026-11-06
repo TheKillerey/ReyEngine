@@ -409,6 +409,11 @@ public sealed partial class MeshPreviewViewModel
                 }, token);
             }
             catch (OperationCanceledException) { return; }
+            lock (_chromaApply) Apply(snapshot, classified, token);   // the texture and parameter prepares may be finishing at the same time (see _chromaApply)
+        }
+
+        void Apply(ChromaEffectSnapshot? snapshot, List<EffectTextureClass> classified, CancellationToken token)
+        {
             if (generation != Volatile.Read(ref _chromaGeneration) || token.IsCancellationRequested) return;
 
             bool was = _chromaRestoring;
@@ -591,18 +596,21 @@ public sealed partial class MeshPreviewViewModel
         }
         catch (OperationCanceledException) { return; }
         catch (Exception ex) { error = "The texture could not be decoded: " + ex.Message; }
-        if (generation != Volatile.Read(ref _chromaGeneration)) return;
-        if (image is null)
+        lock (_chromaApply)
         {
-            bool was = _chromaRestoring;
-            _chromaRestoring = true;
-            try { row.CanInclude = false; row.IsIncluded = false; row.Note = error ?? ""; }
-            finally { _chromaRestoring = was; }
-            UpdateChromaDirty();
-            return;
+            if (generation != Volatile.Read(ref _chromaGeneration)) return;
+            if (image is null)
+            {
+                bool was = _chromaRestoring;
+                _chromaRestoring = true;
+                try { row.CanInclude = false; row.IsIncluded = false; row.Note = error ?? ""; }
+                finally { _chromaRestoring = was; }
+                UpdateChromaDirty();
+                return;
+            }
+            _effectBuffers.Set(row.Hash, image);
+            RequestChromaPreview();
         }
-        _effectBuffers.Set(row.Hash, image);
-        RequestChromaPreview();
     }
 
     [RelayCommand]

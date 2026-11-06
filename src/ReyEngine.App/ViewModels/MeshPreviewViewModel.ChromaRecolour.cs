@@ -232,6 +232,16 @@ public sealed partial class MeshPreviewViewModel
 
     private readonly ChromaPreviewBuffers _chromaBuffers = new();
     private readonly object _chromaGate = new();
+
+    /// <summary>
+    /// Serialises everything that reads or changes the card's lists (texture, parameter and effect rows, the include sets, the
+    /// <see cref="_chromaRestoring"/> flag): a scan, each prepare's continuation after its worker, a decode landing, a preview request
+    /// and the dirty check. The three prepares of one scan finish on their own; under a UI context they are marshalled to the UI thread
+    /// one by one, but with none (a test, a headless host) they resume on pool threads at once, and one enumerated a list another was
+    /// filling ("Collection was modified" in <see cref="RefreshChromaParamSwatches"/>). Re-entrant; taken before <see cref="_chromaGate"/>,
+    /// never inside it, and never held across an await, so the preview loop never waits on it.
+    /// </summary>
+    private readonly object _chromaApply = new();
     private readonly List<ChromaTextureRowViewModel> _chromaRows = new();
     private bool _chromaRestoring;
     private int _chromaGeneration;
@@ -269,6 +279,11 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>The skin changed (or the card was switched off): forget the previous skin's recolour, then restore what the project
     /// holds for the new one. Called by <see cref="SetChromaSkin"/>.</summary>
     private void ResetChromaRecolour(string? skinBin)
+    {
+        lock (_chromaApply) ResetChromaRecolourLocked(skinBin);
+    }
+
+    private void ResetChromaRecolourLocked(string? skinBin)
     {
         _chromaCts.Cancel();
         _chromaCts = new CancellationTokenSource();
@@ -310,6 +325,11 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>The inventory arrived: list its body textures (and, hidden, the maps it left out), switch on the ones the recolour
     /// should act on, and read and classify each original on a worker.</summary>
     private void SetChromaRecolourTextures(SkinColorInventory inventory)
+    {
+        lock (_chromaApply) SetChromaRecolourTexturesLocked(inventory);
+    }
+
+    private void SetChromaRecolourTexturesLocked(SkinColorInventory inventory)
     {
         _chromaCts.Cancel();
         _chromaCts = new CancellationTokenSource();
@@ -406,6 +426,11 @@ public sealed partial class MeshPreviewViewModel
         }
         catch (OperationCanceledException) { return; }
 
+        lock (_chromaApply) ApplyChromaClassified(classified, generation, token);
+    }
+
+    private void ApplyChromaClassified(List<ChromaClassified> classified, int generation, CancellationToken token)
+    {
         if (generation != Volatile.Read(ref _chromaGeneration) || token.IsCancellationRequested) return;
 
         bool was = _chromaRestoring;
@@ -481,6 +506,11 @@ public sealed partial class MeshPreviewViewModel
         }
         catch (OperationCanceledException) { return; }
         catch (Exception ex) { error = "The texture could not be decoded: " + ex.Message; }
+        lock (_chromaApply) ApplyChromaDecoded(row, image, error, generation);
+    }
+
+    private void ApplyChromaDecoded(ChromaTextureRowViewModel row, TextureImage? image, string? error, int generation)
+    {
         if (generation != Volatile.Read(ref _chromaGeneration)) return;
 
         if (image is null)
@@ -541,6 +571,11 @@ public sealed partial class MeshPreviewViewModel
     }
 
     private void UpdateChromaDirty()
+    {
+        lock (_chromaApply) UpdateChromaDirtyLocked();
+    }
+
+    private void UpdateChromaDirtyLocked()
     {
         // nothing listed (the skin was not scanned yet): there is nothing to recolour, so nothing is pending
         bool dirty = false;
@@ -606,6 +641,11 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>Recolour the included textures from their originals and draw them, soon. Safe to call on every slider tick: the
     /// requests collapse into the newest.</summary>
     internal void RequestChromaPreview()
+    {
+        lock (_chromaApply) RequestChromaPreviewLocked();
+    }
+
+    private void RequestChromaPreviewLocked()
     {
         if (_chromaRestoring) return;
         var transform = ChromaSettings.ToTransform();
