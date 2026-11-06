@@ -50,10 +50,32 @@ public sealed class MaterialDriverState
 
     private readonly HashSet<string> _active;
 
-    public MaterialDriverState(IEnumerable<string> activeKeys, float seconds)
+    public MaterialDriverState(IEnumerable<string> activeKeys, float seconds, string? clipName = null, float clipFraction = 0f)
     {
         _active = new HashSet<string>(activeKeys, StringComparer.OrdinalIgnoreCase);
         Seconds = MathF.Max(0f, seconds);
+        ClipName = string.IsNullOrEmpty(clipName) ? null : clipName;
+        ClipFraction = float.IsFinite(clipFraction) ? Math.Clamp(clipFraction, 0f, 1f) : 0f;
+    }
+
+    /// <summary>M856: the animation clip the situation says is playing (null = none). An
+    /// <c>AnimationFractionDynamicMaterialFloatDriver</c> reads this clip's normalised time.</summary>
+    public string? ClipName { get; }
+
+    /// <summary>M856: how far through <see cref="ClipName"/> playback is, 0..1.</summary>
+    public float ClipFraction { get; }
+
+    /// <summary>M856: the fraction an animation-fraction driver reads. A driver names the clip it follows
+    /// (<c>mAnimationName</c>, an FNV-1a hash; 0 = any clip); it reads the playing clip's fraction when that
+    /// clip matches and 0 otherwise - the start of the clip, which is where a clip that is not playing
+    /// sits. That is an assumption, not a measurement: the client's behaviour for a clip that is not playing
+    /// is not in the data. At 0 a death dissolve (graph 1 at 0, falling to 0 by 4-25%) is un-dissolved,
+    /// which is the state a living champion is in.</summary>
+    public float FractionFor(uint animationNameHash)
+    {
+        if (ClipName is null) return 0f;
+        if (animationNameHash == 0) return ClipFraction;
+        return HashAlgorithms.Fnv1a(ClipName) == animationNameHash ? ClipFraction : 0f;
     }
 
     /// <summary>How long the active conditions have held, in seconds. A driver's own
@@ -68,10 +90,13 @@ public sealed class MaterialDriverState
     {
         var next = new HashSet<string>(_active, StringComparer.OrdinalIgnoreCase);
         if (on) next.Add(key); else next.Remove(key);
-        return new MaterialDriverState(next, Seconds);
+        return new MaterialDriverState(next, Seconds, ClipName, ClipFraction);
     }
 
-    public MaterialDriverState WithSeconds(float seconds) => new(_active, seconds);
+    public MaterialDriverState WithSeconds(float seconds) => new(_active, seconds, ClipName, ClipFraction);
+
+    /// <summary>M856: the same situation with <paramref name="clipName"/> playing at <paramref name="fraction"/> (0..1).</summary>
+    public MaterialDriverState WithClip(string? clipName, float fraction) => new(_active, Seconds, clipName, fraction);
 
     /// <summary>How far along a transition of <paramref name="duration"/> seconds this state is, 0..1.
     /// A duration of zero (or less) is instant.</summary>
@@ -398,6 +423,17 @@ public static class MaterialDrivers
                 // reads a float out of the playing animation clip; with no clip driving it that is its default
                 return new(V(F32(Field(d.Properties, "DefaultFloat")) ?? KeyFrameDefault),
                     "no animation clip is driving it -> DefaultFloat");
+
+            case "AnimationFractionDynamicMaterialFloatDriver":
+            {
+                // M856: the named clip's normalised time. mAnimationName 0xfbd16fb5 is a Hash, default 0 (any clip).
+                uint name = Field(d.Properties, "mAnimationName") is BinTreeHash h ? h.Value : 0u;
+                float f = state.FractionFor(name);
+                string clip = name == 0 ? "any clip" : resolve(name) ?? $"0x{name:x8}";
+                return new(V(f), state.ClipName is null
+                    ? $"no clip is playing -> {clip} reads fraction 0"
+                    : $"clip '{state.ClipName}' at {Fmt(state.ClipFraction)} -> {clip} reads {Fmt(f)}");
+            }
 
             case "SineMaterialDriver":
             case "TimeMaterialDriver":
