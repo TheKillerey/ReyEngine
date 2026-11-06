@@ -147,10 +147,10 @@ public sealed class UnnamedTextureTests
         Assert.Contains("UnnamedSprites = 0;", src);
         Assert.Contains("{N(UnnamedSprites)} emitter(s) name no texture at all", src);
 
-        // the mesh and the ribbon both refuse the unnamed sprite as well: they are far too large a surface
+        // the mesh, the ribbon and (M860) the host's body all refuse the unnamed sprite as well: they are far too large a surface
         // to hand a stand-in of any kind. Asked of the SET, so the next stand-in cannot walk past a pair of
         // hand-copied literals the way this one did.
-        Assert.Equal(2, src.Split("VfxPlaybackSim.IsStandIn(sprite.Key)").Length - 1);
+        Assert.Equal(3, src.Split("VfxPlaybackSim.IsStandIn(sprite.Key)").Length - 1);   // M860: the host's body is the third
         Assert.True(VfxPlaybackSim.IsStandIn(VfxPlaybackSim.SoftDotKey));
         Assert.True(VfxPlaybackSim.IsStandIn(VfxPlaybackSim.UnnamedKey));
         Assert.False(VfxPlaybackSim.IsStandIn("assets/test/p.dds"));

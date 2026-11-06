@@ -424,6 +424,9 @@ public sealed class D3D11MapParticles
         if (!meshGeometryAlreadyReleased)
             foreach (var hs in _hostSlices.Where(h => h.GeometryId >= 0)) _renderer.ReleaseMeshGeometry(hs.GeometryId);   // M860
         _hostSlices.Clear();
+        if (!meshGeometryAlreadyReleased)
+            foreach (var cs in _customSlices) _renderer.ReleaseRiotMeshGeometry(cs.GeometryId);   // M861
+        _customSlices.Clear();
         // M782: ribbons are NOT released by ClearMaterials, so these ids are still ours either way.
         foreach (int id in _ribbonSlices.Select(s => s.RibbonId).Distinct())
             _renderer.ReleaseRibbon(id);
@@ -594,7 +597,7 @@ public sealed class D3D11MapParticles
         // only drawable emitter is a beam has no quad slices at all, and testing _slices alone would read
         // as "nothing to do" and freeze it.
         if (_playback is not { } pb
-            || (_slices.Count == 0 && _meshSlices.Count == 0 && _ribbonSlices.Count == 0 && _hostSlices.Count == 0)) return;
+            || (_slices.Count == 0 && _meshSlices.Count == 0 && _ribbonSlices.Count == 0 && _hostSlices.Count == 0 && _customSlices.Count == 0)) return;
 
         phase.Restart();
         UpdateActive(pb, mirrorInclusiveViewProj, cameraPosition, cameraDistance);
@@ -636,7 +639,7 @@ public sealed class D3D11MapParticles
         foreach (var (item, sim) in _active) SpawnQueuedChildren(item, sim);
         TickChildren(dt);
         SimulateMs = phase.Elapsed.TotalMilliseconds;
-        phase.Restart(); TickMeshSlices(); TickHostSlices(); MeshMs = phase.Elapsed.TotalMilliseconds;
+        phase.Restart(); TickMeshSlices(); TickHostSlices(); TickCustomSlices(); MeshMs = phase.Elapsed.TotalMilliseconds;
         phase.Restart(); TickRibbonSlices(cameraPosition); RibbonMs = phase.Elapsed.TotalMilliseconds;
 
         var (right, up, normal) = VfxBillboardBasis.FromView(mirrorInclusiveView);
@@ -964,6 +967,8 @@ public sealed class D3D11MapParticles
         if (def.IsMeshPrimitive)
         {
             if (template) return;
+            // M861: the material the emitter links, through Riot's shader path, instead of the particle mesh shader
+            if (def.CustomMaterialLink != 0 && def.Beam is null && BuildCustomMaterialSlice(item, sim, es, def, sb)) return;
             if (!BuildMeshSlice(item, sim, es, def, tocs, sb)) SkippedMeshEmitters++;
             return;
         }
@@ -1090,6 +1095,16 @@ public sealed class D3D11MapParticles
             if (ms.GeometryId >= 0) _renderer.ReleaseMeshGeometry(ms.GeometryId);
             if (ms.RiotGeometryId >= 0) _renderer.ReleaseRiotMeshGeometry(ms.RiotGeometryId);
             _meshSlices.RemoveAt(i);
+        }
+        for (int i = _customSlices.Count - 1; i >= 0; i--)
+        {
+            var cs = _customSlices[i];
+            if (!ReferenceEquals(cs.Owner, c.Sim)) continue;
+            var gone = new HashSet<PreviewMaterial>(cs.Materials, ReferenceEqualityComparer.Instance);
+            _renderer.RemoveMaterials(m => gone.Contains(m));
+            _mine.ExceptWith(gone);
+            _renderer.ReleaseRiotMeshGeometry(cs.GeometryId);
+            _customSlices.RemoveAt(i);
         }
         for (int i = _hostSlices.Count - 1; i >= 0; i--)
         {
@@ -1223,6 +1238,70 @@ public sealed class D3D11MapParticles
             mat.MeshTexDivMult = new Vector2(divMult.X > 0 ? divMult.X : 1f, divMult.Y > 0 ? divMult.Y : 1f);
             mat.Visible = true;
             HostMeshEmittersDrawn++;
+        }
+    }
+
+    // ---- M861: a mesh emitter whose CustomMaterial links a Riot material ----------------------------------
+
+    /// <summary>A mesh emitter drawn with the material it links instead of the particle mesh shader: Riot's own shader, textures and
+    /// parameters for that StaticMaterialDef, over the emitter's mesh, once per particle - the path a placed prop takes
+    /// (<see cref="Dx11CharacterScene"/> + <see cref="PreviewMaterial.CharacterInstances"/>). Per emitter instance, like
+    /// <see cref="MeshSlice"/>.</summary>
+    private sealed class CustomSlice
+    {
+        public required VfxParticleSimulator Owner { get; init; }
+        public required VfxParticleSimulator.EmitterState State { get; init; }
+        public required int GeometryId { get; init; }
+        public readonly List<PreviewMaterial> Materials = new();
+        public readonly List<Matrix4x4> Instances = new();
+    }
+    private readonly List<CustomSlice> _customSlices = new();
+
+    /// <summary>How many custom-material mesh emitters drew last frame.</summary>
+    public int CustomMaterialEmittersDrawn { get; private set; }
+
+    private bool BuildCustomMaterialSlice(VfxPlaybackItem item, VfxParticleSimulator sim, VfxParticleSimulator.EmitterState es,
+        VfxEmitterDefinition def, StringBuilder sb)
+    {
+        int idx = VfxPlaybackSim.AuthoredIndex(item.System, def);
+        if (item.EmitterCustomMaterials is not { } scenes || idx < 0 || idx >= scenes.Count || scenes[idx] is not { } scene) return false;
+        int rid = _renderer.CreateRiotMeshGeometry(scene.Mesh);
+        if (rid < 0)
+        {
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: custom material - the mesh would not upload; drawn with the particle shader");
+            return false;
+        }
+        var slice = new CustomSlice { Owner = sim, State = es, GeometryId = rid };
+        var mats = Dx11CharacterScene.CommitSlices(_renderer, scene, m =>
+        {
+            m.RiotMeshGeometryId = rid;
+            m.CharacterInstances = slice.Instances;
+        });
+        foreach (var why in scene.Failures) sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: {why}");
+        if (mats.Count == 0)
+        {
+            _renderer.ReleaseRiotMeshGeometry(rid);
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: custom material built no pipeline; drawn with the particle shader");
+            return false;
+        }
+        foreach (var m in mats) { m.Visible = false; _mine.Add(m); slice.Materials.Add(m); }
+        _customSlices.Add(slice);
+        return true;
+    }
+
+    private void TickCustomSlices()
+    {
+        CustomMaterialEmittersDrawn = 0;
+        foreach (var cs in _customSlices)
+        {
+            var es = cs.State;
+            bool live = IsLive(cs.Owner) && es.InstanceCount > 0;
+            foreach (var m in cs.Materials) m.Visible = live;
+            if (!live) continue;
+            cs.Instances.Clear();
+            for (int i = 0; i < es.InstanceCount; i++)
+                cs.Instances.Add(VfxCustomMaterial.ParticleWorld(es.Instances, i, es.PlacementRight, es.PlacementUp, es.PlacementForward));
+            CustomMaterialEmittersDrawn++;
         }
     }
 

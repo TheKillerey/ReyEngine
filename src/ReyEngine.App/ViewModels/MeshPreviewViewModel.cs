@@ -182,6 +182,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolveErosionTextures;   // M174 (2.1)
     public Func<VfxSystemDefinition, IReadOnlyList<TextureImage?>>? ResolvePaletteTextures;   // M175 (2.6)
     public Func<VfxSystemDefinition, IReadOnlyList<CubemapImage?>>? ResolveReflectionCubemaps;   // M181 (2.12)
+    /// <summary>M861: the Riot material scenes of the system's emitters that link a CustomMaterial, over their meshes.</summary>
+    public Func<VfxSystemDefinition, IReadOnlyList<Formats.Meshes.StaticMeshData?>?, IReadOnlyList<Services.PreparedCharacterScene?>?>? ResolveCustomMaterials;
     public Func<VfxSystemDefinition, IReadOnlyList<StaticMeshData?>?>? ResolveMeshes;
     /// <summary>M754: the surfaces emitters are born on.</summary>
     public Func<VfxSystemDefinition, IReadOnlyList<VfxSurfaceSampler?>?>? ResolveEmissionSurfaces;
@@ -1227,7 +1229,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             EmitterPaletteTextures: ResolvePaletteTextures?.Invoke(def),
             EmitterChildren: ResolveChildren(def, depth),
             EmitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def))
-            { EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def) });   // M754; M826: through the effects recolour the card shows, if any
+            {
+                EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def),
+                EmitterCustomMaterials = def.Emitters.Any(e => e.CustomMaterialLink != 0)
+                    ? ResolveCustomMaterials?.Invoke(def, ResolveMeshes?.Invoke(def)) : null,   // M861
+            });   // M754; M826: through the effects recolour the card shows, if any
 
     public void SetVfx(IReadOnlyDictionary<uint, VfxSystemDefinition> systems,
         IReadOnlyDictionary<uint, uint>? resourceMap = null)

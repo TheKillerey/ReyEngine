@@ -277,13 +277,17 @@ public sealed record VfxEmitterDefinition(
     /// <summary>M860: the submeshes of the HOST character an AttachedMesh emitter draws - FNV-1a hashes of submesh names, from
     /// the primitive's mMesh (mSubmeshesToDraw, mSubmeshesToDrawAlways). Empty or null: every submesh. Only meaningful when
     /// <see cref="IsHostMesh"/>.</summary>
-    IReadOnlyList<uint>? HostSubmeshes = null)
+    IReadOnlyList<uint>? HostSubmeshes = null,
+    /// <summary>M861: the object hash of the StaticMaterialDef this emitter's <c>CustomMaterial</c> (VfxMaterialDefinitionData) links, or 0.
+    /// 4,703 emitters; the material's own shader and samplers then draw the emitter's mesh instead of the particle mesh shader.</summary>
+    uint CustomMaterialLink = 0)
 {
     /// <summary>M860: a VfxPrimitiveAttachedMesh that names no mesh FILE - the emitter draws the character it is attached to,
     /// with its own material. 62,906 emitters; they used to become a 1-unit billboard. The schema gives the primitive one
     /// field of its own (UseAvatarSpecificSubmeshMask) and the mesh definition the submesh lists; there is no mesh to
     /// load, so what is drawn is the host's own skinned mesh.</summary>
     public bool IsHostMesh => !IsMeshPrimitive && PrimitiveClass == AttachedMeshClass;
+
     private static readonly uint AttachedMeshClass = ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a("VfxPrimitiveAttachedMesh");
 
     /// <summary>M707: this emitter authors NO base texture path at all.

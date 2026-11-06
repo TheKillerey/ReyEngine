@@ -6893,6 +6893,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.ResolveReflectionCubemaps = ResolveSystemReflectionCubemaps;   // M181 (2.12)
         MeshPreview.ResolveMeshes = ResolveSystemMeshes;
         MeshPreview.ResolveEmissionSurfaces = ResolveSystemEmissionSurfaces;   // M754
+        MeshPreview.ResolveCustomMaterials = ResolveSystemCustomMaterials;     // M861
         MeshPreview.BakeTangents = BakePreviewSkinTangentsAsync;               // M758
         MeshPreview.ScanSkinColours = ScanSkinColours;                         // M812: the CHROMA card's read-only inventory
         WireChromaRecolour();                                                  // M824: and its BODY RECOLOUR
@@ -13412,10 +13413,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var queue = new Queue<WadAssetEntry>();
             queue.Enqueue(binEntry);
             int guard = 0;
+            var closureBins = new List<byte[]>();
             while (queue.Count > 0 && guard++ < 64)
             {
                 byte[] bytes;
                 try { bytes = GetAssetBytes(queue.Dequeue()); } catch { continue; }
+                closureBins.Add(bytes);
                 foreach (var (k, v) in VfxSystemResolver.ExtractAll(bytes)) systems.TryAdd(k, v);
                 foreach (var (k, v) in VfxSystemResolver.ExtractResourceMap(bytes)) resMap.TryAdd(k, v);
                 foreach (var dep in VfxSystemResolver.ExtractDependencies(bytes))
@@ -13424,6 +13427,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     if (visited.Add(h) && TryResolveEntry(h, out var depEntry)) queue.Enqueue(depEntry);
                 }
             }
+            _vfxClosureBins = closureBins;   // M861: the bins a CustomMaterial link is looked up in
+            _customMaterialBins.Clear(); _customMaterialScenes.Clear();
             return (systems, resMap.Count > 0 ? resMap : null);
         }
         catch { return (EmptyVfx, null); }

@@ -76,6 +76,12 @@ public static class VfxPreviewCoverage
     /// foot of <see cref="IgnoredNote"/> would get wrong.</para></summary>
     private static readonly Dictionary<uint, string> NotRendered = new()
     {
+        // M861: CustomMaterial is read, but only a MESH emitter in the Direct3D 11 Character window draws it.
+        [HashAlgorithms.Fnv1a("CustomMaterial")] =
+            "The linked material's shader, textures and parameters draw a MESH emitter in the Direct3D 11 Character window. On a billboard, "
+            + "on an attached mesh (which draws the host's body with the emitter's texture) and in the OpenGL preview it is not applied. "
+            + "The edit is saved to the .bin and the game will use it.",
+
         [HashAlgorithms.Fnv1a("particleLingerType")] =
             "Parsed but unused. M185 measured it as largely independent of the Linger struct - 19,406 Linger "
             + "structs carry no type and 11,347 type values sit on emitters with no Linger struct - so nothing "

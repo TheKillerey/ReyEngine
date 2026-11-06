@@ -572,6 +572,7 @@ public static class VfxSystemResolver
             Linger: ReadLinger(p),
             ParticleLingerType: GetU8(p, F_particleLingerType) ?? -1,
             EmissionSurface: ReadEmissionSurface(p),
+            CustomMaterialLink: Get(p, F_customMaterial) is BinTreeStruct cmat && Get(cmat.Properties, F_cmMaterial) is BinTreeObjectLink cml ? cml.Value : 0u,   // M861
             HostSubmeshes: primClass == C_primAttachedMesh && prim is BinTreeStruct hp && Get(hp.Properties, F_meshDef) is BinTreeStruct hm
                 ? ReadHostSubmeshes(hm.Properties) : null);   // M860
     }
@@ -618,6 +619,8 @@ public static class VfxSystemResolver
         return new VfxEmissionSurface(VfxEmissionSurfaceKind.Host);
     }
 
+    private static readonly uint F_customMaterial = HashAlgorithms.Fnv1a("CustomMaterial");
+    private static readonly uint F_cmMaterial = HashAlgorithms.Fnv1a("Material");
     private static readonly uint F_submeshesToDraw = HashAlgorithms.Fnv1a("mSubmeshesToDraw");
     private static readonly uint F_submeshesToDrawAlways = HashAlgorithms.Fnv1a("mSubmeshesToDrawAlways");
 
