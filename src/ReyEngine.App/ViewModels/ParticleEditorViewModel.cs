@@ -407,6 +407,29 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         if (SelectedSystem is null) { Playback = null; return; }
         if (!_defs.TryGetValue(SelectedSystem.Entry.PathHash, out var def)) { Playback = null; return; }
         def = WithForceSwitches(def);   // M752: preview-only Mute and Solo
+        // M854: the child systems this system's particles spawn, resolved as the Character window resolves them (the
+        // same VfxChildResolver), against the systems of the open document and the document's own resource map. A child
+        // that lives in a bin the document only links to is not found here - the editor holds one document.
+        var resourceMap = def.Emitters.Any(e => e.Children is not null) ? ResourceMapOfDocument() : EmptyResourceMap;
+        var root = BuildPreviewItem(def, 0, resourceMap, new HashSet<uint>()) with
+        {
+            Seed = RigSeed,   // M712: the rig's run, rather than one derived from where it stands
+        };
+        Playback = new VfxPlayback(new[] { root });
+    }
+
+    private static readonly IReadOnlyDictionary<uint, uint> EmptyResourceMap = new Dictionary<uint, uint>();
+
+    private IReadOnlyDictionary<uint, uint> ResourceMapOfDocument()
+    {
+        try { return VfxSystemResolver.ExtractResourceMap(Document.Serialize()); }
+        catch { return EmptyResourceMap; }
+    }
+
+    /// <summary>One playable item for a system, every texture stage resolved, with its children (M854).</summary>
+    private VfxPlaybackItem BuildPreviewItem(VfxSystemDefinition def, int depth,
+        IReadOnlyDictionary<uint, uint> resourceMap, ISet<uint> chain)
+    {
         var texs = ResolveTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var multTexs = ResolveMultTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var distortionTexs = ResolveDistortionTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
@@ -416,10 +439,16 @@ public sealed partial class ParticleEditorViewModel : ObservableObject
         var erosionTexs = ResolveErosionTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var paletteTexs = ResolvePaletteTextures?.Invoke(def) ?? new TextureImage?[def.Emitters.Count];
         var meshes = ResolveMeshes?.Invoke(def);
-        Playback = new VfxPlayback(new[] { new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes,
+        var children = Services.VfxChildResolver.Resolve(def, depth,
+            hash => _defs.GetValueOrDefault(hash),
+            key => resourceMap.TryGetValue(key, out var mapped) ? mapped : null,
+            (child, childDepth) => BuildPreviewItem(child, childDepth, resourceMap, chain),
+            chain);
+        return new VfxPlaybackItem(def, System.Numerics.Vector3.Zero, texs, meshes,
             multTexs, distortionTexs, colorTexs, erosionTexs, paletteTexs,
+            emitterChildren: children,
             emitterReflectionCubemaps: ResolveReflectionCubemaps?.Invoke(def))
-            { Seed = RigSeed, EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def) } });   // M712: the rig's run, rather than one derived from where it stands
+            { EmitterEmissionSurfaces = ResolveEmissionSurfaces?.Invoke(def) };
     }
 
     /// <summary>M185 (2.15): stop emitting and let the Linger curves play out. Riot's shutdown stage is

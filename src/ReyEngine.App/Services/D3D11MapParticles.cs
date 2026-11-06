@@ -183,6 +183,36 @@ public sealed class D3D11MapParticles
     /// builders grow it to fit - a long trail can need far more than the initial guess.</summary>
     private float[] _ribbonVerts = Array.Empty<float>();
 
+    // ---- M854: child systems -----------------------------------------------------------------------
+    //
+    // A particle of a parent emitter can ask for a child system (VfxChildParticleSet), and the simulator only SCHEDULES
+    // those (EmitterState.TakeChildSpawns - it is graphics-free by design). Only the GL viewport ever drained the queue, so
+    // on this backend - the default one - no child ever spawned: 37,047 emitters in 20,069 systems, the Jinx R rocket's
+    // child among them.
+    //
+    // The billboard slices of every child system the playback can reach are built at Rebuild from a TEMPLATE (a simulator
+    // that is never stepped), because a slice is keyed by emitter definition and a spawn must not build materials; a live
+    // child then only adds its emitter states to those slices. A child's mesh and ribbon emitters are per instance (see
+    // MeshSlice and RibbonSlice), so those are built when the child spawns and released when it is retired.
+
+    /// <summary>One live child system: its simulator and everything built for it that must be released with it.</summary>
+    private sealed class ChildSim
+    {
+        public required VfxPlaybackItem Item { get; init; }
+        public required VfxParticleSimulator Sim { get; init; }
+        public float Age;
+        public readonly List<PreviewMaterial> Materials = new();
+    }
+    private readonly List<ChildSim> _children = new();
+    private readonly HashSet<VfxParticleSimulator> _childSet = new(ReferenceEqualityComparer.Instance);
+    private VfxD3D11EmitterPipeline.Tocs? _tocs;
+
+    /// <summary>Live child systems spawned by the playing particles (M854).</summary>
+    public int ChildSystems => _children.Count;
+
+    /// <summary>The camera gate's answer for a placement, or - for a spawned child - that it is alive.</summary>
+    private bool IsLive(VfxParticleSimulator owner) => _activeSet.Contains(owner) || _childSet.Contains(owner);
+
     public D3D11MapParticles(ShaderPreviewRenderer renderer, ShaderCacheReader cache,
         int maxQuads = DefaultMaxQuads)
     {
@@ -330,6 +360,7 @@ public sealed class D3D11MapParticles
     public void StopAll()
     {
         foreach (var sim in _sims.Values) sim.Stop();
+        foreach (var child in _children) child.Sim.Stop();   // M854
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -385,6 +416,8 @@ public sealed class D3D11MapParticles
         foreach (int id in _ribbonSlices.Select(s => s.RibbonId).Distinct())
             _renderer.ReleaseRibbon(id);
         _ribbonSlices.Clear();
+        _children.Clear(); _childSet.Clear();   // M854: their materials and geometry went with the ones released above
+        _tocs = null;
         _liveBySlice.Clear();
         _travelElapsed.Clear();   // M630: elapsed flight belongs to the sims being discarded
         _byEmitter.Clear();
@@ -408,6 +441,7 @@ public sealed class D3D11MapParticles
             BuildReport = tocError ?? "the particle shaders could not be read";
             return;
         }
+        _tocs = tocs;
         // M640: the mesh pair is optional - its absence degrades mesh emitters to the M283 path, visibly.
         string? meshTocError = null;
         _meshTocs = UseRiotMeshShaders ? VfxD3D11EmitterPipeline.ReadMeshTocs(_cache, out meshTocError) : null;
@@ -418,6 +452,7 @@ public sealed class D3D11MapParticles
         int emptySystems = 0, failedPipelines = 0;
         var systems = new Dictionary<uint, (string Name, int Placements, int Emitters)>();
 
+        var templates = new HashSet<VfxPlaybackItem>(ReferenceEqualityComparer.Instance);
         foreach (var item in pb.Items)
         {
             // M266: seed, transform, tint and start delay all come from the one shared contract - see
@@ -432,83 +467,14 @@ public sealed class D3D11MapParticles
             systems[item.System.PathHash] = (item.System.Name, tally.Placements + 1, sim.Emitters.Count);
 
             foreach (var es in sim.Emitters)
-            {
-                var def = es.Def;
-                // M364: beams and trails are ribbon strips, not billboards. They used to be skipped here
-                // with exactly that reason recorded; they now build a ribbon slice of their own.
-                if (def.Beam is not null || def.Trail is not null)
-                {
-                    if (def.Beam is not null && def.IsMeshPrimitive && item.BeamTarget is not null
-                        && BuildMeshSlice(item, sim, es, def, tocs, sb)) continue;
-                    if (!BuildRibbonSlice(item, sim, es, def, tocs, sb)) SkippedBeamTrailEmitters++;
-                    continue;
-                }
+                BuildEmitter(item, sim, es, tocs, sb, ref failedPipelines, template: false);
 
-                // M283: mesh-primitive emitters draw their own .skn through the renderer's mesh pipeline.
-                // The decoded mesh has been on the playback item all along - it is what GL draws - and this
-                // path simply never read it, so the emitter was counted as skipped and nothing appeared.
-                if (def.IsMeshPrimitive)
-                {
-                    if (!BuildMeshSlice(item, sim, es, def, tocs, sb)) SkippedMeshEmitters++;
-                    continue;
-                }
-
-                if (_byEmitter.TryGetValue(def, out var existing))
-                {
-                    existing.Sources.Add((sim, es));
-                    continue;
-                }
-                if (_noPipeline.Contains(def)) continue;
-
-                var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
-                    sampler => ResolveSprite(sampler, item, def), sb);
-                if (mat is null)
-                {
-                    // The per-emitter detail is already in sb; name the emitter so the reason has a subject.
-                    sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline");
-                    failedPipelines++;
-                    _noPipeline.Add(def);
-                    continue;
-                }
-
-                Register(mat, def);
-                var slice = new Slice { Material = mat, Def = def };
-                slice.Sources.Add((sim, es));
-                _byEmitter[def] = slice;
-                _slices.Add(slice);
-            }
+            // M854: the billboard slices of the children this placement can spawn, so a spawn finds them built.
+            BuildChildTemplates(item, tocs, sb, ref failedPipelines, templates);
         }
 
-        // M710: the draw order of this host, at the one moment it exists. Everything above only BUILT
-        // materials; a material that does not write depth is drawn in the order the renderer was handed it,
-        // so this loop is the picture's order and nothing downstream can change it.
-        //
-        // M709 established the key: the ground layer first, then the authored pass, with a stable sort
-        // leaving authored order as the tiebreak. Four channels register from four different places and
-        // draw from one list, so they are ordered together here rather than four times over.
-        //
-        // The scope is a documented divergence from the OpenGL viewport, which sorts inside one simulator.
-        // This host shares one slice per emitter DEFINITION across every placement of it - that sharing is
-        // the whole reason the map can carry thousands of placements - so it cannot sort per placement
-        // without multiplying the draw count by the placement count. It sorts across the map instead.
-        //
-        // M720: and so it takes only the first two keys. The blend rank and the render-flags byte order
-        // emitters inside one system; across a map they would pull every NONE emitter of a pass ahead of
-        // every other system's ADD, because the engine key that keeps systems apart - their position - is one
-        // neither renderer has. Registration order, which is system by system, breaks the tie instead.
-        foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyAcrossSystems(e.Def)))
-            _renderer.AddMaterial(pending.Mat);
-        _pending.Clear();
-
-        // The slice list takes the SAME key, so the quad budget's ranges and its thinning follow the order
-        // the frame actually draws in. Pack thins the last slices first, and "last" is meant to be the
-        // draws on top; under a different key from the one above it would have meant something else.
-        //
-        // OrderBy is stable; List.Sort is not, and an unstable sort here would reshuffle same-key emitters
-        // from frame to frame, which for additive draws IS the image.
-        _slices = _slices.OrderBy(static s => VfxDrawOrder.KeyAcrossSystems(s.Def)).ToList();
-        foreach (var sl in _slices) _liveBySlice.Add(sl.Live);
-        if (_ranges.Length < _slices.Count) _ranges = new PackedRange[_slices.Count];
+        FlushPending();
+        RefreshSliceTables();
 
         var head = new StringBuilder();
         head.AppendLine($"{N(Placements)} placement(s) over {N(systems.Count)} system(s), "
@@ -653,6 +619,10 @@ public sealed class D3D11MapParticles
             VfxPlaybackSim.AttachHost(sim, _emissionHost);   // M755
             sim.Update(dt);
         }
+        // M854: the children the parents' particles asked for during that step - the same drain the GL viewport runs
+        // (ViewportControl.SpawnQueuedChildren, through VfxPlaybackSim.TakeChildSpawns)
+        foreach (var (item, sim) in _active) SpawnQueuedChildren(item, sim);
+        TickChildren(dt);
         SimulateMs = phase.Elapsed.TotalMilliseconds;
         phase.Restart(); TickMeshSlices(); MeshMs = phase.Elapsed.TotalMilliseconds;
         phase.Restart(); TickRibbonSlices(cameraPosition); RibbonMs = phase.Elapsed.TotalMilliseconds;
@@ -668,7 +638,7 @@ public sealed class D3D11MapParticles
             sl.Live.Clear();
             foreach (var (owner, state) in sl.Sources)
             {
-                if (!_activeSet.Contains(owner) || state.InstanceCount == 0) continue;
+                if (!IsLive(owner) || state.InstanceCount == 0) continue;
                 sl.Live.Add(state);
                 requested += state.InstanceCount;
             }
@@ -831,7 +801,7 @@ public sealed class D3D11MapParticles
         {
             var mat = ms.Material;
             var es = ms.State;
-            bool live = _activeSet.Contains(ms.Owner) && es.InstanceCount > 0;
+            bool live = IsLive(ms.Owner) && es.InstanceCount > 0;
             mat.Visible = live;
             if (!live) continue;
 
@@ -950,6 +920,171 @@ public sealed class D3D11MapParticles
         return true;
     }
 
+    /// <summary>M854: build what one emitter draws. <paramref name="template"/> builds only the shared billboard slice
+    /// (no source, no mesh, no ribbon): the emitter belongs to a simulator that is never stepped.</summary>
+    private void BuildEmitter(VfxPlaybackItem item, VfxParticleSimulator sim, VfxParticleSimulator.EmitterState es,
+        VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb, ref int failedPipelines, bool template,
+        ChildSim? owner = null)
+    {
+        var def = es.Def;
+        // M364: beams and trails are ribbon strips, not billboards. They used to be skipped here
+        // with exactly that reason recorded; they now build a ribbon slice of their own.
+        if (def.Beam is not null || def.Trail is not null)
+        {
+            if (template) return;
+            if (def.Beam is not null && def.IsMeshPrimitive && item.BeamTarget is not null
+                && BuildMeshSlice(item, sim, es, def, tocs, sb)) return;
+            if (!BuildRibbonSlice(item, sim, es, def, tocs, sb)) SkippedBeamTrailEmitters++;
+            return;
+        }
+
+        // M283: mesh-primitive emitters draw their own .skn through the renderer's mesh pipeline.
+        // The decoded mesh has been on the playback item all along - it is what GL draws - and this
+        // path simply never read it, so the emitter was counted as skipped and nothing appeared.
+        if (def.IsMeshPrimitive)
+        {
+            if (template) return;
+            if (!BuildMeshSlice(item, sim, es, def, tocs, sb)) SkippedMeshEmitters++;
+            return;
+        }
+
+        if (_byEmitter.TryGetValue(def, out var existing))
+        {
+            if (!template) existing.Sources.Add((sim, es));
+            return;
+        }
+        if (_noPipeline.Contains(def)) return;
+
+        var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
+            sampler => ResolveSprite(sampler, item, def), sb);
+        if (mat is null)
+        {
+            // The per-emitter detail is already in sb; name the emitter so the reason has a subject.
+            sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline");
+            failedPipelines++;
+            _noPipeline.Add(def);
+            return;
+        }
+
+        Register(mat, def);
+        owner?.Materials.Add(mat);
+        var slice = new Slice { Material = mat, Def = def };
+        if (!template) slice.Sources.Add((sim, es));
+        _byEmitter[def] = slice;
+        _slices.Add(slice);
+    }
+
+    /// <summary>M854: build the billboard slices of every child system <paramref name="item"/> can spawn, to the depth the
+    /// playback resolved them. <paramref name="seen"/> is the one guard that matters: the item graph is finite (the resolver
+    /// caps the depth and refuses an ancestor), and an item reachable twice is built once.</summary>
+    private void BuildChildTemplates(VfxPlaybackItem item, VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb,
+        ref int failedPipelines, HashSet<VfxPlaybackItem> seen)
+    {
+        if (item.EmitterChildren is not { } perEmitter) return;
+        foreach (var list in perEmitter)
+        {
+            if (list is null) continue;
+            foreach (var child in list)
+            {
+                if (!seen.Add(child)) continue;
+                var template = new VfxParticleSimulator(1);
+                template.SetSystem(child.System, Matrix4x4.Identity);
+                foreach (var es in template.Emitters)
+                    BuildEmitter(child, template, es, tocs, sb, ref failedPipelines, template: true);
+                BuildChildTemplates(child, tocs, sb, ref failedPipelines, seen);
+            }
+        }
+    }
+
+    /// <summary>M710 (moved here by M854): the draw order of this host, at the one moment it exists. Everything above only
+    /// BUILT materials; a material that does not write depth is drawn in the order the renderer was handed it, so this is
+    /// the picture's order. Run once at the end of a rebuild, and again for what a spawned child built - which then draws
+    /// after everything the rebuild registered.</summary>
+    private void FlushPending()
+    {
+        foreach (var pending in _pending.OrderBy(static e => VfxDrawOrder.KeyAcrossSystems(e.Def)))
+            _renderer.AddMaterial(pending.Mat);
+        _pending.Clear();
+    }
+
+    /// <summary>The slice list takes the SAME key (M710), so the quad budget's ranges and its thinning follow the order the
+    /// frame actually draws in. OrderBy is stable; List.Sort is not, and an unstable sort would reshuffle same-key emitters
+    /// from frame to frame, which for additive draws IS the image.</summary>
+    private void RefreshSliceTables()
+    {
+        _slices = _slices.OrderBy(static s => VfxDrawOrder.KeyAcrossSystems(s.Def)).ToList();
+        _liveBySlice.Clear();
+        foreach (var sl in _slices) _liveBySlice.Add(sl.Live);
+        if (_ranges.Length < _slices.Count) _ranges = new PackedRange[_slices.Count];
+    }
+
+    /// <summary>M854: drain the child spawns one simulator queued and start the children, up to the shared ceiling.</summary>
+    private void SpawnQueuedChildren(VfxPlaybackItem item, VfxParticleSimulator sim)
+    {
+        foreach (var (childItem, position) in VfxPlaybackSim.TakeChildSpawns(item, sim))
+        {
+            if (_children.Count >= VfxPlaybackSim.MaxLiveChildSims || _tocs is not { } tocs) return;
+            var csim = VfxPlaybackSim.CreateChildSim(childItem, position, _children.Count);
+            VfxPlaybackSim.ApplySimulationAssets(csim, childItem);
+            var child = new ChildSim { Item = childItem, Sim = csim };
+
+            int slicesBefore = _slices.Count;
+            var sb = new StringBuilder();
+            int failed = 0;
+            foreach (var es in csim.Emitters)
+                BuildEmitter(childItem, csim, es, tocs, sb, ref failed, template: false, child);
+            foreach (var pending in _pending) child.Materials.Add(pending.Mat);   // the mesh and ribbon materials built just now
+            FlushPending();
+            if (_slices.Count != slicesBefore) RefreshSliceTables();
+
+            _children.Add(child);
+            _childSet.Add(csim);
+        }
+    }
+
+    private void TickChildren(float dt)
+    {
+        // index loop: SpawnQueuedChildren appends, and a grandchild starts on the next frame
+        for (int i = _children.Count - 1; i >= 0; i--)
+        {
+            var c = _children[i];
+            c.Age += dt;
+            if (c.Age > VfxPlaybackSim.ChildSimMaxAge) { RetireChild(c); _children.RemoveAt(i); continue; }
+            if (Stopped) c.Sim.Stop();
+            c.Sim.SetBeamTarget(_beamTarget);
+            VfxPlaybackSim.AttachHost(c.Sim, _emissionHost);
+            c.Sim.Update(dt);
+            SpawnQueuedChildren(c.Item, c.Sim);
+        }
+    }
+
+    /// <summary>Take a child out of the draw: its emitter states leave the shared slices and what was built for it is released.</summary>
+    private void RetireChild(ChildSim c)
+    {
+        _childSet.Remove(c.Sim);
+        foreach (var sl in _slices) sl.Sources.RemoveAll(src => ReferenceEquals(src.Owner, c.Sim));
+        for (int i = _meshSlices.Count - 1; i >= 0; i--)
+        {
+            var ms = _meshSlices[i];
+            if (!ReferenceEquals(ms.Owner, c.Sim)) continue;
+            if (ms.GeometryId >= 0) _renderer.ReleaseMeshGeometry(ms.GeometryId);
+            if (ms.RiotGeometryId >= 0) _renderer.ReleaseRiotMeshGeometry(ms.RiotGeometryId);
+            _meshSlices.RemoveAt(i);
+        }
+        for (int i = _ribbonSlices.Count - 1; i >= 0; i--)
+        {
+            if (!ReferenceEquals(_ribbonSlices[i].Owner, c.Sim)) continue;
+            _renderer.ReleaseRibbon(_ribbonSlices[i].RibbonId);
+            _ribbonSlices.RemoveAt(i);
+        }
+        if (c.Materials.Count > 0)
+        {
+            var mine = new HashSet<PreviewMaterial>(c.Materials, ReferenceEqualityComparer.Instance);
+            _renderer.RemoveMaterials(m => mine.Contains(m));
+            _mine.ExceptWith(mine);
+        }
+    }
+
     /// <summary>M364: re-extrude every live ribbon. Unlike the billboard slices this cannot be skipped when
     /// the camera has not moved - a trail's shape follows its particles, and a camera-facing trail twists
     /// with the view as well.</summary>
@@ -959,7 +1094,7 @@ public sealed class D3D11MapParticles
         foreach (var rs in _ribbonSlices)
         {
             var mat = rs.Material;
-            if (!_activeSet.Contains(rs.Owner)) { mat.Visible = false; continue; }
+            if (!IsLive(rs.Owner)) { mat.Visible = false; continue; }
 
             // Assembled by the GL renderer's own builders. Not a shared style choice - the emitter's particles
             // a trail strings together are internal to that assembly, so this is the only way to get the same

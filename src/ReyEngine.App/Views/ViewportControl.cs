@@ -465,8 +465,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly List<(VfxParticleSimulator Sim, VfxPlaybackItem Item, float Age)> _childSims = new();
     /// <summary>Ceiling on live child systems. Every parent particle can ask for one, so an emitter at a
     /// few hundred particles a second would otherwise accumulate simulators until the frame rate dies.</summary>
-    private const int MaxLiveChildSims = 48;
-    private const float ChildSimMaxAge = 6f;
+    private const int MaxLiveChildSims = Services.VfxPlaybackSim.MaxLiveChildSims;
+    private const float ChildSimMaxAge = Services.VfxPlaybackSim.ChildSimMaxAge;
     private readonly Dictionary<VfxPlaybackItem, VfxParticleSimulator> _particleSimCache = new(ReferenceEqualityComparer.Instance);
     /// <summary>M116: per travelling item, seconds since its playback started (drives caster→target flight).</summary>
     private readonly Dictionary<VfxPlaybackItem, float> _travelElapsed = new(ReferenceEqualityComparer.Instance);
@@ -1604,6 +1604,9 @@ public sealed class ViewportControl : OpenGlControlBase
                 // a child system with a beam is exactly that shape of omission.
                 csim.SetBeamTarget(TargetDummyPosition);
                 csim.Update(dt);
+                // M854: a child's own children (chains run up to VfxChildResolver.MaxChildDepth deep). Appended at the end
+                // of the list, which this loop has already passed on its way down, so they start next frame.
+                SpawnQueuedChildren(citem, csim);
                 prend.Render(csim, viewProj, view, _camera.EffectiveNear, _camera.Far);
             }
             RequestAnimationFrame();
@@ -1996,30 +1999,14 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>M180 (2.7): turn one parent sim's queued child requests into live child simulators.</summary>
     private void SpawnQueuedChildren(VfxPlaybackItem item, VfxParticleSimulator sim)
     {
-        if (item.EmitterChildren is not { } perEmitter) return;
-        for (int e = 0; e < sim.Emitters.Count; e++)
+        // M854: the drain (and its M708 authored-index mapping) is shared with the D3D11 host, so the two cannot read the
+        // queue differently; what is left here is the GL half - binding the child's sprites to GL handles.
+        foreach (var (childItem, position) in Services.VfxPlaybackSim.TakeChildSpawns(item, sim))
         {
-            var spawns = sim.Emitters[e].TakeChildSpawns();
-            if (spawns.Count == 0) continue;
-            // M708: the child list is indexed by AUTHORED emitter, and sim.Emitters is only the visual
-            // subset - SetSystem drops every emitter IsVisual refuses. Indexing it by the simulator's own
-            // position handed an emitter the CHILDREN OF A DIFFERENT ONE as soon as anything before it was
-            // dropped, which on a real map is most systems. BindEmitterAssets a few lines up has remapped
-            // by reference since M180; this loop was the copy that never did.
-            int authored = Services.VfxPlaybackSim.AuthoredIndex(item.System, sim.Emitters[e].Def);
-            if (authored < 0 || authored >= perEmitter.Count) continue;
-            if (perEmitter[authored] is not { } childItems || childItems.Count == 0) continue;
-            foreach (var sp in spawns)
-            {
-                if (_childSims.Count >= MaxLiveChildSims) return;
-                if (sp.ChildIndex < 0 || sp.ChildIndex >= childItems.Count) continue;
-                var childItem = childItems[sp.ChildIndex];
-                var csim = new VfxParticleSimulator(HashCode.Combine(childItem.System.PathHash, _childSims.Count));
-                csim.SetSystem(childItem.System, Matrix4x4.CreateTranslation(sp.Position));
-                Services.VfxPlaybackSim.ApplyEmissionSurfaces(csim, childItem);   // M754
-                BindEmitterAssets(csim, childItem);
-                _childSims.Add((csim, childItem, 0f));
-            }
+            if (_childSims.Count >= Services.VfxPlaybackSim.MaxLiveChildSims) return;
+            var csim = Services.VfxPlaybackSim.CreateChildSim(childItem, position, _childSims.Count);
+            BindEmitterAssets(csim, childItem);
+            _childSims.Add((csim, childItem, 0f));
         }
     }
 
