@@ -1265,9 +1265,18 @@ public sealed class D3D11MapParticles
             int stride = ParticleQuadBuilder.Stride, n = es.InstanceCount;
             if (hs.Instances.Length < n * stride) hs.Instances = new float[n * stride];
             Array.Copy(es.Instances, hs.Instances, n * stride);
+            // M879: modulationFactor tints a host-mesh shell per channel (Darius enraged red_pulse = 0.3,0,0,1 paints the body red)
+            var modulation = hs.Def.Extras?.ModulationFactor;
             for (int i = 0; i < n; i++)
             {
                 int o = i * stride;
+                if (modulation is { } mf)
+                {
+                    hs.Instances[o + ParticleQuadBuilder.OffColor] *= mf.X;
+                    hs.Instances[o + ParticleQuadBuilder.OffColor + 1] *= mf.Y;
+                    hs.Instances[o + ParticleQuadBuilder.OffColor + 2] *= mf.Z;
+                    hs.Instances[o + ParticleQuadBuilder.OffColor + 3] *= mf.W;
+                }
                 float s = hs.Instances[o + ParticleQuadBuilder.OffSizeX];
                 if (MathF.Abs(s) < 0.01f) s = 1f;
                 hs.Instances[o + ParticleQuadBuilder.OffSizeX] = s;
