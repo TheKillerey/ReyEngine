@@ -539,6 +539,7 @@ public sealed partial class MeshPreviewViewModel
             RestoreScene();
             SimStatusLine = "Scene reset.";
         }
+        ResetVisibilityCarry(apply: true);   // M884: Stop / Reset puts submesh visibility back to the skin's base
     }
 
     /// <summary>Stop the run and put the scene back: playback, sounds, queue, positions, ally. Safe at any time; does nothing when idle.</summary>
@@ -559,6 +560,7 @@ public sealed partial class MeshPreviewViewModel
         if (had)
         {
             RestoreScene();
+            ResetVisibilityCarry(apply: true);   // M884
             SimStatusLine = "Stopped - scene reset.";
             AddSimLogLine("stopped");
         }

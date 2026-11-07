@@ -53,6 +53,8 @@ public sealed partial class SubmeshToggleViewModel : ObservableObject
         finally { Busy = false; }
     }
     public Action? Changed;
+    /// <summary>M884: fires only for a tick the user made (not for the auto pass).</summary>
+    public Action? UserChanged;
 
     /// <summary>
     /// M724: the user's own answer for this submesh, or null to follow the skin + animation.
@@ -96,6 +98,7 @@ public sealed partial class SubmeshToggleViewModel : ObservableObject
         {
             Override = value;
             OnPropertyChanged(nameof(IsOverridden));
+            UserChanged?.Invoke();   // M884: a hand-set tick ends the carried animation state
         }
         Changed?.Invoke();
     }
@@ -324,11 +327,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         if (!HasBackground) { BackgroundLights = null; BackgroundLightsEnabled = false; }
 
         // M84: per-submesh visibility toggles (all visible on load)
+        ResetVisibilityCarry(apply: false);   // M884: a new mesh starts from the skin's base state
         Submeshes.Clear();
         foreach (var s in mesh.SubMeshes)
         {
             var t = new SubmeshToggleViewModel { Index = Submeshes.Count, Name = string.IsNullOrEmpty(s.Material) ? $"submesh {Submeshes.Count}" : s.Material };
             t.Changed = RebuildSubmeshVisibility;
+            t.UserChanged = DropVisibilityCarry;   // M884
             t.AddMaterial = AddSubmeshMaterial;   // M703
             Submeshes.Add(t);
         }
@@ -489,6 +494,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         _initialHide = initialHide;
         _clipsByAnm = clipsByAnm;
         _allClips = allClips ?? clipsByAnm?.Values.ToList() ?? (IReadOnlyList<Formats.Skeletons.AnimClipInfo>)Array.Empty<Formats.Skeletons.AnimClipInfo>();
+        ResetVisibilityCarry(apply: false);   // M884: a skin load starts from its own base state
         ApplyAutoVisibility();
     }
 
@@ -502,8 +508,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         _initialHide = Formats.Skeletons.ChampionAnimationData.SplitSubmeshList(spaceSeparated);
         // RebuildVisibilityTimeline only re-runs when the clip or submesh count changed; force it here so
         // the new initial-hide list is not skipped by that cache guard.
-        _visBuiltFor = new object();
-        ApplyAutoVisibility();
+        ResetVisibilityCarry(apply: true);
     }
 
     /// <summary>M86/M91: the playing clip's ParticleEventData → play those VFX bone-attached, like in-game.
@@ -1163,6 +1168,19 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private bool[] _visBase = Array.Empty<bool>();
     private object? _visBuiltFor;      // the clip the cache belongs to (null = no clip)
     private int _visBuiltCount = -1;   // the submesh count it was built against
+    private bool[]? _visLast;          // M884: last state the clip timeline produced (before user overrides)
+    private bool _visForceBase;        // M884: next rebuild starts from the skin's base, not the carried state
+    private bool _visCarryDropped;     // M884: a manual tick: stop recording until the next clip starts
+
+    /// <summary>M884: forget the carried state; the next clip (or, with <paramref name="apply"/>, this one) starts from the skin base.</summary>
+    private void ResetVisibilityCarry(bool apply)
+    {
+        _visLast = null; _visForceBase = true; _visBuiltFor = new object();
+        if (apply) ApplyAutoVisibility();
+    }
+
+    /// <summary>M884: the user ticked a submesh. The current clip keeps its picture; the NEXT clip starts from the skin base.</summary>
+    private void DropVisibilityCarry() { _visLast = null; _visCarryDropped = true; _visForceBase = true; }
 
     /// <summary>M724: resolve every name/hash match for the current clip once. The per-frame fold below is
     /// then pure boolean work - the user asked that the animation runtime not redo what does not change,
@@ -1173,9 +1191,15 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         _visBuiltFor = clip;
         _visBuiltCount = Submeshes.Count;
 
-        _visBase = Submeshes
+        var skinBase = Submeshes
             .Select(s => !_initialHide.Any(h => string.Equals(h, s.Name, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
+        // M884: the state the previous clip's events left behind is where this clip starts (the game keeps
+        // submesh visibility across clips). Only the skin base when nothing was ever applied, or after a
+        // skin load / Stop / manual tick.
+        _visBase = !_visForceBase && _visLast is { } last && last.Length == skinBase.Length ? (bool[])last.Clone() : skinBase;
+        _visForceBase = false;
+        _visCarryDropped = false;
 
         var steps = new List<VisibilityStep>();
         var M = (Func<SubmeshToggleViewModel, IReadOnlyList<string>, IReadOnlyList<uint>, bool>)
@@ -1206,6 +1230,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         if (!ReferenceEquals(_visBuiltFor, clip) || _visBuiltCount != Submeshes.Count) RebuildVisibilityTimeline();
 
         float frame = (float)AnimationTime / MathF.Max(1e-6f, FrameSeconds());
+        bool record = AutoSubmeshVisibility && !_visCarryDropped;
+        var state = record ? new bool[Submeshes.Count] : null;
         for (int i = 0; i < Submeshes.Count; i++)
         {
             // 1. the skin's own picture
@@ -1221,10 +1247,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                     if (i < step.Hide.Length && step.Hide[i]) visible = false;
                 }
 
+            if (state is not null) state[i] = visible;
+
             // 3. the user's own answer, which outranks both
             var s = Submeshes[i];
             s.ApplyComputed(s.Override ?? visible);
         }
+        if (state is not null) _visLast = state;
     }
 
     /// <summary>M724: hand every submesh back to the skin + animation. Shown as a button because an

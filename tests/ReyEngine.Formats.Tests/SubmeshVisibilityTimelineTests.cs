@@ -158,6 +158,72 @@ public sealed class SubmeshVisibilityTimelineTests
         Assert.Equal(2, changed);          // no-op writes do not churn the render set
     }
 
+    // ---- M884: the state carries across clips ----
+
+    private static AnimClipInfo Clip(string name, string[] show, string[] hide, bool events)
+    {
+        var ev = events
+            ? new[] { new AnimVisibilityEvent(0f, -1f, show, hide, Array.Empty<uint>(), Array.Empty<uint>()) }
+            : null;
+        return new AnimClipInfo(name, name.ToLowerInvariant() + ".anm", show, hide,
+            Array.Empty<uint>(), Array.Empty<uint>(), VisibilityEvents: ev);
+    }
+
+    private static (MeshPreviewViewModel vm, Func<string, bool[]> pick) Ahri()
+    {
+        var vm = new MeshPreviewViewModel();
+        foreach (var n in new[] { "Body", "Tails", "Tail_Large" })
+            vm.Submeshes.Add(new SubmeshToggleViewModel { Index = vm.Submeshes.Count, Name = n, Changed = null });
+        foreach (var s in vm.Submeshes) s.UserChanged = null;
+        var clips = new Dictionary<string, AnimClipInfo>
+        {
+            ["run.anm"] = Clip("Run", new[] { "Tail_Large" }, new[] { "Tails" }, true),
+            ["idle.anm"] = Clip("Idle", Array.Empty<string>(), Array.Empty<string>(), false),
+        };
+        vm.SetSubmeshRules(new[] { "Tail_Large" }, clips);
+        bool[] Pick(string anm)
+        {
+            vm.Animation.SelectedAnimation = new AnimationEntryViewModel(new ReyEngine.Core.Assets.WadAssetEntry { Path = "a/" + anm });
+            vm.Animation.ClipChanged!(null);
+            return vm.Submeshes.Select(s => s.IsVisible).ToArray();
+        }
+        return (vm, Pick);
+    }
+
+    [Fact]
+    public void AClipWithoutEventsKeepsTheStateThePreviousClipLeft()
+    {
+        var (vm, pick) = Ahri();
+        Assert.Equal(new[] { true, true, false }, vm.Submeshes.Select(s => s.IsVisible));   // skin base
+        Assert.Equal(new[] { true, true, false }, pick("idle.anm"));                       // first clip: base, nothing invented
+        Assert.Equal(new[] { true, false, true }, pick("run.anm"));
+        Assert.Equal(new[] { true, false, true }, pick("idle.anm"));                       // carried, not reset to base
+    }
+
+    [Fact]
+    public void AnotherSkinLoadStartsFromItsOwnBase()
+    {
+        var (vm, pick) = Ahri();
+        pick("run.anm");
+        vm.SetSubmeshRules(new[] { "Tail_Large" }, new Dictionary<string, AnimClipInfo>
+            { ["idle.anm"] = Clip("Idle", Array.Empty<string>(), Array.Empty<string>(), false) });
+        Assert.Equal(new[] { true, true, false }, pick("idle.anm"));
+    }
+
+    [Fact]
+    public void AManualTickEndsTheCarryForTheNextClip()
+    {
+        var (vm, pick) = Ahri();
+        foreach (var s in vm.Submeshes) s.UserChanged = typeof(MeshPreviewViewModel)
+            .GetMethod("DropVisibilityCarry", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .CreateDelegate<Action>(vm);
+        pick("run.anm");
+        vm.Submeshes[0].IsVisible = false;                      // the user's tick
+        Assert.False(vm.Submeshes[0].IsVisible);
+        var idle = pick("idle.anm");
+        Assert.Equal(new[] { false, true, false }, idle);        // body stays user-hidden; the rest is the skin base again
+    }
+
     // ---- the splitter every reader now shares ----
 
     [Theory]
