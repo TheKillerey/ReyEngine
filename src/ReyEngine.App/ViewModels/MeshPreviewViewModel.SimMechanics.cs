@@ -449,8 +449,7 @@ public sealed partial class MeshPreviewViewModel
         var entry = Animation.Animations.FirstOrDefault(e => string.Equals(e.Name, choice.File, StringComparison.OrdinalIgnoreCase));
         if (entry is null) return;
         Animation.Loop = false;
-        Animation.SelectedAnimation = null;     // restart even when the same clip repeats
-        Animation.SelectedAnimation = entry;
+        SelectClipInternal(entry, true);        // restart even when the same clip repeats
     }
 
     // ---- the end ----

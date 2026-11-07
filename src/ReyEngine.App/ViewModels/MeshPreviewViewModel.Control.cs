@@ -337,8 +337,7 @@ public sealed partial class MeshPreviewViewModel
             return;
         }
         Animation.Loop = false;
-        Animation.SelectedAnimation = null;     // restart even when the cycle repeats a clip
-        Animation.SelectedAnimation = entry;
+        SelectClipInternal(entry, true);        // restart even when the cycle repeats a clip
     }
 
     /// <summary>The attack's missile flying caster to target from the windup, and its hit at the target

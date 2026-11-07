@@ -220,6 +220,20 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
     private double _lastAnimTime;
 
+    /// <summary>M883: true while the view-model itself (an event, an attack, a simulation step) selects a clip; only a pick from outside ends the running spell.</summary>
+    private bool _internalClipSelect;
+
+    private void SelectClipInternal(AnimationEntryViewModel entry, bool restart)
+    {
+        _internalClipSelect = true;
+        try
+        {
+            if (restart) Animation.SelectedAnimation = null;
+            Animation.SelectedAnimation = entry;
+        }
+        finally { _internalClipSelect = false; }
+    }
+
     public MeshPreviewViewModel()
     {
         // M116: two playback modes. ANIMATIONS = the pure .anm (no VFX, no SFX, no VO); EVENTS = the
@@ -227,6 +241,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Animation.ClipChanged = clip =>
         {
             CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility();
+            // M883: a clip the USER picks (Animate tab, an action row without a composite) ends the previous spell: the event stays 'active' otherwise and ApplyClipParticles keeps republishing its bundle
+            bool userPick = clip is not null && !_internalClipSelect && (_eventPlaybackActive || _eventBundle is not null);
+            if (userPick)
+            {
+                _eventPlaybackActive = false; _eventBundle = null; _activeEvent = null;
+                if (SelectedEvent is not null) SelectedEvent = null;
+            }
             if (_eventPlaybackActive)
             {
                 ApplyClipParticles(); ResetSoundSchedule(stopCurrent: true); TryAutoVoice();   // M85/M86/M90/M95c
@@ -235,6 +256,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             {
                 _eventBundle = null; _activeEvent = null;
                 if (SelectedVfx is null) Playback = null;
+                if (userPick) RepublishPlayback();   // M883: the skin's idle effects are all that remains
                 ClearSoundSchedule();
             }
         };
@@ -779,7 +801,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 ApplyClipParticles();
                 Animation.Play();
             }
-            else Animation.SelectedAnimation = entry;                                        // ClipChanged runs the full path
+            else SelectClipInternal(entry, false);                                           // ClipChanged runs the full path
         }
         else
         {
