@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
@@ -242,6 +243,7 @@ public sealed partial class MeshPreviewViewModel
         catch { /* no client text: the bar keeps its names and key letters */ }
         if (details is null || !ReferenceEquals(_simDef, def)) return;      // another champion took over meanwhile
         _simClient = details;
+        RefreshAbilityVideo();
         foreach (var row in SimAbilities)
         {
             string? slot = SlotLetter(row.Key) ?? SlotLetter(row.Ability.ParentKey);
@@ -250,6 +252,69 @@ public sealed partial class MeshPreviewViewModel
             string? iconPath = row.Ability.IconPath ?? ability?.IconPath ?? parentIcon;
             row.ApplyClient(ability?.Description, iconPath is not null && browser.Images is { } images ? new ClientImageHandle(images, iconPath, 72) : null);
         }
+    }
+
+    // ---- M878: Riot's per-ability video (downloaded on demand, cached; never bulk) ----
+
+    /// <summary>The cache the poster and video are fetched through. A test replaces it.</summary>
+    public AbilityVideoCache VideoCache { get; set; } = new();
+
+    /// <summary>How the cached file is opened: the OS default handler. A test replaces it.</summary>
+    public Action<string> VideoOpener { get; set; } = path =>
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true })?.Dispose();
+
+    private string? _videoPath, _videoPosterPath;
+    private int _videoGeneration;
+    [ObservableProperty] private Avalonia.Media.Imaging.Bitmap? _videoPoster;
+    [ObservableProperty] private bool _hasVideo;
+    [ObservableProperty] private string _videoStatus = "";
+    [ObservableProperty] private bool _videoBusy;
+    public Task VideoPosterTask { get; private set; } = Task.CompletedTask;
+
+    partial void OnSimSelectedChanged(SimAbilityRowViewModel? value) => RefreshAbilityVideo();
+
+    /// <summary>Points the video card at the selected ability's client entry and loads its poster (cached, else one small download).</summary>
+    private void RefreshAbilityVideo()
+    {
+        string? slot = SimSelected is null ? null : SlotLetter(SimSelected.Key) ?? SlotLetter(SimSelected.Ability.ParentKey);
+        var ability = slot is null ? null : _simClient?.Ability(slot);
+        _videoPath = ability?.VideoPath;
+        _videoPosterPath = ability?.VideoImagePath;
+        HasVideo = VideoCache.CachePath(_videoPath) is not null;
+        VideoStatus = "";
+        VideoPoster = null;
+        int generation = ++_videoGeneration;
+        if (!HasVideo || VideoCache.CachePath(_videoPosterPath) is null) { VideoPosterTask = Task.CompletedTask; return; }
+        VideoPosterTask = LoadPosterAsync(_videoPosterPath, generation);
+    }
+
+    private async Task LoadPosterAsync(string? posterPath, int generation)
+    {
+        Avalonia.Media.Imaging.Bitmap? bitmap = null;
+        try
+        {
+            var result = await VideoCache.EnsureAsync(posterPath);
+            if (result.Path is { } file) bitmap = await Task.Run(() => { using var fs = File.OpenRead(file); return new Avalonia.Media.Imaging.Bitmap(fs); });
+        }
+        catch { /* no poster: the card keeps the Video button */ }
+        if (generation == _videoGeneration) VideoPoster = bitmap;      // another ability was selected meanwhile
+    }
+
+    [RelayCommand]
+    private async Task OpenAbilityVideoAsync()
+    {
+        if (VideoBusy || !HasVideo) return;
+        int generation = _videoGeneration;
+        VideoBusy = true;
+        VideoStatus = "Downloading video...";
+        try
+        {
+            var result = await VideoCache.EnsureAsync(_videoPath);
+            if (result.Path is not { } file) { if (generation == _videoGeneration) VideoStatus = result.Message; return; }
+            try { VideoOpener(file); if (generation == _videoGeneration) VideoStatus = ""; }
+            catch (Exception ex) { if (generation == _videoGeneration) VideoStatus = "Could not open the video: " + ex.Message; }
+        }
+        finally { VideoBusy = false; }
     }
 
     private static string? SlotLetter(string? key) =>

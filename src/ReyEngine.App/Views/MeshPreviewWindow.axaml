@@ -624,6 +624,18 @@
                           </DataTemplate>
                         </ListBox.ItemTemplate>
                       </ListBox>
+                      <!-- M878: Riot's video for the selected ability: the poster is fetched when it is selected, the video when asked for;
+                           both are cached on disk and open in the OS default player. -->
+                      <StackPanel Spacing="4" IsVisible="{Binding HasVideo}">
+                        <Image Source="{Binding VideoPoster}" MaxHeight="150" Stretch="Uniform" HorizontalAlignment="Left"
+                               IsVisible="{Binding VideoPoster, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <Button Classes="tool" Content="Video" FontSize="10" Padding="6,1" Command="{Binding OpenAbilityVideoCommand}"
+                                  IsEnabled="{Binding !VideoBusy}" ToolTip.Tip="Download Riot's video of this ability once, then open it in your default player" />
+                          <TextBlock Text="{Binding VideoStatus}" FontSize="9" VerticalAlignment="Center" TextWrapping="Wrap"
+                                     Foreground="{DynamicResource ReyTextDimBrush}" />
+                        </StackPanel>
+                      </StackPanel>
                       <WrapPanel Orientation="Horizontal" IsVisible="{Binding HasSimulation}">
                         <Button Classes="tool" Content="Play selected" FontSize="10" Padding="6,1" Margin="0,0,4,4"
                                 Command="{Binding PlaySimulationSelectedCommand}" />

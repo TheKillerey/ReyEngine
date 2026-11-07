@@ -8,8 +8,10 @@ namespace ReyEngine.Formats.Characters;
 /// <summary>One champion in the client's list: <c>v1/champion-summary.json</c> plus the square portrait's WAD path.</summary>
 public sealed record ClientChampionSummary(int Id, string Alias, string Name, string Title, IReadOnlyList<string> Roles, string IconPath);
 
-/// <summary>One ability of a client champion document. <see cref="IconPath"/> is a WAD path, and only when that entry exists.</summary>
-public sealed record ClientAbility(string Key, string? Name, string? IconPath, string Description);
+/// <summary>One ability of a client champion document. <see cref="IconPath"/> is a WAD path, and only when that entry exists.
+/// <c>VideoPath</c> / <c>VideoImagePath</c> are the client JSON's <c>abilityVideoPath</c> / <c>abilityVideoImagePath</c> verbatim
+/// ("champion-abilities/0266/ability_0266_Q1.webm"): they are not in any WAD (the client streams them), so nothing checks them.</summary>
+public sealed record ClientAbility(string Key, string? Name, string? IconPath, string Description, string? VideoPath = null, string? VideoImagePath = null);
 
 /// <summary>A chroma of a skin: <c>Number</c> is the skin number its bin carries (id - championId * 1000), <c>Colors</c> the client's
 /// swatch colours ("#27211C"), <c>ImagePath</c> the WAD path of its picture.</summary>
@@ -302,7 +304,8 @@ public sealed class ClientChampionData : IDisposable
         return details;
     }
 
-    private ClientChampionDetails Parse(int championId, byte[] json)
+    /// <summary>Parses one champion document. Public so a test can feed it text; icon paths are only kept when the WADs hold them.</summary>
+    public ClientChampionDetails Parse(int championId, byte[] json)
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -349,8 +352,11 @@ public sealed class ClientChampionData : IDisposable
         string description = Str(e, "description");
         if (description.Length == 0) description = Str(e, "dynamicDescription");
         return new ClientAbility(key, Str(e, "name") is { Length: > 0 } n ? n : null, PathIfPresent(e, "abilityIconPath"),
-            StripMarkup(description));
+            StripMarkup(description), RawPath(e, "abilityVideoPath"), RawPath(e, "abilityVideoImagePath"));
     }
+
+    private static string? RawPath(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() is { Length: > 0 } t ? t.Trim() : null;
 
     // ---- text --------------------------------------------------------------------------------------
 

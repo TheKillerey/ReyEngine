@@ -30,3 +30,4 @@ publish/
 # Python bytecode from the Blender add-on
 __pycache__/
 *.pyc
+/data/cache/
