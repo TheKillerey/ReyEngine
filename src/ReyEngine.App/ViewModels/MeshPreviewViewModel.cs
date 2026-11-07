@@ -167,12 +167,28 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         get => _playback;
         set
         {
-            if (value is not null && value.Items.Any(i => !i.EmitSingleOnce))
-                value = value with { Items = value.Items.Select(i => i.EmitSingleOnce ? i : i with { EmitSingleOnce = true }).ToList() };
+            if (value is not null && value.Items.Any(i => !i.EmitSingleOnce || !i.CharacterSemantics))
+                value = value with { Items = value.Items.Select(i => i.EmitSingleOnce && i.CharacterSemantics ? i : CharacterItem(i)).ToList() };
             SetProperty(ref _playback, value);
         }
     }
     [ObservableProperty] private bool _hasVfx;
+
+    /// <summary>M880/M881: a character playback item. LTK Manager flies a missile on a basis whose local +Y is the travel direction
+    /// (basis.ts flightInto, with pitch), where every other cast stands on the aim yaw; the item's rotation is kept through the
+    /// flight (VfxCastFrame.RotationOf), so it is set once here.</summary>
+    public static VfxPlaybackItem CharacterItem(VfxPlaybackItem i)
+    {
+        if (i.CharacterSemantics) return i with { EmitSingleOnce = true };
+        var item = i with { EmitSingleOnce = true, CharacterSemantics = true };
+        if (i.TravelTo is { } to && to - i.Transform.Translation is var d && d.LengthSquared() > 1e-4f)
+        {
+            var flight = ReyEngine.Rendering.Vfx.VfxOrientationMath.ToMatrix(ReyEngine.Rendering.Vfx.VfxOrientationMath.Flight(d));
+            flight.Translation = i.Transform.Translation;
+            item = item with { Transform = flight };
+        }
+        return item;
+    }
 
     private IReadOnlyDictionary<uint, VfxSystemDefinition> _vfxDefs =
         new Dictionary<uint, VfxSystemDefinition>();

@@ -8,7 +8,9 @@ namespace ReyEngine.Rendering.Vfx;
 /// <c>isLocalOrientation</c> (declared default true, written false on 162,164 emitters): false means the particle's
 /// orientation ignores the host's rotation while its position still follows the host.
 /// <c>rotationOverride</c>, the system <c>transform</c>, <c>hasPostRotateOrientation</c> and <c>directionVelocityScale</c>
-/// are NOT applied: their meaning could not be established from evidence.
+/// are NOT applied on this path: their meaning could not be established from evidence. M881: character playback does not come
+/// through here for its frame - see <see cref="VfxParticleSimulator.CharacterSemantics"/> (LTK Manager's rule: a non-local emitter
+/// removes only the host rotation, so its rotationOverride and translation survive).
 /// </summary>
 public static class VfxEmitterOrientation
 {

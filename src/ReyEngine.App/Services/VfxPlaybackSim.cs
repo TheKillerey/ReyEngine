@@ -53,6 +53,7 @@ public static class VfxPlaybackSim
             // the bone's rotation". The cast path already keeps yaw only and is left as it was.
             WorldOrientationForNonLocal = item.AttachBone is not null && !item.PreserveCastDirection,
             EmitSingleOnce = item.EmitSingleOnce,   // M880
+            CharacterSemantics = item.CharacterSemantics,   // M881
         };
         // The Matrix4x4 overload, not the Vector3 one: beyond position it establishes BasePos and the
         // PlacementRight/Up/Forward frame that every arbitraryQuad emitter is oriented in.
@@ -289,7 +290,7 @@ public static class VfxPlaybackSim
     /// the way the GL viewport always did, so two children of one system do not run in lockstep.</summary>
     public static VfxParticleSimulator CreateChildSim(VfxPlaybackItem child, Vector3 position, int liveChildren)
     {
-        var sim = new VfxParticleSimulator(HashCode.Combine(child.System.PathHash, liveChildren)) { EmitSingleOnce = child.EmitSingleOnce };
+        var sim = new VfxParticleSimulator(HashCode.Combine(child.System.PathHash, liveChildren)) { EmitSingleOnce = child.EmitSingleOnce, CharacterSemantics = child.CharacterSemantics };
         sim.SetSystem(child.System, Matrix4x4.CreateTranslation(position));
         ApplyEmissionSurfaces(sim, child);   // M754
         return sim;

@@ -60,7 +60,10 @@ public static class ParticleQuadBuilder
         bool Projected = false,
         /// <summary>M862: where a projected quad lands. NaN keeps the emitter's own height (a placed decal is authored on the ground);
         /// a number is the ground plane the host knows - the character window's floor at the character's feet.</summary>
-        float ProjectionGroundY = float.NaN)
+        float ProjectionGroundY = float.NaN,
+        /// <summary>M881: character semantics - an arbitrary quad or ray aims through its Euler rotation (the simulator folds the drift in),
+        /// so its in-plane spin is NOT overwritten with the screen-space velocity.</summary>
+        bool CharacterSemantics = false)
     {
         /// <summary>Plain camera billboard - what every emitter got before M238.</summary>
         public static QuadOrientation Billboard => default;
@@ -135,7 +138,7 @@ public static class ParticleQuadBuilder
             //                     rotation instead, exactly like arbitraryQuad
             //   otherwise         a plain camera billboard
             float rot = orientation.ArbitraryQuad || orientation.Ray ? 0f : instances[o + OffRot];
-            if (orientation.DirectionOriented)
+            if (orientation.DirectionOriented && !(orientation.CharacterSemantics && (orientation.ArbitraryQuad || orientation.Ray)))
             {
                 var vel = new Vector3(instances[o + OffVel], instances[o + OffVel + 1], instances[o + OffVel + 2]);
                 float vx = Vector3.Dot(vel, right);

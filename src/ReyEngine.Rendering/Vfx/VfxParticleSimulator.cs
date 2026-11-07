@@ -25,6 +25,8 @@ public sealed class VfxParticleSimulator
         /// <summary>M795: scaleOverride, multiplied into each particle's own size (the renderers size a
         /// particle from its instance slots, not from <see cref="World"/>).</summary>
         internal Vector3 SizeOverride = Vector3.One;
+        /// <summary>M881: mirrors <see cref="VfxParticleSimulator.CharacterSemantics"/> so the static instance builder and the quad builders can read it.</summary>
+        public bool CharacterSemantics;
         /// <summary>M183 (2.5): the beam's two world-space endpoints, recomputed whenever the target or
         /// the placement changes. HasBeamEndpoints is false when the beam would be degenerate, which the
         /// renderer treats as "draw nothing" rather than drawing a zero-length ribbon.</summary>
@@ -118,6 +120,10 @@ public sealed class VfxParticleSimulator
         /// <summary>M185 (2.15): the age at which this particle entered the linger phase, and how long
         /// that phase lasts. LingerWindow &lt;= 0 means the particle is not lingering.</summary>
         public float LingerStart, LingerWindow;
+
+        /// <summary>M881 (character semantics): euler degrees - birth velocity and acceleration lanes, the integrated rotation0 term, and the
+        /// drift (world velocity in the emitter's own space) a direction-oriented particle aims +Z along.</summary>
+        public Vector3 RotVelDeg, RotAccelDeg, Rot0Deg, Drift;
     }
 
     /// <summary>M180 (2.7): one request to instantiate a child system, at a world position, from entry
@@ -323,6 +329,7 @@ public sealed class VfxParticleSimulator
                     ? (float)_rng.NextDouble() * MathF.Max(0.1f, e.Period ?? 1f)
                     : 0f,
                 SizeOverride = VfxEmitterOverride.Scale(e),
+                CharacterSemantics = CharacterSemantics,
             };
             PlaceEmitter(state, worldTransform, inverse, WorldOrientationForNonLocal);
             _emitters.Add(state);
@@ -341,6 +348,7 @@ public sealed class VfxParticleSimulator
     /// and the placement basis. An emitter with no override takes the placement and its inverse as they are.</summary>
     private static void PlaceEmitter(EmitterState s, Matrix4x4 worldTransform, Matrix4x4 inverseWorld, bool worldOrientationForNonLocal)
     {
+        if (s.CharacterSemantics) { PlaceCharacterEmitter(s, worldTransform, inverseWorld); return; }
         if (VfxEmitterOverride.IsAuthored(s.Def))
         {
             s.World = VfxEmitterOverride.Frame(s.Def) * worldTransform;
@@ -355,6 +363,41 @@ public sealed class VfxParticleSimulator
         (s.PlacementRight, s.PlacementUp, s.PlacementForward) =
             VfxEmitterOrientation.Basis(worldTransform, s.Def.Extras?.IsLocalOrientationOrDefault ?? true, worldOrientationForNonLocal);
     }
+
+    /// <summary>M881: LTK Manager's frame. The birth frame is rotationOverride (columns scaled by scaleOverride), turned by the host
+    /// rotation ("yaw") only when isLocalOrientation - an emitter authored non-local removes the host rotation and nothing else.
+    /// translationOverride is turned by the same host rotation, never by the override. An emitter that authors none of this and is
+    /// local keeps the placement exactly.</summary>
+    private static void PlaceCharacterEmitter(EmitterState s, Matrix4x4 worldTransform, Matrix4x4 inverseWorld)
+    {
+        var d = s.Def;
+        bool local = d.Extras?.IsLocalOrientationOrDefault ?? true;
+        var rot = d.Extras?.RotationOverride;
+        bool hasRot = rot is { } r0 && float.IsFinite(r0.X) && float.IsFinite(r0.Y) && float.IsFinite(r0.Z) && r0 != Vector3.Zero;
+        if (local && !hasRot && !VfxEmitterOverride.IsAuthored(d))
+        {
+            s.World = worldTransform;
+            s.InverseWorld = inverseWorld;
+        }
+        else
+        {
+            var yaw = local ? VfxCastFrame.RotationOf(worldTransform) : Matrix4x4.Identity;
+            var turn = hasRot ? VfxOrientationMath.ToMatrix(VfxOrientationMath.Standing(rot!.Value.X, rot.Value.Y, rot.Value.Z)) : Matrix4x4.Identity;
+            var frame = Matrix4x4.CreateScale(VfxEmitterOverride.Scale(d)) * turn * yaw;
+            frame.Translation = Vector3.TransformNormal(VfxEmitterOverride.Translation(d), yaw) + worldTransform.Translation;
+            s.World = frame;
+            s.InverseWorld = InverseOf(frame);
+        }
+        s.BasePos = Vector3.Transform(d.EmitterPosition.Constant, s.World);
+        (s.PlacementRight, s.PlacementUp, s.PlacementForward) = VfxEmitterOrientation.Basis(s.World, true, false);
+    }
+
+    /// <summary>M881: character and simulation playback follow LTK Manager's VFX engine for orientation (see
+    /// <see cref="VfxOrientationMath"/>): rotationOverride and a non-local isLocalOrientation shape the birth frame, rotation0 /
+    /// birth rotation / spin act on all three euler axes (rotation0 is degrees per 1/60 s), direction-oriented arbitrary quads and
+    /// meshes aim +Z along their drift, and directionVelocityScale stretches camera and arbitrary quads. Off by default: maps,
+    /// arena props and the Particle Editor keep their behaviour. Set before SetSystem.</summary>
+    public bool CharacterSemantics { get; set; }
 
     /// <summary>M877: when set, an emitter authored <c>isLocalOrientation = false</c> keeps WORLD axes for its
     /// quads and meshes however the host (a bone) is rotated; its position and motion still follow the host.
@@ -628,7 +671,19 @@ public sealed class VfxParticleSimulator
             // Y 28,476, Z 11,886. 11,799 author X and no Z, so they start spinning; 7,000 author Z and no
             // X, so they stop. It is a real change in both directions and the smaller lane is the one
             // being given up. What settles it is that the seed and the rate now come from one place.
-            if (linger?.Rotation is { } lingerRot)
+            if (CharacterSemantics)
+            {
+                // M881: LTK integrate.ts turn(): the angle is the closed form in BuildInstances; here only the keyed rotation0
+                // integral (rate x 60 per 1/60 s) and the drift an aimed particle reads.
+                p.Drift = Vector3.TransformNormal(p.Vel, s.InverseWorld);
+                if (d.Extras?.IsRotationEnabled == true)
+                {
+                    if (linger?.Rotation is { } cl) p.Rot0Deg += cl.Sample(lingerT) * (VfxOrientationMath.RotationRate * dt);
+                    else if (d.RotationOverLife is { Times.Length: > 0 } keyed)
+                        p.Rot0Deg += keyed.Sample(particleT) * (VfxOrientationMath.RotationRate * dt);
+                }
+            }
+            else if (linger?.Rotation is { } lingerRot)
                 p.Rot += lingerRot.Sample(lingerT).X * (MathF.PI / 180f) * dt;
             else if (d.RotationOverLife is { } rotCurve)
                 p.Rot += rotCurve.Sample(particleT).X * (MathF.PI / 180f) * dt;
@@ -865,6 +920,11 @@ public sealed class VfxParticleSimulator
                 : 0f,
             FrameRate = d.BirthFrameRate?.SampleBirth(_rng) ?? d.FrameRate ?? 0f,
             ColorRandom = (float)_rng.NextDouble(),
+            RotVelDeg = CharacterSemantics ? rotVel : Vector3.Zero,
+            RotAccelDeg = CharacterSemantics ? d.Extras?.BirthRotationalAcceleration ?? Vector3.Zero : Vector3.Zero,
+            // LTK: rotation0 with no keys is a fixed angle of constant * 60 * lifetime, from birth (sampleCurve.ts integratedInto).
+            Rot0Deg = CharacterSemantics && d.Extras?.IsRotationEnabled == true && d.RotationOverLife is { Times: null } fixedRot && float.IsFinite(life)
+                ? fixedRot.Constant * VfxOrientationMath.RotationRate * life : Vector3.Zero,
         });
 
         // M180 (2.7): children spawn at particle BIRTH unless childEmitOnDeath says otherwise. That
@@ -955,13 +1015,41 @@ public sealed class VfxParticleSimulator
             // picks. The M595 rule above survives inside it: no rate, no run.
             float frame = VfxFlipbook.Frame(d.StartFrame, p.FramePhase, p.Age, p.FrameRate, d.NumFrames);
 
+            // M881: LTK orientation. Euler lanes in degrees: birth + age * (rate + age/2 * acceleration) + the rotation0 term.
+            float spinSlot = p.Rot, eulerX = p.Rot, eulerY = p.BirthRotation.Y, eulerZ = p.BirthRotation.Z;
+            float stretchX = 1f, stretchY = 1f;
+            if (s.CharacterSemantics)
+            {
+                const float ToDeg = 180f / MathF.PI;
+                var deg = p.BirthRotation * ToDeg + p.Age * (p.RotVelDeg + 0.5f * p.Age * p.RotAccelDeg) + p.Rot0Deg;
+                bool placed = d.IsMeshPrimitive || d.IsArbitraryQuad || d.IsRay;
+                if (placed)
+                {
+                    var basis = VfxOrientationMath.Standing(deg.X, deg.Y, deg.Z);
+                    if (d.IsDirectionOriented && (d.IsMeshPrimitive || d.IsArbitraryQuad) && p.Drift != Vector3.Zero)
+                        basis = VfxOrientationMath.Multiply(VfxOrientationMath.Along(p.Drift), basis);
+                    var e = VfxOrientationMath.EulerOf(basis);
+                    spinSlot = 0f; eulerX = e.X; eulerY = e.Y; eulerZ = e.Z;
+                }
+                else
+                {
+                    spinSlot = eulerX = deg.X * (MathF.PI / 180f);   // a camera quad rolls by the first lane
+                    eulerY = deg.Y * (MathF.PI / 180f); eulerZ = deg.Z * (MathF.PI / 180f);
+                }
+                if (d.Extras?.DirectionVelocityScale is { } dvs && dvs != 0f && !d.IsMeshPrimitive && !d.IsRay && !d.IsPlanarProjection)
+                {
+                    float stretch = MathF.Max(d.Extras.DirectionVelocityMinScale ?? 1f, p.Vel.Length() * dvs);
+                    if (d.IsArbitraryQuad) stretchX = stretch; else stretchY = stretch;
+                }
+            }
+
             buf[k++] = p.Pos.X; buf[k++] = p.Pos.Y; buf[k++] = p.Pos.Z;
-            float sizeX = p.BirthSize.X * scaleMul.X;
+            float sizeX = p.BirthSize.X * scaleMul.X * stretchX;
             if (d.UseTextureAspect) sizeX *= s.SpriteAspect;
             buf[k++] = sizeX;
-            buf[k++] = p.BirthSize.Y * scaleMul.Y;
+            buf[k++] = p.BirthSize.Y * scaleMul.Y * stretchY;
             buf[k++] = col.X; buf[k++] = col.Y; buf[k++] = col.Z; buf[k++] = col.W;
-            buf[k++] = p.Rot;
+            buf[k++] = spinSlot;
             // M640: a mesh has no flipbook (its texDiv TILES - M117c), so slot 10 carries its Z scale.
             // Aatrox's W cone is authored <2, 1, 1.5> and its black hole <0.35, 0.1, 0.35>; a uniform X
             // scale made the first twice too tall and the second a sphere instead of a disc.
@@ -972,8 +1060,8 @@ public sealed class VfxParticleSimulator
             // birthRotation.X); a mesh keeps its authored orientation and its spin starts at 0 (slot 9),
             // so the birth X used to be dropped for every mesh - 513 of 684 mesh emitters on 10 champions
             // author a non-zero birth rotation that neither renderer applied.
-            buf[k++] = d.IsMeshPrimitive ? p.BirthRotation.X : p.Rot;
-            buf[k++] = p.BirthRotation.Y; buf[k++] = p.BirthRotation.Z;
+            buf[k++] = s.CharacterSemantics ? eulerX : d.IsMeshPrimitive ? p.BirthRotation.X : p.Rot;
+            buf[k++] = eulerY; buf[k++] = eulerZ;
             // M174 (2.1): the erosion drive is ONE scalar per particle - Riot's quad path feeds it
             // through a vertex attribute (quad_vs: mov o3.z, v2.w), which is why the curve is
             // evaluated here on the CPU rather than in the shader.

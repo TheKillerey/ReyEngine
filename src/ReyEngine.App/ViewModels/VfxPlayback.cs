@@ -65,6 +65,9 @@ public sealed record VfxPlaybackItem(
     /// <summary>M880: character and simulation playback - an isSingleParticle emitter bursts once instead of re-arming
     /// when its particles die. Map placements keep the old re-arm until the game shows otherwise.</summary>
     public bool EmitSingleOnce { get; init; }
+    /// <summary>M881: character and simulation playback orients particles as LTK Manager's VFX engine does (see
+    /// VfxParticleSimulator.CharacterSemantics). Maps, arena props and the Particle Editor leave it false.</summary>
+    public bool CharacterSemantics { get; init; }
 
     /// <summary>M712: the random stream this playing of the system runs on, or null for the one derived
     /// from where it stands.
