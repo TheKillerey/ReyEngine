@@ -428,6 +428,24 @@ public sealed class ViewportControl : OpenGlControlBase
     private ViewportMeshRenderer? _meshRenderer;
     private ViewportMeshRenderer? _bgRenderer;      // M88: NVR map backdrop
     public ReyEngine.App.ViewModels.MainWindowViewModel? ArenaMapViewport { get; set; }
+
+    private bool _pauseSceneUploads;
+
+    /// <summary>M872: the Character window hides this control while Direct3D 11 draws the preview, but the control still gets render
+    /// callbacks, and each one uploaded the stage map's backdrop (2 million vertices, 168 textures: about 3 GB of video memory and
+    /// the commit behind it) and every cast's particle textures to a renderer nobody sees. While true the backdrop, particle and prop
+    /// uploads wait - their dirty flags stay set - and the cheap per-frame work (camera framing, pick matrices) goes on. Turning it
+    /// off asks for a frame, which makes the deferred uploads.</summary>
+    public bool PauseSceneUploads
+    {
+        get => _pauseSceneUploads;
+        set
+        {
+            if (_pauseSceneUploads == value) return;
+            _pauseSceneUploads = value;
+            if (!value) RequestNextFrameRendering();
+        }
+    }
     private TextureImage? _arenaGrassTint, _arenaGrassTintAlt;
     private IReadOnlyList<PointLight>? _arenaPointLights;
     private bool _bgMeshDirty, _bgTexDirty;
@@ -1001,7 +1019,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 _meshRenderer.SetSubmeshVisible(i, vis is null || i >= vis.Count || vis[i]);
             _visibilityDirty = false;
         }
-        if (_bgMeshDirty && _bgRenderer is not null)   // M88: (re)build the NVR backdrop geometry
+        if (!_pauseSceneUploads && _bgMeshDirty && _bgRenderer is not null)   // M88: (re)build the NVR backdrop geometry
         {
             if (BackgroundMesh is { } bgm)
             {
@@ -1020,7 +1038,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _bgTexDirty = true;
             Log?.Invoke("Viewport", "backdrop geometry uploaded");
         }
-        if (_bgTexDirty && _bgRenderer is { HasMesh: true })   // M88/M89: upload backdrop textures (5 layers)
+        if (!_pauseSceneUploads && _bgTexDirty && _bgRenderer is { HasMesh: true })   // M88/M89: upload backdrop textures (5 layers)
         {
             var uploaded = new Dictionary<TextureImage, uint>(ReferenceEqualityComparer.Instance);
             UploadBgLayer(BackgroundTextures, 0, uploaded);        // COLOR_MAP_0 (base diffuse)
@@ -1148,8 +1166,8 @@ public sealed class ViewportControl : OpenGlControlBase
             }
             _lightMarkersDirty = false;
         }
-        if (_particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
-        if (_propMeshesDirty) { RebuildPropMeshes(); _propMeshesDirty = false; }
+        if (!_pauseSceneUploads && _particlePlaybackDirty) { RebuildParticleSim(); _particlePlaybackDirty = false; }
+        if (!_pauseSceneUploads && _propMeshesDirty) { RebuildPropMeshes(); _propMeshesDirty = false; }
         if (_needFrame) { FrameCamera(); _needFrame = false; }
         if (_pendingFocus is { } fp) { FocusOnPoint(fp); _pendingFocus = null; }
 

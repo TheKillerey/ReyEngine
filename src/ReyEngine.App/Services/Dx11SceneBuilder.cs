@@ -530,7 +530,8 @@ public static class Dx11SceneBuilder
             if (bytes.Length == 0) return;
             // A texture that will not decode is left out and reported by the commit pass, exactly as when
             // this ran serially - a throw here would abort the whole scene over one bad file.
-            try { decoded[keys[i]] = TextureDecoder.Decode(bytes); }
+            // M872: the top mip on its own where the container allows - bit-identical to Decode, without decompressing the chain
+            try { decoded[keys[i]] = TextureDecoder.TryDecodeTopMip(bytes) ?? TextureDecoder.Decode(bytes); }
             catch { }
             finally { raw[i] = Array.Empty<byte>(); }   // release the compressed copy as we go
         });

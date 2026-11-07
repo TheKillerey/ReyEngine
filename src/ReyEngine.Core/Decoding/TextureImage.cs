@@ -101,11 +101,18 @@ public static class TextureDecoder
         return TextureReduce.ToMaxSize(Decode(data), maxSize);
     }
 
+    /// <summary>M872: the top mip of a mipped 2D .tex (BC1, BC3 or BGRA8), decoded on its own, or null when this cannot say.
+    /// <see cref="Decode"/> asks LeagueToolkit to decompress every mip and then copies the first, which for a 4096 square atlas is
+    /// 4.3 times the bytes it returns; Map11's 168 textures made 9 GB of short-lived allocation that way. A caller that gets null
+    /// takes <see cref="Decode"/>. Same pixels as <see cref="Decode"/> for the formats it accepts; callers decide whether to trust that.</summary>
+    public static TextureImage? TryDecodeTopMip(byte[] data) =>
+        IsEncryptedAsset(data) || TgaDecoder.LooksLikeTga(data) ? null : TryDecodeTexMip(data, int.MaxValue, topOnly: true);
+
     /// <summary>The largest stored mip of a mipped 2D .tex whose longer side is at most <paramref name="maxSize"/>, or null
     /// when this cannot say (see <see cref="DecodeToMaxSize"/>). The layout is the one <see cref="TryDecodeExtendedTex"/> and
     /// the reference reader read: a 12-byte header (magic, width, height, depth, format, resource type, flags), then the
     /// mips SMALLEST FIRST, each a whole number of blocks.</summary>
-    private static TextureImage? TryDecodeTexMip(byte[] data, int maxSize)
+    private static TextureImage? TryDecodeTexMip(byte[] data, int maxSize, bool topOnly = false)
     {
         const int HeaderSize = 12;
         if (data.Length < HeaderSize || data[0] != 'T' || data[1] != 'E' || data[2] != 'X' || data[3] != 0) return null;
@@ -115,7 +122,7 @@ public static class TextureDecoder
         int depth = data[8];
         byte format = data[9], resource = data[10], flags = data[11];
         if (resource != 0 || depth > 1 || (flags & 1) == 0) return null;   // a plain 2D texture with a mip chain
-        if (width <= 0 || height <= 0 || Math.Max(width, height) <= maxSize) return null;
+        if (width <= 0 || height <= 0 || (!topOnly && Math.Max(width, height) <= maxSize)) return null;
 
         // format: 10/11 BC1 (8 bytes a 4x4 block), 12 BC3 (16 bytes), 20 uncompressed BGRA8
         int block, bytesPerBlock;
@@ -136,7 +143,7 @@ public static class TextureDecoder
         }
 
         int pick = 0;
-        while (pick < mipCount - 1 && Math.Max(Math.Max(1, width >> pick), Math.Max(1, height >> pick)) > maxSize) pick++;
+        while (!topOnly && pick < mipCount - 1 && Math.Max(Math.Max(1, width >> pick), Math.Max(1, height >> pick)) > maxSize) pick++;
 
         long total = 0, before = 0;
         for (int level = 0; level < mipCount; level++)

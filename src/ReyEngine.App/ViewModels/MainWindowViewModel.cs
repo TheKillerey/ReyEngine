@@ -7534,7 +7534,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var bytes = ReadAssetByPath(path);
             if (bytes is null) return null;
-            return TextureDecoder.Decode(bytes);
+            // M872: the top mip on its own where the container allows (bit-identical to Decode; 16,837 Map11/Common textures checked)
+            return TextureDecoder.TryDecodeTopMip(bytes) ?? TextureDecoder.Decode(bytes);
         }
         catch { return null; }   // subchunked/corrupt chunks throw inside the mount read — never propagate
     }
@@ -12447,8 +12448,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 _faceGrows.Clear();
                 ClearFaceSelection();
                 InvalidateRayIndex();
-                PrebuildRayIndex(map, MeshVerticesRevision);   // M172a: warm it so the first click is instant
-                _currentMapBytes = rawMapBytes;
+                // M872: a stage map (the Character window's) is never clicked or edited: no warm ray index (GetRayIndex
+                // still builds one on demand) and no copy of the 87 MB mapgeo kept for a save that cannot happen.
+                if (!_leanArena)
+                {
+                    PrebuildRayIndex(map, MeshVerticesRevision);   // M172a: warm it so the first click is instant
+                    _currentMapBytes = rawMapBytes;
+                }
                 _currentMapEntry = entry;
                 HasMapGeo = true;   // M79
                 // M446 (D): show the map's OWN placed lights, not just the ones the editor happens to hold.
@@ -12585,7 +12591,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (levelProps.Count > 0)
                 _log.Info("MapGeo", $"{levelProps.Count} level prop(s) of {levelProps.Select(p => p.CharacterName).Distinct(StringComparer.OrdinalIgnoreCase).Count()} character(s), "
                     + "drawn with Props on (read-only).");
-            LoadMapAudioBanks(binEntry.Path, sounds);   // M56/M60: direct MapAudio + VFX-carried map ambience
+            if (!_leanArena) LoadMapAudioBanks(binEntry.Path, sounds);   // M56/M60: direct MapAudio + VFX-carried map ambience (M872: the stage plays none)
         }
         catch { CurrentModelParticles = null; _vfxSystems = EmptyVfx; CurrentModelProbes = null; CurrentModelProps = null; CurrentModelSounds = null; SetMapBanners(null); SetMapLevelProps(null); }
 
@@ -12598,6 +12604,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return (null, sunProperties, boardStages);
         }
         _currentMaterialToTexture = materialToTexture;   // M172c: the paint session needs per-submesh paths
+        if (_leanArena)
+        {
+            // M872: the GL decode (2.2 GB live, 8.5 GB allocated on Map11) feeds only the OpenGL viewport; Direct3D 11 reads
+            // and decodes its own. Everything else BuildMapTextures publishes (materials, profiles) is kept; the pictures
+            // are made when the preview falls back to OpenGL (LoadDeferredMapTexturesAsync).
+            _deferredMapTextures = () => BuildMapTextures(map, materialToTexture, profiles, names.Count, mapEntry.Path);
+            return (BuildMapTextures(map, materialToTexture, profiles, names.Count, mapEntry.Path, decodeTextures: false), sunProperties, boardStages);
+        }
         return (BuildMapTextures(map, materialToTexture, profiles, names.Count, mapEntry.Path), sunProperties, boardStages);
     }
 
@@ -13097,12 +13111,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// no state. What is left here is what was always view-model business: publishing the result into the
     /// main window's map fields, the grass tint, and the log line.</para></summary>
     private IReadOnlyList<TextureImage?> BuildMapTextures(MapGeoAsset map, Dictionary<string, string> materialToTexture,
-        Dictionary<string, MaterialProfile> profilesByName, int materialCount, string? mapGeoPath)
+        Dictionary<string, MaterialProfile> profilesByName, int materialCount, string? mapGeoPath, bool decodeTextures = true)
     {
         _currentMapProfiles = profilesByName; // M34: cache for the mesh inspector's render-state rows
 
         var res = Services.MapSubmeshResources.Build(map, materialToTexture, profilesByName, mapGeoPath,
-            LoadTextureByPath,
+            decodeTextures ? LoadTextureByPath : static _ => null,
             onFlowGroup: (matName, prof, flowMap, flowNormal) =>
             {
                 // M44 diagnostic: confirm detection + texture loads for the first few. Channel histogram of
@@ -13138,7 +13152,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (gtGroups > 0)
         {
             var gtPath = FindGrassTintTexturePath();
-            CurrentGrassTint = gtPath is not null ? LoadTextureByPath(gtPath) : null;
+            CurrentGrassTint = gtPath is not null && decodeTextures ? LoadTextureByPath(gtPath) : null;
             // M365b: the terrain-blend canvas, not a second one derived from the whole scene.
             //
             // This used to be (BoundsMin.X, BoundsMin.Z, 1/spanX, 1/spanZ), which was wrong three ways:

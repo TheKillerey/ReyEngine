@@ -44,9 +44,11 @@ public partial class MeshPreviewWindow
         // fault during a backdrop upload leaves its last step behind in session.log.
         PreviewViewport.Log ??= (cat, msg) => vm.LogDx11?.Invoke(cat, msg);
         PreviewViewport.ArenaMapViewport = vm.ArenaViewport;
+        PreviewViewport.PauseSceneUploads = vm.UseDx11Preview;   // M872: the hidden GL control makes no backdrop/particle uploads
         WireChromaRecolour(vm);   // M824
         vm.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName is nameof(MeshPreviewViewModel.UseDx11Preview)) PreviewViewport.PauseSceneUploads = vm.UseDx11Preview;
             if (e.PropertyName == nameof(MeshPreviewViewModel.ArenaViewport))
                 PreviewViewport.ArenaMapViewport = vm.ArenaViewport;
             if (e.PropertyName is nameof(MeshPreviewViewModel.UseDx11Preview) && vm.UseDx11Preview)

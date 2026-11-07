@@ -1123,6 +1123,17 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
 
     public void AddMaterial(PreviewMaterial m) => _materials.Add(m);
 
+    /// <summary>M872: move <paramref name="mats"/> (kept in their given order) so the first lands at <paramref name="index"/> of the draw
+    /// list, as if they had been added there. Submission order is part of the picture for materials that do not write depth.</summary>
+    public void MoveMaterialsTo(IReadOnlyList<PreviewMaterial> mats, int index)
+    {
+        var set = new HashSet<PreviewMaterial>(mats);
+        int before = 0;
+        for (int i = 0; i < Math.Min(index, _materials.Count); i++) if (set.Contains(_materials[i])) before++;
+        _materials.RemoveAll(set.Contains);
+        _materials.InsertRange(Math.Clamp(index - before, 0, _materials.Count), mats);
+    }
+
     /// <summary>M266: drop only the materials matching <paramref name="pred"/>, and return how many went.
     ///
     /// <para>Deliberately does NOT touch _texPool, _retired or _sharedCbs the way ClearMaterials does: the

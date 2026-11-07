@@ -16,6 +16,9 @@ public partial class MeshPreviewWindow
     private bool _buildingArena;
     private int _arenaCharacterGeometry = -1;
     private List<PreviewMaterial> _arenaCharacterMaterials = new();
+    private List<string> _arenaCharacterTextureKeys = new();
+    private int _arenaCharacterInsertIndex = -1;   // M872: where the character's materials sit in the draw list - after the map's, before particles and props
+    private bool _arenaMemoryHandedBack;
     private PropRenderSet? _arenaPropsSource, _arenaDummySource, _arenaCombinedProps;
     private VfxPlayback? _arenaVfxSource, _arenaSpellSource, _arenaCombinedVfx;
 
@@ -28,17 +31,59 @@ public partial class MeshPreviewWindow
                 _committedArena = null;
                 _dx11CommittedRevision = -1;
                 _arenaCharacterMaterials.Clear();
+                _arenaCharacterTextureKeys = new();
                 if (_arenaCharacterGeometry >= 0) _dx11?.Renderer.ReleaseRiotMeshGeometry(_arenaCharacterGeometry);
                 _arenaCharacterGeometry = -1;
             }
             return !_buildingArena;
         }
         if (_buildingArena) return false;
-        if (ReferenceEquals(map, _committedArena) && _arenaMaterialsRevision == map.MaterialsRevision
-            && _dx11CommittedRevision == vm.Dx11SceneRevision) return true;
+        if (ReferenceEquals(map, _committedArena) && _arenaMaterialsRevision == map.MaterialsRevision)
+        {
+            if (_dx11CommittedRevision == vm.Dx11SceneRevision) return true;
+            // M872: only the champion changed. The map's ~1,600 materials and 170 textures stay where they are; building
+            // them again per champion cost 9 GB of allocation and ~4 s. Swap the character's own materials, geometry and
+            // textures in place instead.
+            if (_dx11 is { } live) { SwapArenaCharacter(vm, live); return true; }
+        }
         _buildingArena = true;
         _ = BuildArenaDx11Scene(vm, map);
         return false;
+    }
+
+    /// <summary>M872: replace the previous character's materials, geometry and pooled textures with vm.Dx11Scene's, leaving
+    /// the map scene (and the particle/prop materials riding on it) untouched. Textures go through RemoveCachedTextures, which
+    /// keeps any view another material still binds (M781), so a texture the map or the new character shares is never freed.</summary>
+    private void SwapArenaCharacter(MeshPreviewViewModel vm, Dx11ViewportSurface surface)
+    {
+        var renderer = surface.Renderer;
+        var old = _arenaCharacterMaterials;
+        if (old.Count > 0) renderer.RemoveMaterials(m => old.Contains(m));
+        _arenaCharacterMaterials = new();
+        if (_arenaCharacterGeometry >= 0) renderer.ReleaseRiotMeshGeometry(_arenaCharacterGeometry);
+        _arenaCharacterGeometry = -1;
+        var oldKeys = _arenaCharacterTextureKeys;
+        _arenaCharacterTextureKeys = new();
+        if (oldKeys.Count > 0) renderer.RemoveCachedTextures(oldKeys);
+        _dx11CommittedRevision = vm.Dx11SceneRevision;
+        CommitArenaCharacter(vm, surface);
+        // a full build has the character right after the map's materials and the particle/prop materials after it; appended at the end
+        // instead, a non-depth-writing champion slice would blend after the effects and the M796 depth replay would start at another draw
+        if (_arenaCharacterInsertIndex >= 0 && _arenaCharacterMaterials.Count > 0)
+            renderer.MoveMaterialsTo(_arenaCharacterMaterials, _arenaCharacterInsertIndex);
+        surface.HasScene = renderer.MaterialCount > 0;
+        vm.ReapplyChromaPreview();
+    }
+
+    private void CommitArenaCharacter(MeshPreviewViewModel vm, Dx11ViewportSurface surface)
+    {
+        if (vm.Dx11Scene is not { } character) return;
+        _arenaCharacterGeometry = surface.Renderer.CreateRiotMeshGeometry(character.Mesh);
+        if (_arenaCharacterGeometry < 0) return;
+        _arenaCharacterMaterials = Dx11CharacterScene.CommitSlices(surface.Renderer, character,
+            m => m.RiotMeshGeometryId = _arenaCharacterGeometry);
+        // the keys the slices bound, as the renderer's ordinal pool holds them (the scene's own dictionary is case-insensitive)
+        _arenaCharacterTextureKeys = character.Slices.SelectMany(sl => sl.Textures).Select(t => t.Key).Distinct(StringComparer.Ordinal).ToList();
     }
 
     private async Task BuildArenaDx11Scene(MeshPreviewViewModel vm, MainWindowViewModel map)
@@ -49,17 +94,21 @@ public partial class MeshPreviewWindow
             if (_arenaCharacterGeometry >= 0) surface.Renderer.ReleaseRiotMeshGeometry(_arenaCharacterGeometry);
             _arenaCharacterGeometry = -1;
             _arenaCharacterMaterials.Clear();
+            _arenaCharacterTextureKeys = new();
             var report = await map.BuildDx11SceneAsync(surface.Renderer);
             if (_dx11Closed || !ReferenceEquals(vm.ArenaViewport, map)) return;
-            _arenaMaterialsRevision = map.MaterialsRevision;
-            _dx11CommittedRevision = vm.Dx11SceneRevision;
-            if (vm.Dx11Scene is { } character)
+            // M872: the build decodes every texture of the map into the large object heap and drops them once they are on the GPU. The
+            // runtime keeps that address space committed (8 GB of working set for 1.5 GB of live data), so hand it back - once per window
+            // session (a later rebuild is a map edit), and not for a window that has closed.
+            if (!_arenaMemoryHandedBack)
             {
-                _arenaCharacterGeometry = surface.Renderer.CreateRiotMeshGeometry(character.Mesh);
-                if (_arenaCharacterGeometry >= 0)
-                    _arenaCharacterMaterials = Dx11CharacterScene.CommitSlices(surface.Renderer, character,
-                        m => m.RiotMeshGeometryId = _arenaCharacterGeometry);
+                _arenaMemoryHandedBack = true;
+                MainWindowViewModel.HandBackLargeObjectMemory();
             }
+            _arenaMaterialsRevision = map.MaterialsRevision;
+            _arenaCharacterInsertIndex = surface.Renderer.MaterialCount;
+            _dx11CommittedRevision = vm.Dx11SceneRevision;
+            CommitArenaCharacter(vm, surface);
             surface.HasScene = surface.Renderer.MaterialCount > 0;
             surface.SceneReport = report;
             surface.NotifySceneRebuilt();

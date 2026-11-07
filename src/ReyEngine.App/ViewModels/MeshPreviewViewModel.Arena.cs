@@ -159,6 +159,30 @@ public sealed partial class MeshPreviewViewModel
         SceneProps = list.Count > 0 ? new PropRenderSet(list) : null;
     }
 
+    /// <summary>M872: a stage viewport opened under Direct3D 11 skipped the OpenGL texture decode. When OpenGL is the preview, make
+    /// those textures and hand the backdrop its pictures. A no-op for a viewport that already has them, or while D3D11 is on.</summary>
+    private void EnsureArenaGlTextures()
+    {
+        if (UseDx11Preview || ArenaViewport is not { IsLeanStage: true } viewport) return;
+        // textures still to make, or made (while D3D11 was ticked again) but the backdrop was built before them
+        if (viewport.NeedsDeferredMapTextures || !ReferenceEquals(_glBackdropViewport, viewport))
+            _ = RestoreArenaGlTexturesAsync(viewport);
+    }
+
+    private MainWindowViewModel? _glBackdropViewport;
+
+    private async Task RestoreArenaGlTexturesAsync(MainWindowViewModel viewport)
+    {
+        try
+        {
+            await viewport.LoadDeferredMapTexturesAsync();
+            if (UseDx11Preview || !ReferenceEquals(ArenaViewport, viewport) || !_arenaOwnsBackdrop) return;
+            SetArenaBackdrop(viewport.ArenaBackground(EnvironmentMapKey));
+            _glBackdropViewport = viewport;
+        }
+        catch (Exception ex) { LogDx11?.Invoke("Arena", "OpenGL textures for the stage could not be made: " + ex.Message); }
+    }
+
     /// <summary>M725: the backdrop's placement, composed EXACTLY as the GL viewport composes it
     /// (<c>ViewportControl.BackgroundWorld</c>: translate, then rotate about world Y). A different order
     /// here would put the same map in a different place under the two renderers, which is the one thing
@@ -317,6 +341,7 @@ public sealed partial class MeshPreviewViewModel
             ArenaViewport = _parkedViewport;
             _parkedScene = null; _parkedViewport = null;
             ApplyEnvironment(parked);
+            EnsureArenaGlTextures();
             return Task.CompletedTask;
         }
         return LoadEnvironmentAsync();
@@ -382,6 +407,7 @@ public sealed partial class MeshPreviewViewModel
             if (!ReferenceEquals(previous, viewport)) previous?.ReleaseArenaViewport();
             applied = true;
             ApplyEnvironment(scene);
+            EnsureArenaGlTextures();
         }
         catch (Exception ex)
         {

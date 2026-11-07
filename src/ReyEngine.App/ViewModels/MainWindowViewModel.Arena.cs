@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using ReyEngine.App.Services;
@@ -24,6 +25,9 @@ public sealed partial class MainWindowViewModel
             // fog. These are the viewport's defaults for a freshly constructed MainWindowViewModel except
             // fog, which defaults on, so it is turned off here. Nothing in the Character window turns them back on.
             arena.ShowFog = false;
+            // M872: while Direct3D 11 is the preview, the stage map skips what only the editor's map view and the GL viewport use
+            // (GL texture decode, map audio banks, ray index, a copy of the mapgeo bytes). See LoadDeferredMapTexturesAsync.
+            arena._leanArena = MeshPreview.UseDx11Preview;
             if (ProjectMode)
             {
                 arena.ProjectMode = true;
@@ -44,6 +48,44 @@ public sealed partial class MainWindowViewModel
     }
 
     public Formats.MapGeo.NavGrid? ArenaNavGrid => _navGrid;
+
+    // M872: set on a stage viewport opened under Direct3D 11; see CreateArenaViewport.
+    private bool _leanArena;
+    private Func<IReadOnlyList<Core.Decoding.TextureImage?>>? _deferredMapTextures;
+
+    private Task? _deferredLoad;
+
+    /// <summary>M872: this viewport was opened lean (under Direct3D 11), so its backdrop must be built again once the OpenGL textures exist.</summary>
+    public bool IsLeanStage => _leanArena;
+
+    /// <summary>M872: this stage viewport skipped its OpenGL textures and has not made them yet (true while the decode runs, and again
+    /// after a failed one, so the next switch to OpenGL retries).</summary>
+    public bool NeedsDeferredMapTextures => _deferredMapTextures is not null;
+
+    /// <summary>M872: hand address space the runtime keeps committed back to the OS after a decode that filled the large object heap
+    /// with textures. Blocking and compacting; call it once per big build, never per frame.</summary>
+    internal static void HandBackLargeObjectMemory()
+    {
+        System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+    }
+
+    /// <summary>M872: make the OpenGL textures a lean stage viewport skipped (the user unticked Direct3D 11). Idempotent.</summary>
+    public Task LoadDeferredMapTexturesAsync() => _deferredLoad ??= LoadDeferredCoreAsync();
+
+    private async Task LoadDeferredCoreAsync()
+    {
+        try
+        {
+            if (_deferredMapTextures is not { } build) return;
+            var textures = await Task.Run(() => { var t = build(); HandBackLargeObjectMemory(); return t; });
+            CurrentModelTextures = textures;
+            ClearSecondaryTextures();
+            PublishMapMaterialLayers();
+            _deferredMapTextures = null;   // only after it worked: a failure leaves it for the next switch to OpenGL
+        }
+        finally { _deferredLoad = null; }
+    }
 
     public MapPreviewBackground ArenaBackground(string mapName)
     {

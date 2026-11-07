@@ -132,7 +132,7 @@ public sealed partial class MeshPreviewViewModel
         ReapplyChromaPreview();   // M824: the other renderer shows the project's files; a recolour not yet saved is drawn on it
         RebuildSceneProps();   // M665: the arena floor is a prop under D3D11 and the backdrop under GL
         OnPropertyChanged(nameof(BackdropIsDiffuseOnly));   // M725: the card says which of the two it is
-        if (!value) { Dx11Status = ""; return; }
+        if (!value) { Dx11Status = ""; EnsureArenaGlTextures(); return; }
 
         // M620: only when nothing more specific has been said. This used to overwrite unconditionally,
         // so the real reason - which the host had already put here - was replaced by a guess at it, and
