@@ -638,7 +638,7 @@ public sealed class D3D11MapParticles
             // whole of "the cast points at the dummy" for a character.
             // M726: the same precedence GL uses - an explicit world target, then the event's own target
             // BONE, then the dummy. Written as one expression in both renderers so the order cannot drift.
-            sim.SetBeamTarget(item.BeamTarget ?? BoneWorldPosition(item.TargetBone) ?? _beamTarget);
+            sim.SetBeamTarget(item.BeamTarget ?? BoneWorldPosition(item.TargetBone) ?? (item.AimAtDummy ? _beamTarget : null));   // M882
             VfxPlaybackSim.AttachHost(sim, item.HostIsCaster ? _emissionHost : null);   // M755; M874: not for a system that is not on the caster
             sim.Update(dt);
         }
@@ -1084,7 +1084,7 @@ public sealed class D3D11MapParticles
             c.Age += dt;
             if (c.Age > VfxPlaybackSim.ChildSimMaxAge) { RetireChild(c); _children.RemoveAt(i); continue; }
             if (Stopped) c.Sim.Stop();
-            c.Sim.SetBeamTarget(_beamTarget);
+            c.Sim.SetBeamTarget(c.Item.BeamTarget ?? BoneWorldPosition(c.Item.TargetBone) ?? (c.Item.AimAtDummy ? _beamTarget : null));   // M882: the same precedence as a root
             VfxPlaybackSim.AttachHost(c.Sim, _emissionHost);
             c.Sim.Update(dt);
             SpawnQueuedChildren(c.Item, c.Sim);

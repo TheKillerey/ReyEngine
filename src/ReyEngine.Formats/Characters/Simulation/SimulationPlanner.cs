@@ -179,6 +179,8 @@ public static class SimulationPlanner
     public const uint FriendlyBit = 0x1;
     /// <summary>Inferred: the enemy bit of <c>mAffectsTypeFlags</c>.</summary>
     public const uint EnemyBit = 0x2;
+    /// <summary>M882: seconds between a clip-less root spell's cast and the basic attack that plays its child's clip. A convention.</summary>
+    public const float FollowUpGap = 0.35f;
 
     private static bool IsUnitTargeted(string kind) => Normalise(kind) is "target" or "targetorlocation";
 
@@ -377,6 +379,18 @@ public static class SimulationPlanner
                 hitPlanned = true; lastHit = cast;
             }
             else notes.Add($"self area: the enemy is {hitDistance:0} away, radius {a.CastRadius:0}; no hit");
+        }
+
+        // ---- M882: the basic attack that plays the clip a clip-less root spell does not ----
+        if (!passive && a.FollowUpAttack is { Clip: not null } follow)
+        {
+            float startAt = MathF.Max(cast, lastDisplaceEnd) + FollowUpGap;
+            var (att, fhit, fhitAt, fclipEnd) = ReyEngine.Formats.Characters.Simulation.Adapters.SimAdapterKit.AttackOn(follow, startAt, "enemy", champion, hitUnit,
+                $"{a.Key} authors no clip; its child spell {follow.Name} does, and plays on the basic attack that follows the cast (a {FollowUpGap:0.##} s gap is a convention)");
+            steps.Add(att);
+            if (fhit is not null) steps.Add(fhit);
+            hitPlanned = true; lastHit = MathF.Max(lastHit, fhitAt);
+            clipSeconds = MathF.Max(clipSeconds ?? 0f, fclipEnd);
         }
 
         // ---- channel ----

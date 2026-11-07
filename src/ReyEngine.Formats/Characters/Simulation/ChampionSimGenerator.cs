@@ -149,6 +149,7 @@ public static class ChampionSimGenerator
             SimClip? clip = null;
             IReadOnlyList<SimClip>? clipChain = null;
             string? authored = slot.AnimationName;
+            AttackSim? followUpAttack = null;
             bool hasSubCasts = events.Any(e => SubCast.Match(e.Name) is { Success: true } m
                 && m.Groups[1].Value.Equals(rec.Key, OIC) && (m.Groups[2].Length > 0 || m.Groups[3].Length > 0));
             if (authored is not null)
@@ -161,11 +162,31 @@ public static class ChampionSimGenerator
                 }
                 else issues.Add($"clip '{authored}' is not in the base animation graph");
             }
-            else if (rec.Key.Length == 1 && "QWER".Contains(rec.Key[0]) && !hasSubCasts
-                     && actions[slot.Index].Clip is { } conventional)
+            else if (rec.Key.Length == 1 && "QWER".Contains(rec.Key[0]) && !hasSubCasts)
             {
-                clip = MakeClip(conventional, "convention");
-                sources.Add(new FieldSource("clip", "convention"));
+                // M882: the convention clip (SpellN by slot) is only a guess, and a wrong one when the cast belongs to something else. Riot authors no clip for these roots:
+                //  - a child *Attack spell with a clip (Blitzcrank E, Nasus Q): the root plays no cast clip; the clip is the following basic attack's (FollowUpAttack)
+                //  - no child clip at all: no cast clip, the champion stays on idle / run
+                //  - children with clips that are not attacks: the convention clip is kept and flagged
+                var conventional = actions[slot.Index].Clip;
+                if (rec.FollowUpChild is { } followUp)
+                {
+                    followUpAttack = BuildAttack(followUp.AsAttack());
+                    sources.Add(new FieldSource("clip", "none"));
+                    issues.Add($"authors no clip: no cast clip; the child attack {followUp.Name} plays clip '{followUp.AnimationName}' on a following basic attack");
+                }
+                else if (conventional is not null && rec.Children.Any(c => c.AnimationName is { Length: > 0 }))
+                {
+                    clip = MakeClip(conventional, "convention");
+                    sources.Add(new FieldSource("clip", "convention"));
+                    issues.Add("convention clip kept; review (the spell authors no clip, its child spells author "
+                        + string.Join(", ", rec.Children.Where(c => c.AnimationName is { Length: > 0 }).Select(c => $"{c.Name}='{c.AnimationName}'")) + ")");
+                }
+                else
+                {
+                    sources.Add(new FieldSource("clip", "none"));
+                    if (conventional is not null) issues.Add("authors no clip and no child spell does: no cast clip (the champion stays on idle / run)");
+                }
             }
             else sources.Add(new FieldSource("clip", "none"));
 
@@ -235,7 +256,7 @@ public static class ChampionSimGenerator
                 slot.Tags, slot.AffectsTypeFlags,
                 authored, clip, castSeconds, slot.SpellTotalTime, slot.SpellCastTime,
                 missiles, SortRefs(casters), SortRefs(targets), SortRefs(returns),
-                particles, sounds, scenario, sources, issues, clipChain, SortRefs(aims));
+                particles, sounds, scenario, sources, issues, clipChain, SortRefs(aims), followUpAttack);
         }
 
         private AbilitySim BuildSubCast(string name, ChampionEvent ev, AbilitySim owner, AbilityRecordData rec)

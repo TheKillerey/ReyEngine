@@ -230,13 +230,18 @@ public sealed class AuthoredClipTests(ITestOutputHelper output) : IDisposable
         var (_, kd) = Load("Kalista");
         Assert.Equal("authored-composite", Slot(kd, "Q").Clip!.Source);
         Assert.Equal("authored-composite", Slot(kd, "E").Clip!.Source);
-        // AurelionSol authors no clip name for Q: the clip is a naming convention, recorded as such, and the player keeps the definition's file
+        // AurelionSol authors no clip name for Q (M882): a root with no clip and no child clip plays no cast clip, instead of the SpellN convention guess; one whose
+        // children author non-attack clips keeps the convention clip and says so
         var (ai, ad) = Load("AurelionSol");
         var aq = Slot(ad, "Q");
         Assert.Null(aq.AuthoredClipName);
-        Assert.Equal("convention", aq.Clip!.Source);
-        var choice = SimClipChooser.Choose(aq, ai.Clips, ai.ClipNodes, _ => true, "aurelionsol_spell1_in.anm")!;
-        Assert.Equal(FileOf(aq), choice.File, ignoreCase: true);
+        if (aq.Clip is null) Assert.Contains(aq.Issues, i => i.StartsWith("authors no clip", StringComparison.Ordinal));
+        else
+        {
+            Assert.Equal("convention", aq.Clip.Source);
+            Assert.Contains(aq.Issues, i => i.StartsWith("convention clip kept", StringComparison.Ordinal));
+            Assert.Equal(FileOf(aq), SimClipChooser.Choose(aq, ai.Clips, ai.ClipNodes, _ => true, "aurelionsol_spell1_in.anm")!.File, ignoreCase: true);
+        }
         // Akshan E authors 'Spell2', which is no key of its graph: nothing authored resolves, the convention variant is labelled as one
         var (ki, kad) = Load("Akshan");
         var ae = Slot(kad, "E");
@@ -248,7 +253,7 @@ public sealed class AuthoredClipTests(ITestOutputHelper output) : IDisposable
     [Fact]
     public void The_generator_version_records_the_change_and_the_definition_round_trips()
     {
-        Assert.Equal("M875.1", ChampionSimDefinition.CurrentGeneratorVersion);
+        Assert.Equal("M882.1", ChampionSimDefinition.CurrentGeneratorVersion);
         if (Skip()) return;
         var (_, def) = Load("Ahri");
         var bytes = ChampionSimJson.Write(def);

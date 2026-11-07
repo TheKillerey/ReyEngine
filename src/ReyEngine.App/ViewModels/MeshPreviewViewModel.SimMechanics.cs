@@ -387,7 +387,14 @@ public sealed partial class MeshPreviewViewModel
         _simFx.RemoveAll(f => f.EndClock <= clock);
         var items = new List<VfxPlaybackItem>(_idleItems);
         if (Playback is { } current)
-            items.AddRange(current.Items.Where(i => !_idleItems.Contains(i) && !_simFxPublished.Contains(i) && !_simBundleOriginals.Contains(i) && !_simBundlePublished.Contains(i)));
+        {
+            // M882: the Playback setter rewrites every item to character semantics, so what we published earlier is no longer Equal to what we
+            // remember; compare against both forms or the idle effects and republished copies would double on every republish.
+            var known = new HashSet<VfxPlaybackItem>();
+            foreach (var set in new IEnumerable<VfxPlaybackItem>[] { _idleItems, _simFxPublished, _simBundleOriginals, _simBundlePublished })
+                foreach (var k in set) { known.Add(k); known.Add(CharacterItem(k)); }
+            items.AddRange(current.Items.Where(i => !known.Contains(i)));
+        }
         _simFxPublished.Clear();
         _simBundlePublished.Clear();
         foreach (var bundle in _simBundles)
@@ -418,7 +425,7 @@ public sealed partial class MeshPreviewViewModel
 
     private void PlayAttackStep(SimRun run, SimStep step)
     {
-        var attack = _attacks.FirstOrDefault(a => a.Name.Equals(step.Name, StringComparison.OrdinalIgnoreCase));
+        var attack = _attacks.Concat(_followUpAttacks).FirstOrDefault(a => a.Name.Equals(step.Name, StringComparison.OrdinalIgnoreCase));
         var target = (step.Unit is { } u ? SimUnitPosition(u) : null) ?? step.To ?? TargetDummyPosition ?? CharacterPosition;
         FaceToward(target);
         if (attack is null) { LogDx11?.Invoke("Simulation", $"attack '{step.Name}' is not in the champion's record; the clip alone plays"); PlayStepClip(step.Clip, null); }

@@ -170,6 +170,10 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
                 // M638: the basic attacks - clip, windup frame, hit, and the missile for a ranged champion.
                 var attacks = ChampionSpellData.ReadAttacks(recordBytes, character);
                 MeshPreview.SetAttacks(attacks);
+                // M882: a clip-less root ability's child *Attack spell plays on a following basic attack in the simulation
+                MeshPreview.SetFollowUpAttacks(ChampionSpellData.ReadAll(recordBytes, character)
+                    .Where(r => r.Slot.AnimationName is null && r.FollowUpChild is not null)
+                    .Select(r => r.FollowUpChild!.AsAttack()).ToList());
                 if (attacks.Count > 0)
                     _log.Info("Character", $"{character}: {attacks.Count(a => !a.IsCrit)} basic attack(s) in the cycle"
                                            + (attacks.Any(a => a.IsRanged) ? ", ranged" : ", melee")

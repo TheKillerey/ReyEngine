@@ -249,6 +249,9 @@ public sealed partial class MeshPreviewViewModel
     // ---- M638: the basic-attack composite ----
 
     private IReadOnlyList<AttackSpell> _attacks = Array.Empty<AttackSpell>();
+    /// <summary>M882: the child *Attack spells of clip-less root abilities (Blitzcrank E's PowerFistAttack). Never in the basic-attack cycle; only a simulation Attack step plays one.</summary>
+    private IReadOnlyList<AttackSpell> _followUpAttacks = Array.Empty<AttackSpell>();
+    public void SetFollowUpAttacks(IReadOnlyList<AttackSpell> attacks) => _followUpAttacks = attacks;
     private int _attackCycle;
     private readonly Random _attackRandom = new();
 
@@ -257,6 +260,7 @@ public sealed partial class MeshPreviewViewModel
     public void SetAttacks(IReadOnlyList<AttackSpell> attacks)
     {
         _attacks = attacks;
+        _followUpAttacks = Array.Empty<AttackSpell>();
         _attackCycle = 0;
     }
 

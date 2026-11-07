@@ -260,7 +260,18 @@ public sealed record AbilityChildSpell(
     float CastFrame,
     bool UseAnimatorFramerate,
     float CastTimeSeconds,
-    AbilityMissile? Missile);
+    AbilityMissile? Missile)
+{
+    /// <summary>M882: the child's own <c>mHitEffectKey</c> (a resource-map key; 0 when none).</summary>
+    public uint HitEffectKey { get; init; }
+
+    /// <summary>M882: a child spell that is a basic attack of its own (<c>PowerFistAttack</c>, <c>NasusQAttack</c>) and authors a clip.</summary>
+    public bool IsAttackWithClip => AnimationName is { Length: > 0 } && Name.EndsWith("Attack", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>M882: this child as the attack it plays.</summary>
+    public AttackSpell AsAttack() => new(Name, AnimationName, CastFrame, UseAnimatorFramerate, CastTimeSeconds, HitEffectKey,
+        Missile is null ? Array.Empty<AbilityMissile>() : new[] { Missile }, false);
+}
 
 /// <summary>M867: an ability of the champion record. <paramref name="Key"/> is "P", "Q", "W", "E", "R" or, for any
 /// further <c>mAbilities</c> entry, "X". <paramref name="Slot"/> carries the root spell's casting envelope.</summary>
@@ -269,7 +280,11 @@ public sealed record AbilityRecordData(
     string AbilityName,
     string SpellEntry,
     AbilitySlot Slot,
-    IReadOnlyList<AbilityChildSpell> Children);
+    IReadOnlyList<AbilityChildSpell> Children)
+{
+    /// <summary>M882: the first child <c>*Attack</c> spell with an authored clip, or null.</summary>
+    public AbilityChildSpell? FollowUpChild => Children.FirstOrDefault(c => c.IsAttackWithClip);
+}
 
 public static class ChampionSpellData
 {
@@ -451,7 +466,10 @@ public static class ChampionSpellData
                         spell is null ? 0f : F32(spell, FCastFrame),
                         spell is not null && Get(spell.Properties, FUseAnimatorFps) is BinTreeBool { Value: true },
                         spell is null ? 0f : F32(spell, FCastTime),
-                        spell is null ? null : ReadMissile(spellObject, spell)));
+                        spell is null ? null : ReadMissile(spellObject, spell))
+                    {
+                        HitEffectKey = spell is null ? 0u : Hash(spell, FHitEffectKey),
+                    });
                 }
             break;
         }

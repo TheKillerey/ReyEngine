@@ -181,6 +181,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     {
         if (i.CharacterSemantics) return i with { EmitSingleOnce = true };
         var item = i with { EmitSingleOnce = true, CharacterSemantics = true };
+        // M882: the children carry the character semantics too - VfxPlaybackSim.CreateChildSim reads them off the child item
+        if (i.EmitterChildren is { } kids)
+            item = item with { EmitterChildren = kids.Select(list => list is null ? null : (IReadOnlyList<VfxPlaybackItem>)list.Select(CharacterItem).ToList()).ToList() };
         if (i.TravelTo is { } to && to - i.Transform.Translation is var d && d.LengthSquared() > 1e-4f)
         {
             var flight = ReyEngine.Rendering.Vfx.VfxOrientationMath.ToMatrix(ReyEngine.Rendering.Vfx.VfxOrientationMath.Flight(d));
@@ -517,7 +520,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             if (def is null || !def.Emitters.Any(e => e.IsVisual)) continue;
             // M114: target-bound systems ("_tar") anchor at the dummy, not on the caster's bones.
             var anchor = AnchorFor(def);
-            bool atDummy = anchor != System.Numerics.Vector3.Zero;
+            // M882: the same test AnchorFor uses. 'anchor != Zero' was true for EVERY system on a stage where the character stands away from the origin, which stripped every clip event of its bone.
+            bool atDummy = ClipEventIsAtDummy(TargetDummyPosition, def.Name);
             // M634: every stage, through the one builder - this copy had no multiplier texture and no
             // child systems, so a clip event's mask was white and its children never spawned.
             // M635: a clip event at the dummy faces the caster; a bone-attached one takes its frame from
@@ -537,6 +541,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                     // M726: the far end of a beam, when the event names one of the character's own joints
                     TargetBone = atDummy ? null : ResolveBoneName(spawn.TargetBoneName, spawn.TargetBoneHash),
                     HostIsCaster = !atDummy,   // M874
+                    AimAtDummy = atDummy,      // M882
                     StartDelay = start,
                     // M726: mEndFrame - an effect with an authored end stops there instead of emitting
                     // until the clip wraps and the whole playback is torn down
@@ -677,6 +682,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         SelectedCasterBone = Formats.Characters.CasterBone.Choose(skel.Joints.Select(j => j.Name))
                              ?? NoCasterBone;
     }
+
+    /// <summary>M882: a clip event plays at the target dummy only for a target-bound ("_tar") system and only while a dummy exists. It is NOT 'the anchor is not the origin':
+    /// on the Map11 stage the character itself stands at (7374, 54, 7158), which made every event 'at the dummy' and stripped it of its bone.</summary>
+    public static bool ClipEventIsAtDummy(System.Numerics.Vector3? dummy, string systemName) => dummy is not null && IsTargetVfxName(systemName);
 
     private System.Numerics.Vector3 AnchorFor(VfxSystemDefinition def, bool forceDummy = false) =>
         TargetDummyPosition is { } dummy && (forceDummy || IsTargetVfxName(def.Name))
@@ -852,6 +861,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 AttachBone = bone,
                 PreserveCastDirection = bone is not null,
                 HostIsCaster = onCaster,
+                AimAtDummy = true,   // M882: a spell composite's beam may end on the target dummy
             };
         }
 
@@ -1361,6 +1371,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         }
 
         var item = BuildItem(def, placement);
+        item = item with { AimAtDummy = PlaySelectedAtDummy || IsTargetVfxName(def.Name) };   // M882
         Playback = new VfxPlayback(new[] { bone is null ? item : item with { AttachBone = bone } });
         OnPropertyChanged(nameof(Rig));
     }
@@ -1460,7 +1471,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         if (_idleItems.Count == 0) return;
         var current = Playback;
         var items = new List<VfxPlaybackItem>(_idleItems);
-        if (current is not null) items.AddRange(current.Items.Where(i => !_idleItems.Contains(i)));
+        // M882: the Playback setter rewrites items to character semantics, so the idle items in 'current' are no longer Equal to _idleItems
+        var idle = new HashSet<VfxPlaybackItem>(_idleItems);
+        foreach (var raw in _idleItems) idle.Add(CharacterItem(raw));
+        if (current is not null) items.AddRange(current.Items.Where(i => !idle.Contains(i)));
         Playback = new VfxPlayback(items);
     }
 

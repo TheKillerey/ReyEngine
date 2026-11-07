@@ -32,7 +32,7 @@ public sealed record ChampionSimDefinition(
 {
     public const int CurrentSchemaVersion = 1;
     /// <summary>Bumped whenever the generator's output for the same data would change.</summary>
-    public const string CurrentGeneratorVersion = "M875.1";
+    public const string CurrentGeneratorVersion = "M882.1";
 }
 
 /// <summary>A reference to a VFX system. <see cref="Name"/> is null when it did not resolve.</summary>
@@ -135,7 +135,10 @@ public sealed record AbilitySim(
     /// <summary>M873: when the authored clip is a sequencer, every clip it plays in order (the first is <see cref="Clip"/>); null for a single clip.</summary>
     IReadOnlyList<SimClip>? ClipChain = null,
     /// <summary>M875: location / terminal composite systems (end, explosion, trap, zone...), played at the aim or hit point rather than on the caster.</summary>
-    IReadOnlyList<SimSystemRef>? AimSystems = null);
+    IReadOnlyList<SimSystemRef>? AimSystems = null,
+    /// <summary>M882: a root spell that authors no clip of its own but has a child <c>*Attack</c> spell that does (Blitzcrank E PowerFistAttack, Nasus Q): the root plays no cast clip and the
+    /// simulation plays this attack - the child's clip, cast time and hit effect - on the basic attack that follows. Null otherwise.</summary>
+    AttackSim? FollowUpAttack = null);
 
 /// <summary>A basic attack (or crit) from the champion record.</summary>
 public sealed record AttackSim(

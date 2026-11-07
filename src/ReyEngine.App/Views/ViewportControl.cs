@@ -1597,7 +1597,7 @@ public sealed class ViewportControl : OpenGlControlBase
             foreach (var (beamItem, beamSim) in _particleSimCache)
                 beamSim.SetBeamTarget(beamItem.BeamTarget
                     ?? BoneWorldPosition(beamItem.TargetBone)
-                    ?? TargetDummyPosition);
+                    ?? (beamItem.AimAtDummy ? TargetDummyPosition : null));   // M882
             // M755: "born on the character" emitters sample the character this viewport is showing
             var emissionHost = PosedEmissionHost();
             foreach (var psim in _particleSims) Services.VfxPlaybackSim.AttachHost(psim, emissionHost);
@@ -1627,7 +1627,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 _childSims[i] = (csim, citem, age);
                 // Both loops, deliberately: M175 found erosion reaching one of seven playback paths, and
                 // a child system with a beam is exactly that shape of omission.
-                csim.SetBeamTarget(TargetDummyPosition);
+                csim.SetBeamTarget(citem.BeamTarget ?? BoneWorldPosition(citem.TargetBone) ?? (citem.AimAtDummy ? TargetDummyPosition : null));   // M882
                 csim.Update(dt);
                 // M854: a child's own children (chains run up to VfxChildResolver.MaxChildDepth deep). Appended at the end
                 // of the list, which this loop has already passed on its way down, so they start next frame.

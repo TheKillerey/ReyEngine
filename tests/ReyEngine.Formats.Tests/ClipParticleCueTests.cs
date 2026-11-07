@@ -39,9 +39,9 @@ public sealed class ClipParticleCueTests
         // the SAME precedence in both: explicit world target, then the event's target bone, then the dummy
         Assert.Contains("beamItem.BeamTarget", gl);
         Assert.Contains("BoneWorldPosition(beamItem.TargetBone)", gl);
-        Assert.Contains("?? TargetDummyPosition", gl);
+        Assert.Contains("?? (beamItem.AimAtDummy ? TargetDummyPosition : null)", gl);   // M882: the dummy only for an item that aims at it
 
-        Assert.Contains("item.BeamTarget ?? BoneWorldPosition(item.TargetBone) ?? _beamTarget", dx);
+        Assert.Contains("item.BeamTarget ?? BoneWorldPosition(item.TargetBone) ?? (item.AimAtDummy ? _beamTarget : null)", dx);   // M882
 
         // and both derive it from bone globals rather than from a second source of truth
         Assert.Contains("private Vector3? BoneWorldPosition(string? bone)", gl);

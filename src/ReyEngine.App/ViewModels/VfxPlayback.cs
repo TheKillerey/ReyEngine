@@ -121,6 +121,13 @@ public sealed record VfxPlaybackItem(
     /// dummy, a missile, an Effect step on a summoned unit - which would otherwise paint its shell over the champion, the only host there is.
     /// </summary>
     public bool HostIsCaster { get; init; } = true;
+
+    /// <summary>
+    /// M882: may this system's beam fall back to the target dummy when it has neither <see cref="BeamTarget"/> nor a <see cref="TargetBone"/>?
+    /// True only for spell composites, target-side (_tar) systems and a manual "play at dummy" pick. A caster clip event (Kai'Sa's recall beam)
+    /// leaves it false, and the simulator then uses the emitter's own authored target offset. Children inherit it from their parent.
+    /// </summary>
+    public bool AimAtDummy { get; init; }
 }
 
 /// <summary>

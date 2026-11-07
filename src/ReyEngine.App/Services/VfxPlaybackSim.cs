@@ -280,7 +280,8 @@ public static class VfxPlaybackSim
             foreach (var sp in spawns)
             {
                 if (sp.ChildIndex < 0 || sp.ChildIndex >= childItems.Count) continue;
-                result.Add((childItems[sp.ChildIndex], sp.Position));
+                var ci = childItems[sp.ChildIndex];
+                result.Add((item.AimAtDummy && !ci.AimAtDummy ? ci with { AimAtDummy = true } : ci, sp.Position));   // M882: a child aims where its parent aims
             }
         }
         return result;
