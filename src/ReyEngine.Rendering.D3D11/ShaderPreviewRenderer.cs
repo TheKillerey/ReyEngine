@@ -3601,6 +3601,8 @@ float4 psmain(VOut i) : SV_Target
     {
         public ComPtr<ID3D11Buffer> Vb, Ib;
         public int VertexCount, IndexCount;
+        /// <summary>Non-null for a DYNAMIC geometry (<see cref="CreateDynamicRiotMeshGeometry"/>): the CPU copy rewritten per frame.</summary>
+        public PreviewVertex[]? Dynamic;
     }
     private readonly List<RiotMeshGeom?> _riotMeshGeoms = new();
 
@@ -3663,13 +3665,50 @@ float4 psmain(VOut i) : SV_Target
         return RegisterRiotGeometry(mesh.Vertices, mesh.Indices);
     }
 
-    private int RegisterRiotGeometry(PreviewVertex[] verts, uint[] idx)
+    /// <summary>M876: a Riot-layout mesh primitive whose positions and normals are rewritten every frame
+    /// (<see cref="UpdateRiotMeshGeometry"/>) - a skinned body drawn through Riot's particle mesh shaders.
+    /// UVs and indices are fixed at creation. Additive: the immutable overloads are unchanged.</summary>
+    public int CreateDynamicRiotMeshGeometry(float[] uvs, uint[] indices, int vertexCount)
+    {
+        if (vertexCount <= 0 || indices.Length < 3) return -1;
+        var verts = new PreviewVertex[vertexCount];
+        for (int v = 0; v < vertexCount; v++)
+        {
+            float u = v * 2 + 1 < uvs.Length ? uvs[v * 2] : 0f;
+            float w = v * 2 + 1 < uvs.Length ? uvs[v * 2 + 1] : 0f;
+            verts[v] = new PreviewVertex { Normal = Vector3.UnitY, Uv0 = new Vector4(u, w, 0f, 0f), Uv1 = new Vector2(u, w), Color = Vector4.One };
+        }
+        int id = RegisterRiotGeometry(verts, indices, dynamic: true);
+        if (id >= 0) _riotMeshGeoms[id]!.Dynamic = verts;
+        return id;
+    }
+
+    /// <summary>M876: rewrite a dynamic Riot geometry's positions and normals (3 floats per vertex each).</summary>
+    public void UpdateRiotMeshGeometry(int id, float[] positions, float[] normals)
+    {
+        if (id < 0 || id >= _riotMeshGeoms.Count || _riotMeshGeoms[id] is not { Dynamic: { } verts } geom || geom.Vb.Handle is null) return;
+        int n = Math.Min(verts.Length, Math.Min(positions.Length, normals.Length) / 3);
+        for (int v = 0; v < n; v++)
+        {
+            verts[v].Position = new Vector3(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]);
+            var nv = new Vector3(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]);
+            verts[v].Normal = nv.LengthSquared() > 1e-12f ? Vector3.Normalize(nv) : Vector3.UnitY;   // never zero: see CreateRiotMeshGeometry
+        }
+        var map = new MappedSubresource();
+        if (_ctx.Map(geom.Vb, 0, Map.WriteDiscard, 0, ref map) < 0) return;
+        fixed (PreviewVertex* src = verts)
+            System.Buffer.MemoryCopy(src, map.PData, (long)verts.Length * PreviewVertex.SizeInBytes, (long)verts.Length * PreviewVertex.SizeInBytes);
+        _ctx.Unmap(geom.Vb, 0);
+    }
+
+    private int RegisterRiotGeometry(PreviewVertex[] verts, uint[] idx, bool dynamic = false)
     {
         var geom = new RiotMeshGeom { VertexCount = verts.Length, IndexCount = idx.Length };
         var vdesc = new BufferDesc
         {
             ByteWidth = (uint)(verts.Length * PreviewVertex.SizeInBytes),
-            Usage = Usage.Immutable, BindFlags = (uint)BindFlag.VertexBuffer,
+            Usage = dynamic ? Usage.Dynamic : Usage.Immutable, BindFlags = (uint)BindFlag.VertexBuffer,
+            CPUAccessFlags = dynamic ? (uint)CpuAccessFlag.Write : 0u,
         };
         fixed (PreviewVertex* p = verts)
         {

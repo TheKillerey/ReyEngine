@@ -1149,6 +1149,10 @@ public sealed class D3D11MapParticles
         public int GeometryId = -1;
         public ReyEngine.Formats.Meshes.MeshAsset? Mesh;
         public float[] Positions = Array.Empty<float>();
+        /// <summary>M876: the skinned normals, filled only on the Riot mesh shader path.</summary>
+        public float[] Normals = Array.Empty<float>();
+        /// <summary>M876: drawn through Riot's mesh_vs/mesh_ps (dynamic Riot geometry) rather than the minimal M283 shader.</summary>
+        public bool Riot;
         public float[] Instances = Array.Empty<float>();
         /// <summary>The visibility the geometry's index set was built for; a change rebuilds it.</summary>
         public string VisibilityKey = "";
@@ -1171,8 +1175,23 @@ public sealed class D3D11MapParticles
             sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: attached mesh with no texture - not drawn");
             return false;
         }
-        var mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
+        // M876: Riot's own particle mesh shaders first - erosion, fresnel, depthPushPull, palette and alpha test are
+        // what keep a shell a rim or a glow; the minimal shader (t * gColor) paints the whole body one colour.
+        PreviewMaterial? mat = null;
+        bool riot = false;
+        if (_meshTocs is { } meshTocs)
+        {
+            mat = VfxD3D11EmitterPipeline.Build(_renderer, _cache, meshTocs, def,
+                sampler => ResolveSprite(sampler, item, def), sb, meshHasVertexColors: false);
+            riot = mat is not null;
+        }
+        string why = _meshTocs is null ? "mesh tocs unavailable" : riot ? "" : "mesh_vs/mesh_ps did not resolve";
+        mat ??= VfxD3D11EmitterPipeline.Build(_renderer, _cache, tocs, def,
             sampler => ResolveSprite(sampler, item, def), sb);
+        string pathLine = $"   ^ {item.System.Name} / {def.Name}: host-mesh shell on {(riot ? "Riot mesh shaders" : "M283 fallback (" + why + ")")}";
+        sb.AppendLine(pathLine);
+        System.Diagnostics.Trace.WriteLine(pathLine);
+        if (Environment.GetEnvironmentVariable("REY_HOSTLOG") is { Length: > 0 } hostLog) File.AppendAllText(hostLog, pathLine + Environment.NewLine);
         if (mat is null)
         {
             sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: no pipeline (attached mesh)");
@@ -1182,7 +1201,7 @@ public sealed class D3D11MapParticles
         mat.CullBackFaces = !def.DisableBackfaceCull;
         mat.Visible = false;   // until a host exists
         Register(mat, def);
-        _hostSlices.Add(new HostSlice { Material = mat, Def = def, Owner = sim, State = es });
+        _hostSlices.Add(new HostSlice { Material = mat, Def = def, Owner = sim, State = es, Riot = riot });
         return true;
     }
 
@@ -1198,7 +1217,7 @@ public sealed class D3D11MapParticles
             string visKey = HostSubmeshVisible is { } vis ? string.Concat(vis.Select(v => v ? '1' : '0')) : "";
             if (hs.GeometryId < 0 || !ReferenceEquals(hs.Mesh, host.Mesh) || hs.VisibilityKey != visKey)
             {
-                if (hs.GeometryId >= 0) _renderer.ReleaseMeshGeometry(hs.GeometryId);
+                if (hs.GeometryId >= 0) { if (hs.Riot) _renderer.ReleaseRiotMeshGeometry(hs.GeometryId); else _renderer.ReleaseMeshGeometry(hs.GeometryId); }
                 hs.GeometryId = -1;
                 var mesh = host.Mesh;
                 var keepMask = VfxEmissionSurfaceLoader.SubmeshFilter(mesh, hs.Def.HostSubmeshes);
@@ -1220,17 +1239,25 @@ public sealed class D3D11MapParticles
                     indices = kept.ToArray();
                 }
                 if (indices.Length == 0) { mat.Visible = false; continue; }
-                hs.GeometryId = _renderer.CreateMeshGeometry(mesh.Positions, mesh.Uvs, indices);
+                hs.GeometryId = hs.Riot
+                    ? _renderer.CreateDynamicRiotMeshGeometry(mesh.Uvs, indices, mesh.VertexCount)
+                    : _renderer.CreateMeshGeometry(mesh.Positions, mesh.Uvs, indices);
                 if (hs.GeometryId < 0) { mat.Visible = false; continue; }
                 hs.Mesh = mesh;
                 hs.VisibilityKey = visKey;
                 hs.Positions = new float[mesh.VertexCount * 3];
-                mat.MeshGeometryId = hs.GeometryId;
+                hs.Normals = new float[mesh.VertexCount * 3];
+                if (hs.Riot) mat.RiotMeshGeometryId = hs.GeometryId; else mat.MeshGeometryId = hs.GeometryId;
             }
 
             // The body, skinned and placed by the character window (CPU skinning of the same pose the palette poses the drawn mesh with)
             host.CopyWorldPositions(hs.Positions);
-            _renderer.UpdateMeshGeometryPositions(hs.GeometryId, hs.Positions);
+            if (hs.Riot)
+            {
+                host.CopyWorldNormals(hs.Normals);
+                _renderer.UpdateRiotMeshGeometry(hs.GeometryId, hs.Positions, hs.Normals);
+            }
+            else _renderer.UpdateMeshGeometryPositions(hs.GeometryId, hs.Positions);
 
             // One draw per particle, the geometry already in world space: the transform is identity and the particle's size scales
             // the body about the character's origin (the emitter's authored scale is a slight inflation of the body, 1.01-1.1),
@@ -1244,6 +1271,12 @@ public sealed class D3D11MapParticles
                 float s = hs.Instances[o + ParticleQuadBuilder.OffSizeX];
                 if (MathF.Abs(s) < 0.01f) s = 1f;
                 hs.Instances[o + ParticleQuadBuilder.OffSizeX] = s;
+                if (hs.Riot)
+                {   // mesh_vs scales per axis (Y and Z from their own slots) and spins about Y (slot 9): uniform, unspun
+                    hs.Instances[o + ParticleQuadBuilder.OffSizeY] = s;
+                    hs.Instances[o + ParticleQuadBuilder.OffFrame] = s;
+                    hs.Instances[o + ParticleQuadBuilder.OffRot] = 0f;
+                }
                 var shift = host.Origin * (1f - s);
                 hs.Instances[o + ParticleQuadBuilder.OffPos] = shift.X;
                 hs.Instances[o + ParticleQuadBuilder.OffPos + 1] = shift.Y;
@@ -1262,6 +1295,17 @@ public sealed class D3D11MapParticles
             mat.MeshTexDiv = new Vector2(div.X > 0 ? div.X : 1f, div.Y > 0 ? div.Y : 1f);
             var divMult = hs.Def.TextureMultTexDiv;
             mat.MeshTexDivMult = new Vector2(divMult.X > 0 ? divMult.X : 1f, divMult.Y > 0 ? divMult.Y : 1f);
+            if (hs.Riot)
+            {   // as TickMeshSlices: the tiling/scroll affines and the rim light
+                var sc = mat.MeshUvOffset; var dv = mat.MeshTexDiv;
+                mat.Params["vParticleUVTransform"] = new[] { dv.X, 0f, sc.X, 0f, 0f, dv.Y, sc.Y, 0f, 0f, 0f, 1f, 0f };
+                var scm = mat.MeshUvOffsetMult; var dvm = mat.MeshTexDivMult;
+                mat.Params["vParticleUVTransformMult"] = new[] { dvm.X, 0f, scm.X, 0f, 0f, dvm.Y, scm.Y, 0f, 0f, 0f, 1f, 0f };
+                var refl = hs.Def.Reflection;
+                mat.Params["vFresnel"] = refl is { HasFresnel: true }
+                    ? new[] { refl.FresnelColor.X, refl.FresnelColor.Y, refl.FresnelColor.Z, refl.Fresnel }
+                    : new[] { 0f, 0f, 0f, 1f };
+            }
             mat.Visible = true;
             HostMeshEmittersDrawn++;
         }
