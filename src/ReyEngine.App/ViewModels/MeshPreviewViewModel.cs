@@ -160,7 +160,18 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     // ---- M55 champion VFX: the skin's effect library, played at the model origin ----
     public ObservableCollection<VfxSystemItemViewModel> VfxSystems { get; } = new();
     [ObservableProperty] private VfxSystemItemViewModel? _selectedVfx;
-    [ObservableProperty] private VfxPlayback? _playback;
+    private VfxPlayback? _playback;
+    /// <summary>M880: every character/simulation playback emits isSingleParticle bursts once (see VfxPlaybackItem.EmitSingleOnce).</summary>
+    public VfxPlayback? Playback
+    {
+        get => _playback;
+        set
+        {
+            if (value is not null && value.Items.Any(i => !i.EmitSingleOnce))
+                value = value with { Items = value.Items.Select(i => i.EmitSingleOnce ? i : i with { EmitSingleOnce = true }).ToList() };
+            SetProperty(ref _playback, value);
+        }
+    }
     [ObservableProperty] private bool _hasVfx;
 
     private IReadOnlyDictionary<uint, VfxSystemDefinition> _vfxDefs =

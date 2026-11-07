@@ -62,6 +62,9 @@ public sealed record VfxPlaybackItem(
     public bool PreserveCastDirection { get; init; }
     /// <summary>Retain a character preview's playback without culling when combined with a culled map.</summary>
     public bool SkipCameraCulling { get; init; }
+    /// <summary>M880: character and simulation playback - an isSingleParticle emitter bursts once instead of re-arming
+    /// when its particles die. Map placements keep the old re-arm until the game shows otherwise.</summary>
+    public bool EmitSingleOnce { get; init; }
 
     /// <summary>M712: the random stream this playing of the system runs on, or null for the one derived
     /// from where it stands.

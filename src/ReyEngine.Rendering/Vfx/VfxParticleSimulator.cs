@@ -361,6 +361,9 @@ public sealed class VfxParticleSimulator
     /// Off by default: map placements and the Particle Editor keep their placement basis.</summary>
     public bool WorldOrientationForNonLocal { get; set; }
 
+    /// <summary>M880: emit an isSingleParticle burst once per run instead of re-arming it. Default false (map behaviour).</summary>
+    public bool EmitSingleOnce { get; set; }
+
     /// <summary>M86: move the whole system WITHOUT resetting live particles — used to follow an animated
     /// bone per frame (spawn origins and placement axes update; existing particles keep flying).</summary>
     public void SetWorldTransform(Matrix4x4 worldTransform)
@@ -632,8 +635,11 @@ public sealed class VfxParticleSimulator
             s.Particles[i] = p;
         }
 
-        // Infinite emitter with no live particles and a finished burst -> allow looping single particles.
-        if (d.IsSingleParticle && s.BurstDone && s.Particles.Count == 0 && d.EmitterLifetime is null)
+        // M880: an isSingleParticle emitter bursts ONCE per run, with or without an emitterLifetime (LTK Manager's engine
+        // reading: emit.ts singleParticle && state.emitted returns; not verified in game). Opt-in via EmitSingleOnce for
+        // character and simulation playback. Map placements keep the older re-arm of a lifetime-less burst, because the
+        // game's map behaviour is unproven. Reset() always re-arms.
+        if (!EmitSingleOnce && d.IsSingleParticle && s.BurstDone && s.Particles.Count == 0 && d.EmitterLifetime is null)
             s.BurstDone = false;
     }
 
