@@ -26,14 +26,22 @@ public static class SimClipChooser
     /// <param name="hasFile">Whether an .anm of this file name is loaded in the animation list.</param>
     /// <param name="compositeFile">The spell composite's own clip file (this skin's), or null.</param>
     public static SimClipChoice? Choose(AbilitySim ability, IEnumerable<AnimClipInfo> ownClips, IEnumerable<AnimClipNode> ownNodes,
-        Func<string?, bool> hasFile, string? compositeFile)
-    {
-        string? definitionFile = FileOf(ability.Clip?.AnmPath);
-        bool authored = ability.AuthoredClipName is { Length: > 0 };
+        Func<string?, bool> hasFile, string? compositeFile) =>
+        ChooseClip(ability.AuthoredClipName, ability.Clip, ability.ClipChain, ownClips, ownNodes, hasFile, compositeFile);
 
-        // 1. the clip NAME in this skin's own graph: Riot's authored name, or - for an ability that authors none - the graph name of the clip the
+    /// <summary>
+    /// The same choice for a clip that is not an ability's own (a basic attack's, a hop's): <paramref name="authoredName"/> is Riot's name for it when the record
+    /// has one (null for a clip the definition found by convention), <paramref name="definitionClip"/> the definition's clip for it.
+    /// </summary>
+    public static SimClipChoice? ChooseClip(string? authoredName, SimClip? definitionClip, IReadOnlyList<SimClip>? chain,
+        IEnumerable<AnimClipInfo> ownClips, IEnumerable<AnimClipNode> ownNodes, Func<string?, bool> hasFile, string? compositeFile)
+    {
+        string? definitionFile = FileOf(definitionClip?.AnmPath);
+        bool authored = authoredName is { Length: > 0 };
+
+        // 1. the clip NAME in this skin's own graph: Riot's authored name, or - for a clip that authors none - the graph name of the clip the
         //    definition chose (a skin that has its own version of that clip plays its own)
-        string? name = authored ? ability.AuthoredClipName : ability.Clip?.Name;
+        string? name = authored ? authoredName : definitionClip?.Name;
         if (name is { Length: > 0 } && AnimationClipGraph.Resolve(name, ownClips, ownNodes) is { } r)
         {
             var files = r.Chain.Select(c => FileOf(c.AnmPath)).Where(f => f is not null && hasFile(f)).Select(f => f!).ToList();
@@ -45,11 +53,11 @@ public static class SimClipChooser
         // 2. the definition's base-skin file, when this skin's graph has no clip of that name
         if (definitionFile is not null && hasFile(definitionFile))
         {
-            var chain = ability.ClipChain is { Count: > 1 } cc
-                ? cc.Select(c => FileOf(c.AnmPath)).Where(f => f is not null && hasFile(f)).Select(f => f!).ToList()
+            var files = chain is { Count: > 1 }
+                ? chain.Select(c => FileOf(c.AnmPath)).Where(f => f is not null && hasFile(f)).Select(f => f!).ToList()
                 : new List<string>();
-            if (chain.Count == 0) chain.Add(definitionFile);
-            return new SimClipChoice(chain[0], "definition", chain);
+            if (files.Count == 0) files.Add(definitionFile);
+            return new SimClipChoice(files[0], "definition", files);
         }
 
         // 3. the spell composite's own clip

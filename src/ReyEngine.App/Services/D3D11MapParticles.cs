@@ -639,7 +639,7 @@ public sealed class D3D11MapParticles
             // M726: the same precedence GL uses - an explicit world target, then the event's own target
             // BONE, then the dummy. Written as one expression in both renderers so the order cannot drift.
             sim.SetBeamTarget(item.BeamTarget ?? BoneWorldPosition(item.TargetBone) ?? _beamTarget);
-            VfxPlaybackSim.AttachHost(sim, _emissionHost);   // M755
+            VfxPlaybackSim.AttachHost(sim, item.HostIsCaster ? _emissionHost : null);   // M755; M874: not for a system that is not on the caster
             sim.Update(dt);
         }
         // M854: the children the parents' particles asked for during that step - the same drain the GL viewport runs
@@ -1161,6 +1161,11 @@ public sealed class D3D11MapParticles
     private bool BuildHostSlice(VfxPlaybackItem item, VfxParticleSimulator sim, VfxParticleSimulator.EmitterState es,
         VfxEmitterDefinition def, VfxD3D11EmitterPipeline.Tocs tocs, StringBuilder sb)
     {
+        if (!item.HostIsCaster)
+        {
+            sb.AppendLine($"   ^ {item.System.Name}: attached-mesh shell skipped - the system is not on the caster, and the champion is the only host there is");
+            return false;
+        }
         if (ResolveSprite("TEXTURE", item, def) is not { } sprite || VfxPlaybackSim.IsStandIn(sprite.Key))
         {
             sb.AppendLine($"   ^ {item.System.Name} / {def.Name}: attached mesh with no texture - not drawn");

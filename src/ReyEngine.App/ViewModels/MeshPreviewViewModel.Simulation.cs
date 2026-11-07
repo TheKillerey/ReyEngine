@@ -145,6 +145,8 @@ public sealed partial class MeshPreviewViewModel
         if (string.Equals(_simChampion, champion, StringComparison.OrdinalIgnoreCase)) return;
         StopSimulation();
         _simChampion = champion;
+        _simUnitMeshCache.Clear(); _simUnitLoads.Clear();   // M874: another champion's summoned units are not this one's
+        FrameScene();                                       // M874: a new champion on the stage gets the default framing, not the last champion's zoom
         _simDef = null; _simVerdict = null;
         ForgetRun();
         SimAbilities.Clear();
@@ -160,6 +162,7 @@ public sealed partial class MeshPreviewViewModel
     public void ClearSimulation()
     {
         StopSimulation();
+        _simUnitMeshCache.Clear(); _simUnitLoads.Clear();
         _simChampion = null; _simDef = null; _simVerdict = null;
         ForgetRun();
         SimAbilities.Clear();
@@ -395,7 +398,7 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>Every step executed since the last user-initiated start (Play, Showcase, Replay), in order.</summary>
     public List<SimTraceEntry> SimTrace { get; } = new();
 
-    public void ClearSimulationHistory() { SimVisited.Clear(); SimResetCount = 0; SimTrace.Clear(); }
+    public void ClearSimulationHistory() { SimVisited.Clear(); SimResetCount = 0; SimTrace.Clear(); SimUnitTrack.Clear(); SimCasterTrack.Clear(); SimEffectStarts.Clear(); }
 
     /// <summary>Play one ability. A wrapper entry that only owns sub-casts (Aatrox Q) plays its sub-casts in order.</summary>
     public void PlaySimulation(AbilitySim ability)
@@ -561,6 +564,16 @@ public sealed partial class MeshPreviewViewModel
         _castBusyUntil = DateTime.UtcNow.AddHours(1);     // a cast owns the animation: the control tick must not stamp the idle over it
         Animation.Loop = false;                            // one pass: a wrap would replay the effects
 
+        PreloadSimUnits(plan);                              // M874: a summoned unit's meshes are built before the clock starts
+        // M874: the camera keeps what a script moves into the picture (a jump's landing, a summoned unit's walk) and the unit track starts over
+        _simFrameExtras.Clear();
+        foreach (var st in plan.Steps)
+        {
+            if (st.Kind == SimStepKind.Displace && st.Displacement == SimDisplaceKind.Jump && st.To is { } jumpTo) _simFrameExtras.Add(jumpTo);
+            else if (st.Kind == SimStepKind.Spawn && st.To is { } spawnTo) _simFrameExtras.Add(spawnTo);
+        }
+        if (_simFrameExtras.Count > 0) FrameScene();
+        SimUnitTrack.Clear(); SimCasterTrack.Clear(); SimEffectStarts.Clear(); _simLastTrack = double.NegativeInfinity;
         _simRun = new SimRun { Ability = ability, Script = plan };
         SimVisited.Add(ability.Key);
         SetRowRunning(ability.Key);
@@ -624,6 +637,7 @@ public sealed partial class MeshPreviewViewModel
         ProcessDueSteps();
         if (_simRun is null) return;           // the End step finished the run
         ApplyDisplacement(run);
+        TickMechanics(run);
         UpdateSimStatus();
     }
 
@@ -651,9 +665,18 @@ public sealed partial class MeshPreviewViewModel
                 AddSimLog(step.Time, step.Text + tag);
                 break;
             case SimStepKind.Composite:
-                PlayComposite(a, run.Script);
-                AddSimLog(step.Time, $"{a.Key} cast plays" + tag);
+            {
+                // M874: a Composite step may play ANOTHER ability's cast (Kalista's Q inside her E), planned on the stage as it stands then; its hit lands when its plan says
+                var played = step.Name is { Length: > 0 } key && !key.Equals(a.Key, StringComparison.OrdinalIgnoreCase)
+                             && _simDef?.Abilities.FirstOrDefault(x => x.Key == key) is { } other ? other : a;
+                if (step.Sub is { } sub) _castPlan = BuildSimCastPlan(played, sub);
+                if (step.EndTime > step.Time) _simHitDelay = step.EndTime - step.Time;
+                else if (step.Sub is { } sub2 && sub2.Find(SimStepKind.Hit) is { } subHit) _simHitDelay = subHit.Time;
+                PlayComposite(played, run.Script, step.Exclude);
+                RepublishSimEffects(run.Clock);                   // the cast rebuilt the playback: the effects that are live go back in
+                AddSimLog(step.Time, $"{played.Key} cast plays" + tag);
                 break;
+            }
             case SimStepKind.Displace:
                 if (step.Displacement == SimDisplaceKind.Blink)
                 {
@@ -663,8 +686,13 @@ public sealed partial class MeshPreviewViewModel
                 else
                 {
                     run.Displace = step;
+                    if (step.Clip is not null) { PlayStepClip(step.Clip, null); RepublishSimEffects(run.Clock); }   // a hop or a leap has its own clip
                     AddSimLog(step.Time, step.Text + tag);
                 }
+                break;
+            case SimStepKind.Attack: case SimStepKind.Spawn: case SimStepKind.Despawn: case SimStepKind.MoveUnit:
+            case SimStepKind.Effect: case SimStepKind.Hide: case SimStepKind.Show:
+                ExecuteMechanic(run, step, tag);
                 break;
             case SimStepKind.Channel:
                 AddSimLog(step.Time, step.Text + tag);
@@ -688,6 +716,7 @@ public sealed partial class MeshPreviewViewModel
         float f = (float)Math.Clamp((run.Clock - d.Time) / span, 0.0, 1.0);
         var p = Vector3.Lerp(d.From!.Value, d.To!.Value, f);
         if (_arena?.Nav is { } nav) p.Y = NavGridPath.GroundHeight(nav, p);
+        if (d.Displacement == SimDisplaceKind.Jump) p.Y += d.Height * 4f * f * (1f - f);   // an arc: up and down to the ground at the far end
         MoveCaster(p, run.Script.ChampionYaw);
         if (f >= 1f) run.Displace = null;
     }
@@ -701,7 +730,7 @@ public sealed partial class MeshPreviewViewModel
 
     // ---- the cast: the same path the Animate tab's EVENTS take ----
 
-    private void PlayComposite(AbilitySim ability, SimScript script)
+    private void PlayComposite(AbilitySim ability, SimScript script, IReadOnlyList<string>? exclude = null)
     {
         var ev = FindEventFor(ability);
         var choice = ChooseSimClip(ability, ev);
@@ -715,7 +744,11 @@ public sealed partial class MeshPreviewViewModel
             : new Formats.Vfx.ChampionEvent
             {
                 Name = ev.Name, ClipAnmFile = file,
-                CasterSystems = ev.CasterSystems, TargetSystems = ev.TargetSystems,
+                // M874: caster systems that belong to another unit (Kalista W's sentinel effects) are not played at the caster
+                CasterSystems = exclude is { Count: > 0 }
+                    ? ev.CasterSystems.Where(h => !(_vfxDefs.TryGetValue(h, out var d) && exclude.Contains(d.Name, StringComparer.OrdinalIgnoreCase))).ToList()
+                    : ev.CasterSystems,
+                TargetSystems = ev.TargetSystems,
                 MissileSystems = ev.MissileSystems, ReturnMissileSystems = ev.ReturnMissileSystems,
             };
         PlayEvent(play);
@@ -798,6 +831,7 @@ public sealed partial class MeshPreviewViewModel
     {
         _castPlan = null;
         _simHitDelay = null;
+        CleanupMechanics();                                // M874: spawned units, the hidden ally, moves, live effects - before the stage is put back
         ResetScene();                                      // StopEvent, stage positions, idle pose, camera
         SimAllyPosition = null;
         Animation.Loop = true;                             // the idle clip loops

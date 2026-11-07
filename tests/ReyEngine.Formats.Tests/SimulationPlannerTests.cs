@@ -123,20 +123,21 @@ public sealed class SimulationPlannerTests(ITestOutputHelper output)
     {
         if (Skip()) return;
         var d = Def("Kalista");
+        var generic = Array.Empty<ISimAdapter>();   // M874: the generic plan; Kalista's own adapter script is tested in AdapterTests
         foreach (var key in new[] { "Q", "E", "R" })
         {
             var a = Ab(d, key);
-            var script = SimulationPlanner.Plan(d, a, Stage());
+            var script = SimulationPlanner.Plan(d, a, Stage(), generic);
             Assert.Empty(script.All(SimStepKind.Displace));
             var hit = Assert.Single(script.All(SimStepKind.Hit));
             Assert.True(hit.Time >= a.CastSeconds!.Value, $"{key}: hit {hit.Time} before cast {a.CastSeconds}");
             Assert.Equal(SimStepKind.End, script.Steps[^1].Kind);
             output.WriteLine($"Kalista {key} {a.TargetingKind}: " + string.Join(" / ", script.Steps.Select(s => $"{s.Time:0.###} {s.Kind} ({s.Source}) {s.Text}")));
         }
-        var q = SimulationPlanner.Plan(d, Ab(d, "Q"), Stage());
+        var q = SimulationPlanner.Plan(d, Ab(d, "Q"), Stage(), generic);
         Assert.Equal("authored", q.Find(SimStepKind.Hit)!.Source);
         // SelfAoe E: no aim point of its own
-        Assert.Equal(SimAimTarget.Caster, SimulationPlanner.Plan(d, Ab(d, "E"), Stage()).AimAt);
+        Assert.Equal(SimAimTarget.Caster, SimulationPlanner.Plan(d, Ab(d, "E"), Stage(), generic).AimAt);
     }
 
     [Fact]
@@ -241,7 +242,8 @@ public sealed class SimulationPlannerTests(ITestOutputHelper output)
         output.WriteLine($"{defs} definitions, {picked.Count} ability/abilities need an ally:");
         foreach (var p in picked) output.WriteLine("  " + p);
         Assert.True(defs >= 150);
-        Assert.Equal(12, picked.Count);   // measured on 16.22.8348910
+        // M874: by mAffectsTypeFlags (friendly 0x1 set, enemy 0x2 clear) the tag rule's twelve become eight; see AdapterTests for the named list
+        Assert.Equal(8, picked.Count);   // measured on 16.22.8348910
     }
 
     [Fact]
@@ -285,7 +287,7 @@ public sealed class SimulationPlannerTests(ITestOutputHelper output)
         Assert.Equal("adapter", script.Steps[^1].Source);
         Assert.Equal(1, mine.Calls);
         Assert.Equal(0, other.Calls);
-        Assert.Empty(SimulationPlanner.Adapters);   // none are registered yet
+        Assert.Equal(new[] { "Kalista", "Talon" }, SimulationPlanner.Adapters.Select(a => a.Champion).OrderBy(c => c, StringComparer.Ordinal));   // M874
     }
 
     private sealed class Tag(string champion) : ISimAdapter

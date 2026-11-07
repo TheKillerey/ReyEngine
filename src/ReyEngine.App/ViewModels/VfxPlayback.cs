@@ -108,6 +108,13 @@ public sealed record VfxPlaybackItem(
     /// one. <see cref="BeamTarget"/> stays the explicit world-space override and wins when both are set.</para>
     /// </summary>
     public string? TargetBone { get; init; }
+
+    /// <summary>
+    /// M874: does this system sit on the CASTER, so that an attached-mesh emitter without a mesh of its own may take the champion as its host?
+    /// True for the caster's own systems and clip events (the default). False for a system that belongs to another place - a target system at the
+    /// dummy, a missile, an Effect step on a summoned unit - which would otherwise paint its shell over the champion, the only host there is.
+    /// </summary>
+    public bool HostIsCaster { get; init; } = true;
 }
 
 /// <summary>

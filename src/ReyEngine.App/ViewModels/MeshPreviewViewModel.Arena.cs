@@ -151,11 +151,12 @@ public sealed partial class MeshPreviewViewModel
             list.Add(new PropInstanceData(backdrop, BackdropWorld));
         if (DummyProps is { } dummy) list.AddRange(dummy.Instances);
         // M869: the ally dummy, while a simulated ability needs one. The same mesh as the enemy, turned toward the champion.
-        if (SimAllyPosition is { } ally && _dummyMesh is not null)
+        if (SimAllyPosition is { } ally && _dummyMesh is not null && !_simAllyHidden)
         {
             float yaw = MathF.Atan2(CharacterPosition.X - ally.X, CharacterPosition.Z - ally.Z);
             list.Add(new PropInstanceData(_dummyMesh, Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(ally)));
         }
+        list.AddRange(SimUnitInstances());   // M874: summoned units
         SceneProps = list.Count > 0 ? new PropRenderSet(list) : null;
     }
 
@@ -495,7 +496,8 @@ public sealed partial class MeshPreviewViewModel
             // M869: the ally dummy, when an ability brought one, is part of the picture
             var sum = CharacterPosition; int n = 1;
             if (TargetDummyPosition is { } dummy) { sum += dummy; n++; }
-            if (SimAllyPosition is { } ally) { sum += ally; n++; }
+            if (SimAllyPosition is { } ally && !_simAllyHidden) { sum += ally; n++; }
+            foreach (var extra in _simFrameExtras) { sum += extra; n++; }   // M874: where a jump lands, where a summoned unit goes
             return sum / n;
         }
     }

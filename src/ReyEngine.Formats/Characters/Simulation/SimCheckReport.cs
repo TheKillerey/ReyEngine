@@ -36,7 +36,9 @@ public sealed record SimCheckAbilityReport(
     IReadOnlyList<SimCheckFrameReport> Frames,
     IReadOnlyList<string> CleanupProblems,
     IReadOnlyList<string> LogErrors,
-    double WallSeconds);
+    double WallSeconds,
+    /// <summary>M874: each scripted-mechanic step of the plan and whether it passed (null for a report written before M874).</summary>
+    IReadOnlyList<AdapterStepEvidence>? AdapterSteps = null);
 
 public sealed record SimCheckChampionReport(
     string Champion,
@@ -79,7 +81,7 @@ public sealed record SimCheckSummary(
 public static class SimCheckReports
 {
     /// <summary>Bumped whenever the checker's evidence or grading would change a verdict for the same data; part of the resume key.</summary>
-    public const string CheckVersion = "M873.1";
+    public const string CheckVersion = "M874.1";
 
     private static readonly JsonSerializerOptions Options = new()
     {

@@ -149,6 +149,30 @@ public static class SimCheckFrames
     }
 
     /// <summary>
+    /// M874: of the pixels of <paramref name="box"/> that differ from the baseline (by more than <paramref name="channelThreshold"/>), the share that are near-white
+    /// (every colour channel at least <paramref name="whiteFloor"/>). A summoned unit that is drawn without its textures is a flat white silhouette: nearly all of what
+    /// changed in its box is white. Null when too few pixels changed to say (under <paramref name="minPixels"/>).
+    /// </summary>
+    public static double? ChangedWhiteShare(ReadOnlySpan<byte> baseline, ReadOnlySpan<byte> frame, int width, int height, PixelRect box,
+        int channelThreshold = DefaultChannelThreshold, int whiteFloor = 225, int minPixels = 20)
+    {
+        long need = (long)width * height * 4;
+        box = box.Clamp(width, height);
+        if (box.IsEmpty || baseline.Length < need || frame.Length < need) return null;
+        long changed = 0, white = 0;
+        for (int y = box.Y; y < box.Bottom; y++)
+            for (int x = box.X; x < box.Right; x++)
+            {
+                int o = (y * width + x) * 4;
+                int d = Math.Max(Math.Abs(baseline[o] - frame[o]), Math.Max(Math.Abs(baseline[o + 1] - frame[o + 1]), Math.Abs(baseline[o + 2] - frame[o + 2])));
+                if (d <= channelThreshold) continue;
+                changed++;
+                if (frame[o] >= whiteFloor && frame[o + 1] >= whiteFloor && frame[o + 2] >= whiteFloor) white++;
+            }
+        return changed < minPixels ? null : (double)white / changed;
+    }
+
+    /// <summary>
     /// M873: the part of the frame a contact-sheet cell shows. The judged <paramref name="region"/> grown by <paramref name="pad"/> on each side, widened or
     /// heightened to the cell's <paramref name="aspect"/> (width / height) around its centre, then slid back inside the frame (never cut, so the aspect
     /// holds): the actors fill the cell instead of sitting small in a 2200-unit camera view. A region that is empty or larger than the frame gives the whole frame.

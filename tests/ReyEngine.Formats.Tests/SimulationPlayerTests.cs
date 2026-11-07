@@ -672,4 +672,244 @@ public sealed class SimulationPlayerTests(ITestOutputHelper output) : IDisposabl
         Assert.Equal(vm.TargetDummyPosition, vm.DummyGizmoPivot);
         vm.StopControl();
     }
+
+    // ===================================================== M874: scripted mechanics, and what is left behind
+
+    private static PropMesh UnitMesh(string key) => new(key, new float[9], new float[9], new float[6], new uint[] { 0, 1, 2 }, new List<PropSubmesh>());
+
+    private static void GiveUnits(MeshPreviewViewModel vm, List<string>? asked = null)
+    {
+        vm.LoadUnitMeshes = (skin, idle, run) => { asked?.Add($"{skin}|{idle}|{run}"); return new SimUnitMeshes(UnitMesh(skin + "#idle"), UnitMesh(skin + "#run")); };
+    }
+
+    private static void StepTo(MeshPreviewViewModel vm, double clock)
+    {
+        int n = 0;
+        while (vm.SimRunning && vm.SimClock < clock && n++ < 5000) vm.AdvanceSimulation(0.016);
+    }
+
+    [Fact]
+    public async Task Kalista_W_summons_the_Sentinel_walks_and_patrols_it_and_removes_it_with_the_run()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        var asked = new List<string>();
+        GiveUnits(vm, asked);
+        int stage = vm.SceneProps!.Instances.Count;
+        vm.PlaySimulation("W");
+        var spawn = vm.SimCurrentScript!.Find(SimStepKind.Spawn)!;
+        Assert.Empty(vm.SimSpawnedUnits);                                       // not before the cast
+        StepTo(vm, spawn.Time + 0.5);
+        Assert.Equal(new[] { "sentinel" }, vm.SimSpawnedUnits);
+        Assert.Equal(stage + 1, vm.SceneProps!.Instances.Count);
+        Assert.Contains("Characters/KalistaSpawn/Skins/Skin0|Idle1|Run", asked);   // the base unit, with the clip names the step carries
+        var early = vm.SimUnitPosition("sentinel")!.Value;
+        StepTo(vm, spawn.Time + 1.6);
+        var later = vm.SimUnitPosition("sentinel")!.Value;
+        Assert.True(Vector3.Distance(early, later) > 100f, "the Sentinel walks");
+        StepTo(vm, spawn.Time + 2.5);                                           // on its patrol: still within a few hundred units of the target
+        Assert.True(Vector3.Distance(vm.SimUnitPosition("sentinel")!.Value, spawn.To!.Value) < 400f);
+        Assert.Contains("Kalista_Base_W_Avatar", vm.SimLiveEffects);
+        Assert.NotEmpty(vm.SimUnitTrack.Where(u => u.Unit == "sentinel"));
+        RunToEnd(vm);
+        Assert.Empty(vm.SimSpawnedUnits);
+        Assert.Equal(stage, vm.SceneProps!.Instances.Count);
+        Assert.Empty(vm.SimLiveEffects);
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task Stopping_a_run_in_the_middle_removes_every_spawned_unit_unhides_the_ally_and_returns_the_dummies()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        GiveUnits(vm);
+        var enemyAtRest = vm.TargetDummyPosition;
+        vm.PlaySimulation("W");
+        StepTo(vm, 1.0);
+        Assert.NotEmpty(vm.SimSpawnedUnits);
+        vm.StopSimulationAndResetCommand.Execute(null);
+        Assert.Empty(vm.SimSpawnedUnits);
+        Assert.Empty(vm.SimLiveEffects);
+
+        vm.PlaySimulation("R");
+        var script = vm.SimCurrentScript!;
+        Assert.NotNull(vm.SimAllyPosition);
+        var hide = script.Find(SimStepKind.Hide)!; var show = script.Find(SimStepKind.Show)!;
+        StepTo(vm, hide.Time + 0.2);
+        Assert.True(vm.SimAllyHidden);
+        Assert.Null(vm.SimUnitPosition("ally"));
+        StepTo(vm, show.Time + 0.2);
+        Assert.False(vm.SimAllyHidden);
+        var knock = script.All(SimStepKind.MoveUnit).First(m => m.Move == SimMoveKind.Knockup);
+        StepTo(vm, knock.Time + 0.5);
+        Assert.True(vm.TargetDummyPosition!.Value.Y > enemyAtRest!.Value.Y + 50f, "the enemy is in the air");
+        vm.StopSimulationAndResetCommand.Execute(null);                          // stopped while the ally is thrown and the enemy is up
+        Assert.False(vm.SimAllyHidden);
+        Assert.Null(vm.SimAllyPosition);
+        Assert.Equal(enemyAtRest, vm.TargetDummyPosition);
+        Assert.Empty(vm.SimSpawnedUnits);
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task R_pulls_the_ally_to_the_caster_flings_it_to_the_enemy_and_knocks_the_enemy_up_and_back()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        vm.PlaySimulation("R");
+        var s = vm.SimCurrentScript!;
+        var pull = s.All(SimStepKind.MoveUnit).First(m => m.Move == SimMoveKind.Pull);
+        var fling = s.All(SimStepKind.MoveUnit).First(m => m.Move == SimMoveKind.Fling);
+        var knock = s.All(SimStepKind.MoveUnit).First(m => m.Move == SimMoveKind.Knockup);
+        StepTo(vm, pull.EndTime + 0.02);
+        Assert.InRange(Vector3.Distance(vm.SimAllyPosition!.Value, pull.To!.Value), 0f, 30f);
+        StepTo(vm, fling.EndTime + 0.02);
+        Assert.InRange(Vector3.Distance(vm.SimAllyPosition!.Value, fling.To!.Value), 0f, 30f);
+        double peak = 0;
+        while (vm.SimRunning && vm.SimClock < knock.EndTime) { vm.AdvanceSimulation(0.016); peak = Math.Max(peak, vm.TargetDummyPosition!.Value.Y); }
+        Assert.InRange(peak, knock.Height * 0.8, knock.Height * 1.05);
+        RunToEnd(vm);
+        Assert.Null(vm.SimAllyPosition);
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task A_hop_is_an_arc_and_the_Talon_leap_lands_beside_the_enemy_and_the_stack_markers_stop_with_the_run()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        vm.PlaySimulation("P");
+        var hop = vm.SimCurrentScript!.All(SimStepKind.Displace).First();
+        double peak = 0;
+        while (vm.SimRunning && vm.SimClock < hop.EndTime + 0.05) { vm.AdvanceSimulation(0.016); if (vm.SimClock >= hop.Time) peak = Math.Max(peak, vm.CharacterPosition.Y); }
+        Assert.InRange(peak, hop.Height * 0.8, hop.Height * 1.05);
+        Assert.InRange(Vector3.Distance(vm.CharacterPosition, hop.To!.Value), 0f, 40f);
+        RunToEnd(vm);
+        vm.StopControl();
+
+        var e = await PlayerAsync("Kalista");
+        e.PlaySimulation("E");
+        StepTo(e, 1.6);
+        Assert.Contains("Kalista_Base_E_Spear_tar1", e.SimLiveEffects);          // the first spear stays on the enemy
+        RunToEnd(e);
+        Assert.Empty(e.SimLiveEffects);
+        e.StopControl();
+
+        var t = await PlayerAsync("Talon");
+        t.PlaySimulation("Q");
+        var leap = t.SimCurrentScript!.All(SimStepKind.Displace).Single();
+        StepTo(t, leap.EndTime + 0.05);
+        Assert.InRange(Vector3.Distance(t.CharacterPosition, leap.To!.Value), 0f, 40f);
+        RunToEnd(t);
+        t.StopControl();
+    }
+
+    // ===================================================== M874 fixes
+
+    [Fact]
+    public async Task A_replay_or_a_showcase_that_begins_mid_run_leaves_no_unit_and_no_hidden_ally_behind()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        GiveUnits(vm);
+        vm.PlaySimulation("W");
+        StepTo(vm, 1.0);
+        Assert.NotEmpty(vm.SimSpawnedUnits);
+        vm.ReplaySimulation();                                                   // starts the same ability again from a clean scene
+        Assert.Empty(vm.SimSpawnedUnits);
+        StepTo(vm, 0.2);
+        vm.StopSimulationAndResetCommand.Execute(null);
+
+        vm.PlaySimulation("R");
+        var hide = vm.SimCurrentScript!.Find(SimStepKind.Hide)!;
+        StepTo(vm, hide.Time + 0.1);
+        Assert.True(vm.SimAllyHidden);
+        vm.ShowcaseSimulation();                                                 // another run begins while the ally is hidden
+        Assert.False(vm.SimAllyHidden);
+        Assert.Empty(vm.SimSpawnedUnits);
+        vm.StopSimulationAndResetCommand.Execute(null);
+        Assert.Null(vm.SimAllyPosition);
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task A_new_skin_mid_run_removes_the_summoned_unit_and_the_hidden_ally()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        GiveUnits(vm);
+        vm.PlaySimulation("W");
+        StepTo(vm, 1.0);
+        Assert.NotEmpty(vm.SimSpawnedUnits);
+        vm.Show("another skin", MeshForShow(), null, null, keepStage: true);
+        Assert.False(vm.SimRunning);
+        Assert.Empty(vm.SimSpawnedUnits);
+        Assert.Empty(vm.SimLiveEffects);
+        vm.PlaySimulation("R");
+        StepTo(vm, vm.SimCurrentScript!.Find(SimStepKind.Hide)!.Time + 0.1);
+        Assert.True(vm.SimAllyHidden);
+        vm.Show("another skin", MeshForShow(), null, null, keepStage: true);
+        Assert.False(vm.SimAllyHidden);
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task A_unit_whose_first_leg_has_no_length_still_walks_on_to_patrol_and_a_failed_build_is_tried_again()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        int builds = 0;
+        vm.LoadUnitMeshes = (skin, idle, run) => { builds++; return builds == 1 ? null : new SimUnitMeshes(UnitMesh(skin + "#idle"), UnitMesh(skin + "#run")); };
+        vm.PlaySimulation("W");
+        StepTo(vm, 0.2);
+        vm.StopSimulationAndResetCommand.Execute(null);
+        int afterFirst = builds;
+        vm.PlaySimulation("W");                                                  // the first build failed: it is built again, not remembered as null
+        StepTo(vm, 0.8);
+        Assert.True(builds > afterFirst);
+        Assert.NotEmpty(vm.SimSpawnedUnits);
+        Assert.Contains(vm.SimSpawnedUnitStates, u => u.HasMesh);
+        vm.StopSimulationAndResetCommand.Execute(null);
+
+        // the target clamped onto the start: the zero-length first leg is walked through
+        var spawn = new SimStep(SimStepKind.Spawn, 0f, "adapter", "spawn")
+        { Unit = "u", Resource = "KalistaSpawn", From = Vector3.Zero, To = Vector3.Zero, Speed = 560f, Path = new[] { Vector3.Zero, new Vector3(300f, 0f, 0f), new Vector3(300f, 0f, 300f) }, Loop = true, EndTime = 6f };
+        var script = new SimScript("Kalista", "W", Vector3.Zero, 0, new Vector3(0, 0, 500), null, SimAimTarget.Caster, Vector3.Zero, "",
+            new[] { new SimStep(SimStepKind.Place, 0f, "convention", "p"), spawn, new SimStep(SimStepKind.End, 6f, "convention", "e") { EndTime = 6f } }, 6f, Array.Empty<string>());
+        var at = vm.PreviewUnitPosition(spawn, 1.0);
+        Assert.True(Vector3.Distance(at, Vector3.Zero) > 100f, "after one second the unit has left the start");
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task The_control_tabs_attack_still_plays_the_record_s_attack_after_the_refactor()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        var attacks = ReadAttacks("Kalista");
+        vm.SetAttacks(attacks);
+        var m = typeof(MeshPreviewViewModel).GetMethod("PlayAttack", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(m);
+        m!.Invoke(vm, null);
+        Assert.Contains("KalistaBasicAttack", vm.ControlStatus);                  // the same status line the cycle always wrote
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task A_new_champion_gets_the_default_framing()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Kalista");
+        int before = vm.SceneFrameCount;
+        vm.BeginSimulation("Talon");
+        Assert.True(vm.SceneFrameCount > before, "the camera snaps back to its default distance for the new champion");
+        vm.StopControl();
+    }
+
+    private static IReadOnlyList<AttackSpell> ReadAttacks(string champion)
+    {
+        using var wad = WadArchive.Open(Path.Combine(Final, "Champions", champion + ".wad.client"), Hashes.Value.Resolver);
+        return ChampionSpellData.ReadAttacks(wad.Extract(HashAlgorithms.WadPath(ChampionRecord.PathFor(champion.ToLowerInvariant()))), champion);
+    }
 }

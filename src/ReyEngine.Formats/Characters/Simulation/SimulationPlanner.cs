@@ -4,9 +4,34 @@ using ReyEngine.Formats.MapGeo;
 
 namespace ReyEngine.Formats.Characters.Simulation;
 
-public enum SimStepKind { Place, Clip, Composite, Displace, Channel, Hit, End }
+public enum SimStepKind
+{
+    Place, Clip, Composite, Displace, Channel, Hit, End,
+    /// <summary>M874: a basic attack on a unit, from the champion's own attack spell (clip, cast point, missile, hit effect).</summary>
+    Attack,
+    /// <summary>M874: a summoned unit appears (a character model with its own skin, clips and optional waypoint path).</summary>
+    Spawn,
+    /// <summary>M874: a summoned unit is removed.</summary>
+    Despawn,
+    /// <summary>M874: a unit is hidden (the ally inside Kalista).</summary>
+    Hide,
+    /// <summary>M874: a hidden unit is shown again.</summary>
+    Show,
+    /// <summary>M874: a non-caster unit (the enemy dummy, the ally dummy or a spawned unit) moves from A to B over a time span.</summary>
+    MoveUnit,
+    /// <summary>M874: one named VFX system plays on a unit or at a position for a time span (stack markers, vanish cones).</summary>
+    Effect,
+}
 
-public enum SimDisplaceKind { Dash, Blink }
+public enum SimDisplaceKind
+{
+    Dash, Blink,
+    /// <summary>M874: an arc of the caster with a height (a hop, a leap, a wall jump).</summary>
+    Jump,
+}
+
+/// <summary>M874: how a <see cref="SimStepKind.MoveUnit"/> moves its unit.</summary>
+public enum SimMoveKind { Pull, Fling, Knockup }
 
 /// <summary>Who the ability is aimed at in a scenario.</summary>
 public enum SimAimTarget { Caster, Enemy, Ally }
@@ -27,6 +52,37 @@ public sealed record SimStep(SimStepKind Kind, float Time, string Source, string
     public string? Name { get; init; }
     /// <summary>On a Hit: the missile ends at the unit it hit (<c>Trait_Ranged_StopsFirstHit</c> with the unit on its line) instead of flying on.</summary>
     public bool StopsMissile { get; init; }
+
+    // ---- M874: the fields the scripted-mechanics steps carry (all optional; the older steps leave them empty) ----
+
+    /// <summary>The unit a step is about: "caster", "enemy", "ally" or the id of a spawned unit ("sentinel").</summary>
+    public string? Unit { get; init; }
+    /// <summary>Arc height in world units for a Jump or a Knockup.</summary>
+    public float Height { get; init; }
+    /// <summary>Units per second where a step moves a unit at a speed (a Spawn's walk, a Pull, a Fling).</summary>
+    public float? Speed { get; init; }
+    public SimMoveKind? Move { get; init; }
+    /// <summary>A Spawn: waypoints walked in order at <see cref="Speed"/>; with <see cref="Loop"/> the last leg returns to the first waypoint and repeats (a patrol).</summary>
+    public IReadOnlyList<Vector3>? Path { get; init; }
+    public bool Loop { get; init; }
+    /// <summary>A Spawn: the character folder and skin ("KalistaSpawn" + the loaded skin's number, 0 when it has no sentinel skin of its own). An Effect: the system name.</summary>
+    public string? Resource { get; init; }
+    /// <summary>A Spawn: the graph clip names to play while standing and while walking.</summary>
+    public string? IdleClip { get; init; }
+    public string? RunClip { get; init; }
+    /// <summary>The clip a step plays by itself (an Attack's, a hop's): the definition's clip, resolved in the loaded skin like a spell's.</summary>
+    public SimClip? Clip { get; init; }
+    /// <summary>An Attack: seconds from its start to the hit (the record's cast point plus the missile's flight).</summary>
+    public float HitAfter { get; init; }
+    /// <summary>Why a value of this step is not data: "hop distance 300 = castRangeDisplayOverride; the record has no distance". Shown by the UI and the report.</summary>
+    public string? Why { get; init; }
+    /// <summary>A Composite step: caster systems (by name) that are NOT played at the caster because they belong to another unit (Kalista W's sentinel effects).</summary>
+    public IReadOnlyList<string>? Exclude { get; init; }
+    /// <summary>An Effect: the bone to ride on the unit, or null for its root. The data names none for the units the adapters use.</summary>
+    public string? Bone { get; init; }
+    /// <summary>A Composite step of another ability than the run's own (Kalista's Q inside her E, Talon's W, Q and R inside his passive): that ability planned on the stage as it is at that moment.
+    /// The player aims the cast from it.</summary>
+    public SimScript? Sub { get; init; }
 }
 
 /// <summary>
@@ -102,14 +158,27 @@ public static class SimulationPlanner
 
     private static readonly string[] AllyTags = { "PositiveEffect_Boon", "Trait_Shield", "Trait_ActiveHeal" };
 
-    /// <summary>Adapters in effect when a caller passes none. Empty until a per-champion milestone adds some.</summary>
-    public static IReadOnlyList<ISimAdapter> Adapters { get; } = Array.Empty<ISimAdapter>();
+    /// <summary>Adapters in effect when a caller passes none (M874: Kalista and Talon).</summary>
+    public static IReadOnlyList<ISimAdapter> Adapters { get; } = new ISimAdapter[] { new Adapters.KalistaSimAdapter(), new Adapters.TalonSimAdapter() };
 
     /// <summary>True when the ability is staged with an ally: an adapter said so, or it is a boon / shield / heal that needs a unit.</summary>
     public static bool NeedsAlly(AbilitySim a) => a.Scenario.NeedsAlly || AllyByTags(a);
 
+    /// <summary>
+    /// M874: an ability is aimed at an ally when a boon / shield / heal tag says it helps, a unit is its target, AND <c>mAffectsTypeFlags</c> has the friendly
+    /// bit (0x1) set and the enemy bit (0x2) clear. THE BIT MEANINGS ARE INFERRED, not documented: measured over the twelve abilities the tag rule alone picked
+    /// (16.22), 0x1 is set on every ability that is plainly friendly (Annie E 1, Kayle W 1, Milio W 1, Bard W 1029, LeeSin W 1045, Galio R 16385, Rakan E 16385,
+    /// KSante E 17413) and 0x2 on every one that also hits enemies (Vladimir Q 6154, Riven E 6154, Senna Q 24575 and TahmKench R 16387 carry both bits). The tag-only
+    /// rule staged an ally for Senna Q, TahmKench R, Vladimir Q and Riven E, which are not ally-aimed; flags with no friendly bit, or with the enemy bit, are not either.
+    /// </summary>
     private static bool AllyByTags(AbilitySim a) =>
-        IsUnitTargeted(a.TargetingKind) && a.Tags.Any(t => AllyTags.Contains(t, StringComparer.Ordinal));
+        IsUnitTargeted(a.TargetingKind) && a.Tags.Any(t => AllyTags.Contains(t, StringComparer.Ordinal))
+        && a.AffectsTypeFlags is { } flags && (flags & FriendlyBit) != 0 && (flags & EnemyBit) == 0;
+
+    /// <summary>Inferred (see <see cref="NeedsAlly"/>): the friendly bit of <c>mAffectsTypeFlags</c>.</summary>
+    public const uint FriendlyBit = 0x1;
+    /// <summary>Inferred: the enemy bit of <c>mAffectsTypeFlags</c>.</summary>
+    public const uint EnemyBit = 0x2;
 
     private static bool IsUnitTargeted(string kind) => Normalise(kind) is "target" or "targetorlocation";
 

@@ -6892,6 +6892,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         MeshPreview.Animation.ClipLoader = DecodeAnimation;
         MeshPreview.LoadDummyMesh = () => Services.TargetDummyLoader.Get(Project.GameDirectory, _resolver,
             m => _log.Warn("Preview", m));   // M115: Riot's practice dummy from Map11.wad
+        MeshPreview.LoadUnitMeshes = BuildSimUnitMeshes;   // M874: a summoned unit is a prop built by the map props' own decode
+        MeshPreview.LoadedSkinNumber = PreviewSkinNumber;
+        MeshPreview.PrepareOwnPropScene = PreparePropDx11Scene;   // M874: a summoned unit's textures are in the champion's wad, which only this view model reads
         MeshPreview.LoadSimulationDefinition = LoadSimulationDefinitionAsync;   // M869: the champion's ability simulation data
         MeshPreview.LoadSkybox = LoadSkyboxAtAsync;   // M122: same catalogue, its own pick
         MeshPreview.ResolveTextures = ResolveSystemTextures;

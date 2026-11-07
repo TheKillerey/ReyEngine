@@ -509,6 +509,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                     AttachBone = atDummy ? null : ResolveBoneName(spawn.BoneName, spawn.BoneHash),
                     // M726: the far end of a beam, when the event names one of the character's own joints
                     TargetBone = atDummy ? null : ResolveBoneName(spawn.TargetBoneName, spawn.TargetBoneHash),
+                    HostIsCaster = !atDummy,   // M874
                     StartDelay = start,
                     // M726: mEndFrame - an effect with an authored end stops there instead of emitting
                     // until the clip wraps and the whole playback is torn down
@@ -798,8 +799,9 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // M635: every spell item is AIMED. Caster-side systems and missiles point their local forward at
         // the target; a target-side system faces back at the caster. VfxCastFrame holds the shared
         // world-space axis convention, also used by the character controller.
+        // M874: only the caster's own systems may take the champion as the host of an attached-mesh emitter; a target system at the dummy and a missile are not on the caster
         VfxPlaybackItem? Make(uint hash, System.Numerics.Vector3 at, System.Numerics.Vector3 faceToward,
-            System.Numerics.Vector3? travelTo, string? bone = null)
+            System.Numerics.Vector3? travelTo, string? bone = null, bool onCaster = false)
         {
             if (!_vfxDefs.TryGetValue(hash, out var def)) return null;
             float dist = travelTo is { } dst ? (dst - at).Length() : 0f;
@@ -822,6 +824,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 // hand and flies - and a target-side system belongs to whatever it hit.
                 AttachBone = bone,
                 PreserveCastDirection = bone is not null,
+                HostIsCaster = onCaster,
             };
         }
 
@@ -844,7 +847,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // it stayed while he moved. CasterBone explains why the default is a locator; the picker beside
         // the events list is there because Riot's files never name the real bone.
         string? casterBone = CasterBoneOrNull;
-        foreach (var h in ev.CasterSystems) if (Make(h, caster, aim, null, casterBone) is { } i) items.Add(i);
+        foreach (var h in ev.CasterSystems) if (Make(h, caster, aim, null, casterBone, onCaster: true) is { } i) items.Add(i);
         if (hitAt is { } hit)
             foreach (var h in ev.TargetSystems)
                 if (Make(h, hit, caster, null) is { } i)

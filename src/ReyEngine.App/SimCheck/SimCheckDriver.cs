@@ -244,6 +244,9 @@ internal sealed class SimCheckDriver
         Mp.StopSimulation();
         var stage = new StageSnapshot(Mp.CharacterPosition, Mp.TargetDummyPosition, PlaybackNames());
 
+        // M874: a freshly loaded stage is still warming up (the map's own particles come and go for a few seconds); the first ability would otherwise measure its particle baseline in that transient
+        await Task.Delay(3000);
+
         // ---- every ability, in the order the ability list shows them
         var results = new List<(SimCheckAbilityReport Report, List<(byte[] Bgra, int W, int H)> Cells, PixelRect Region, string[] Captions)>();
         var grades = new Dictionary<string, AbilityGrade>();
@@ -335,6 +338,7 @@ internal sealed class SimCheckDriver
         string? clipExpected = clipChoice?.File;
         string? clipDefinition = SimClipChooser.FileOf(ability.Clip?.AnmPath);
         string? clipSeen = null; bool clipAdvanced = false;
+        var unitChange = new Dictionary<string, double>(); var unitWhite = new Dictionary<string, double>(); var unitHasMesh = new Dictionary<string, bool>();
         var positions = new List<(double Clock, float X, float Z)>();
         double noise = 0; int particleBaseline = 0;
         SimScript? script = null;
@@ -365,6 +369,21 @@ internal sealed class SimCheckDriver
             void AddBox(Vector3 world) { if (CasterBox(b1, world) is { } box) casterBoxes.Add(box); }
             AddBox(script.ChampionPosition);
             foreach (var d in script.All(SimStepKind.Displace)) { if (d.From is { } f) AddBox(f); if (d.To is { } t) AddBox(t); }
+            // M874: a unit a mechanic moves or summons is no effect either: the boxes of the spawned units, and of the dummy or ally a MoveUnit moves (start, end, and the top of a knock-up)
+            foreach (var st in script.Steps)
+            {
+                if (st.Kind == SimStepKind.Spawn)
+                {
+                    if (st.From is { } sf) AddBox(sf);
+                    if (st.To is { } stTo) AddBox(stTo);
+                    foreach (var wp in st.Path ?? Array.Empty<Vector3>()) AddBox(wp);
+                }
+                else if (st.Kind == SimStepKind.MoveUnit)
+                {
+                    if (st.From is { } mf) { AddBox(mf); AddBox(mf + new Vector3(0f, st.Height, 0f)); }
+                    if (st.To is { } mt) AddBox(mt);
+                }
+            }
             int boxedPositions = 0;
             PixelRect? exclude = SimCheckFrames.Union(casterBoxes);
             particleBaseline = Math.Max(particleBaseline, b1.LiveParticles);
@@ -432,6 +451,22 @@ internal sealed class SimCheckDriver
                 // positions the driver has collected so far join the union (the caster as it really moved)
                 for (; boxedPositions < positions.Count; boxedPositions++)
                     AddBox(new Vector3(positions[boxedPositions].X, script.ChampionPosition.Y, positions[boxedPositions].Z));
+                // the units as they really stand now join the union; the share of each spawned unit's own box that changed is the proof it is drawn
+                foreach (var (unitId, unitPos, hasMesh) in Mp.SimSpawnedUnitStates)
+                {
+                    unitHasMesh[unitId] = hasMesh;
+                    if (CasterBox(b1, unitPos) is { } ubox)
+                    {
+                        casterBoxes.Add(ubox);
+                        double share = SimCheckFrames.ChangedRatio(b1.Bgra, tap.Bgra, tap.Width, tap.Height, ubox);
+                        unitChange[unitId] = Math.Max(unitChange.GetValueOrDefault(unitId), share);
+                        // and what colour that change is: untextured, a unit is a white silhouette (M874 fix)
+                        if (SimCheckFrames.ChangedWhiteShare(b1.Bgra, tap.Bgra, tap.Width, tap.Height, ubox) is { } ws)
+                            unitWhite[unitId] = Math.Max(unitWhite.GetValueOrDefault(unitId), ws);
+                    }
+                }
+                foreach (var moved in script.All(SimStepKind.MoveUnit).Select(m => m.Unit).Distinct())
+                    if (moved is { Length: > 0 } && Mp.SimUnitPosition(moved) is { } mp) AddBox(mp);
                 exclude = SimCheckFrames.Union(casterBoxes);
                 double effect = Math.Max(0.0, SimCheckFrames.ChangedRatio(b1.Bgra, tap.Bgra, tap.Width, tap.Height, region, exclude) - ambient);
                 var ev = new FrameEvidence(sample.Label, sample.Time, clockAtFrame, changed, effect, tap.LiveParticles);
@@ -453,6 +488,19 @@ internal sealed class SimCheckDriver
         var displace = script?.All(SimStepKind.Displace).Where(s => s.To is not null && s.From is not null).ToList() ?? new List<SimStep>();
         bool displaceOk = displace.All(d => SimCheckGrader.DisplacementApplied(d.From!.Value.X, d.From.Value.Z, d.To!.Value.X, d.To.Value.Z, positions, d.EndTime, _thresholds));
 
+        // ---- the scripted mechanics: what the player recorded, read BEFORE the end-of-run reset clears the stage
+        var adapterPlans = script is null ? new List<AdapterStepPlan>() : SimCheckAdapterSteps.Plans(script).ToList();
+        var observations = new AdapterObservations
+        {
+            Trace = trace.Select(t => new StepEvidence(t.Kind.ToString(), t.Planned, t.Clock)).ToList(),
+            Units = Mp.SimUnitTrack.Select(u => new UnitObservation(u.Clock, u.Unit, u.Position.X, u.Position.Y, u.Position.Z, u.Visible)).ToList(),
+            Caster = Mp.SimCasterTrack.ToList(),
+            UnitPixelChange = unitChange, UnitWhiteShare = unitWhite, UnitHasMesh = unitHasMesh,
+            EffectsStarted = Mp.SimEffectStarts.ToList(),
+        };
+        var adapterSteps = SimCheckAdapterSteps.Verify(adapterPlans, observations);
+        bool hadSpawn = script?.All(SimStepKind.Spawn).Any() ?? false;
+
         // ---- cleanup: let the end-of-run reset reach the frames, then compare with the stage
         if (Mp.SimRunning) Mp.StopSimulation();
         await Settle();
@@ -463,6 +511,9 @@ internal sealed class SimCheckDriver
         if (!idleNow.SequenceEqual(stage.Idle)) cleanup.Add($"playback holds {idleNow.Count} effect(s), {stage.Idle.Count} at rest ({string.Join(", ", idleNow.Except(stage.Idle).Take(3))})");
         if (Mp.SelectedEvent is not null) cleanup.Add("an event is still selected");
         if (Mp.SimAllyPosition is not null) cleanup.Add("the ally dummy is still on the stage");
+        if (Mp.SimSpawnedUnits.Count > 0) cleanup.Add($"{Mp.SimSpawnedUnits.Count} summoned unit(s) are still on the stage ({string.Join(", ", Mp.SimSpawnedUnits)})");
+        if (Mp.SimAllyHidden) cleanup.Add("the ally is still hidden");
+        if (Mp.SimLiveEffects.Count > 0) cleanup.Add($"{Mp.SimLiveEffects.Count} scripted effect(s) are still playing");
         if (!Animation_Loops()) cleanup.Add("the clip is left on 'play once'");
         if (Horizontal(Mp.CharacterPosition, stage.Champion) > 2f) cleanup.Add($"the champion is {Horizontal(Mp.CharacterPosition, stage.Champion):0} units from the stage point");
         if (stage.Dummy is { } sd && (Mp.TargetDummyPosition is not { } nd || Horizontal(nd, sd) > 2f)) cleanup.Add("the enemy dummy is not back on the stage");
@@ -485,7 +536,8 @@ internal sealed class SimCheckDriver
             ClipChoiceSource = clipChoice?.Source,
             ClipDefinition = clipDefinition,
             ClipAuthored = ability.AuthoredClipName is { Length: > 0 },
-            ExpectsEffects = SimCheckGrader.ExpectsEffects(ability),
+            ExpectsEffects = SimCheckGrader.ExpectsEffects(ability) || hadSpawn || (script?.All(SimStepKind.Effect).Any() ?? false),
+            AdapterSteps = adapterSteps,
             ClipSeen = clipSeen,
             ClipAdvanced = clipAdvanced,
             HitsExpected = hitsExpected,
@@ -509,7 +561,7 @@ internal sealed class SimCheckDriver
             trace.Select(t => new SimCheckStepReport(t.Kind.ToString(), t.Planned, Math.Round(t.Clock, 3))).ToList(),
             clipExpected, clipSeen, clipAdvanced, hitsExpected, hitsLogged, displace.Count > 0, displaceOk,
             Math.Round(noise, 5), after.Count == 0 ? 0 : Math.Round(after.Max(f => f.ChangedRatio), 5), after.Count == 0 ? 0 : Math.Round(after.Max(f => f.EffectRatio), 5),
-            particleBaseline, after.Count == 0 ? 0 : after.Max(f => f.LiveParticles), frameReports, cleanup, errors, Math.Round(wall.Elapsed.TotalSeconds, 2));
+            particleBaseline, after.Count == 0 ? 0 : after.Max(f => f.LiveParticles), frameReports, cleanup, errors, Math.Round(wall.Elapsed.TotalSeconds, 2), adapterSteps);
         WorkingSetMb();
         return (report, cells, cellRegion, captions.ToArray());
     }
@@ -540,6 +592,12 @@ internal sealed class SimCheckDriver
         if (script.AllyPosition is { } ally) Add(ally);
         Add(script.Aim);
         foreach (var d in script.All(SimStepKind.Displace)) if (d.To is { } to) Add(to);
+        // M874: the places a summoned unit walks to and the units a mechanic moves are part of the picture too
+        foreach (var st in script.Steps)
+        {
+            if (st.Kind == SimStepKind.Spawn) { foreach (var wp in st.Path ?? Array.Empty<Vector3>()) Add(wp); if (st.From is { } sf) Add(sf); }
+            else if (st.Kind == SimStepKind.MoveUnit && st.To is { } mt) Add(mt);
+        }
         var region = SimCheckFrames.RegionAround(points, tap.Width, tap.Height);
         if (Environment.GetEnvironmentVariable("SIMCHECK_DEBUG") == "1")
             Say($"    {script.Key} region {region} from {string.Join(' ', points.Select(p => $"({p.Item1:0},{p.Item2:0})"))} champ {script.ChampionPosition} enemy {script.EnemyPosition} aim {script.Aim}");

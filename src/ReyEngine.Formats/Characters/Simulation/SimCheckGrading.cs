@@ -57,6 +57,8 @@ public sealed record AbilityEvidence
     /// those effects on screen - the effect ratio with the caster's box left out, or a particle gain - and the caster's pose changing is not enough.
     /// </summary>
     public bool ExpectsEffects { get; init; }
+    /// <summary>M874: the verdict of every scripted-mechanic step (spawn, move, effect, hide, jump, attack); a failed one makes the ability INCOMPLETE.</summary>
+    public IReadOnlyList<AdapterStepEvidence> AdapterSteps { get; init; } = Array.Empty<AdapterStepEvidence>();
     /// <summary>The clip the animation player held while the cast ran (null: none was playing).</summary>
     public string? ClipSeen { get; init; }
     /// <summary>The animation clock moved while that clip was in force.</summary>
@@ -135,6 +137,12 @@ public static class SimCheckGrader
         if (e.HitsExpected > 0 && e.HitsLogged < e.HitsExpected)
             reasons.Add(e.HitsLogged == 0 ? "hit expected, none logged" : $"{e.HitsExpected} hit(s) expected, {e.HitsLogged} logged");
         if (e.DisplacementExpected && !e.DisplacementApplied) reasons.Add("displacement planned, not applied to the caster");
+
+        // ---- the scripted mechanics (M874): each step ran and did what it says
+        foreach (var step in e.AdapterSteps.Where(x => !x.Passed))
+            reasons.Add($"adapter step {step.Kind} at {S(step.Time)} s failed: {step.Detail} ({step.Text})");
+        if (e.AdapterSteps.Count > 0 && e.AdapterSteps.All(x => x.Passed))
+            notes.Add($"{e.AdapterSteps.Count} scripted step(s) ran and checked out");
 
         // ---- what is on screen
         var after = e.Frames.Where(f => f.Label != "baseline").ToList();

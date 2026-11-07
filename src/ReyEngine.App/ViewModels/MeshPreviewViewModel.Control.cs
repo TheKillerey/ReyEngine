@@ -265,6 +265,11 @@ public sealed partial class MeshPreviewViewModel
     /// The controller has already decided the cadence (AttacksPerSecond) and that the target is in range.</summary>
     private void PlayAttack()
     {
+        PlayAttackCycle();
+    }
+
+    private void PlayAttackCycle()
+    {
         // The record's pool: weighted by mAttackProbability where the champion authors weights (Akali,
         // Ashe, Garen...), else the plain BasicAttackN cycle (Aatrox) - see AttackSpell.Pool.
         var pool = AttackSpell.Pool(_attacks);
@@ -284,7 +289,15 @@ public sealed partial class MeshPreviewViewModel
         }
         else attack = pool[_attackCycle % pool.Count];
         _attackCycle++;
+        PlayAttackSpell(attack, null, null);
+    }
 
+    /// <summary>
+    /// One swing of <paramref name="attack"/> at <paramref name="targetOverride"/> (the controller's target or the dummy when null). M874: the simulation's Attack step calls this with the
+    /// target it planned and the definition's clip for the attack, which is resolved in the loaded skin's graph like a spell's; the Control tab's own cycle passes neither.
+    /// </summary>
+    private void PlayAttackSpell(AttackSpell attack, Vector3? targetOverride, Formats.Characters.Simulation.SimClip? stepClip)
+    {
         // The clip the record names, out of the Attack row's own clip and its variants; the row's clip
         // (Attack1) when the skin has no clip of that name.
         var row = Actions.FirstOrDefault(a => a.Action.Kind == CharacterActionKind.Attack && a.HasClip);
@@ -298,11 +311,18 @@ public sealed partial class MeshPreviewViewModel
         }
         AnimationEntryViewModel? entry = clip is null ? null : Animation.Animations.FirstOrDefault(e =>
             string.Equals(e.Name, System.IO.Path.GetFileName(clip.AnmPath.Replace('\\', '/')), StringComparison.OrdinalIgnoreCase));
+        if (stepClip is not null)
+        {
+            // M874: the definition's clip for this attack, resolved in the loaded skin's own graph; the record's clip row is the fallback
+            bool Has(string? file) => file is not null && Animation.Animations.Any(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase));
+            if (Formats.Characters.Simulation.SimClipChooser.ChooseClip(attack.ClipName, stepClip, null, _ownClips, _ownNodes, Has, null) is { } choice)
+                entry = Animation.Animations.FirstOrDefault(e => string.Equals(e.Name, choice.File, StringComparison.OrdinalIgnoreCase)) ?? entry;
+        }
 
         // The composite rides the clip through ApplyClipParticles, exactly as a spell's does.
         _eventPlaybackActive = false;
         _activeEvent = null;
-        _eventBundle = BuildAttackBundle(attack);
+        _eventBundle = BuildAttackBundle(attack, targetOverride);
         ControlStatus = $"{attack.Name}: {attack.ClipName}"
                         + (attack.IsRanged ? " · missile" : "")
                         + (attack.HitEffectKey != 0 ? " · hit" : "");
@@ -319,11 +339,11 @@ public sealed partial class MeshPreviewViewModel
 
     /// <summary>The attack's missile flying caster to target from the windup, and its hit at the target
     /// when the missile lands - or at the windup for a melee swing. Both face the way a cast's do.</summary>
-    private List<VfxPlaybackItem> BuildAttackBundle(AttackSpell attack)
+    private List<VfxPlaybackItem> BuildAttackBundle(AttackSpell attack, Vector3? targetOverride = null)
     {
         var items = new List<VfxPlaybackItem>();
         var caster = CharacterPosition;
-        var target = _controller.Target ?? TargetDummyPosition ?? caster + Forward() * (float)AttackRange;
+        var target = targetOverride ?? _controller.Target ?? TargetDummyPosition ?? caster + Forward() * (float)AttackRange;
         float windup = attack.CastSecondsAt(ClipFps());
         float flight = 0f;
 
@@ -340,6 +360,7 @@ public sealed partial class MeshPreviewViewModel
                 TravelTo = target,
                 TravelSeconds = seconds,
                 StartDelay = windup,
+                HostIsCaster = false,   // M874: a missile is not on the caster
             });
         }
 
@@ -349,6 +370,7 @@ public sealed partial class MeshPreviewViewModel
             items.Add(BuildItem(hitDef, Formats.Vfx.VfxCastFrame.Toward(target, caster, target)) with
             {
                 StartDelay = windup + flight,
+                HostIsCaster = false,   // M874: the impact is at the target
             });
         return items;
     }

@@ -76,6 +76,8 @@ public sealed class D3D11MapProps
         public readonly List<Matrix4x4> Transforms = new();
     }
     private readonly List<PendingUpload> _pending = new();
+    /// <summary>M874: how many placements of each distinct mesh the last <see cref="Load"/> was given, to recognise a set that only MOVED.</summary>
+    private Dictionary<PropMesh, int> _loadedCounts = new(ReferenceEqualityComparer.Instance);
     private int _pendingAt;
     private Func<PropMesh, PreparedCharacterScene?>? _prepare;
     private Func<Vector3, PropLighting?>? _lightingAt;
@@ -140,6 +142,8 @@ public sealed class D3D11MapProps
 
         _prepare = prepare;
         _lightingAt = lightingAt;
+        _loadedCounts = new Dictionary<PropMesh, int>(ReferenceEqualityComparer.Instance);
+        foreach (var inst in set.Instances) _loadedCounts[inst.Mesh] = _loadedCounts.GetValueOrDefault(inst.Mesh) + 1;
 
         // M733: grouping is ALL this does now. It used to upload every distinct mesh here - the scene
         // prepare, every texture decoded, the pipeline built and the geometry sent to the card - and it is
@@ -161,6 +165,31 @@ public sealed class D3D11MapProps
             p.Transforms.Add(inst.Transform);
         }
         UpdateReport();
+    }
+
+    /// <summary>
+    /// M874: a set with the same meshes, the same number of placements of each, in the same order, only moved (a summoned unit walking, a dummy knocked up) takes its new
+    /// transforms IN PLACE: no material, texture or geometry is dropped and nothing is decoded again. False when the set differs, and the caller loads it as before.
+    /// </summary>
+    public bool TryUpdateTransforms(PropRenderSet? set)
+    {
+        if (set is null || _loadedCounts.Count == 0) return false;
+        var counts = new Dictionary<PropMesh, int>(ReferenceEqualityComparer.Instance);
+        foreach (var inst in set.Instances) counts[inst.Mesh] = counts.GetValueOrDefault(inst.Mesh) + 1;
+        if (counts.Count != _loadedCounts.Count) return false;
+        foreach (var (mesh, n) in counts) if (_loadedCounts.GetValueOrDefault(mesh) != n) return false;
+
+        var next = new Dictionary<PropMesh, int>(ReferenceEqualityComparer.Instance);
+        foreach (var inst in set.Instances)
+        {
+            int k = next[inst.Mesh] = next.GetValueOrDefault(inst.Mesh);
+            next[inst.Mesh] = k + 1;
+            var geom = _geoms.FirstOrDefault(g => ReferenceEquals(g.Mesh, inst.Mesh));
+            if (geom is not null) { if (k < geom.Instances.Count) geom.Instances[k] = inst.Transform; continue; }
+            var pend = _pending.Skip(_pendingAt).FirstOrDefault(p => ReferenceEquals(p.Mesh, inst.Mesh));
+            if (pend is not null && k < pend.Transforms.Count) pend.Transforms[k] = inst.Transform;
+        }
+        return true;
     }
 
     /// <summary>M733: upload as many waiting prop meshes as <see cref="UploadBudgetMs"/> allows, and at

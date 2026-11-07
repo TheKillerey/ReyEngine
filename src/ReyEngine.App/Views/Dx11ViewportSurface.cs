@@ -393,6 +393,7 @@ public sealed class Dx11ViewportSurface : IDisposable
         {
             if (ReferenceEquals(_propMeshes, value)) return;   // rebuilt only when the set really changes
             _propMeshes = value;
+            if (Props?.TryUpdateTransforms(value) == true) return;   // M874: the same meshes, only moved - no reload
             Props?.Load(value, PreparePropScene, PropLightingAt);
         }
     }

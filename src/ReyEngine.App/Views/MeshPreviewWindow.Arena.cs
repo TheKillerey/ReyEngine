@@ -165,7 +165,9 @@ public partial class MeshPreviewWindow
         surface.Backdrop = null;
         surface.ApplySkybox(map.CurrentSkybox);
         surface.ShaderCache = map.Dx11ShaderCache;
-        surface.PreparePropScene = map.PreparePropDx11Scene;
+        // M874: a summoned unit lives in the CHAMPION's wad, which the stage viewport (Map11 only) cannot read: its textures would not be found and bind as white.
+        // Those meshes are prepared by the main view model's own reader (vm.PrepareOwnPropScene); every other prop, the map's and the dummy, by the map's.
+        surface.PreparePropScene = mesh => vm.IsOwnPropMesh(mesh) && vm.PrepareOwnPropScene is { } own ? own(mesh) : map.PreparePropDx11Scene(mesh);
         surface.PropLightingAt = map.PropLightingAt;
         surface.PlayPropAnimations = map.PlayPropAnimations;
         UpdateArenaPlayback(vm, map);

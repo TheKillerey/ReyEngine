@@ -24,7 +24,10 @@ public static class SimCheckSamples
         if (!(endTime > 0.0)) return Array.Empty<SamplePoint>();
         double castStart = steps.Where(s => s.Kind is "Composite" or "Clip").Select(s => s.Time).DefaultIfEmpty(0.0).Min();
         var wanted = new List<SamplePoint> { new("cast", castStart + CastDelay) };
-        if (steps.FirstOrDefault(s => s.Kind == "Hit") is { Kind: "Hit" } hit) wanted.Add(new SamplePoint("hit", hit.Time + HitDelay));
+        // M874: a script with several hits (an attack run, a stack) is sampled after each of the first three, not only the first
+        int hitNo = 0;
+        foreach (var hit in steps.Where(s => s.Kind == "Hit").OrderBy(s => s.Time).Take(3))
+            wanted.Add(new SamplePoint(hitNo++ == 0 ? "hit" : $"hit{hitNo}", hit.Time + HitDelay));
         wanted.Add(new SamplePoint("end", Math.Max(0.0, endTime - EndLead)));
         wanted.Add(new SamplePoint("mid", endTime * 0.5));      // last in priority: the frame the others replace first
 
