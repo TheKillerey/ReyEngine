@@ -47,7 +47,12 @@ public static class VfxPlaybackSim
             BitConverter.SingleToInt32Bits(item.Transform.M41),
             BitConverter.SingleToInt32Bits(item.Transform.M42),
             BitConverter.SingleToInt32Bits(item.Transform.M43));
-        var sim = new VfxParticleSimulator(seed);
+        var sim = new VfxParticleSimulator(seed)
+        {
+            // M877: a system riding the FULL bone frame (clip events) takes isLocalOrientation=false as "do not inherit
+            // the bone's rotation". The cast path already keeps yaw only and is left as it was.
+            WorldOrientationForNonLocal = item.AttachBone is not null && !item.PreserveCastDirection,
+        };
         // The Matrix4x4 overload, not the Vector3 one: beyond position it establishes BasePos and the
         // PlacementRight/Up/Forward frame that every arbitraryQuad emitter is oriented in.
         sim.SetSystem(item.System, item.Transform);

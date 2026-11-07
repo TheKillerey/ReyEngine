@@ -324,7 +324,7 @@ public sealed class VfxParticleSimulator
                     : 0f,
                 SizeOverride = VfxEmitterOverride.Scale(e),
             };
-            PlaceEmitter(state, worldTransform, inverse);
+            PlaceEmitter(state, worldTransform, inverse, WorldOrientationForNonLocal);
             _emitters.Add(state);
         }
         ResolveBeams();   // M183: endpoints depend on BasePos + the placement basis just computed
@@ -339,7 +339,7 @@ public sealed class VfxParticleSimulator
 
     /// <summary>The emitter's world frame (M795: its override frame under the placement), its spawn origin
     /// and the placement basis. An emitter with no override takes the placement and its inverse as they are.</summary>
-    private static void PlaceEmitter(EmitterState s, Matrix4x4 worldTransform, Matrix4x4 inverseWorld)
+    private static void PlaceEmitter(EmitterState s, Matrix4x4 worldTransform, Matrix4x4 inverseWorld, bool worldOrientationForNonLocal)
     {
         if (VfxEmitterOverride.IsAuthored(s.Def))
         {
@@ -352,10 +352,14 @@ public sealed class VfxParticleSimulator
             s.InverseWorld = inverseWorld;
         }
         s.BasePos = Vector3.Transform(s.Def.EmitterPosition.Constant, s.World);
-        s.PlacementRight = SafeNormal(Vector3.TransformNormal(Vector3.UnitX, worldTransform), Vector3.UnitX);
-        s.PlacementUp = SafeNormal(Vector3.TransformNormal(Vector3.UnitY, worldTransform), Vector3.UnitY);
-        s.PlacementForward = SafeNormal(Vector3.TransformNormal(Vector3.UnitZ, worldTransform), Vector3.UnitZ);
+        (s.PlacementRight, s.PlacementUp, s.PlacementForward) =
+            VfxEmitterOrientation.Basis(worldTransform, s.Def.Extras?.IsLocalOrientationOrDefault ?? true, worldOrientationForNonLocal);
     }
+
+    /// <summary>M877: when set, an emitter authored <c>isLocalOrientation = false</c> keeps WORLD axes for its
+    /// quads and meshes however the host (a bone) is rotated; its position and motion still follow the host.
+    /// Off by default: map placements and the Particle Editor keep their placement basis.</summary>
+    public bool WorldOrientationForNonLocal { get; set; }
 
     /// <summary>M86: move the whole system WITHOUT resetting live particles — used to follow an animated
     /// bone per frame (spawn origins and placement axes update; existing particles keep flying).</summary>
@@ -365,7 +369,7 @@ public sealed class VfxParticleSimulator
         foreach (var s in _emitters)
         {
             var previous = s.World;
-            PlaceEmitter(s, worldTransform, inverse);
+            PlaceEmitter(s, worldTransform, inverse, WorldOrientationForNonLocal);
             FollowEmitter(s, previous);
         }
         // M183: the beam endpoints hang off BasePos and the placement basis, both of which just moved -
