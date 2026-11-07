@@ -7583,19 +7583,24 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <param name="skinBin">M728: the skin bin the window was opened with - its initialSubmeshToHide and its own
     /// animation graph. The mesh's folder decides only when nobody chose one.</param>
     private (IReadOnlyList<string> InitialHide, IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? Clips,
-             IReadOnlySet<string> OwnAnms, IReadOnlyList<Formats.Skeletons.AnimClipInfo> AllClips)
+             IReadOnlySet<string> OwnAnms, IReadOnlyList<Formats.Skeletons.AnimClipInfo> AllClips,
+             IReadOnlyList<Formats.Skeletons.AnimClipInfo> OwnClips, IReadOnlyList<Formats.Skeletons.AnimClipNode> OwnNodes)
         LoadSubmeshRules(WadAssetEntry skn, string? skinBin = null)
     {
         var ownAnms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Keyed by clip NAME and ordered: this skin's own graph goes in first, so where several graphs
         // define "Spell2" the one that wins is the one this skin actually plays.
         var byClipName = new Dictionary<string, Formats.Skeletons.AnimClipInfo>(StringComparer.OrdinalIgnoreCase);
+        // M873: this skin's OWN graph, atomic clips and composite nodes, kept apart from the merged list above: an authored
+        // clip name is resolved in the graph the loaded skin links, never in another skin's.
+        var ownClips = new List<Formats.Skeletons.AnimClipInfo>();
+        IReadOnlyList<Formats.Skeletons.AnimClipNode> ownNodes = Array.Empty<Formats.Skeletons.AnimClipNode>();
         try
         {
-            if (!skn.IsResolved) return (Array.Empty<string>(), null, ownAnms, Array.Empty<Formats.Skeletons.AnimClipInfo>());
+            if (!skn.IsResolved) return (Array.Empty<string>(), null, ownAnms, Array.Empty<Formats.Skeletons.AnimClipInfo>(), ownClips, ownNodes);
             var parts = skn.Path.Split('/');
             int ci = Array.FindIndex(parts, p => p.Equals("characters", StringComparison.OrdinalIgnoreCase));
-            if (ci < 0 || ci + 1 >= parts.Length) return (Array.Empty<string>(), null, ownAnms, Array.Empty<Formats.Skeletons.AnimClipInfo>());
+            if (ci < 0 || ci + 1 >= parts.Length) return (Array.Empty<string>(), null, ownAnms, Array.Empty<Formats.Skeletons.AnimClipInfo>(), ownClips, ownNodes);
             string champ = parts[ci + 1];
             const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
             string animDir = $"characters/{champ}/animations/";
@@ -7619,13 +7624,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 && VfxSystemResolver.ExtractDependencies(GetAssetBytes(skinBinEntry))
                     .FirstOrDefault(d => d.Contains("/animations/", OIC)) is { } graphPath
                 && TryResolveEntry(HashAlgorithms.WadPath(graphPath), out var graphEntry))
-                foreach (var c in Formats.Skeletons.ChampionAnimationData.ParseClips(GetAssetBytes(graphEntry), ResolveBinName, ResolveWadPath))
+            {
+                var graphBytes = GetAssetBytes(graphEntry);
+                ownNodes = Formats.Skeletons.AnimationClipGraph.ParseNodes(graphBytes, ResolveBinName);
+                foreach (var c in Formats.Skeletons.ChampionAnimationData.ParseClips(graphBytes, ResolveBinName, ResolveWadPath))
                 {
+                    ownClips.Add(c);
                     var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
                     if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
                     if (file.Length > 0) ownAnms.Add(file);   // M115: THIS skin's animation set
                     if (c.Name.Length > 0) byClipName.TryAdd(c.Name, c);   // M663
                 }
+            }
 
             foreach (var e in AssetEntries)
             {
@@ -7650,9 +7660,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             if (clips.Count > 0)
                 _log.Info("Preview", $"{champ}: {clips.Count} named clip(s) with visibility data, "
                     + $"{byClipName.Count} distinct clip name(s), initial-hide: {(hide.Count > 0 ? string.Join(' ', hide) : "(none)")}.");
-            return (hide, clips.Count > 0 ? clips : null, ownAnms, byClipName.Values.ToList());
+            return (hide, clips.Count > 0 ? clips : null, ownAnms, byClipName.Values.ToList(), ownClips, ownNodes);
         }
-        catch { return (Array.Empty<string>(), null, ownAnms, byClipName.Values.ToList()); }
+        catch { return (Array.Empty<string>(), null, ownAnms, byClipName.Values.ToList(), ownClips, ownNodes); }
     }
 
     private IEnumerable<AnimationEntryViewModel> FindAnimations(WadAssetEntry skn, IReadOnlySet<string>? currentSkinAnms = null)
@@ -12228,7 +12238,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 return (m, s, t, v);
             });
             // M85: game-accurate submesh visibility — skin bin initial-hide + animation-graph clip lists.
-            var (initialHide, clipsByAnm, ownAnms, allClips) = LoadSubmeshRules(entry, binPath);
+            var (initialHide, clipsByAnm, ownAnms, allClips, ownClips, ownNodes) = LoadSubmeshRules(entry, binPath);
             // M90: clip SFX banks. M728: still found from the mesh's folder, which for Lillia's skin 49 is right -
             // its bankUnits name skin 46's banks.
             await Task.Run(() => LoadChampionAudio(entry));
@@ -12251,7 +12261,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MeshPreview.Materials = textures.Materials;
                 // M812: the CHROMA card scans THIS skin's bin, on demand. Nothing is read here - opening a skin gets no slower.
                 MeshPreview.SetChromaSkin(binPath);
-                MeshPreview.SetSubmeshRules(initialHide, clipsByAnm, allClips);
+                MeshPreview.SetSubmeshRules(initialHide, clipsByAnm, allClips, ownClips, ownNodes);
                 MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
                     ? FindAnimations(entry, ownAnms)
                     : Enumerable.Empty<AnimationEntryViewModel>());

@@ -44,7 +44,19 @@ public sealed record AbilityEvidence
     public bool TimedOut { get; init; }
     public double TimeoutSeconds { get; init; }
 
+    /// <summary>The clip the player was supposed to play: the SAME resolution the player uses (M873: <c>MeshPreviewViewModel.ChooseSimClip</c>).</summary>
     public string? ClipExpected { get; init; }
+    /// <summary>How the player chose <see cref="ClipExpected"/>: "authored", "authored-composite", "definition" or "composite".</summary>
+    public string? ClipChoiceSource { get; init; }
+    /// <summary>M873: the file of the definition's own clip (the base skin's authored one); null when the definition has none.</summary>
+    public string? ClipDefinition { get; init; }
+    /// <summary>M873: the spell authors a clip name. Then the clip the player plays must be the definition's (the check runs on the base skin).</summary>
+    public bool ClipAuthored { get; init; }
+    /// <summary>
+    /// M873: the data gives this ability visuals of its own (caster, target, return or missile systems, or visual clip particle events). Then COMPLETE needs
+    /// those effects on screen - the effect ratio with the caster's box left out, or a particle gain - and the caster's pose changing is not enough.
+    /// </summary>
+    public bool ExpectsEffects { get; init; }
     /// <summary>The clip the animation player held while the cast ran (null: none was playing).</summary>
     public string? ClipSeen { get; init; }
     /// <summary>The animation clock moved while that clip was in force.</summary>
@@ -111,8 +123,13 @@ public static class SimCheckGrader
             if (e.ClipSeen is not { Length: > 0 }) reasons.Add($"clip missing: '{e.ClipExpected}' expected, no clip was playing");
             else if (!SameClip(e.ClipExpected, e.ClipSeen)) reasons.Add($"clip missing: '{e.ClipExpected}' expected, '{e.ClipSeen}' was playing");
             else if (!e.ClipAdvanced) reasons.Add($"clip '{e.ClipSeen}' was selected but its clock never advanced");
+            // M873: Riot's authored clip wins. The check runs on the base skin, whose graph is the definition's: a different file is the player's mistake.
+            if (e.ClipAuthored && e.ClipDefinition is { Length: > 0 } && !SameClip(e.ClipExpected, e.ClipDefinition))
+                reasons.Add($"clip mismatch: the authored clip is '{e.ClipDefinition}', the player chose '{e.ClipExpected}' ({e.ClipChoiceSource ?? "unknown"})");
         }
         else if (e.ClipSeen is { Length: > 0 }) notes.Add($"no clip in the definition; '{e.ClipSeen}' was playing");
+        if (e.ClipAuthored && e.ClipDefinition is not { Length: > 0 } && e.ClipExpected is { Length: > 0 })
+            notes.Add($"the authored clip is not in the base graph; '{e.ClipExpected}' ({e.ClipChoiceSource ?? "composite"}) was played instead");
 
         // ---- hit and displacement
         if (e.HitsExpected > 0 && e.HitsLogged < e.HitsExpected)
@@ -127,20 +144,41 @@ public static class SimCheckGrader
             double peak = after.Max(f => f.ChangedRatio), peakEffect = after.Max(f => f.EffectRatio);
             int particlePeak = after.Max(f => f.LiveParticles);
             bool changed = peak - e.NoiseRatio >= t.MinChangedRatio;
+            bool effect = peakEffect - e.NoiseRatio >= t.MinChangedRatio;
             bool particles = particlePeak - e.ParticleBaseline >= t.MinParticleGain;
-            if (!changed && !particles)
-                reasons.Add($"no visible change (peak changed ratio {F(peak)} vs noise {F(e.NoiseRatio)}, needs +{F(t.MinChangedRatio)}) "
-                            + $"and no live particles gained ({particlePeak} vs {e.ParticleBaseline} before)");
-            else if (changed && !particles && !(peakEffect - e.NoiseRatio >= t.MinChangedRatio))
-                notes.Add($"the change is the caster's own pose; nothing else moved in the frame (effect ratio {F(peakEffect)})");
-            else if (!changed && particles)
-                notes.Add($"no pixel change above the noise, but {particlePeak - e.ParticleBaseline} particle(s) gained");
+            string gained = $"no live particles gained ({particlePeak} vs {e.ParticleBaseline} before)";
+            if (e.ExpectsEffects)
+            {
+                // M873: the data says this ability has effects, so they must show: change OUTSIDE the caster's box, or new particles.
+                if (!effect && !particles)
+                    reasons.Add(changed
+                        ? $"only the caster pose changed (effect ratio {F(peakEffect)} vs noise {F(e.NoiseRatio)}, needs +{F(t.MinChangedRatio)}) and {gained}; the ability effects never showed"
+                        : $"no visible change (peak changed ratio {F(peak)} vs noise {F(e.NoiseRatio)}, needs +{F(t.MinChangedRatio)}) and {gained}");
+                else if (!effect) notes.Add($"no pixel change outside the caster, but {particlePeak - e.ParticleBaseline} particle(s) gained");
+                else if (!particles) notes.Add($"effect pixels changed (effect ratio {F(peakEffect)}); no particle gain ({particlePeak} vs {e.ParticleBaseline})");
+            }
+            else if (!changed && !particles)
+                reasons.Add($"no visible change (peak changed ratio {F(peak)} vs noise {F(e.NoiseRatio)}, needs +{F(t.MinChangedRatio)}) and {gained}");
+            else if (e.ClipExpected is { Length: > 0 } && !particles)
+                notes.Add("animation only - no visual systems in the data");
         }
 
         // ---- cleanup
         foreach (string problem in e.CleanupProblems) reasons.Add("cleanup: " + problem);
 
         return new AbilityGrade(reasons.Count == 0 ? SimCheckGrade.Complete : SimCheckGrade.Incomplete, reasons, notes);
+    }
+
+    /// <summary>
+    /// M873: does the data give <paramref name="a"/> effects of its own? Caster, target or return systems, a missile effect or hit effect, or a clip particle event
+    /// whose system is not known to be invisible. An unresolved system counts (the data says there is one); one known to have no visual emitter does not.
+    /// </summary>
+    public static bool ExpectsEffects(AbilitySim a)
+    {
+        static bool Visible(SimSystemRef? r) => r is not null && r.Visual != false;
+        return a.CasterSystems.Any(Visible) || a.TargetSystems.Any(Visible) || a.ReturnSystems.Any(Visible)
+               || a.Missiles.Any(m => Visible(m.Effect) || Visible(m.HitEffect))
+               || a.ClipParticleEvents.Any(p => Visible(p.System));
     }
 
     private static bool SameClip(string expected, string seen) =>

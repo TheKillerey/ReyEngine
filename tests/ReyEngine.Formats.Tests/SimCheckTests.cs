@@ -130,8 +130,9 @@ public sealed class SimCheckTests : IDisposable
         Assert.True(SimCheckGrader.Grade(particles).IsComplete);
         var pose = Good() with { Frames = new[] { new FrameEvidence("cast", 0.15, 0.15, 0.02, 0.0, 0) } };
         var g = SimCheckGrader.Grade(pose);
-        Assert.True(g.IsComplete);
-        Assert.Contains("caster's own pose", Assert.Single(g.Notes));
+        Assert.True(g.IsComplete);   // M873: passes only because the data gives this ability no visual systems of its own
+        Assert.Contains("animation only", Assert.Single(g.Notes));
+        Assert.Contains("only the caster pose changed", One(pose with { ExpectsEffects = true }));
         Assert.Contains("no frame", One(Good() with { Frames = Array.Empty<FrameEvidence>() }));
     }
 

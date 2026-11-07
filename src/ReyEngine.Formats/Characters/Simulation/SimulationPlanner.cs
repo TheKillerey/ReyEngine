@@ -113,16 +113,18 @@ public static class SimulationPlanner
 
     private static bool IsUnitTargeted(string kind) => Normalise(kind) is "target" or "targetorlocation";
 
-    public static SimScript Plan(ChampionSimDefinition def, AbilitySim ability, SimStage stage, IEnumerable<ISimAdapter>? adapters = null)
+    /// <param name="playedClip">M873: the clip the player will actually play (its duration measured from the file), when that is not the definition's base-skin clip - a skin that
+    /// overrides the clip with a different length. The Clip step and the script end are timed from it; null keeps the definition's clip.</param>
+    public static SimScript Plan(ChampionSimDefinition def, AbilitySim ability, SimStage stage, IEnumerable<ISimAdapter>? adapters = null, SimClip? playedClip = null)
     {
-        var script = PlanCore(def, ability, stage);
+        var script = PlanCore(def, ability, stage, playedClip);
         foreach (var adapter in adapters ?? Adapters)
             if (adapter.Champion.Equals(def.Champion, StringComparison.OrdinalIgnoreCase))
                 script = adapter.Adapt(def, ability, stage, script);
         return script;
     }
 
-    private static SimScript PlanCore(ChampionSimDefinition def, AbilitySim a, SimStage stage)
+    private static SimScript PlanCore(ChampionSimDefinition def, AbilitySim a, SimStage stage, SimClip? playedClip = null)
     {
         var notes = new List<string>();
         var steps = new List<SimStep>();
@@ -194,9 +196,10 @@ public static class SimulationPlanner
         { From = champion, To = aim, Name = a.Key });
 
         // ---- clip and composite ----
-        float? clipSeconds = a.Clip?.DurationSeconds;
-        if (a.Clip is { } clip)
-            steps.Add(new SimStep(SimStepKind.Clip, 0f, clip.Source is "authored" or "convention" or "adapter" ? clip.Source : "convention",
+        var planClip = playedClip ?? a.Clip;
+        float? clipSeconds = planClip?.DurationSeconds;
+        if (planClip is { } clip)
+            steps.Add(new SimStep(SimStepKind.Clip, 0f, clip.Source is "authored" or "authored-composite" or "convention" or "adapter" ? clip.Source : "convention",
                 $"clip {clip.Name}" + (clipSeconds is { } cs ? $" ({cs.ToString("0.###", CultureInfo.InvariantCulture)} s)" : ""))
             { Name = clip.Name, EndTime = clipSeconds ?? 0f });
         steps.Add(new SimStep(SimStepKind.Composite, 0f, "convention", $"spell composite {a.Key}") { Name = a.Key });

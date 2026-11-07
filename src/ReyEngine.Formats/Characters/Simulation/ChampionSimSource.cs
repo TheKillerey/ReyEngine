@@ -29,6 +29,8 @@ public sealed class ChampionSimInputs
     public IReadOnlyDictionary<uint, VfxSystemDefinition> Systems { get; init; } = new Dictionary<uint, VfxSystemDefinition>();
     public IReadOnlyDictionary<uint, uint> ResourceMap { get; init; } = new Dictionary<uint, uint>();
     public IReadOnlyList<AnimClipInfo> Clips { get; init; } = Array.Empty<AnimClipInfo>();
+    /// <summary>M873: the base graph's non-atomic clip entries (sequencer, selector, parametric, condition).</summary>
+    public IReadOnlyList<AnimClipNode> ClipNodes { get; init; } = Array.Empty<AnimClipNode>();
     /// <summary>The .anm header of a clip path: frame rate and duration, or null when it cannot be read. Cached by the caller.</summary>
     public Func<string, (float Fps, float Duration)?> ReadClipTiming { get; init; } = _ => null;
     public IReadOnlyList<string> Issues { get; init; } = Array.Empty<string>();
@@ -52,6 +54,7 @@ public static class ChampionSimSource
         var resMap = new Dictionary<uint, uint>();
         string? graphPath = null;
         IReadOnlyList<AnimClipInfo> clips = Array.Empty<AnimClipInfo>();
+        IReadOnlyList<AnimClipNode> clipNodes = Array.Empty<AnimClipNode>();
 
         ulong skinHash = HashAlgorithms.WadPath(skinBin);
         if (!wad.TryGetEntry(skinHash, out _))
@@ -90,8 +93,11 @@ public static class ChampionSimSource
             else if (!wad.TryGetEntry(HashAlgorithms.WadPath(graphPath), out _))
                 issues.Add($"animation graph {graphPath} is not in the WAD");
             else
-                clips = ChampionAnimationData.ParseClips(wad.Extract(HashAlgorithms.WadPath(graphPath)),
-                    resolveBinName, resolveWadPath);
+            {
+                byte[] graphBytes = wad.Extract(HashAlgorithms.WadPath(graphPath));
+                clips = ChampionAnimationData.ParseClips(graphBytes, resolveBinName, resolveWadPath);
+                clipNodes = AnimationClipGraph.ParseNodes(graphBytes, resolveBinName);
+            }
         }
 
         var timing = new Dictionary<string, (float, float)?>(StringComparer.OrdinalIgnoreCase);
@@ -122,6 +128,7 @@ public static class ChampionSimSource
             Systems = systems,
             ResourceMap = resMap,
             Clips = clips,
+            ClipNodes = clipNodes,
             ReadClipTiming = p => ReadTiming(p),
             Issues = issues,
         };

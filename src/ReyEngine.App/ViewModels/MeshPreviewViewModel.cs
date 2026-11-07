@@ -245,6 +245,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Mesh = mesh;
         Skeleton = skeleton;
         Textures = textures;
+        // M873: the previous skin's animation graph must never reach a later load path (SetSubmeshRules installs this skin's own)
+        _ownClips = Array.Empty<Formats.Skeletons.AnimClipInfo>(); _ownNodes = Array.Empty<Formats.Skeletons.AnimClipNode>();
         Materials = null;   // M142: cleared per preview; only the legacy-map viewer sets it after Show
         MaskTextures = null; GradientTextures = null; EmissiveTextures = null;   // M142.2: map-only layers
         MatCapTextures = null; LightmapTextures = null;
@@ -418,13 +420,20 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// by-file view silently drops all but the first - which is fine for "what does the animation now
     /// playing hide?" and wrong for anything that reads the clip list as a whole.</summary>
     private IReadOnlyList<Formats.Skeletons.AnimClipInfo> _allClips = Array.Empty<Formats.Skeletons.AnimClipInfo>();
+    /// <summary>M873: the clips and composite nodes of the loaded skin's OWN animation graph (see <see cref="ChooseSimClip"/>).</summary>
+    private IReadOnlyList<Formats.Skeletons.AnimClipInfo> _ownClips = Array.Empty<Formats.Skeletons.AnimClipInfo>();
+    private IReadOnlyList<Formats.Skeletons.AnimClipNode> _ownNodes = Array.Empty<Formats.Skeletons.AnimClipNode>();
 
     /// <summary>Provide the skin's initial-hide list + animation-graph clips (keyed by .anm file name),
     /// and the full clip list beside it.</summary>
     public void SetSubmeshRules(IReadOnlyList<string> initialHide,
         IReadOnlyDictionary<string, Formats.Skeletons.AnimClipInfo>? clipsByAnm,
-        IReadOnlyList<Formats.Skeletons.AnimClipInfo>? allClips = null)
+        IReadOnlyList<Formats.Skeletons.AnimClipInfo>? allClips = null,
+        IReadOnlyList<Formats.Skeletons.AnimClipInfo>? ownClips = null,
+        IReadOnlyList<Formats.Skeletons.AnimClipNode>? ownNodes = null)
     {
+        _ownClips = ownClips ?? Array.Empty<Formats.Skeletons.AnimClipInfo>();
+        _ownNodes = ownNodes ?? Array.Empty<Formats.Skeletons.AnimClipNode>();
         _initialHide = initialHide;
         _clipsByAnm = clipsByAnm;
         _allClips = allClips ?? clipsByAnm?.Values.ToList() ?? (IReadOnlyList<Formats.Skeletons.AnimClipInfo>)Array.Empty<Formats.Skeletons.AnimClipInfo>();

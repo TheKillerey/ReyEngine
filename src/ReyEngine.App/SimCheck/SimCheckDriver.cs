@@ -38,6 +38,9 @@ internal sealed class SimCheckDriver
     private MeshPreviewWindow? _window;
     private string _gameVersion = "unknown";
     private string _outRoot = "";
+    private readonly List<string> _writeFailures = new();
+    private string SpeedText => _options.Speed.ToString(CultureInfo.InvariantCulture);
+    private string PlacementText => _options.Placement.ToString().ToLowerInvariant();
     private double _peakWorkingSetMb;
 
     private MeshPreviewViewModel Mp => _vm.MeshPreview;
@@ -114,11 +117,11 @@ internal sealed class SimCheckDriver
         Mp.SimSpeed = _options.Speed;
         Mp.UseDx11Preview = true;
 
-        int done = 0, skipped = 0;
+        int done = 0, skipped = 0, writeErrors = 0;
         foreach (string champion in selection.Champions)
         {
             string reportPath = SimCheckReports.ReportPath(_outRoot, _gameVersion, champion);
-            if (SimCheckReports.IsDone(reportPath, _gameVersion, ChampionSimDefinition.CurrentGeneratorVersion, _options.Force))
+            if (SimCheckReports.IsDone(reportPath, _gameVersion, ChampionSimDefinition.CurrentGeneratorVersion, _options.Force, SpeedText, PlacementText))
             { skipped++; Say($"{champion,-16} skipped (report exists)"); continue; }
 
             var sw = Stopwatch.StartNew();
@@ -128,30 +131,60 @@ internal sealed class SimCheckDriver
             {
                 report = Blocked(champion, "check threw: " + ex.GetType().Name + ": " + ex.Message, sw.Elapsed.TotalSeconds);
             }
-            SimCheckReports.WriteFile(reportPath, SimCheckReports.Write(report));
+            // M873: a champion whose report cannot be written is recorded and skipped; it never ends the roster run
+            try { SimCheckReports.WriteFile(reportPath, SimCheckReports.Write(report)); }
+            catch (Exception ex)
+            {
+                writeErrors++;
+                Say($"{champion,-16} REPORT NOT WRITTEN: {ex.GetType().Name}: {ex.Message}");
+                _writeFailures.Add($"{champion}: {ex.GetType().Name}: {ex.Message}");
+                GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+                continue;
+            }
             done++;
             Say($"{champion,-16} {report.Status,-10} {string.Join(' ', report.Abilities.Where(a => !a.Wrapper).Select(a => a.Key.Split(' ')[0] + "=" + a.Grade[0]))}"
                 + $"  {report.WallSeconds.ToString("0", CultureInfo.InvariantCulture)} s  {report.WorkingSetMb.ToString("0", CultureInfo.InvariantCulture)} MB");
 
             // the window drops the last champion's scene when the next loads; give the garbage back between champions
             GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+            Say($"  memory after {champion}: {MemoryText()}");
         }
 
         var all = SimCheckReports.ReadAll(_outRoot, _gameVersion);
         var summary = SimCheckReports.Summarize(_gameVersion, ChampionSimDefinition.CurrentGeneratorVersion, all);
-        SimCheckReports.WriteFile(Path.Combine(_outRoot, _gameVersion, "_summary.json"), SimCheckReports.Write(summary));
-        SimCheckReports.WriteFile(Path.Combine(_outRoot, _gameVersion, "_summary.md"), SimCheckReports.SummaryMarkdown(summary));
-        Say($"done: {done} checked, {skipped} skipped, {swAll.Elapsed.TotalSeconds.ToString("0", CultureInfo.InvariantCulture)} s, peak working set {_peakWorkingSetMb.ToString("0", CultureInfo.InvariantCulture)} MB; "
+        try
+        {
+            SimCheckReports.WriteFile(Path.Combine(_outRoot, _gameVersion, "_summary.json"), SimCheckReports.Write(summary));
+            SimCheckReports.WriteFile(Path.Combine(_outRoot, _gameVersion, "_summary.md"), SimCheckReports.SummaryMarkdown(summary));
+        }
+        catch (Exception ex) { writeErrors++; Say("the summary could not be written: " + ex.Message); }
+        Say($"done: {done} checked, {skipped} skipped, {writeErrors} report write error(s), {swAll.Elapsed.TotalSeconds.ToString("0", CultureInfo.InvariantCulture)} s, peak working set {_peakWorkingSetMb.ToString("0", CultureInfo.InvariantCulture)} MB; "
             + string.Join(", ", summary.ChampionStatus.Select(kv => kv.Value + " " + kv.Key)));
-        return 0;
+        foreach (string failure in _writeFailures) Say("  not written: " + failure);
+
+        // M873: the exit code answers "is the roster complete?" for the champions this run covered
+        var selected = new HashSet<string>(selection.Champions, StringComparer.OrdinalIgnoreCase);
+        int code = SimCheckReports.ExitCode(all.Where(r => selected.Contains(r.Champion)), writeErrors);
+        if (selection.Champions.Any(c => !all.Any(r => r.Champion.Equals(c, StringComparison.OrdinalIgnoreCase)))) code = SimCheckReports.ExitIncomplete;
+        if (code != 0) Say($"exit {code}: not every selected champion is COMPLETE");
+        return code;
     }
 
     private SimCheckChampionReport Blocked(string champion, string error, double seconds) =>
         new(champion, _gameVersion, ChampionSimDefinition.CurrentGeneratorVersion, SimCheckReports.CheckVersion, "BLOCKED",
             new[] { error }, error, 0, seconds, WorkingSetMb(), "D3D11", WindowText(), _options.Speed.ToString(CultureInfo.InvariantCulture),
-            Array.Empty<string>(), Array.Empty<SimCheckAbilityReport>());
+            Array.Empty<string>(), Array.Empty<SimCheckAbilityReport>(), PlacementText);
 
     private string WindowText() => _window is null ? "" : $"{_window.ClientSize.Width:0}x{_window.ClientSize.Height:0} {_options.Placement}";
+
+    /// <summary>M873: where the process's memory is - the managed heap after a full collection against the working set and private bytes. A heap that stays small while the
+    /// working set grows is native or GPU memory (the stage), not frames, reports or bitmaps the driver keeps.</summary>
+    private static string MemoryText()
+    {
+        using var p = Process.GetCurrentProcess();
+        var info = GC.GetGCMemoryInfo();
+        return $"managed heap {GC.GetTotalMemory(false) / 1048576.0:0} MB (committed {info.TotalCommittedBytes / 1048576.0:0}), working set {p.WorkingSet64 / 1048576.0:0} MB, private {p.PrivateMemorySize64 / 1048576.0:0} MB";
+    }
 
     private double WorkingSetMb()
     {
@@ -254,7 +287,7 @@ internal sealed class SimCheckDriver
             failed.Count == 0 ? Array.Empty<string>() : new[] { "not complete: " + string.Join(", ", failed) },
             null, loadSeconds, sw.Elapsed.TotalSeconds, WorkingSetMb(), "D3D11 (Dx11ViewportSurface)", WindowText(),
             _options.Speed.ToString(CultureInfo.InvariantCulture),
-            warnings.Concat(loadErrors.Select(e => "ERROR " + e)).ToList(), reportAbilities);
+            warnings.Concat(loadErrors.Select(e => "ERROR " + e)).ToList(), reportAbilities, PlacementText);
 
         try
         {
@@ -294,9 +327,13 @@ internal sealed class SimCheckDriver
         var cells = new List<(byte[] Bgra, int W, int H)>();
         var captions = new List<string>();
         string? exception = null;
-        PixelRect region = default;
+        PixelRect region = default, cellRegion = default;
 
-        string? clipExpected = ability.Clip?.AnmPath is { Length: > 0 } anm ? Path.GetFileName(anm.Replace('\\', '/')) : null;
+        // M873: what the PLAYER was supposed to play - the player's own resolution (Riot's authored name in the loaded skin's graph first) - so the check
+        // grades the execution, and the grader flags a choice that differs from the definition's authored clip.
+        var clipChoice = Mp.ChooseSimClip(ability);
+        string? clipExpected = clipChoice?.File;
+        string? clipDefinition = SimClipChooser.FileOf(ability.Clip?.AnmPath);
         string? clipSeen = null; bool clipAdvanced = false;
         var positions = new List<(double Clock, float X, float Z)>();
         double noise = 0; int particleBaseline = 0;
@@ -308,6 +345,12 @@ internal sealed class SimCheckDriver
             Mp.StopSimulation();
             Mp.ClearSimulationHistory();
             await Settle();
+            // M873: the particle baseline is the MAX over a short window BEFORE the cast (the map's own effects come and go), not two frames
+            for (int i = 0; i < PreCastFrames; i++)
+            {
+                if (await FrameAsync(TimeSpan.FromSeconds(5)) is { } pre) particleBaseline = Math.Max(particleBaseline, pre.LiveParticles);
+                await Task.Delay(40);
+            }
             Mp.PlaySimulation(ability);                       // BeginRun: places, frames, and runs the steps due at t = 0
             script = Mp.SimCurrentScript;
             if (!Mp.SimRunning || script is null) throw new InvalidOperationException("the player did not start");
@@ -316,8 +359,15 @@ internal sealed class SimCheckDriver
             for (int i = 0; i < 4; i++) await FrameAsync(TimeSpan.FromSeconds(10));
             var b1 = await FrameAsync(TimeSpan.FromSeconds(10)) ?? throw new InvalidOperationException("no baseline frame");
             region = RegionFor(b1, script);
-            var exclude = CasterBox(b1, script);
-            particleBaseline = b1.LiveParticles;
+            // M873: the caster's own pixels are left out of the effect ratio - at its start AND along any dash, blink or leap (the union of its boxes over
+            // the whole cast window), so a caster that merely travels is not mistaken for an effect
+            var casterBoxes = new List<PixelRect>();
+            void AddBox(Vector3 world) { if (CasterBox(b1, world) is { } box) casterBoxes.Add(box); }
+            AddBox(script.ChampionPosition);
+            foreach (var d in script.All(SimStepKind.Displace)) { if (d.From is { } f) AddBox(f); if (d.To is { } t) AddBox(t); }
+            int boxedPositions = 0;
+            PixelRect? exclude = SimCheckFrames.Union(casterBoxes);
+            particleBaseline = Math.Max(particleBaseline, b1.LiveParticles);
             await Task.Delay(400);                            // a moment of the map's own movement: the noise floor
             var b2 = await FrameAsync(TimeSpan.FromSeconds(10)) ?? b1;
             var wholeFrame = new PixelRect(0, 0, b1.Width, b1.Height);
@@ -325,10 +375,20 @@ internal sealed class SimCheckDriver
             noise = Math.Max(0.0, SimCheckFrames.ChangedRatio(b1.Bgra, b2.Bgra, b1.Width, b1.Height, region) - ambient0);
             particleBaseline = Math.Max(particleBaseline, b2.LiveParticles);
             int cellW = 0, cellH = 0;
+            PixelRect crop = default;
             void AddCell(Dx11FrameCapture tap, FrameEvidence ev)
             {
-                if (cellW == 0) { cellW = 288; cellH = Math.Max(9, (int)Math.Round(288.0 * tap.Height / tap.Width)); }
-                cells.Add((SimCheckFrames.Downscale(tap.Bgra, tap.Width, tap.Height, cellW, cellH), cellW, cellH));
+                if (cellW == 0)
+                {
+                    // M873: the cell shows the judged region (the yellow box) enlarged to the cell, not the whole frame - at the 2200-unit camera the
+                    // actors are a few dozen pixels tall and the effects cannot be read in a downscaled full view.
+                    cellW = 288; cellH = Math.Max(9, (int)Math.Round(288.0 * tap.Height / tap.Width));
+                    crop = SimCheckFrames.CropFor(region, tap.Width, tap.Height, (double)cellW / cellH);
+                    // the judged region, in the cell's own pixels, for the dashed outline of the sheet
+                    cellRegion = new PixelRect((int)Math.Round((region.X - crop.X) * (double)cellW / crop.Width), (int)Math.Round((region.Y - crop.Y) * (double)cellH / crop.Height),
+                        (int)Math.Round(region.Width * (double)cellW / crop.Width), (int)Math.Round(region.Height * (double)cellH / crop.Height)).Clamp(cellW, cellH);
+                }
+                cells.Add((SimCheckFrames.ResampleCrop(tap.Bgra, tap.Width, tap.Height, crop, cellW, cellH), cellW, cellH));
                 captions.Add($"{ev.Label}  t={ev.Clock.ToString("0.00", CultureInfo.InvariantCulture)}s  d={(ev.ChangedRatio * 100).ToString("0.0", CultureInfo.InvariantCulture)}%  fx={(ev.EffectRatio * 100).ToString("0.0", CultureInfo.InvariantCulture)}%  p={ev.LiveParticles}");
                 frameReports.Add(new SimCheckFrameReport(ev.Label, ev.PlannedTime, ev.Clock, ev.ChangedRatio, ev.EffectRatio, ev.LiveParticles,
                     tap.Width, tap.Height, new[] { region.X, region.Y, region.Width, region.Height }));
@@ -369,6 +429,10 @@ internal sealed class SimCheckDriver
                 double ambient = region.Width >= tap.Width && region.Height >= tap.Height ? 0.0
                     : SimCheckFrames.ChangedRatio(b1.Bgra, tap.Bgra, tap.Width, tap.Height, whole, region);
                 double changed = Math.Max(0.0, SimCheckFrames.ChangedRatio(b1.Bgra, tap.Bgra, tap.Width, tap.Height, region) - ambient);
+                // positions the driver has collected so far join the union (the caster as it really moved)
+                for (; boxedPositions < positions.Count; boxedPositions++)
+                    AddBox(new Vector3(positions[boxedPositions].X, script.ChampionPosition.Y, positions[boxedPositions].Z));
+                exclude = SimCheckFrames.Union(casterBoxes);
                 double effect = Math.Max(0.0, SimCheckFrames.ChangedRatio(b1.Bgra, tap.Bgra, tap.Width, tap.Height, region, exclude) - ambient);
                 var ev = new FrameEvidence(sample.Label, sample.Time, clockAtFrame, changed, effect, tap.LiveParticles);
                 frames.Add(ev);
@@ -418,6 +482,10 @@ internal sealed class SimCheckDriver
             TimedOut = timedOut,
             TimeoutSeconds = (script?.EndTime ?? 0) / _options.Speed * 3.0 + 40.0,
             ClipExpected = clipExpected,
+            ClipChoiceSource = clipChoice?.Source,
+            ClipDefinition = clipDefinition,
+            ClipAuthored = ability.AuthoredClipName is { Length: > 0 },
+            ExpectsEffects = SimCheckGrader.ExpectsEffects(ability),
             ClipSeen = clipSeen,
             ClipAdvanced = clipAdvanced,
             HitsExpected = hitsExpected,
@@ -443,8 +511,11 @@ internal sealed class SimCheckDriver
             Math.Round(noise, 5), after.Count == 0 ? 0 : Math.Round(after.Max(f => f.ChangedRatio), 5), after.Count == 0 ? 0 : Math.Round(after.Max(f => f.EffectRatio), 5),
             particleBaseline, after.Count == 0 ? 0 : after.Max(f => f.LiveParticles), frameReports, cleanup, errors, Math.Round(wall.Elapsed.TotalSeconds, 2));
         WorkingSetMb();
-        return (report, cells, region, captions.ToArray());
+        return (report, cells, cellRegion, captions.ToArray());
     }
+
+    /// <summary>Frames read before a cast to find the map's own particle peak.</summary>
+    private const int PreCastFrames = 10;
 
     private bool Animation_Loops() => Mp.Animation.Loop;
 
@@ -475,10 +546,10 @@ internal sealed class SimCheckDriver
         return region;
     }
 
-    private PixelRect? CasterBox(Dx11FrameCapture tap, SimScript script)
+    private PixelRect? CasterBox(Dx11FrameCapture tap, Vector3 position)
     {
-        if (!SimCheckFrames.ProjectToPixel(tap.View, tap.Projection, script.ChampionPosition, tap.Width, tap.Height, true, out float fx, out float fy)
-            || !SimCheckFrames.ProjectToPixel(tap.View, tap.Projection, script.ChampionPosition + new Vector3(0f, 190f, 0f), tap.Width, tap.Height, true, out _, out float hy))
+        if (!SimCheckFrames.ProjectToPixel(tap.View, tap.Projection, position, tap.Width, tap.Height, true, out float fx, out float fy)
+            || !SimCheckFrames.ProjectToPixel(tap.View, tap.Projection, position + new Vector3(0f, 190f, 0f), tap.Width, tap.Height, true, out _, out float hy))
             return null;
         float height = MathF.Max(8f, MathF.Abs(fy - hy));
         return SimCheckFrames.Around(fx, fy, height * 0.7f, height * 1.2f, height * 0.15f, tap.Width, tap.Height);

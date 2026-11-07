@@ -134,4 +134,71 @@ public static class SimCheckFrames
         }
         return result;
     }
+
+    /// <summary>M873: the bounding rectangle of the non-empty rectangles (null when there are none). The caster's boxes along a dash, as one region to leave out.</summary>
+    public static PixelRect? Union(IEnumerable<PixelRect> rects)
+    {
+        int x0 = int.MaxValue, y0 = int.MaxValue, x1 = int.MinValue, y1 = int.MinValue; bool any = false;
+        foreach (var r in rects)
+        {
+            if (r.IsEmpty) continue;
+            any = true;
+            x0 = Math.Min(x0, r.X); y0 = Math.Min(y0, r.Y); x1 = Math.Max(x1, r.Right); y1 = Math.Max(y1, r.Bottom);
+        }
+        return any ? new PixelRect(x0, y0, x1 - x0, y1 - y0) : null;
+    }
+
+    /// <summary>
+    /// M873: the part of the frame a contact-sheet cell shows. The judged <paramref name="region"/> grown by <paramref name="pad"/> on each side, widened or
+    /// heightened to the cell's <paramref name="aspect"/> (width / height) around its centre, then slid back inside the frame (never cut, so the aspect
+    /// holds): the actors fill the cell instead of sitting small in a 2200-unit camera view. A region that is empty or larger than the frame gives the whole frame.
+    /// </summary>
+    public static PixelRect CropFor(PixelRect region, int width, int height, double aspect, double pad = 0.08)
+    {
+        var whole = new PixelRect(0, 0, Math.Max(0, width), Math.Max(0, height));
+        if (width <= 0 || height <= 0 || region.IsEmpty || !(aspect > 0.05) || double.IsInfinity(aspect)) return whole;
+        double cx = region.X + region.Width / 2.0, cy = region.Y + region.Height / 2.0;
+        double w = region.Width * (1 + 2 * pad), h = region.Height * (1 + 2 * pad);
+        if (w / h < aspect) w = h * aspect; else h = w / aspect;
+        if (w >= width || h >= height)
+        {
+            // the cell's aspect at the largest size the frame allows
+            w = Math.Min(width, height * aspect); h = w / aspect;
+            if (region.Width * (1 + 2 * pad) >= width && region.Height * (1 + 2 * pad) >= height) return whole;
+        }
+        int cw = (int)Math.Ceiling(w), ch = (int)Math.Ceiling(h);
+        cw = Math.Min(cw, width); ch = Math.Min(ch, height);
+        int x = (int)Math.Round(cx - cw / 2.0), y = (int)Math.Round(cy - ch / 2.0);
+        x = Math.Clamp(x, 0, width - cw); y = Math.Clamp(y, 0, height - ch);
+        return new PixelRect(x, y, cw, ch);
+    }
+
+    /// <summary>A bilinear resample of <paramref name="crop"/> of a BGRA frame to <paramref name="targetWidth"/> x <paramref name="targetHeight"/>, opaque. Up- and downscales.</summary>
+    public static byte[] ResampleCrop(ReadOnlySpan<byte> bgra, int width, int height, PixelRect crop, int targetWidth, int targetHeight)
+    {
+        var result = new byte[Math.Max(0, targetWidth) * Math.Max(0, targetHeight) * 4];
+        crop = crop.Clamp(width, height);
+        if (width <= 0 || height <= 0 || targetWidth <= 0 || targetHeight <= 0 || crop.IsEmpty || bgra.Length < (long)width * height * 4) return result;
+        for (int ty = 0; ty < targetHeight; ty++)
+        {
+            double sy = crop.Y + (ty + 0.5) * crop.Height / targetHeight - 0.5;
+            int y0 = Math.Clamp((int)Math.Floor(sy), crop.Y, crop.Bottom - 1), y1 = Math.Min(y0 + 1, crop.Bottom - 1);
+            double fy = Math.Clamp(sy - y0, 0.0, 1.0);
+            for (int tx = 0; tx < targetWidth; tx++)
+            {
+                double sx = crop.X + (tx + 0.5) * crop.Width / targetWidth - 0.5;
+                int x0 = Math.Clamp((int)Math.Floor(sx), crop.X, crop.Right - 1), x1 = Math.Min(x0 + 1, crop.Right - 1);
+                double fx = Math.Clamp(sx - x0, 0.0, 1.0);
+                int t = (ty * targetWidth + tx) * 4;
+                for (int c = 0; c < 3; c++)
+                {
+                    double top = bgra[(y0 * width + x0) * 4 + c] * (1 - fx) + bgra[(y0 * width + x1) * 4 + c] * fx;
+                    double bottom = bgra[(y1 * width + x0) * 4 + c] * (1 - fx) + bgra[(y1 * width + x1) * 4 + c] * fx;
+                    result[t + c] = (byte)Math.Clamp((int)Math.Round(top * (1 - fy) + bottom * fy), 0, 255);
+                }
+                result[t + 3] = 255;
+            }
+        }
+        return result;
+    }
 }

@@ -513,6 +513,26 @@ public sealed partial class MeshPreviewViewModel
     private IEnumerable<AbilitySim> SubCastsOf(AbilitySim a) =>
         _simDef?.Abilities.Where(s => s.ParentKey == a.Key) ?? Enumerable.Empty<AbilitySim>();
 
+    /// <summary>
+    /// M873: the clip the player will actually play, timed from its own file. Null when it is the definition's clip (the common case: the base skin) or when the file
+    /// cannot be measured, so the plan keeps the definition's timing. A skin that overrides the clip with another length gets a plan of that length.
+    /// </summary>
+    private SimClip? PlayedClipFor(AbilitySim ability)
+    {
+        try
+        {
+            var choice = ChooseSimClip(ability);
+            if (choice is null) return null;
+            string? defFile = SimClipChooser.FileOf(ability.Clip?.AnmPath);
+            if (defFile is not null && string.Equals(defFile, choice.File, StringComparison.OrdinalIgnoreCase)) return null;
+            var entry = Animation.Animations.FirstOrDefault(e => string.Equals(e.Name, choice.File, StringComparison.OrdinalIgnoreCase));
+            if (entry is null || Animation.ClipLoader?.Invoke(entry.Entry) is not { } clip || !(clip.Duration > 0f)) return null;
+            var baseClip = ability.Clip ?? new SimClip(System.IO.Path.GetFileNameWithoutExtension(choice.File), choice.File, choice.Source, clip.Fps, clip.Duration, clip.Fps > 1f ? 1f / clip.Fps : 1f / 30f, "anmFps");
+            return baseClip with { AnmPath = entry.Entry.Path ?? choice.File, DurationSeconds = clip.Duration, Fps = clip.Fps > 1f ? clip.Fps : baseClip.Fps };
+        }
+        catch { return null; }
+    }
+
     private void BeginRun(AbilitySim ability)
     {
         if (_simDef is not { } def) return;
@@ -522,7 +542,7 @@ public sealed partial class MeshPreviewViewModel
         var nav = _arena?.Nav;
         var plan = SimulationPlanner.Plan(def, ability,
             new SimStage(stage.Champion, stage.Yaw, stage.Dummy, null, nav is null ? null : p => NavGridPath.GroundHeight(nav, p), nav,
-                nav is null ? null : p => NavGridPath.IsWalkable(nav, p)));
+                nav is null ? null : p => NavGridPath.IsWalkable(nav, p)), null, PlayedClipFor(ability));
 
         // Place: champion, enemy dummy, ally dummy; then frame all of them
         _controller.Teleport(plan.ChampionPosition, plan.ChampionYaw);
@@ -684,12 +704,10 @@ public sealed partial class MeshPreviewViewModel
     private void PlayComposite(AbilitySim ability, SimScript script)
     {
         var ev = FindEventFor(ability);
-        string? clipFile = ability.Clip?.AnmPath is { Length: > 0 } p ? System.IO.Path.GetFileName(p.Replace('\\', '/')) : null;
-        bool Has(string? file) => file is not null && Animation.Animations.Any(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase));
-
-        // The composite's own clip is this SKIN's (the event builder matched it against the loaded skin's clips); the definition's is
-        // the base skin's. The skin's wins; the definition's is the fallback when the event names none.
-        string? file = ev?.ClipAnmFile is { } own && Has(own) ? own : Has(clipFile) ? clipFile : ev?.ClipAnmFile;
+        var choice = ChooseSimClip(ability, ev);
+        string? file = choice?.File;
+        if (choice is not null && choice.Chain.Count > 1)
+            LogDx11?.Invoke("Simulation", $"{ability.Key}: clip '{ability.AuthoredClipName}' plays {choice.Chain.Count} clips in order ({string.Join(", ", choice.Chain)}); the first is played");
         if (ev is null && file is null) return;           // no composite and no clip in this skin: the rest of the script still runs
 
         var play = ev is null
@@ -702,6 +720,19 @@ public sealed partial class MeshPreviewViewModel
             };
         PlayEvent(play);
         RepublishPlayback();                               // the skin's idle effects play under the cast, as in game
+    }
+
+    /// <summary>
+    /// M873: the clip the player plays for <paramref name="ability"/> - Riot's authored name resolved in the LOADED skin's own animation graph first,
+    /// the definition's base-skin file second, the spell composite's own clip last (see <see cref="SimClipChooser"/>). The simulation check asks this same
+    /// method for the clip it expects, so it grades what the player was supposed to play.
+    /// </summary>
+    public SimClipChoice? ChooseSimClip(AbilitySim ability) => ChooseSimClip(ability, FindEventFor(ability));
+
+    private SimClipChoice? ChooseSimClip(AbilitySim ability, Formats.Vfx.ChampionEvent? ev)
+    {
+        bool Has(string? file) => file is not null && Animation.Animations.Any(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase));
+        return SimClipChooser.Choose(ability, _ownClips, _ownNodes, Has, ev?.ClipAnmFile);
     }
 
     /// <summary>The M116 composite for an ability key: its own name, or its form variant ("Q (assassin)"). A sub-cast is only ever its own number.</summary>

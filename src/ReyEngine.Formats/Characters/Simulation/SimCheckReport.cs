@@ -53,7 +53,9 @@ public sealed record SimCheckChampionReport(
     string Window,
     string Speed,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<SimCheckAbilityReport> Abilities);
+    IReadOnlyList<SimCheckAbilityReport> Abilities,
+    /// <summary>M873: the window placement the run used ("minimized", "offscreen", "corner"); part of the resume key.</summary>
+    string? Placement = null);
 
 public sealed record SimCheckSummaryEntry(string Champion, string Status, int Abilities, int Complete, int Incomplete, int Blocked,
     double WallSeconds, double WorkingSetMb, IReadOnlyList<string> Reasons);
@@ -77,7 +79,7 @@ public sealed record SimCheckSummary(
 public static class SimCheckReports
 {
     /// <summary>Bumped whenever the checker's evidence or grading would change a verdict for the same data; part of the resume key.</summary>
-    public const string CheckVersion = "M871.1";
+    public const string CheckVersion = "M873.1";
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -100,19 +102,31 @@ public static class SimCheckReports
         Path.Combine(outRoot, gameVersion, champion, "report.json");
 
     /// <summary>
-    /// Is this champion already done? True when a readable report exists for the same game version, definition generator and checker.
-    /// A report that cannot be read (a run killed mid-write) is not done.
+    /// Is this champion already done? True when a readable report exists for the same game version, definition generator and checker, and - when the
+    /// caller names them - the same speed and window placement (a run at another speed or in another window state is another measurement). M873: a
+    /// BLOCKED report is never done (the champion did not load; a retry may), and a report that cannot be read (a run killed mid-write) is not done.
     /// </summary>
-    public static bool IsDone(string reportPath, string gameVersion, string generatorVersion, bool force)
+    public static bool IsDone(string reportPath, string gameVersion, string generatorVersion, bool force, string? speed = null, string? placement = null)
     {
         if (force || !File.Exists(reportPath)) return false;
         try
         {
             var r = Read(File.ReadAllText(reportPath));
-            return r is not null && r.GameVersion == gameVersion && r.GeneratorVersion == generatorVersion && r.CheckVersion == CheckVersion;
+            return r is not null && r.GameVersion == gameVersion && r.GeneratorVersion == generatorVersion && r.CheckVersion == CheckVersion
+                   && !string.Equals(r.Status, "BLOCKED", StringComparison.OrdinalIgnoreCase)
+                   && (speed is null || r.Speed == speed)
+                   && (placement is null || string.Equals(r.Placement, placement, StringComparison.OrdinalIgnoreCase));
         }
         catch (IOException) { return false; }
     }
+
+    /// <summary>
+    /// M873: the process exit code of a run: 0 when every checked champion is COMPLETE, 3 when any is BLOCKED or INCOMPLETE or when a champion's report could not
+    /// be written (<paramref name="skipped"/>). Usage and install problems (2) and crashes (1) are decided by the caller.
+    /// </summary>
+    public const int ExitIncomplete = 3;
+    public static int ExitCode(IEnumerable<SimCheckChampionReport> reports, int skipped = 0) =>
+        skipped > 0 || reports.Any(r => !string.Equals(r.Status, "COMPLETE", StringComparison.OrdinalIgnoreCase)) ? ExitIncomplete : 0;
 
     /// <summary>Write via a temp file and a rename, so an interrupted run never leaves a half report that the resume rule would accept.</summary>
     public static void WriteFile(string path, string text)
@@ -201,14 +215,10 @@ public static class SimCheckReports
     /// <summary>A reason with its numbers and names taken out, so "clip missing: 'a.anm' expected" and "... 'b.anm' ..." count as one.</summary>
     public static string Normalize(string reason)
     {
-        var sb = new StringBuilder(reason.Length);
-        bool inQuote = false;
-        foreach (char c in reason)
-        {
-            if (c == '\'') { inQuote = !inQuote; if (!inQuote) sb.Append('_'); sb.Append(c); continue; }
-            if (inQuote) continue;
-            sb.Append(char.IsDigit(c) ? '#' : c);
-        }
+        // only PAIRED quotes are names; a lone apostrophe (an exception message, "don't") stays as it is
+        string unquoted = System.Text.RegularExpressions.Regex.Replace(reason, @"(?<![\p{L}\p{N}])'[^'\r\n]*'(?![\p{L}\p{N}])", "'_'");
+        var sb = new StringBuilder(unquoted.Length);
+        foreach (char c in unquoted) sb.Append(char.IsDigit(c) ? '#' : c);
         // collapse digit runs and decimals
         string s = System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"#+([.,]#+)?", "#");
         int cut = s.IndexOf(" (", StringComparison.Ordinal);

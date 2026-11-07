@@ -62,11 +62,11 @@ internal static class SimCheckSheetWriter
                         System.Runtime.InteropServices.Marshal.Copy(bgra, y * w * 4, fb.Address + y * fb.RowBytes, w * 4);
                 Place(canvas, new Image { Source = bitmap, Width = cell.Width, Height = cell.Height, Stretch = Stretch.Fill }, cell.X, cell.Y);
 
-                // the region the cast is judged in, scaled onto the cell (the baseline's frame size is the sheet's)
-                if (!region.IsEmpty && ability.Frames.Count > c)
+                // the region the cast is judged in, in the cell's own pixels, scaled onto the cell
+                if (!region.IsEmpty)
                 {
-                    var f = ability.Frames[c];
-                    double sx = (double)cell.Width / f.Width, sy = (double)cell.Height / f.Height;
+                    // M873: the cell shows a crop of the frame; the region arrives in the cell's own pixels
+                    double sx = (double)cell.Width / w, sy = (double)cell.Height / h;
                     Place(canvas, new Rectangle
                     {
                         Width = Math.Max(2, region.Width * sx), Height = Math.Max(2, region.Height * sy),

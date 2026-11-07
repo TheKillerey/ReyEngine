@@ -147,6 +147,7 @@ public static class ChampionSimGenerator
 
             // ---- clip: the spell's own name first, a naming convention only when the spell names none
             SimClip? clip = null;
+            IReadOnlyList<SimClip>? clipChain = null;
             string? authored = slot.AnimationName;
             bool hasSubCasts = events.Any(e => SubCast.Match(e.Name) is { Success: true } m
                 && m.Groups[1].Value.Equals(rec.Key, OIC) && (m.Groups[2].Length > 0 || m.Groups[3].Length > 0));
@@ -154,7 +155,8 @@ public static class ChampionSimGenerator
             {
                 if (ResolveAuthoredClip(authored) is { } found)
                 {
-                    clip = MakeClip(found.Clip, found.Source);
+                    clip = MakeClip(found.Clip, found.Source, found.Via);
+                    if (found.Chain.Count > 1) clipChain = found.Chain.Select((c, i) => i == 0 ? clip : MakeClip(c, found.Source, found.Via)).ToList();
                     sources.Add(new FieldSource("clip", found.Source));
                 }
                 else issues.Add($"clip '{authored}' is not in the base animation graph");
@@ -222,7 +224,7 @@ public static class ChampionSimGenerator
                 slot.Tags, slot.AffectsTypeFlags,
                 authored, clip, castSeconds, slot.SpellTotalTime, slot.SpellCastTime,
                 missiles, SortRefs(casters), SortRefs(targets), SortRefs(returns),
-                particles, sounds, scenario, sources, issues);
+                particles, sounds, scenario, sources, issues, clipChain);
         }
 
         private AbilitySim BuildSubCast(string name, ChampionEvent ev, AbilitySim owner, AbilityRecordData rec)
@@ -293,7 +295,7 @@ public static class ChampionSimGenerator
         private AttackSim BuildAttack(AttackSpell a)
         {
             var issues = new List<string>();
-            SimClip? clip = ResolveAuthoredClip(a.ClipName) is { } found ? MakeClip(found.Clip, found.Source) : null;
+            SimClip? clip = ResolveAuthoredClip(a.ClipName) is { } found ? MakeClip(found.Clip, found.Source, found.Via) : null;
             if (clip is null) issues.Add($"clip '{a.ClipName}' is not in the base animation graph");
             float? cast = a.CastFrame > 0f || a.CastTimeSeconds > 0f ? a.CastSecondsAt(clip?.Fps ?? 0f) : null;
             return new AttackSim(a.Name, a.IsCrit, false, a.Probability, a.ClipName, clip, cast,
@@ -362,11 +364,11 @@ public static class ChampionSimGenerator
         /// prefix-and-separator rule <see cref="CharacterActions"/> uses, with the ordering made explicit).</item>
         /// </list>
         /// </summary>
-        private (AnimClipInfo Clip, string Source)? ResolveAuthoredClip(string name)
+        private (AnimClipInfo Clip, IReadOnlyList<AnimClipInfo> Chain, IReadOnlyList<string> Via, string Source)? ResolveAuthoredClip(string name)
         {
-            if (FindClip(name) is { } exact) return (exact, "authored");
-            string hashName = "0x" + ReyEngine.Core.Hashing.HashAlgorithms.Fnv1a(name).ToString("x8", CultureInfo.InvariantCulture);
-            if (_in.Clips.FirstOrDefault(c => c.Name.Equals(hashName, OIC)) is { } byHash) return (byHash, "authored");
+            // M873: the authored name is a key of the clip map; it may be an atomic clip or a sequencer/selector/parametric/condition node
+            if (AnimationClipGraph.Resolve(name, _in.Clips, _in.ClipNodes) is { } graph)
+                return (graph.First, graph.Chain, graph.Via, graph.IsComposite ? "authored-composite" : "authored");
 
             var variants = _in.Clips
                 .Where(c => c.Name.Length > name.Length && c.Name.StartsWith(name, OIC) && c.Name[name.Length] is '_' or '-' or ' ')
@@ -374,10 +376,10 @@ public static class ChampionSimGenerator
                 .ThenBy(c => c.Name.Length)
                 .ThenBy(c => c.Name, StringComparer.Ordinal)
                 .ToList();
-            return variants.Count > 0 ? (variants[0], "convention") : null;
+            return variants.Count > 0 ? (variants[0], new[] { variants[0] }, Array.Empty<string>(), "convention") : null;
         }
 
-        private SimClip MakeClip(AnimClipInfo c, string source)
+        private SimClip MakeClip(AnimClipInfo c, string source, IReadOnlyList<string>? via = null)
         {
             string? anm = string.IsNullOrWhiteSpace(c.AnmPath) ? null : c.AnmPath.Replace('\\', '/');
             var timing = anm is null ? null : _in.ReadClipTiming(anm);
@@ -385,7 +387,7 @@ public static class ChampionSimGenerator
             if (c.TickDuration is > 0.0001f and < 1f) { frame = c.TickDuration; basis = "tickDuration"; }
             else if (timing is { Fps: > 1f and < 240f } t) { frame = 1f / t.Fps; basis = "anmFps"; }
             else { frame = 1f / 30f; basis = "assumed30fps"; }
-            return new SimClip(c.Name, anm, source, timing?.Fps, timing?.Duration, frame, basis);
+            return new SimClip(c.Name, anm, source, timing?.Fps, timing?.Duration, frame, basis, via is { Count: > 0 } ? via : null);
         }
 
         private (IReadOnlyList<ClipParticleEventSim>, IReadOnlyList<ClipSoundEventSim>) ClipEvents(SimClip? sim)

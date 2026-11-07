@@ -32,7 +32,7 @@ public sealed record ChampionSimDefinition(
 {
     public const int CurrentSchemaVersion = 1;
     /// <summary>Bumped whenever the generator's output for the same data would change.</summary>
-    public const string CurrentGeneratorVersion = "M867.1";
+    public const string CurrentGeneratorVersion = "M873.1";
 }
 
 /// <summary>A reference to a VFX system. <see cref="Name"/> is null when it did not resolve.</summary>
@@ -64,7 +64,8 @@ public sealed record MissileSim(
     float Width,
     string Source);
 
-/// <summary>The animation clip chosen for an ability. <see cref="Source"/>: "authored" (the spell names it) or "convention".</summary>
+/// <summary>The animation clip chosen for an ability. <see cref="Source"/>: "authored" (the spell names the clip), "authored-composite" (the spell names a graph
+/// sequencer/selector/parametric/condition entry and this is the atomic clip it plays first) or "convention".</summary>
 public sealed record SimClip(
     string Name,
     string? AnmPath,
@@ -73,7 +74,9 @@ public sealed record SimClip(
     float? DurationSeconds,
     /// <summary>Seconds per event frame: "tickDuration" (the clip authors one), "anmFps" (the .anm header) or "assumed30fps".</summary>
     float FrameSeconds,
-    string TimeBasis);
+    string TimeBasis,
+    /// <summary>M873: the composite clip names walked from the authored name down to this clip (empty/null for an atomic clip).</summary>
+    IReadOnlyList<string>? Via = null);
 
 public sealed record ClipParticleEventSim(
     float Frame,
@@ -128,7 +131,9 @@ public sealed record AbilitySim(
     IReadOnlyList<ClipSoundEventSim> ClipSoundEvents,
     ScenarioHint Scenario,
     IReadOnlyList<FieldSource> Sources,
-    IReadOnlyList<string> Issues);
+    IReadOnlyList<string> Issues,
+    /// <summary>M873: when the authored clip is a sequencer, every clip it plays in order (the first is <see cref="Clip"/>); null for a single clip.</summary>
+    IReadOnlyList<SimClip>? ClipChain = null);
 
 /// <summary>A basic attack (or crit) from the champion record.</summary>
 public sealed record AttackSim(
