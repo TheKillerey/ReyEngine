@@ -203,9 +203,7 @@ public sealed class ClientAbilityCatalog : IDisposable
         string? icon = null;
         if (e.TryGetProperty("abilityIconPath", out var ip) && ip.ValueKind == JsonValueKind.String && ip.GetString() is { Length: > 0 } raw)
         {
-            const string Prefix = "/lol-game-data/assets/";
-            string rel = raw.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase) ? raw[Prefix.Length..] : raw.TrimStart('/');
-            string wadPath = ("plugins/rcp-be-lol-game-data/global/default/" + rel).ToLowerInvariant();
+            string wadPath = ClientChampionData.ToWadPath(raw);     // M870: the one client-path mapping
             if (_archive.TryGetEntry(HashAlgorithms.WadPath(wadPath), out _)) icon = wadPath;
         }
         return new ClientAbilityInfo(name, icon);

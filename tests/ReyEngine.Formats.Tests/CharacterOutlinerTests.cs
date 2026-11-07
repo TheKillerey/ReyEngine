@@ -130,15 +130,17 @@ public sealed class CharacterOutlinerTests
         var host = Source("src", "ReyEngine.App", "ViewModels", "MainWindowViewModel.Characters.cs");
         if (window is null || main is null || host is null) return;
 
-        Assert.Contains("ColumnDefinitions=\"250,4,*,4,340\"", window);
+        Assert.Contains("ColumnDefinitions=\"320,4,*,4,340\"", window);
         Assert.Contains("HighlightSubmeshes=\"{Binding HighlightedSubmeshes}\"", window);
-        Assert.Contains("Command=\"{Binding Browser.OpenSkinCommand}\"", window);
+        // M870: a click on a skin card loads it - the Load skin button is gone, the card's command is the row's Select
+        Assert.Contains("Command=\"{Binding Select}\"", window);
+        Assert.DoesNotContain("Browser.OpenSkinCommand", window);
         Assert.Contains("SelectedItem=\"{Binding SelectedSubmesh}\"", window);
         // ONE submesh list: the card left the Scene tab when it became the outliner.
         Assert.Equal(1, window.Split("Text=\"SUBMESHES\"").Length - 1);
 
         Assert.Contains("Header=\"Character Editor…\"", main);
         Assert.DoesNotContain("Views.CharacterBrowserWindow.Show(", host);   // nothing opens the old window
-        Assert.Contains("EnsureCharacterBrowser();", host);
+        Assert.Contains("EnsureCharacterBrowser(refresh: true);", host);   // M870: the menu command lists again; a skin load does not
     }
 }

@@ -12,7 +12,7 @@ public sealed record ClientChampion(int Id, string Alias, string DisplayName, st
 /// <para>M728: or a chroma - "Petals of Spring Lillia (Rose Quartz)" - and then <see cref="ChromaOf"/> is the number
 /// of the skin it recolours. The client lists a chroma inside that skin rather than beside it.</para></summary>
 public sealed record ClientSkin(int Id, int Number, string DisplayName, bool IsBase, bool IsLegacy, string? TilePath,
-    int? ChromaOf = null)
+    int? ChromaOf = null, string? Rarity = null, string? LoadScreenPath = null)
 {
     public bool IsChroma => ChromaOf is not null;
 }
@@ -157,7 +157,9 @@ public sealed class ClientNameCatalog
                 Str(element, "name"),
                 Bool(element, "isBase"),
                 Bool(element, "isLegacy"),
-                Str(element, "tilePath") is { Length: > 0 } tile ? tile : null);
+                Str(element, "tilePath") is { Length: > 0 } tile ? tile : null,
+                Rarity: ClientChampionData.RarityLabel(Str(element, "rarity")),
+                LoadScreenPath: Str(element, "loadScreenPath") is { Length: > 0 } load ? load : null);
         }
 
         // M728: a chroma is not an entry of this file - it sits in the "chromas" array of the skin it recolours, so

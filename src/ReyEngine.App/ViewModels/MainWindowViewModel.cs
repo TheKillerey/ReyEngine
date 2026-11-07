@@ -12269,6 +12269,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MeshInspector.ShowMesh(mesh, skeleton);
                 ShowMeshPreviewWindow?.Invoke();
                 _log.Success("Mesh", $"{entry.DisplayName}: {mesh.VertexCount:n0} verts, {mesh.TriangleCount:n0} tris — model preview window.");
+                MeshPreview.Browser?.NotifySkinLoaded(binPath);   // M870: the banner follows what is on stage, once it is there
             });
         }
         catch (Exception ex) { _log.Error("Mesh", $"{entry.DisplayName}: {ex.Message}"); }

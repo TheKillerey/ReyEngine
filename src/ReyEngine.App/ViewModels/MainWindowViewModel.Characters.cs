@@ -63,21 +63,28 @@ public sealed partial class MainWindowViewModel : ICharacterBrowserHost
     [RelayCommand]
     private void OpenCharacterBrowser()
     {
-        EnsureCharacterBrowser();
+        EnsureCharacterBrowser(refresh: true);
         ShowMeshPreviewWindow?.Invoke();
     }
 
     private string? _browserGameDirectory;
+    private int _browserProjectCharacters = -1;
 
     /// <summary>The picker embedded in the character window: created once, listed again when the game
     /// folder changes, because it lists whichever install the project points at.</summary>
-    private void EnsureCharacterBrowser()
+    /// <summary>M870: listed again only when the install or the project's characters changed (or the user opened the window from the menu).
+    /// It used to list again on EVERY skin load, which reset the selection under the skin that was loading - the SKINS card vanished -
+    /// and read the client WAD's name tables on the UI thread each time. <see cref="CharacterBrowserViewModel.Reload"/> also keeps the
+    /// selection now, for the cases that do list again.</summary>
+    private void EnsureCharacterBrowser(bool refresh = false)
     {
+        int projectCharacters = ((ICharacterBrowserHost)this).ProjectCharacterPaths.Count;
         if (MeshPreview.Browser is null)
             MeshPreview.Browser = new CharacterBrowserViewModel(this, (category, message) => _log.Info(category, message));
-        else
+        else if (refresh || _browserGameDirectory != Project.GameDirectory || _browserProjectCharacters != projectCharacters)
             MeshPreview.Browser.Reload();
         _browserGameDirectory = Project.GameDirectory;
+        _browserProjectCharacters = projectCharacters;
     }
 
     void ICharacterBrowserHost.OpenSkin(ChampionPackage champion, CharacterEntry character, CharacterSkinInfo skin)

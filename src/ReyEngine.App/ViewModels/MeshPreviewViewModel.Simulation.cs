@@ -19,8 +19,14 @@ namespace ReyEngine.App.ViewModels;
 /// <summary>One row of the SIMULATION ability list: the definition's ability, what the asset check says about it, and a Play button.</summary>
 public sealed class SimAbilityRowViewModel : ObservableObject
 {
-    public SimAbilityRowViewModel(AbilitySim ability, AbilityValidation verdict, bool isSub, Action<SimAbilityRowViewModel> play, string? parentName = null)
+    public SimAbilityRowViewModel(AbilitySim ability, AbilityValidation verdict, bool isSub, Action<SimAbilityRowViewModel> play, string? parentName = null,
+        ClientImageHandle? icon = null, string? description = null)
     {
+        _icon = icon ?? ClientImageHandle.None;
+        _description = string.IsNullOrWhiteSpace(description) ? null : description;
+        // the letter the icon falls back to: the slot key, or the parent's for a sub-cast; an extra has none
+        IconLetter = ability.Key.Length > 0 && "PQWER".IndexOf(ability.Key[0]) >= 0 && (ability.Key.Length == 1 || !char.IsLetter(ability.Key[1])) ? ability.Key[..1]
+            : ability.ParentKey is { Length: > 0 } pk && "PQWER".IndexOf(pk[0]) >= 0 && (pk.Length == 1 || !char.IsLetter(pk[1])) ? pk[..1] : "*";
         Ability = ability;
         Key = ability.Key;
         IsSub = isSub;
@@ -41,6 +47,44 @@ public sealed class SimAbilityRowViewModel : ObservableObject
     public SimStatus Status { get; }
     public string StatusText { get; }
     public string Reasons { get; }
+
+    /// <summary>M870: the ability's icon from the client (decoded when the row is on screen); the key letter shows until it is there, and
+    /// stays for an ability the client has no icon for.</summary>
+    private ClientImageHandle _icon;
+    public ClientImageHandle Icon { get => _icon; private set => SetProperty(ref _icon, value); }
+    public string IconLetter { get; }
+    /// <summary>The client's description as plain text, or null (extras and sub-casts the client does not describe).</summary>
+    private string? _description;
+    public string? Description { get => _description; private set { if (SetProperty(ref _description, value)) { OnPropertyChanged(nameof(HasDescription)); OnPropertyChanged(nameof(Tooltip)); } } }
+    public bool HasDescription => Description is not null;
+
+    /// <summary>The client's text arrived after the row was built (it is read on a worker): fill in what the row does not have yet.</summary>
+    public void ApplyClient(string? description, ClientImageHandle? icon)
+    {
+        if (!string.IsNullOrWhiteSpace(description)) Description = description;
+        if (icon is not null && !Icon.CanLoad) Icon = icon;
+    }
+
+    private const int TooltipColumns = 56;
+
+    /// <summary>Word-wrapped at about <see cref="TooltipColumns"/> columns (a string tooltip does not wrap on its own).</summary>
+    internal static string Wrap(string text)
+    {
+        var lines = new System.Collections.Generic.List<string>();
+        foreach (string paragraph in text.Split('\n'))
+        {
+            string line = "";
+            foreach (string word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (line.Length > 0 && line.Length + 1 + word.Length > TooltipColumns) { lines.Add(line); line = word; }
+                else line = line.Length == 0 ? word : line + " " + word;
+            }
+            lines.Add(line);
+        }
+        return string.Join("\n", lines);
+    }
+    /// <summary>What the row's tooltip says: the name, then the description. Null when the client has no text.</summary>
+    public string? Tooltip => Description is null ? null : Wrap(Name + "\n\n" + Description);
     public bool IsComplete => Status == SimStatus.Complete;
     public bool IsIncomplete => Status == SimStatus.Incomplete;
     public bool IsBlocked => Status == SimStatus.Blocked;
@@ -158,6 +202,8 @@ public sealed partial class MeshPreviewViewModel
         _simChampion ??= def.Champion;
         _simVerdict = ChampionSimValidator.Validate(def);
         SimAbilities.Clear();
+        // M870: the client's text for the ability bar - icons and descriptions - when the browser has the client data. Never required.
+        _simClient = null;
         foreach (var top in def.Abilities.Where(a => a.ParentKey is null))
         {
             SimAbilities.Add(MakeRow(top, false));
@@ -167,18 +213,58 @@ public sealed partial class MeshPreviewViewModel
         foreach (var orphan in def.Abilities.Where(a => a.ParentKey is not null && def.Abilities.All(t => t.Key != a.ParentKey)))
             SimAbilities.Add(MakeRow(orphan, true));
         HasSimulation = SimAbilities.Count > 0;
+        SimClientTask = ApplyClientTextAsync(def);
         SimSelected = SimAbilities.FirstOrDefault(r => r.Key == "Q") ?? SimAbilities.FirstOrDefault();
         int ok = SimAbilities.Count(r => r.IsComplete), partial = SimAbilities.Count(r => r.IsIncomplete), blocked = SimAbilities.Count(r => r.IsBlocked);
         SimSummary = $"{def.DisplayName ?? def.Champion}: {SimAbilities.Count} abilities - {ok} ok, {partial} partial, {blocked} blocked (asset check, game {def.GameVersion})";
         OnPropertyChanged(nameof(SimSpeedIndex));
     }
 
+    private ClientChampionDetails? _simClient;
+
+    /// <summary>The client text fetch started by the last <see cref="SetSimulationDefinition"/>; a test awaits it.</summary>
+    public Task SimClientTask { get; private set; } = Task.CompletedTask;
+
+    /// <summary>M870: the ability bar's descriptions (and icons the definition lacks) come from the client champion JSON. Reading it opens
+    /// the client WAD, so it is done on a worker and the rows are filled in when it arrives; the bar is usable meanwhile.</summary>
+    private async Task ApplyClientTextAsync(ChampionSimDefinition def)
+    {
+        if (Browser is not { } browser) return;
+        ClientChampionDetails? details = null;
+        try
+        {
+            var client = browser.ClientData;
+            details = await Task.Run(() => client.Champion(def.Champion) is { } champion ? client.GetDetails(champion.Id) : null);
+        }
+        catch { /* no client text: the bar keeps its names and key letters */ }
+        if (details is null || !ReferenceEquals(_simDef, def)) return;      // another champion took over meanwhile
+        _simClient = details;
+        foreach (var row in SimAbilities)
+        {
+            string? slot = SlotLetter(row.Key) ?? SlotLetter(row.Ability.ParentKey);
+            var ability = slot is null ? null : details.Ability(slot);
+            string? parentIcon = row.Ability.ParentKey is null ? null : def.Abilities.FirstOrDefault(p => p.Key == row.Ability.ParentKey)?.IconPath;
+            string? iconPath = row.Ability.IconPath ?? ability?.IconPath ?? parentIcon;
+            row.ApplyClient(ability?.Description, iconPath is not null && browser.Images is { } images ? new ClientImageHandle(images, iconPath, 72) : null);
+        }
+    }
+
+    private static string? SlotLetter(string? key) =>
+        key is { Length: > 0 } && "PQWER".IndexOf(key[0]) >= 0 && (key.Length == 1 || !char.IsLetter(key[1])) ? key[..1] : null;
+
     private SimAbilityRowViewModel MakeRow(AbilitySim a, bool isSub)
     {
         var verdict = _simVerdict!.Abilities.FirstOrDefault(v => v.Key == a.Key)
                       ?? new AbilityValidation(a.Key, SimStatus.Incomplete, Array.Empty<ValidationCheck>(), Array.Empty<string>());
         string? parentName = a.ParentKey is null ? null : _simDef!.Abilities.FirstOrDefault(p => p.Key == a.ParentKey)?.DisplayName;
-        return new SimAbilityRowViewModel(a, verdict, isSub, row => PlaySimulation(row.Ability), parentName);
+        // the client ability of this slot (a sub-cast or a form variant takes its parent's): description, and the icon when the
+        // definition has none. A sub-cast with no icon of its own shows its parent's.
+        string? slot = SlotLetter(a.Key) ?? SlotLetter(a.ParentKey);
+        var client = slot is null ? null : _simClient?.Ability(slot);
+        string? parentIcon = a.ParentKey is null ? null : _simDef!.Abilities.FirstOrDefault(p => p.Key == a.ParentKey)?.IconPath;
+        string? iconPath = a.IconPath ?? client?.IconPath ?? parentIcon;
+        var icon = iconPath is not null && Browser?.Images is { } images ? new ClientImageHandle(images, iconPath, 72) : null;
+        return new SimAbilityRowViewModel(a, verdict, isSub, row => PlaySimulation(row.Ability), parentName, icon, client?.Description);
     }
 
     // ---- controls and status ----

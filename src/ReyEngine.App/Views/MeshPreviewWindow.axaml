@@ -53,7 +53,7 @@
     <!-- M642: the character editor layout. The viewport keeps the left; the right is a resizable
          tabbed panel - Material (the skin bin, live on both renderers), Animate, Play, Scene - in
          place of the one 250px column every card used to share. -->
-    <Grid ColumnDefinitions="250,4,*,4,340">
+    <Grid ColumnDefinitions="320,4,*,4,340">
       <!-- M643: the left panel. The champion picker is M610's browser, embedded - the same view model,
            the same three lists - and the outliner is the SUBMESHES card grown up: each row names the
            material it draws with, and selecting one outlines it and opens that material on the right. -->
@@ -61,25 +61,50 @@
               BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="0,0,1,0">
         <ScrollViewer>
           <StackPanel Margin="8" Spacing="8">
+            <!-- M870: the picker is a portrait grid (the client's own champion icons, decoded only for the tiles on screen), skin cards
+                 with the client's splash tiles, and the chromas of the selected skin as colour swatches. A click on a card loads that skin;
+                 a companion form (KalistaSpawn) and a project character stay reachable through the same champion tile. -->
             <Border Classes="card" IsVisible="{Binding Browser, Converter={x:Static ObjectConverters.IsNotNull}}">
-              <StackPanel Spacing="4">
+              <StackPanel Spacing="6">
                 <TextBlock Classes="cardTitle" Text="CHARACTER" />
                 <TextBox Text="{Binding Browser.Search}" PlaceholderText="Search champions" FontSize="11" Padding="4,2" />
                 <ListBox ItemsSource="{Binding Browser.Champions}" SelectedItem="{Binding Browser.SelectedChampion}"
-                         Height="180" Background="{DynamicResource ReyBgBrush}"
-                         BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
+                         Height="236" Padding="2" Background="{DynamicResource ReyBgBrush}"
+                         BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                  <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                  </ListBox.ItemsPanel>
+                  <ListBox.Styles>
+                    <Style Selector="ListBoxItem">
+                      <Setter Property="Padding" Value="2" />
+                      <Setter Property="MinHeight" Value="0" />
+                    </Style>
+                  </ListBox.Styles>
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:ChampionRowViewModel">
-                      <StackPanel Margin="2,0">
-                        <TextBlock Text="{Binding Name}" FontSize="11" />
-                        <TextBlock Text="{Binding SourceLabel}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
-                        <TextBlock Text="{Binding Folder}" FontSize="9" IsVisible="{Binding ShowFolder}"
-                                   Foreground="{DynamicResource ReyTextDimBrush}" />
+                      <StackPanel Width="52" Spacing="2" ToolTip.Tip="{Binding Tooltip}">
+                        <Border Width="46" Height="46" CornerRadius="6" ClipToBounds="True" HorizontalAlignment="Center"
+                                Background="{DynamicResource ReyPanelAltBrush}">
+                          <Grid>
+                            <TextBlock Text="{Binding Initial}" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding Icon.NoImage}" />
+                            <views:ClientImageView Handle="{Binding Icon}" />
+                            <Border Classes="badge accent" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="2"
+                                    IsVisible="{Binding InProject}">
+                              <TextBlock Text="PRJ" />
+                            </Border>
+                          </Grid>
+                        </Border>
+                        <TextBlock Text="{Binding Name}" FontSize="9" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
                       </StackPanel>
                     </DataTemplate>
                   </ListBox.ItemTemplate>
                 </ListBox>
+                <TextBlock Text="Form or companion" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}"
+                           IsVisible="{Binding Browser.HasCompanions}" />
                 <ComboBox ItemsSource="{Binding Browser.Characters}" SelectedItem="{Binding Browser.SelectedCharacter}"
+                          IsVisible="{Binding Browser.HasCompanions}"
                           HorizontalAlignment="Stretch" FontSize="11"
                           ToolTip.Tip="A champion WAD also ships its pets, summons and second forms - each a full character with its own skins.">
                   <ComboBox.ItemTemplate>
@@ -88,25 +113,71 @@
                     </DataTemplate>
                   </ComboBox.ItemTemplate>
                 </ComboBox>
-                <ListBox ItemsSource="{Binding Browser.Skins}" SelectedItem="{Binding Browser.SelectedSkin}"
-                         Height="160" Background="{DynamicResource ReyBgBrush}"
-                         BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1">
-                  <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:SkinRowViewModel">
-                      <Grid ColumnDefinitions="28,*,Auto" Margin="2,0">
-                        <TextBlock Grid.Column="0" Text="{Binding NumberText}" FontSize="10"
-                                   Foreground="{DynamicResource ReyTextDimBrush}" />
-                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="11" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="2" Text="{Binding Badge}" FontSize="9"
-                                   Foreground="{DynamicResource ReyAccent2Brush}" />
-                      </Grid>
-                    </DataTemplate>
-                  </ListBox.ItemTemplate>
-                </ListBox>
-                <Button Classes="primary" Content="Load skin" Command="{Binding Browser.OpenSkinCommand}"
-                        HorizontalAlignment="Stretch" FontSize="11" Padding="8,3" />
                 <TextBlock Text="{Binding Browser.Status}" FontSize="9" TextWrapping="Wrap"
                            Foreground="{DynamicResource ReyTextDimBrush}" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card" IsVisible="{Binding Browser.HasSkinCards}">
+              <StackPanel Spacing="6">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Classes="cardTitle" Text="SKINS" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Binding Browser.SkinCards.Count}" FontSize="10" VerticalAlignment="Center"
+                             Foreground="{DynamicResource ReyTextDimBrush}" />
+                </Grid>
+                <TextBlock Text="Click a skin to load it." FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" />
+                <ItemsControl ItemsSource="{Binding Browser.SkinCards}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SkinRowViewModel">
+                      <Button Classes="themeCard" Classes.selected="{Binding IsActive}" Padding="3" Margin="0,0,4,4" Width="86"
+                              Command="{Binding Select}" CommandParameter="{Binding}" ToolTip.Tip="{Binding Name}"
+                              VerticalContentAlignment="Top">
+                        <StackPanel Spacing="3">
+                          <Border Width="78" Height="78" CornerRadius="5" ClipToBounds="True" Background="{DynamicResource ReyPanelAltBrush}">
+                            <Grid>
+                              <TextBlock Text="{Binding NumberText}" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                         Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding Tile.NoImage}" />
+                              <views:ClientImageView Handle="{Binding Tile}" />
+                              <Border Classes="badge" Classes.accent="{Binding IsPremium}" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                      Margin="3" IsVisible="{Binding HasChip}">
+                                <TextBlock Text="{Binding ChipText}" />
+                              </Border>
+                            </Grid>
+                          </Border>
+                          <TextBlock Text="{Binding Name}" FontSize="9" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
+                                     MinHeight="24" />
+                        </StackPanel>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <StackPanel Spacing="4" IsVisible="{Binding Browser.HasChromas}">
+                  <TextBlock Text="CHROMAS" FontSize="9" FontWeight="SemiBold" Foreground="{DynamicResource ReyTextDimBrush}" />
+                  <ItemsControl ItemsSource="{Binding Browser.Chromas}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:ChromaSwatchViewModel">
+                        <Button Classes="swatch" Classes.selected="{Binding IsSelected}" Margin="0,0,4,4"
+                                Command="{Binding Row.Select}" CommandParameter="{Binding Row}">
+                          <ToolTip.Tip>
+                            <StackPanel Spacing="4">
+                              <TextBlock Text="{Binding Name}" FontSize="11" />
+                              <views:ClientImageView Handle="{Binding Picture}" Eager="True" Stretch="Uniform" Width="200" Height="200"
+                                                     IsVisible="{Binding HasPicture}" />
+                            </StackPanel>
+                          </ToolTip.Tip>
+                          <Border Width="22" Height="22" CornerRadius="11" Background="{Binding Fill}"
+                                  BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1" />
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
               </StackPanel>
             </Border>
 
@@ -242,6 +313,26 @@
       <GridSplitter Grid.Column="3" Background="{DynamicResource ReyBorderBrush}" ResizeDirection="Columns" />
       <Border Grid.Column="4" Background="{DynamicResource ReyPanelBrush}"
               BorderBrush="{DynamicResource ReyBorderBrush}" BorderThickness="1,0,0,0">
+        <DockPanel>
+        <!-- M870: who is on stage - the loading-screen art of the skin last loaded, the champion, the title, the roles -->
+        <Border DockPanel.Dock="Top" Classes="card" Padding="6" Margin="6,6,6,2" IsVisible="{Binding Browser.Header.HasChampion}">
+          <Grid ColumnDefinitions="Auto,*">
+            <Border Width="56" Height="64" CornerRadius="6" ClipToBounds="True" Background="{DynamicResource ReyPanelAltBrush}">
+              <views:ClientImageView Handle="{Binding Browser.Header.Art}" Eager="True" Stretch="Fill" Width="56" Height="102"
+                                     VerticalAlignment="Top" />
+            </Border>
+            <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center" Spacing="1">
+              <TextBlock Text="{Binding Browser.Header.Name}" FontSize="16" FontWeight="Bold" TextTrimming="CharacterEllipsis"
+                         Foreground="{DynamicResource ReyTextBrightBrush}" />
+              <TextBlock Text="{Binding Browser.Header.Title}" FontSize="10" FontStyle="Italic" TextTrimming="CharacterEllipsis"
+                         Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding Browser.Header.HasTitle}" />
+              <TextBlock Text="{Binding Browser.Header.Roles}" FontSize="9" Foreground="{DynamicResource ReyAccentBrush}"
+                         IsVisible="{Binding Browser.Header.HasRoles}" />
+              <TextBlock Text="{Binding Browser.Header.SkinName}" FontSize="9" TextTrimming="CharacterEllipsis"
+                         Foreground="{DynamicResource ReyTextDimBrush}" />
+            </StackPanel>
+          </Grid>
+        </Border>
         <TabControl SelectedIndex="{Binding PanelTab}" Padding="0" Margin="4,2,4,0">
           <TabItem FontSize="12" IsVisible="{Binding HasMaterialEditor}">
             <TabItem.Header><TextBlock Text="Material" FontSize="12" /></TabItem.Header>
@@ -504,15 +595,25 @@
                       <TextBlock Text="{Binding SimSummary}" Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" TextWrapping="Wrap" />
                       <ListBox ItemsSource="{Binding SimAbilities}" SelectedItem="{Binding SimSelected, Mode=TwoWay}"
                                IsVisible="{Binding HasSimulation}"
-                               MaxHeight="260" Background="Transparent" BorderThickness="0">
+                               MaxHeight="340" Background="Transparent" BorderThickness="0">
                         <ListBox.ItemTemplate>
                           <DataTemplate x:DataType="vm:SimAbilityRowViewModel">
-                            <Grid ColumnDefinitions="Auto,34,*,Auto,Auto" Margin="0,1">
+                            <Grid ColumnDefinitions="Auto,36,*,Auto,Auto" Margin="0,2" ColumnSpacing="6" ToolTip.Tip="{Binding Tooltip}">
                               <Border Grid.Column="0" Width="{Binding Indent}" />
-                              <TextBlock Grid.Column="1" Text="{Binding Key}" FontSize="11" VerticalAlignment="Center"
-                                         Foreground="{DynamicResource ReyAccentBrush}" TextTrimming="CharacterEllipsis" />
+                              <!-- M870: the client's ability icon (passive and Q/W/E/R; a sub-cast shows its parent's); the key letter until it is there -->
+                              <Border Grid.Column="1" Width="36" Height="36" CornerRadius="6" ClipToBounds="True"
+                                      Background="{DynamicResource ReyPanelAltBrush}" BorderBrush="{DynamicResource ReyBorderSoftBrush}" BorderThickness="1">
+                                <Grid>
+                                  <TextBlock Text="{Binding IconLetter}" FontSize="14" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                             Foreground="{DynamicResource ReyTextDimBrush}" IsVisible="{Binding Icon.NoImage}" />
+                                  <views:ClientImageView Handle="{Binding Icon}" Stretch="Fill" />
+                                  <Border Classes="badge accent" HorizontalAlignment="Left" VerticalAlignment="Bottom" Padding="3,0">
+                                    <TextBlock Text="{Binding Key}" FontSize="8" />
+                                  </Border>
+                                </Grid>
+                              </Border>
                               <TextBlock Grid.Column="2" Text="{Binding Name}" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                              <StackPanel Grid.Column="3" Margin="6,0" VerticalAlignment="Center" ToolTip.Tip="{Binding Reasons}">
+                              <StackPanel Grid.Column="3" Margin="0" VerticalAlignment="Center" ToolTip.Tip="{Binding Reasons}">
                                 <TextBlock Text="{Binding StatusText}" FontSize="9" IsVisible="{Binding IsComplete}" Foreground="{DynamicResource ReySuccessBrush}" />
                                 <TextBlock Text="{Binding StatusText}" FontSize="9" IsVisible="{Binding IsIncomplete}" Foreground="{DynamicResource ReyWarningBrush}" />
                                 <TextBlock Text="{Binding StatusText}" FontSize="9" IsVisible="{Binding IsBlocked}" Foreground="{DynamicResource ReyErrorBrush}" />
@@ -1044,6 +1145,7 @@
             </Border>
           </TabItem>
         </TabControl>
+        </DockPanel>
       </Border>
     </Grid>
   </DockPanel>

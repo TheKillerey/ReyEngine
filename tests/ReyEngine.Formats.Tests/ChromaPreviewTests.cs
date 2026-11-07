@@ -125,7 +125,9 @@ public sealed class ChromaPreviewTests
         int start = main.IndexOf("private async Task LoadMeshPreviewAsync(WadAssetEntry entry, string? skinBin = null)",
             StringComparison.Ordinal);
         Assert.True(start >= 0, "LoadMeshPreviewAsync no longer takes the chosen skin bin");
-        int end = main.IndexOf("// M88: cache the last-loaded backdrop", start, StringComparison.Ordinal);
+        // M868 removed the backdrop cache that used to follow this method; the next member is the idle-effect reader.
+        int end = main.IndexOf("/// M726: the loaded skin's own <c>idleParticlesEffects</c>.", start, StringComparison.Ordinal);
+        Assert.True(end > start, "the member after LoadMeshPreviewAsync moved - re-point this guard");
         string body = main[start..end];
         foreach (string read in new[]
                  {

@@ -531,7 +531,7 @@ public sealed class Map11EnvironmentTests(Xunit.Abstractions.ITestOutputHelper o
 
         // header bar, Play tab, Scene tab: the regions this milestone edited. A binding inside a DataTemplate
         // belongs to its item type, so only top-level paths are checked here.
-        string header = xaml[..xaml.IndexOf("<Grid ColumnDefinitions=\"250,4,*,4,340\">", StringComparison.Ordinal)];
+        string header = xaml[..xaml.IndexOf("<Grid ColumnDefinitions=\"320,4,*,4,340\">", StringComparison.Ordinal)];
         int play = xaml.IndexOf("<TextBlock Text=\"Play\"", StringComparison.Ordinal);
         int chroma = xaml.IndexOf("<TextBlock Text=\"Chroma\"", StringComparison.Ordinal);
         Assert.True(play > 0 && chroma > play);
