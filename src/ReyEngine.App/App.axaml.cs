@@ -20,7 +20,18 @@ public partial class App : Application
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new MainWindow { DataContext = new MainWindowViewModel() };
+            var main = new MainWindow { DataContext = new MainWindowViewModel() };
+            desktop.MainWindow = main;
+            if (ReyEngine.App.SimCheck.SimCheckSession.Options is { } check)
+            {
+                // M871: --simcheck. The main window is not needed: shown minimised and without activation, so nothing takes the user's focus.
+                main.ShowActivated = false;
+                main.WindowState = Avalonia.Controls.WindowState.Minimized;
+                var vm = (MainWindowViewModel)main.DataContext!;
+                main.Opened += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(
+                    async () => await new ReyEngine.App.SimCheck.SimCheckDriver(check, main, vm).RunAsync(),
+                    Avalonia.Threading.DispatcherPriority.Background);
+            }
         }
 
         base.OnFrameworkInitializationCompleted();

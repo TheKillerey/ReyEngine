@@ -283,6 +283,7 @@ public partial class MeshPreviewWindow
             return;
         }
         _dx11LastErrorShown = null;
+        TapDx11Frame(w, h);   // M871: --simcheck reads the frame back
 
         // M622: what the renderer actually DID, once a second. Three milestones were spent guessing at an
         // invisible mesh from the outside, and the numbers that separate the possibilities - was it
@@ -317,4 +318,48 @@ public partial class MeshPreviewWindow
     }
 
     private static string GameVersionOf(MeshPreviewViewModel vm) => "";
+
+    // ---- M871: the frame tap -------------------------------------------------------------------------
+
+    /// <summary>One frame the D3D11 surface rendered, read back for <c>--simcheck</c>: BGRA top-down pixels of the 3D view only (no window
+    /// UI), the camera it was drawn with, and the live particle count at that moment.</summary>
+    internal sealed record Dx11FrameTap(byte[] Bgra, int Width, int Height, System.Numerics.Matrix4x4 View, System.Numerics.Matrix4x4 Projection,
+        int LiveParticles, long Number);
+
+    private readonly System.Collections.Generic.List<System.Threading.Tasks.TaskCompletionSource<Dx11FrameTap>> _frameWaiters = new();
+    private long _dx11FramesRendered;
+
+    /// <summary>How many frames the surface has rendered successfully.</summary>
+    internal long Dx11FramesRendered => _dx11FramesRendered;
+
+    internal Dx11ViewportSurface? Dx11Surface => _dx11;
+
+    /// <summary>The frame the live loop renders next, copied out of the renderer's reused readback buffer. Nothing is read back, and
+    /// nothing is copied, unless somebody is waiting for it. The loop is the window's own (a compositor animation frame); this adds no
+    /// second render.</summary>
+    internal System.Threading.Tasks.Task<Dx11FrameTap> NextDx11FrameAsync()
+    {
+        var waiter = new System.Threading.Tasks.TaskCompletionSource<Dx11FrameTap>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        _frameWaiters.Add(waiter);
+        QueueDx11Frame();
+        return waiter.Task;
+    }
+
+    private void TapDx11Frame(int w, int h)
+    {
+        _dx11FramesRendered++;
+        if (_frameWaiters.Count == 0 || _dx11?.LastPixels is not { } pixels || pixels.Length < w * h * 4) return;
+        var copy = new byte[w * h * 4];
+        Buffer.BlockCopy(pixels, 0, copy, 0, copy.Length);
+        var camera = PreviewViewport.Camera;
+        var tap = new Dx11FrameTap(copy, w, h, camera.View, camera.Projection((float)w / h), _dx11.Particles?.LiveParticles ?? 0, _dx11FramesRendered);
+        var waiters = _frameWaiters.ToArray();
+        _frameWaiters.Clear();
+        foreach (var waiter in waiters) waiter.TrySetResult(tap);
+    }
+
+    /// <summary>Is the viewport's scene (the character, and the arena under it) committed to the D3D11 renderer for the view model's current scene?</summary>
+    internal bool Dx11SceneReady(MeshPreviewViewModel vm) =>
+        _dx11 is { IsReady: true, HasScene: true } && !_buildingArena && _dx11CommittedRevision == vm.Dx11SceneRevision
+        && (vm.ArenaViewport is null || ReferenceEquals(_committedArena, vm.ArenaViewport));
 }

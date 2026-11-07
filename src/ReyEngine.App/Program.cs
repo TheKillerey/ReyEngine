@@ -12,6 +12,15 @@ internal static class Program
         // M867: the headless champion simulation generator runs before any Avalonia, settings or project state exists.
         if (SimGenCommand.Handles(args)) return SimGenCommand.Run(args);
 
+        // M871: --simcheck runs the real application (Avalonia, the Character window, D3D11) and exits by itself when done.
+        if (SimCheck.SimCheckOptions.Handles(args))
+        {
+            try { AttachConsole(-1); } catch { }
+            var options = SimCheck.SimCheckOptions.Parse(args, out string? problem);
+            if (options is null) { Console.Error.WriteLine(problem); return 2; }
+            SimCheck.SimCheckSession.Options = options;
+        }
+
         // M140.2: the app had no crash net — an unhandled exception died silently. Record it so a
         // crash leaves a readable stack behind (%AppData%/ReyEngine/crash.log).
         AppDomain.CurrentDomain.UnhandledException += (_, e) => WriteCrash(e.ExceptionObject as Exception);
@@ -23,11 +32,14 @@ internal static class Program
             WriteCrash(e.Exception);
             e.SetObserved();   // recorded; do not escalate to a process kill
         };
-        try { BuildAvaloniaApp().StartWithClassicDesktopLifetime(args); }
+        int exit = 0;
+        try { exit = BuildAvaloniaApp().StartWithClassicDesktopLifetime(args); }
         catch (Exception ex) { WriteCrash(ex); throw; }
         finally { ViewModels.MainWindowViewModel.SessionLog?.Dispose(); }
-        return 0;
+        return SimCheck.SimCheckSession.Active ? SimCheck.SimCheckSession.ExitCode : 0;
     }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool AttachConsole(int processId);
 
     private static void WriteCrash(Exception? ex)
     {

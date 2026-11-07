@@ -35,6 +35,9 @@ namespace ReyEngine.App.ViewModels;
 public sealed partial class MainWindowViewModel : ViewModelBase
 {
     private readonly Logger _log = new();
+
+    /// <summary>M871: <c>--simcheck</c> listens to the same log the Console tab shows, to grade an ability by the errors it wrote.</summary>
+    internal void AddLogSink(ReyEngine.Core.Diagnostics.ILogSink sink) => _log.AddSink(sink);
     private readonly HashSyncService _sync = new();
     private readonly MimirSyncService _mimir = new();   // M495
 

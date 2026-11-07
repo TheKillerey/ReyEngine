@@ -503,6 +503,9 @@ public sealed partial class MeshPreviewViewModel
         SimPaused = !SimPaused;
     }
 
+    /// <summary>M871: <c>--simcheck</c> plays a wrapper's sub-casts one by one instead of the wrapper.</summary>
+    internal bool IsSimWrapper(AbilitySim a) => IsWrapper(a);
+
     private bool IsWrapper(AbilitySim a) =>
         a.Clip is null && a.CasterSystems.Count == 0 && a.TargetSystems.Count == 0 && a.Missiles.Count == 0
         && a.ClipParticleEvents.Count == 0 && SubCastsOf(a).Any();

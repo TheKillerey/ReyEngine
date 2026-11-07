@@ -142,7 +142,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         };
         LoadBranding();
         TitleVersionText.Text = AppInfo.DisplayVersion;   // M81
-        _ = AutoCheckUpdatesAsync();                      // M81: silent startup check
+        if (!ReyEngine.App.SimCheck.SimCheckSession.Active) _ = AutoCheckUpdatesAsync();   // M81: silent startup check (M871: not during a check)
         DataContextChanged += (_, _) =>
         {
             if (DataContext is MainWindowViewModel vm)
@@ -812,7 +812,8 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             };
             Viewport.CameraMoved += pos => vm.UpdateAmbience(pos);        // M56: positional map audio
             ApplyEditorSettings(vm.Settings);   // M40: apply saved keybinds + camera feel at startup
-            _ = vm.AutoUpdateHashesAsync();      // M731: newer hash tables / meta classes, when Settings leaves it on
+            if (!ReyEngine.App.SimCheck.SimCheckSession.Active)   // M871: a check runs on the tables it was started with, and touches nothing on disk
+                _ = vm.AutoUpdateHashesAsync();      // M731: newer hash tables / meta classes, when Settings leaves it on
             WireBrowserDragDrop();   // M74: Explorer-style drag & drop
             WireBrowserThumbnails(vm);   // M807: the tiles in view are the only map tiles drawn
 
@@ -830,7 +831,7 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
             };
 
             // M93: first launch — walk the user through hashes / audio decoder / preview map.
-            if (!vm.Settings.FirstRunCompleted)
+            if (!vm.Settings.FirstRunCompleted && !ReyEngine.App.SimCheck.SimCheckSession.Active)
                 Dispatcher.UIThread.Post(() => ShowSetupWizard(vm), DispatcherPriority.Background);
         }
     }
@@ -1095,10 +1096,16 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
                 _meshPreviewWindow = null;
                 vm.OnPreviewWindowClosed();   // M120/M121: stop sounds/animation AND close its tabs
             };
-            _meshPreviewWindow.Show(this);
+            if (ReyEngine.App.SimCheck.SimCheckSession.Active)
+                ReyEngine.App.SimCheck.SimCheckWindows.ShowCharacterWindow(_meshPreviewWindow);   // M871: a fixed size, no focus taken
+            else
+                _meshPreviewWindow.Show(this);
         }
-        else _meshPreviewWindow.Activate();
+        else if (!ReyEngine.App.SimCheck.SimCheckSession.Active) _meshPreviewWindow.Activate();
     }
+
+    /// <summary>M871: the Character window, for <c>--simcheck</c>.</summary>
+    internal MeshPreviewWindow? CharacterWindow => _meshPreviewWindow;
 
     // M46: the Particle Editor lives in its own (non-modal) window; reuse one instance while open.
     private ParticleEditorWindow? _particleEditorWindow;
