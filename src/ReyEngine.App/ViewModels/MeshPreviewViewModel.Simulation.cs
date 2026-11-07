@@ -748,7 +748,7 @@ public sealed partial class MeshPreviewViewModel
                 CasterSystems = exclude is { Count: > 0 }
                     ? ev.CasterSystems.Where(h => !(_vfxDefs.TryGetValue(h, out var d) && exclude.Contains(d.Name, StringComparer.OrdinalIgnoreCase))).ToList()
                     : ev.CasterSystems,
-                TargetSystems = ev.TargetSystems,
+                TargetSystems = ev.TargetSystems, AimSystems = ev.AimSystems,
                 MissileSystems = ev.MissileSystems, ReturnMissileSystems = ev.ReturnMissileSystems,
             };
         PlayEvent(play);

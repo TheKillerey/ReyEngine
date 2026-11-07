@@ -97,7 +97,7 @@ public static class ChampionSimValidator
         }
 
         // 3. caster / target / return systems
-        var systems = a.CasterSystems.Concat(a.TargetSystems).Concat(a.ReturnSystems).ToList();
+        var systems = a.CasterSystems.Concat(a.TargetSystems).Concat(a.ReturnSystems).Concat(a.AimSystems ?? Array.Empty<SimSystemRef>()).ToList();
         if (systems.Count == 0) checks.Add(new ValidationCheck("systems", true, "no caster, target or return systems"));
         else
         {
@@ -119,7 +119,7 @@ public static class ChampionSimValidator
         // 5. something to see
         bool visible = a.Clip is not null
             || a.CasterSystems.Any(s => s.Visual == true) || a.TargetSystems.Any(s => s.Visual == true)
-            || a.ReturnSystems.Any(s => s.Visual == true)
+            || a.ReturnSystems.Any(s => s.Visual == true) || (a.AimSystems?.Any(s => s.Visual == true) ?? false)
             || a.Missiles.Any(m => m.Effect?.Visual == true)
             || a.ClipParticleEvents.Any(e => e.System?.Visual == true);
         if (!visible && subCasts.Any(sc => Validate(sc).Status != SimStatus.Blocked)) visible = true;

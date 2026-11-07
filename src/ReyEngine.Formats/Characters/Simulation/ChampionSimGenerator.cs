@@ -185,7 +185,7 @@ public static class ChampionSimGenerator
             if (missiles.Count > 0) sources.Add(new FieldSource("missiles", "authored"));
 
             // ---- composite systems (name tokens)
-            var casters = new List<SimSystemRef>(); var targets = new List<SimSystemRef>(); var returns = new List<SimSystemRef>();
+            var casters = new List<SimSystemRef>(); var targets = new List<SimSystemRef>(); var returns = new List<SimSystemRef>(); var aims = new List<SimSystemRef>();
             if (rec.Key.Length == 1)
             {
                 var ev = events.FirstOrDefault(e => e.Name == rec.Key);
@@ -194,10 +194,21 @@ public static class ChampionSimGenerator
                     casters.AddRange(ObjectRefs(ev.CasterSystems));
                     targets.AddRange(ObjectRefs(ev.TargetSystems));
                     returns.AddRange(ObjectRefs(ev.ReturnMissileSystems));
-                    if (missiles.Count == 0)
+                    aims.AddRange(ObjectRefs(ev.AimSystems));
+                    // M875: an authored missile that names no effect hid the convention missile (Lux R: Lux_Base_R_mis_beam never played)
+                    if (missiles.Count(m => m.Effect?.Name != null) == 0 && ev.MissileSystems.Count > 0)
+                    {
+                        // exactly one authored missile: its speed, flight time and hit effect describe the convention missile too
+                        var own = missiles.Count == 1 ? missiles[0] : null;
+                        if (own is not null) missiles.Clear();
                         foreach (var r in ObjectRefs(ev.MissileSystems))
-                            missiles.Add(new MissileSim(null, r, null, "Unknown", null, null, null, 0f, "convention"));
-                    if (casters.Count + targets.Count + returns.Count > 0 || ev.MissileSystems.Count > 0)
+                            missiles.Add(own is null
+                                ? new MissileSim(null, r, null, "Unknown", null, null, null, 0f, "convention")
+                                : own with { Effect = r, Source = "convention" });
+                    }
+                    if (ev.DroppedSystemNames.Count > 0)
+                        issues.Add("convention left out " + ev.DroppedSystemNames.Count + " system(s): " + string.Join(", ", ev.DroppedSystemNames));
+                    if (casters.Count + targets.Count + returns.Count + aims.Count > 0 || ev.MissileSystems.Count > 0)
                         sources.Add(new FieldSource("systems", "convention"));
                 }
             }
@@ -224,7 +235,7 @@ public static class ChampionSimGenerator
                 slot.Tags, slot.AffectsTypeFlags,
                 authored, clip, castSeconds, slot.SpellTotalTime, slot.SpellCastTime,
                 missiles, SortRefs(casters), SortRefs(targets), SortRefs(returns),
-                particles, sounds, scenario, sources, issues, clipChain);
+                particles, sounds, scenario, sources, issues, clipChain, SortRefs(aims));
         }
 
         private AbilitySim BuildSubCast(string name, ChampionEvent ev, AbilitySim owner, AbilityRecordData rec)
@@ -271,6 +282,7 @@ public static class ChampionSimGenerator
             var casters = ObjectRefs(ev.CasterSystems).ToList();
             var targets = ObjectRefs(ev.TargetSystems).ToList();
             var returns = ObjectRefs(ev.ReturnMissileSystems).ToList();
+            var aimed = ObjectRefs(ev.AimSystems).ToList();
             var missiles = ObjectRefs(ev.MissileSystems)
                 .Select(r => new MissileSim(null, r, null, "Unknown", null, null, null, 0f, "convention")).ToList();
 
@@ -289,7 +301,7 @@ public static class ChampionSimGenerator
                 particles, sounds,
                 new ScenarioHint(missiles.Count > 0 || targets.Count > 0 || owner.TargetingKind == "Cone", false,
                     owner.TargetingKind is "Target" or "TargetOrLocation", DistanceHint(owner.CastRange)),
-                sources, issues);
+                sources, issues, null, SortRefs(aimed));
         }
 
         private AttackSim BuildAttack(AttackSpell a)

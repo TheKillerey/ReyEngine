@@ -19,8 +19,12 @@ public sealed class ChampionEvent
     public IReadOnlyList<uint> TargetSystems { get; init; } = Array.Empty<uint>();
     public IReadOnlyList<uint> MissileSystems { get; init; } = Array.Empty<uint>();
     public IReadOnlyList<uint> ReturnMissileSystems { get; init; } = Array.Empty<uint>();
+    /// <summary>M875: location / terminal systems (end, explosion, aoe, zone, trap...) - they play at the aim or hit point, not on the caster.</summary>
+    public IReadOnlyList<uint> AimSystems { get; init; } = Array.Empty<uint>();
+    /// <summary>M875: systems the convention rules left out (alternatives, timed states), with the reason; the simulation lists them in the ability's issues.</summary>
+    public IReadOnlyList<string> DroppedSystemNames { get; init; } = Array.Empty<string>();
     public bool NeedsTarget => TargetSystems.Count > 0 || MissileSystems.Count > 0;
-    public bool HasSystems => CasterSystems.Count > 0 || NeedsTarget;
+    public bool HasSystems => CasterSystems.Count > 0 || AimSystems.Count > 0 || NeedsTarget;
 
     public string Description
     {
@@ -28,12 +32,82 @@ public sealed class ChampionEvent
         {
             var parts = new List<string>();
             if (CasterSystems.Count > 0) parts.Add($"{CasterSystems.Count} caster");
+            if (AimSystems.Count > 0) parts.Add($"{AimSystems.Count} aim");
             if (MissileSystems.Count > 0) parts.Add($"{MissileSystems.Count} missile");
             if (ReturnMissileSystems.Count > 0) parts.Add($"{ReturnMissileSystems.Count} return");
             if (TargetSystems.Count > 0) parts.Add($"{TargetSystems.Count} target");
             if (ClipAnmFile is not null) parts.Add(System.IO.Path.GetFileNameWithoutExtension(ClipAnmFile));
             return parts.Count > 0 ? string.Join(" · ", parts) : "";
         }
+    }
+}
+
+/// <summary>
+/// M875: the one place the system-name token rules live. A name-matched system used to play on the caster at t=0 unless it said tar/hit/mis; that put
+/// ground effects, target marks and every alternative of one effect on the champion together.
+/// </summary>
+public static class ChampionSystemTokens
+{
+    public enum Role { Caster, Target, Missile, Aim }
+
+    /// <summary>Location or terminal effects: they happen where the spell lands.</summary>
+    public static readonly HashSet<string> AimTokens = new(StringComparer.OrdinalIgnoreCase)
+    { "end", "explosion", "explode", "detonate", "detonation", "aoe", "zone", "ground", "trap", "mine" };
+
+    /// <summary>States an ability leaves ON the unit it hit.</summary>
+    public static readonly HashSet<string> TargetStateTokens = new(StringComparer.OrdinalIgnoreCase)
+    { "debuff", "mark", "marked", "moonlight", "root", "rooted", "tether", "tethered", "snare", "stun", "charm", "taunt", "fear", "sleep" };
+
+    /// <summary>Timed states of a placed effect; they play when the game reaches that phase, not at the cast.</summary>
+    public static readonly HashSet<string> TimedStateTokens = new(StringComparer.OrdinalIgnoreCase)
+    { "idle", "ready", "indicator", "warning" };
+
+    /// <summary>Alternatives of one effect that must not play together: (kept, dropped) team-colour pairs.</summary>
+    private static readonly (string Keep, string Drop)[] TeamPairs =
+        { ("ally", "enemy"), ("blue", "red"), ("order", "chaos"), ("friendly", "hostile") };
+    private static readonly string[] QuadrantTokens = { "ne", "nw", "se", "sw" };
+
+    /// <summary>The reason a system is not played, or null. <paramref name="names"/> holds every system name of the skin (case-insensitive).</summary>
+    public static string? DropReason(string name, ISet<string> names)
+    {
+        var tokens = name.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var raw in tokens)
+        {
+            string tk = raw.ToLowerInvariant();
+            if (tk == "onkill") return "on-kill variant";
+            if (tk == "timeout") return "timeout variant";
+            if (tk.Length > 4 && tk.EndsWith("only", StringComparison.Ordinal)) return "single-champion variant";
+            if (TimedStateTokens.Contains(tk)) return "timed state (" + tk + ")";
+        }
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            string tk = tokens[i].ToLowerInvariant();
+            foreach (var (keep, drop) in TeamPairs)
+            {
+                if (tk != keep && tk != drop) continue;
+                // the plain form (token removed) wins; of a colour pair only the first half plays
+                if (names.Contains(string.Join('_', tokens.Where((_, j) => j != i)))) return "team-colour alternative (" + tk + ")";
+                if (tk == drop && names.Contains(string.Join('_', tokens.Select((t, j) => j == i ? keep : t)))) return "team-colour alternative (" + tk + ")";
+            }
+            if (Array.IndexOf(QuadrantTokens, tk) >= 0)
+                foreach (var other in QuadrantTokens)
+                    if (string.CompareOrdinal(other, tk) < 0
+                        && names.Contains(string.Join('_', tokens.Select((t, j) => j == i ? other : t)))) return "quadrant sibling";
+        }
+        return null;
+    }
+
+    /// <summary>Where a surviving system plays. tar/hit and mis keep their existing meaning and win over the new tables.</summary>
+    public static Role Classify(string name, bool passive = false)
+    {
+        var tokens = name.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(t => t.ToLowerInvariant()).ToArray();
+        if (tokens.Any(t => t is "tar" or "hit")) return Role.Target;
+        if (tokens.Contains("mis")) return Role.Missile;
+        // a passive is not aimed and the planner gives it no hit: its states and placed effects stay with the caster (M873 behaviour)
+        if (passive) return Role.Caster;
+        if (tokens.Any(TargetStateTokens.Contains)) return Role.Target;
+        if (tokens.Any(AimTokens.Contains)) return Role.Aim;
+        return Role.Caster;
     }
 }
 
@@ -65,7 +139,8 @@ public static class ChampionEventBuilder
         var events = new List<ChampionEvent>();
 
         // ---- spell composites from VFX naming ----
-        var groups = new Dictionary<(string Form, string Spell), (List<uint> Cas, List<uint> Tar, List<uint> Mis)>();
+        var groups = new Dictionary<(string Form, string Spell), (List<uint> Cas, List<uint> Tar, List<uint> Mis, List<uint> Aim, List<string> Dropped)>();
+        var allNames = systems.Values.Select(d => d.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var (hash, def) in systems)
         {
             if (!def.Emitters.Any(e => e.IsVisual)) continue;
@@ -73,14 +148,11 @@ public static class ChampionEventBuilder
 
             string? spell = null;
             string form = "";
-            bool isTarget = false, isMissile = false;
             foreach (var raw in tokens)
             {
                 var tk = raw.ToLowerInvariant();
                 if (spell is null && SpellTokens.Contains(tk)) spell = tk;
                 if (form.Length == 0 && Array.IndexOf(FormTokens, tk) >= 0) form = raw;
-                if (tk is "tar" or "hit") isTarget = true;
-                if (tk == "mis") isMissile = true;
             }
             if (spell is null) continue;   // idles/transforms/etc. — covered by clip events
 
@@ -92,8 +164,15 @@ public static class ChampionEventBuilder
                 var s => s,
             };
             var key = (form, spellKey);
-            if (!groups.TryGetValue(key, out var g)) groups[key] = g = (new List<uint>(), new List<uint>(), new List<uint>());
-            (isTarget ? g.Tar : isMissile ? g.Mis : g.Cas).Add(hash);
+            if (!groups.TryGetValue(key, out var g)) groups[key] = g = (new List<uint>(), new List<uint>(), new List<uint>(), new List<uint>(), new List<string>());
+            if (ChampionSystemTokens.DropReason(def.Name, allNames) is { } why) { g.Dropped.Add(def.Name + " (" + why + ")"); continue; }
+            switch (ChampionSystemTokens.Classify(def.Name, spellKey == "P"))
+            {
+                case ChampionSystemTokens.Role.Target: g.Tar.Add(hash); break;
+                case ChampionSystemTokens.Role.Missile: g.Mis.Add(hash); break;
+                case ChampionSystemTokens.Role.Aim: g.Aim.Add(hash); break;
+                default: g.Cas.Add(hash); break;
+            }
         }
 
         static int SpellRank(string s) => s switch
@@ -120,15 +199,18 @@ public static class ChampionEventBuilder
                     int n = CastVariant(name, key.Spell, castOnly: false);
                     return cast == 0 || n == 0 || n == cast;
                 }).ToList();
-                var missiles = authoredMissiles is not null
-                    && authoredMissiles.TryGetValue(key.Spell, out var own) && own.Count > 0
-                    ? own.Where(systems.ContainsKey).Distinct().ToList() : Select(g.Mis);
+                // M875: authored missiles that resolve to no system of this skin must not hide the name-matched ones
+                var ownMissiles = authoredMissiles is not null && authoredMissiles.TryGetValue(key.Spell, out var own)
+                    ? own.Where(systems.ContainsKey).Distinct().ToList() : null;
+                var missiles = ownMissiles is { Count: > 0 } ? ownMissiles : Select(g.Mis);
                 events.Add(new ChampionEvent
                 {
                     Name = key.Form.Length > 0 ? $"{spell} ({key.Form})" : spell,
                     ClipAnmFile = FindClip(clips, ClipPrefixFor(key.Spell), key.Form, spell),
                     CasterSystems = Select(g.Cas).Where(h => !missiles.Contains(h)).ToList(),
                     TargetSystems = Select(g.Tar),
+                    AimSystems = Select(g.Aim).Where(h => !missiles.Contains(h)).ToList(),
+                    DroppedSystemNames = g.Dropped.Distinct().OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(),
                     MissileSystems = missiles,
                     ReturnMissileSystems = g.Mis.Where(h => !missiles.Contains(h)
                         && missiles.Any(m => systems[h].Name.Equals(systems[m].Name + "_return", StringComparison.OrdinalIgnoreCase))).ToList(),

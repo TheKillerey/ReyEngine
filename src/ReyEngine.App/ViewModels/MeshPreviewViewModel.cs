@@ -848,6 +848,8 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // the events list is there because Riot's files never name the real bone.
         string? casterBone = CasterBoneOrNull;
         foreach (var h in ev.CasterSystems) if (Make(h, caster, aim, null, casterBone, onCaster: true) is { } i) items.Add(i);
+        // M875: location / terminal systems play where the spell lands, not on the caster
+        foreach (var h in ev.AimSystems) if (Make(h, aim, caster, null) is { } i) items.Add(i);
         if (hitAt is { } hit)
             foreach (var h in ev.TargetSystems)
                 if (Make(h, hit, caster, null) is { } i)

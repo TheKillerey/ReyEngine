@@ -184,7 +184,7 @@ public static class SimCheckGrader
     public static bool ExpectsEffects(AbilitySim a)
     {
         static bool Visible(SimSystemRef? r) => r is not null && r.Visual != false;
-        return a.CasterSystems.Any(Visible) || a.TargetSystems.Any(Visible) || a.ReturnSystems.Any(Visible)
+        return a.CasterSystems.Any(Visible) || a.TargetSystems.Any(Visible) || a.ReturnSystems.Any(Visible) || (a.AimSystems?.Any(Visible) ?? false)
                || a.Missiles.Any(m => Visible(m.Effect) || Visible(m.HitEffect))
                || a.ClipParticleEvents.Any(p => Visible(p.System));
     }

@@ -32,7 +32,7 @@ public static class SimAdapterKit
     {
         foreach (var a in def.Abilities)
         {
-            foreach (var r in a.CasterSystems.Concat(a.TargetSystems).Concat(a.ReturnSystems)
+            foreach (var r in a.CasterSystems.Concat(a.TargetSystems).Concat(a.ReturnSystems).Concat(a.AimSystems ?? Array.Empty<SimSystemRef>())
                          .Concat(a.Missiles.SelectMany(m => new[] { m.Effect, m.HitEffect }).Where(r => r is not null).Select(r => r!))
                          .Concat(a.ClipParticleEvents.Select(e => e.System).Where(r => r is not null).Select(r => r!)))
                 if (r.Name is { } n && n.Equals(name, StringComparison.OrdinalIgnoreCase)) return n;
