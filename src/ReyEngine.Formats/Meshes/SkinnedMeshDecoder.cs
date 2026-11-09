@@ -127,6 +127,22 @@ public static class SkinnedMeshDecoder
         var indices = new uint[ia.Count];
         for (int i = 0; i < ia.Count; i++) indices[i] = ia[i];
 
+        // M888: a v4 file with NORMALIZED_INDICES (flags bit 1) stores every range's indices RELATIVE to
+        // that range's StartVertex - the game draws each range with it as the base vertex. LeagueToolkit
+        // hands them back as stored, so every range after the first indexed the first range's vertices:
+        // sheets of stretched triangles and a box round the body on Akali skin102, Kai'Sa skin83,
+        // Evelynn skin65, Ahri skin97 (all flags=2), while skins without the flag (Kai'Sa skin1, flags=0,
+        // absolute indices) were fine. Made absolute here, once, for every consumer of the MeshAsset.
+        // SknTangentBaker reads the same flag the same way.
+        if (HasNormalizedIndices(data))
+            foreach (SkinnedMeshRange r in skn.Ranges)
+            {
+                if (r.StartVertex <= 0) continue;
+                int from = Math.Clamp(r.StartIndex, 0, indices.Length);
+                int to = Math.Clamp(r.StartIndex + r.IndexCount, from, indices.Length);
+                for (int i = from; i < to; i++) indices[i] += (uint)r.StartVertex;
+            }
+
         var subs = new List<SubMeshInfo>();
         foreach (SkinnedMeshRange r in skn.Ranges)
             subs.Add(new SubMeshInfo(r.Material, r.StartIndex, r.IndexCount, r.VertexCount));
@@ -147,5 +163,16 @@ public static class SkinnedMeshDecoder
             BlendWeights = blendWeights,
             Colors = colors,   // M646
         };
+    }
+
+    /// <summary>M888: the SKN v4 header's NORMALIZED_INDICES flag (bit 1): magic, u16 major, u16 minor,
+    /// u32 range count, 80-byte ranges, then the u32 flags - the layout SknTangentBaker reads. Other
+    /// versions have no flags and always store absolute indices.</summary>
+    public static bool HasNormalizedIndices(ReadOnlySpan<byte> skn)
+    {
+        const uint NormalizedIndices = 2;
+        if (skn.Length < 12 || BitConverter.ToUInt16(skn[4..]) != 4) return false;
+        long at = 12 + 80L * BitConverter.ToUInt32(skn[8..]);
+        return at + 4 <= skn.Length && (BitConverter.ToUInt32(skn[(int)at..]) & NormalizedIndices) != 0;
     }
 }
