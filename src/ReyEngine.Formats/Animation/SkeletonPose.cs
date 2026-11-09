@@ -34,7 +34,18 @@ public sealed class SkeletonIndex
         foreach (var j in skeleton.Joints) if (j.Id >= 0) ById[j.Id] = j;
         int count = skeleton.Influences.Count > 0 ? skeleton.Influences.Count : maxId + 1;
         PaletteLength = Math.Clamp(count, 1, BonePalette.MaxBones);
+        var bind = new Dictionary<uint, (Quaternion, Vector3, Vector3)>(skeleton.Joints.Count);
+        foreach (var j in skeleton.Joints)
+            if (Matrix4x4.Decompose(j.LocalTransform, out var scale, out var rotation, out var translation))
+                bind.TryAdd(j.AnimHash, (rotation, translation, scale));
+        _bindLocal = bind;
+        BindLocal = hash => _bindLocal.TryGetValue(hash, out var trs) ? trs : null;
     }
+
+    private readonly Dictionary<uint, (Quaternion, Vector3, Vector3)> _bindLocal;
+
+    /// <summary>M889: the bind local TRS by joint hash, for a clip that omits a track of a joint it animates.</summary>
+    public Func<uint, (Quaternion Rotation, Vector3 Translation, Vector3 Scale)?> BindLocal { get; }
 
     public static SkeletonIndex For(SkeletonAsset skeleton) => Cache.GetValue(skeleton, s => new SkeletonIndex(s));
 }
@@ -82,7 +93,7 @@ public static class SkeletonPose
         var pose = buffer.Pose;
         pose.Clear();
         if (clip is not null)
-            try { clip.Evaluate(time, pose); }
+            try { clip.Evaluate(time, pose, index.BindLocal); }
             catch { pose.Clear(); /* a clip that will not evaluate falls back to the bind pose */ }
 
         var byId = index.ById;

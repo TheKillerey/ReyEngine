@@ -264,6 +264,16 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             }
         };
         Animation.ClipEnded = OnIntroClipEnded;   // M887
+        // M889: another clip chosen while the spawn intro plays ends the chain. A pick by the user (Animate tab, an action row) also
+        // gets back the loop the intro switched off - it stayed off before, so that clip and every later one played once and stopped.
+        // Internal selections (a cast, the simulation) set their own loop.
+        Animation.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(AnimationInspectorViewModel.SelectedAnimation) || _introEntry is null
+                || ReferenceEquals(Animation.SelectedAnimation, _introEntry)) return;
+            _introEntry = null; _introFollowUp = null;
+            if (!_internalClipSelect) Animation.Loop = true;
+        };
         Animation.TimeChanged = t =>
         {
             // M86: clip event VFX are one-shot — respawn them each time the looping clip wraps around

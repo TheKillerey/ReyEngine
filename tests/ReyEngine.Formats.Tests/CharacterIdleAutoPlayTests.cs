@@ -81,5 +81,6 @@ public sealed class CharacterIdleAutoPlayTests
         vm.Animation.SelectedAnimation = vm.Animation.Animations.First(a => a.Name == "run.anm");
         vm.Animation.ClipEnded!();
         Assert.Equal("run.anm", vm.Animation.SelectedAnimation?.Name);
+        Assert.True(vm.Animation.Loop);   // M889: the user's pick loops again - the intro's one-shot loop does not stick
     }
 }
