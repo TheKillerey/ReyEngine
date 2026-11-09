@@ -1512,11 +1512,9 @@ public sealed class ViewportControl : OpenGlControlBase
                     _travelElapsed[item] = elapsed;
                     if (item.EndTime is { } end && elapsed >= end) _expiredTravelSims.Add(sim);
                     float t01 = Math.Clamp((elapsed - item.StartDelay) / item.TravelSeconds, 0f, 1f);
-                    var pos = Vector3.Lerp(item.WorldPos, dest, t01);
                     // M635: the aim travels with it - same as the D3D11 driver, or the two viewports
-                    // would fly the same missile in two directions.
-                    sim.SetWorldTransform(ReyEngine.Formats.Vfx.VfxCastFrame.RotationOf(item.Transform)
-                        * Matrix4x4.CreateTranslation(pos));
+                    // would fly the same missile in two directions. M893: through the same helper, so the authored height path is shared too.
+                    sim.SetWorldTransform(Services.VfxPlaybackSim.TravelTransform(item, dest, t01));
                 }
 
             // M712: the rig. It carries the whole system along a path the file does not describe - a

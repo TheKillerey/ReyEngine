@@ -315,14 +315,17 @@ public sealed class SimulationPlannerTests(ITestOutputHelper output)
         Assert.True(hit.StopsMissile);
         Assert.Contains("stops", hit.Text);
 
-        var pierce = SimulationPlanner.Plan(d, q with { Tags = q.Tags.Concat(new[] { SimulationPlanner.PiercingTag }).ToList() }, Stage()).Find(SimStepKind.Hit)!;
+        // M893: Ezreal Q's missile authors DestroyOnHit, which decides over the tags; a tag-only variant drops the behaviour list
+        Assert.All(q.Missiles.Where(m => m.ReturnSource is null), m => Assert.True(m.Flight!.HasBehavior("DestroyOnHit")));
+        var noBehaviours = q.Missiles.Select(m => m with { Flight = null }).ToList();
+        var pierce = SimulationPlanner.Plan(d, q with { Tags = q.Tags.Concat(new[] { SimulationPlanner.PiercingTag }).ToList(), Missiles = noBehaviours }, Stage()).Find(SimStepKind.Hit)!;
         Assert.False(pierce.StopsMissile);
         Assert.Equal(hit.Time, pierce.Time);                                  // the hit time is the same either way
 
         // real data: Kalista Q carries both tags, so it flies on
         var k = Def("Kalista");
         Assert.False(SimulationPlanner.Plan(k, Ab(k, "Q"), Stage()).Find(SimStepKind.Hit)!.StopsMissile);
-        var untagged = q with { Tags = q.Tags.Where(t => t != SimulationPlanner.StopsFirstHitTag).ToList() };
+        var untagged = q with { Tags = q.Tags.Where(t => t != SimulationPlanner.StopsFirstHitTag).ToList(), Missiles = noBehaviours };
         Assert.False(SimulationPlanner.Plan(d, untagged, Stage()).Find(SimStepKind.Hit)!.StopsMissile);
     }
 

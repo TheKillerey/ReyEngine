@@ -83,6 +83,7 @@ public static class ChampionSimGenerator
             var authoredMissiles = records
                 .Where(r => r.Key.Length == 1 && r.Key != "X")
                 .ToDictionary(r => r.Key, r => (IReadOnlyList<uint>)r.Slot.Missiles
+                        .Where(m => m.ReturnSource != "name")   // M893: a sibling return missile is a leg back, not a second outbound missile
                         .Select(m => _in.ResourceMap.TryGetValue(m.MissileEffectKey, out var h) ? h : 0u)
                         .Where(h => _in.Systems.ContainsKey(h)).Distinct().ToList(),
                     StringComparer.OrdinalIgnoreCase);
@@ -271,7 +272,8 @@ public static class ChampionSimGenerator
                 authored, clip, castSeconds, slot.SpellTotalTime, slot.SpellCastTime,
                 missiles, SortRefs(casters), SortRefs(targets), SortRefs(returns),
                 particles, sounds, scenario, sources, issues, clipChain, SortRefs(aims), followUpAttack,
-                script?.Characters, script?.Spells, script?.BuffEffects, script?.Files);
+                script?.Characters, script?.Spells, script?.BuffEffects, script?.Files,
+                slot.HitBoneName.Length > 0 ? slot.HitBoneName : null, slot.HaveHitBone, slot.HitEffectOrientType, slot.HaveHitEffect);
         }
 
         private AbilitySim BuildSubCast(string name, ChampionEvent ev, AbilitySim owner, AbilityRecordData rec)
@@ -348,7 +350,8 @@ public static class ChampionSimGenerator
             float? cast = a.CastFrame > 0f || a.CastTimeSeconds > 0f ? a.CastSecondsAt(clip?.Fps ?? 0f) : null;
             return new AttackSim(a.Name, a.IsCrit, false, a.Probability, a.ClipName, clip, cast,
                 Ref(a.HitEffectKey, "hit effect", issues),
-                a.Missiles.Select(m => MakeMissile(m, issues)).ToList(), issues);
+                a.Missiles.Select(m => MakeMissile(m, issues)).ToList(), issues,
+                a.HitBoneName.Length > 0 ? a.HitBoneName : null, a.HaveHitBone, a.HitEffectOrientType, a.HaveHitEffect);
         }
 
         // ---- pieces ------------------------------------------------------------------------------------
@@ -367,7 +370,36 @@ public static class ChampionSimGenerator
             if (m.MissileEffectKey == 0) issues.Add($"missile {m.SpellName} authors no effect key");
             var hit = Ref(m.HitEffectKey, $"missile {m.SpellName} hit effect", issues);
             if (kind == "Unknown") issues.Add($"missile {m.SpellName} authors no speed or flight time");
-            return new MissileSim(m.SpellName, effect, hit, kind, speed, duration, motionSource, m.Width, "authored");
+            var sources = new List<FieldSource>();
+            if (m.Flight is { } f)
+            {
+                string mv = f.MovementClass.Length > 0 ? f.MovementClass : "movementComponent";
+                if (f.StartBoneName is not null) sources.Add(new FieldSource(mv + ".mStartBoneName", "authored"));
+                if (f.TargetHeightAugment is not null) sources.Add(new FieldSource(mv + ".mTargetHeightAugment", "authored"));
+                if (f.OffsetInitialTargetHeight is not null) sources.Add(new FieldSource(mv + ".mOffsetInitialTargetHeight", "authored"));
+                if (f.UseHeightOffsetAtEnd is not null) sources.Add(new FieldSource(mv + ".mUseHeightOffsetAtEnd", "authored"));
+                if (f.TracksTarget is not null) sources.Add(new FieldSource(mv + ".mTracksTarget", "authored"));
+                if (f.HeightSolver is not null) sources.Add(new FieldSource("MissileSpecification.heightSolver", "authored"));
+                if (f.VerticalFacing is not null) sources.Add(new FieldSource("MissileSpecification.verticalFacing", "authored"));
+                if (f.Behaviors.Count > 0) sources.Add(new FieldSource("MissileSpecification.behaviors", "authored"));
+                foreach (var unknown in f.Behaviors.Where(b => b.StartsWith("0x", StringComparison.Ordinal)).Distinct())
+                    issues.Add($"missile {m.SpellName}: behaviour class {unknown} is not known; stored, not used");
+            }
+            if (m.HitBoneName.Length > 0) sources.Add(new FieldSource("SpellDataResource.mHitBoneName", "authored"));
+            if (m.HaveHitBone is not null) sources.Add(new FieldSource("SpellDataResource.bHaveHitBone", "authored"));
+            if (m.HitEffectOrientType is not null) sources.Add(new FieldSource("SpellDataResource.mHitEffectOrientType", "authored"));
+            if (m.HaveHitEffect is not null) sources.Add(new FieldSource("SpellDataResource.bHaveHitEffect", "authored"));
+            return new MissileSim(m.SpellName, effect, hit, kind, speed, duration, motionSource, m.Width, "authored")
+            {
+                Flight = m.Flight,
+                HitBone = m.HitBoneName.Length > 0 ? m.HitBoneName : null,
+                HaveHitBone = m.HaveHitBone,
+                HitEffectOrientType = m.HitEffectOrientType,
+                HaveHitEffect = m.HaveHitEffect,
+                ReturnSource = m.IsReturn ? m.ReturnSource : null,
+                IsDeadVariant = m.IsReturn && m.IsDeadVariant,
+                FlightSources = sources.Count > 0 ? sources : null,
+            };
         }
 
         /// <summary>An effect key through the resource map to a system; null for key 0 (nothing authored).</summary>

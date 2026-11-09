@@ -629,13 +629,44 @@ public sealed class SimulationPlayerTests(ITestOutputHelper output) : IDisposabl
     }
 
     [Fact]
+    public async Task A_returning_missile_flies_back_to_the_caster_after_it_arrives()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Ahri");
+        vm.PlaySimulation("Q");
+        var flying = vm.Playback!.Items.Where(i => i.TravelTo is not null).ToList();
+        var caster = vm.CharacterPosition;
+        var back = Assert.Single(flying, i => Vector3.Distance(new Vector3(i.TravelTo!.Value.X, 0f, i.TravelTo.Value.Z), new Vector3(caster.X, 0f, caster.Z)) < 1f);
+        var outbound = Assert.Single(flying, i => !ReferenceEquals(i, back) && i.TravelTo is not null);
+        Assert.Equal(outbound.StartDelay + outbound.TravelSeconds, back.StartDelay, 3);   // it turns where the outbound arrives
+        Assert.True(back.TravelSeconds > 0f && back.TravelSeconds < 3f);                  // accelerating missile: not the 8 s a 60 u/s stand-in would say
+        Assert.Equal(outbound.StartDelay + outbound.TravelSeconds, outbound.EndTime!.Value, 3);
+    }
+
+    [Fact]
+    public async Task A_lobbed_missile_carries_its_height_solver_and_end_height()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Ziggs");
+        vm.PlaySimulation("Q");
+        var dummy = vm.TargetDummyPosition!.Value;
+        var lobbed = vm.Playback!.Items.First(i => i.TravelPath is { Kind: MissileHeightKind.Gravity });
+        Assert.True(lobbed.TravelPath!.IsArc);
+        Assert.Equal(dummy.Y + 60f, lobbed.TravelTo!.Value.Y, 2);                        // mOffsetInitialTargetHeight 60, no height offset at the end
+        Assert.True(lobbed.TravelFollowsPath);                                            // VeritcalFacingMatchVelocity
+        float mid = lobbed.TravelPath.HeightAt(0.5f, lobbed.WorldPos.Y, lobbed.TravelTo.Value.Y);
+        Assert.True(mid > MathF.Max(lobbed.WorldPos.Y, lobbed.TravelTo.Value.Y) + 10f);  // the bomb rises above both ends: g T^2 / 8 = 48 units at 400 away (T = 0.235 s)
+    }
+
+    [Fact]
     public async Task A_piercing_missile_flies_on_past_the_enemy()
     {
         if (Skip()) return;
         var vm = await PlayerAsync("Ezreal");
         var def = vm.SimulationDefinition!;
         var q = def.Abilities.Single(a => a.Key == "Q");
-        var piercing = q with { Tags = q.Tags.Concat(new[] { SimulationPlanner.PiercingTag }).ToList() };
+        // M893: the missile's DestroyOnHit behaviour outranks the tag; the tag-only variant drops the behaviour list
+        var piercing = q with { Tags = q.Tags.Concat(new[] { SimulationPlanner.PiercingTag }).ToList(), Missiles = q.Missiles.Select(m => m with { Flight = null }).ToList() };
         vm.SetSimulationDefinition(def with { Abilities = def.Abilities.Select(a => a.Key == "Q" ? piercing : a).ToList() });
         vm.PlaySimulation("Q");
         Assert.False(vm.SimCurrentScript!.Find(SimStepKind.Hit)!.StopsMissile);

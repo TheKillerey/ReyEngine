@@ -72,9 +72,19 @@ public static class SimAdapterKit
         };
         var hit = new SimStep(SimStepKind.Hit, t + hitAfter, "authored",
             $"{attack.Name} lands on {unit}" + (missile is null ? "" : $" ({missile.Effect?.Name ?? "missile"} arrives)"))
-        { Name = unit, From = from, To = target, EndTime = t + hitAfter };
+        {
+            Name = unit, From = from, To = target, EndTime = t + hitAfter,
+            Bone = HitBone(attack, missile),
+            Why = HitBone(attack, missile) is { } bone
+                ? $"mHitBoneName = {bone} (authored): the bone on the target the hit effect rides; a target without that bone gets the effect at its root" : null,
+        };
         return (step, hit, t + hitAfter, clipEnd);
     }
+
+    /// <summary>M893: the target bone an attack's hit effect rides (<c>mHitBoneName</c> of the missile spell, else of the attack spell), or null.</summary>
+    private static string? HitBone(AttackSim attack, MissileSim? missile) =>
+        missile is { HitBone: { Length: > 0 } mb } && missile.HaveHitBone != false ? mb
+        : attack.HitBoneName is { Length: > 0 } ab && attack.HaveHitBone != false ? ab : null;
 
     /// <summary>An Effect step: one named system, on a unit or at a position, from <paramref name="t"/> to <paramref name="end"/>. A resolved name only: null when the definition does not know it.</summary>
     public static SimStep? Effect(ChampionSimDefinition def, string system, float t, float end, string unit, Vector3 at, string why,

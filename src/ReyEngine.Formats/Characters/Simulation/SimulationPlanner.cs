@@ -21,6 +21,8 @@ public enum SimStepKind
     MoveUnit,
     /// <summary>M874: one named VFX system plays on a unit or at a position for a time span (stack markers, vanish cones).</summary>
     Effect,
+    /// <summary>M893: a returning missile flies back from where it arrived to the caster (Ahri Q, Sivir Q, Ekko Q). From = the turn-around point, To = the caster, Time..EndTime = the flight back.</summary>
+    Return,
 }
 
 public enum SimDisplaceKind
@@ -349,15 +351,34 @@ public static class SimulationPlanner
                 else
                 {
                     // A missile that stops at the first unit ends at the one it hits - when that unit is on its line. Piercing keeps flying.
-                    bool piercing = a.Tags.Contains(PiercingTag, StringComparer.Ordinal);
+                    // M893: a DestroyOnHit behaviour in the missile's own list decides stop vs fly-on; the tags only speak where it does not.
+                    bool destroyOnHit = m.Flight?.DestroyedOnHit == true;
+                    bool piercing = !destroyOnHit && a.Tags.Contains(PiercingTag, StringComparer.Ordinal);
                     float lane = (m.Width > 0f ? m.Width * 0.5f : 0f) + UnitRadius;
                     float reachRange = boundedRange ? a.CastRange : 1000f;
-                    bool stops = !piercing && aimAt == SimAimTarget.Enemy && a.Tags.Contains(StopsFirstHitTag, StringComparer.Ordinal)
+                    bool stops = !piercing && aimAt == SimAimTarget.Enemy && (destroyOnHit || a.Tags.Contains(StopsFirstHitTag, StringComparer.Ordinal))
                                  && OnLine(champion, hitUnit, hitUnit, reachRange, lane);
+                    string bone = HitBoneOf(m.HitBone, m.HaveHitBone) ?? HitBoneOf(a.HitBoneName, a.HaveHitBone) ?? "";
                     steps.Add(new SimStep(SimStepKind.Hit, at, m.Source == "authored" && m.MotionSource is not null ? "authored" : "convention",
-                        $"{who} hits {hitTarget}" + (stops ? " and stops" : piercing ? " and flies on" : ""))
-                    { Name = hitTarget, From = champion, To = hitUnit, EndTime = at, StopsMissile = stops });
+                        $"{who} hits {hitTarget}" + (stops ? (destroyOnHit ? " and stops (DestroyOnHit)" : " and stops") : piercing ? " and flies on" : ""))
+                    {
+                        Name = hitTarget, From = champion, To = hitUnit, EndTime = at, StopsMissile = stops,
+                        Bone = bone.Length > 0 ? bone : null,
+                        Why = bone.Length > 0 ? HitBoneWhy(bone) : null,
+                    });
                     hitPlanned = true; lastHit = at;
+
+                    // M893: a returning missile flies back to the caster from where it turned. Authored (ReturnToCasterOnMovementComplete in its own behaviours)
+                    // or the sibling "...Return..." missile spell of the ability (a name convention, recorded as such).
+                    var back = ReturnLeg(a, m);
+                    if (back is { } leg && !stops && FlightSeconds(leg, hitDistance) is { } backFlight && at + backFlight <= MaxSeconds)
+                    {
+                        string legWho = leg.Effect?.Name ?? leg.SpellName ?? a.Key;
+                        steps.Add(new SimStep(SimStepKind.Return, at, leg.ReturnSource == "name" ? "convention" : "authored",
+                            $"{legWho} returns to the caster ({leg.ReturnSource})")
+                        { Name = hitTarget, From = hitUnit, To = champion, EndTime = at + backFlight, Why = $"return leg from {leg.ReturnSource}" });
+                        lastHit = at + backFlight;
+                    }
                 }
             }
             else
@@ -374,8 +395,9 @@ public static class SimulationPlanner
             if (inside)
             {
                 string who = a.TargetSystems.FirstOrDefault(s => s.Name is not null)?.Name ?? a.Key;
+                string bone = HitBoneOf(a.HitBoneName, a.HaveHitBone) ?? "";
                 steps.Add(new SimStep(SimStepKind.Hit, cast, castAuthored ? "authored" : "convention", $"{who} lands on {hitTarget}")
-                { Name = hitTarget, From = champion, To = hitUnit, EndTime = cast });
+                { Name = hitTarget, From = champion, To = hitUnit, EndTime = cast, Bone = bone.Length > 0 ? bone : null, Why = bone.Length > 0 ? HitBoneWhy(bone) : null });
                 hitPlanned = true; lastHit = cast;
             }
             else notes.Add($"self area: the enemy is {hitDistance:0} away, radius {a.CastRadius:0}; no hit");
@@ -454,10 +476,26 @@ public static class SimulationPlanner
         return along >= 0f && along <= length && (rel - dir * along).Length() <= halfWidth;
     }
 
+    /// <summary>M893: the hit bone a spell authors, or null when it names none or <c>bHaveHitBone</c> is false.</summary>
+    private static string? HitBoneOf(string? name, bool? have) => !string.IsNullOrWhiteSpace(name) && have != false ? name : null;
+
+    private static string HitBoneWhy(string bone) =>
+        $"mHitBoneName = {bone} (authored): the bone on the target the hit effect rides; a target without that bone gets the effect at its root";
+
+    /// <summary>M893: the missile that flies the way back for <paramref name="outbound"/>: itself when its behaviours say ReturnToCasterOnMovementComplete, else the ability's sibling
+    /// return missile (not the dead-caster variant) that has a speed or a duration. Null when the ability has no return leg.</summary>
+    public static MissileSim? ReturnLeg(AbilitySim a, MissileSim outbound)
+    {
+        if (outbound.Flight is { ReturnsToCaster: true })
+            return outbound.ReturnSource is null ? outbound with { ReturnSource = "behavior:ReturnToCasterOnMovementComplete" } : outbound;
+        return a.Missiles.FirstOrDefault(x => !ReferenceEquals(x, outbound) && x.ReturnSource is not null && !x.IsDeadVariant
+                                              && (x.Speed is > 0f || x.Duration is > 0f));
+    }
+
     /// <summary>The missile whose arrival counts as the hit: a visual, outbound one, the earliest. Null when the ability has none.</summary>
     private static MissileSim? PickMissile(AbilitySim a)
     {
-        var outbound = a.Missiles.Where(m => m.SpellName?.Contains("Return", StringComparison.OrdinalIgnoreCase) != true).ToList();
+        var outbound = a.Missiles.Where(m => m.SpellName?.Contains("Return", StringComparison.OrdinalIgnoreCase) != true && m.ReturnSource != "name").ToList();
         if (outbound.Count == 0) outbound = a.Missiles.ToList();
         var moving = outbound.Where(m => m.Speed is > 0f || m.Duration is > 0f).ToList();
         var visual = moving.Where(m => m.Effect?.Visual == true).ToList();
@@ -467,7 +505,7 @@ public static class SimulationPlanner
     }
 
     /// <summary>Seconds a missile takes over <paramref name="distance"/>; null when the data gives neither a speed nor a duration.</summary>
-    public static float? FlightSeconds(MissileSim m, float distance) => m.MotionKind switch
+    public static float? FlightSeconds(MissileSim m, float distance) => m.Flight?.AcceleratingSeconds(distance) ?? m.MotionKind switch
     {
         "ConstantSpeed" when m.Speed is > 0f => distance / m.Speed.Value,
         "FixedDuration" when m.Duration is > 0f => m.Duration.Value,

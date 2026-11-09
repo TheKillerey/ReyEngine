@@ -767,6 +767,12 @@ public sealed partial class MeshPreviewViewModel
             case SimStepKind.Hit:
                 run.Hits++;
                 AddSimLog(step.Time, step.Text + tag);
+                if (step.Bone is { Length: > 0 } hitBone)
+                    AddSimLog(step.Time, $"hit bone {hitBone}: the target dummy is a static prop with no skeleton, so the effect plays at its root");
+                break;
+            case SimStepKind.Return:
+                // M893: the return leg itself is part of the cast's playback bundle (BuildEventBundle); this is the log line
+                AddSimLog(step.Time, step.Text + tag);
                 break;
             case SimStepKind.End:
                 AddSimLog(step.Time, $"{a.Key} done" + tag);

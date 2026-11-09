@@ -48,6 +48,30 @@ public sealed record AbilityMissile(
     /// but no <c>mMissileSpec</c> at all, so <see cref="Motion"/> is unknown for it. 0 when absent. The preview
     /// ignores this; the simulation definition reports it as a separate, labelled source.</summary>
     public float LegacySpeed { get; init; }
+
+    /// <summary>M893: how the missile flies - start bone, heights, height solver, vertical facing, behaviours. Null when the spell has no <c>mMissileSpec</c>.</summary>
+    public MissileFlight? Flight { get; init; }
+
+    /// <summary>M893: the missile spell's own <c>mHitBoneName</c> (the bone on the TARGET its hit effect rides) and <c>bHaveHitBone</c>; "" / null when absent.</summary>
+    public string HitBoneName { get; init; } = "";
+    public bool? HaveHitBone { get; init; }
+
+    /// <summary>M893: <c>mHitEffectOrientType</c>, raw. The enum's meaning is not established (2 on 419 of 438 spells, 0 and 3 on the rest, with no pattern
+    /// by spell kind); stored, never read by the player.</summary>
+    public uint? HitEffectOrientType { get; init; }
+    public bool? HaveHitEffect { get; init; }
+
+    /// <summary>M893: how this missile is a return leg of its ability. "behavior:ReturnToCasterOnMovementComplete" when its behaviour list says so (authored);
+    /// "name" for the sibling missile spells Riot ships for Ahri Q, Sivir Q and Ekko Q, whose behaviour lists name nothing; "" when it is not one.</summary>
+    public string ReturnSource =>
+        Flight is { ReturnsToCaster: true } ? "behavior:ReturnToCasterOnMovementComplete"
+        : SpellName.Contains("Return", StringComparison.OrdinalIgnoreCase) ? "name" : "";
+    public bool IsReturn => ReturnSource.Length > 0;
+
+    /// <summary>M893: seconds over <paramref name="distance"/>: the AcceleratingMovement kinematics when the spec is one, else the authored speed / duration (<see cref="MissileMotion.SecondsFor"/>).</summary>
+    public float? SecondsFor(float distance) => Flight?.AcceleratingSeconds(distance) ?? Motion.SecondsFor(distance);
+    /// <summary>"...ReturnDead" is the variant for a dead caster (Sivir Q, Ekko Q): not played as a leg.</summary>
+    public bool IsDeadVariant => SpellName.Contains("Dead", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>One of Q/W/E/R, and everything the spell records say about how it is cast.</summary>
@@ -133,6 +157,13 @@ public sealed record AbilitySlot(
     /// <summary>The object path hash of the root spell (the <c>spells</c> link), 0 when none.</summary>
     public uint RootSpellHash { get; init; }
 
+    /// <summary>M893: the root spell's <c>mHitBoneName</c> / <c>bHaveHitBone</c> (1,437 / 1,416 spells carry them): the bone on the TARGET its hit effect rides.</summary>
+    public string HitBoneName { get; init; } = "";
+    public bool? HaveHitBone { get; init; }
+    /// <summary>M893: the root spell's <c>mHitEffectOrientType</c> and <c>bHaveHitEffect</c>, raw (see <see cref="AbilityMissile.HitEffectOrientType"/>).</summary>
+    public uint? HitEffectOrientType { get; init; }
+    public bool? HaveHitEffect { get; init; }
+
     /// <summary>Riot's "no range limit": 132 of 661 authored ranges are exactly 25,000, and everything at
     /// or above 20,000 (139) is a dash, a self-cast or a global, not a distance anyone measured.</summary>
     public bool IsUnboundedRange => CastRange >= 20000f;
@@ -197,6 +228,12 @@ public sealed record AttackSpell(
     bool IsCrit)
 {
     public bool IsRanged => Missiles.Any(m => m.MissileEffectKey != 0);
+
+    /// <summary>M893: the attack spell's own <c>mHitBoneName</c> / <c>bHaveHitBone</c> and <c>mHitEffectOrientType</c> (raw) / <c>bHaveHitEffect</c>; melee attacks author them with no missile to carry them.</summary>
+    public string HitBoneName { get; init; } = "";
+    public bool? HaveHitBone { get; init; }
+    public uint? HitEffectOrientType { get; init; }
+    public bool? HaveHitEffect { get; init; }
 
     /// <summary>The record slot's <c>mAttackProbability</c>: the weight this attack has in the random
     /// pool. 0 when the slot authors none, which is what a script-driven attack looks like in the data.</summary>
@@ -325,6 +362,21 @@ public static class ChampionSpellData
     private static readonly uint FSpellCastTime = HashAlgorithms.Fnv1a("spellCastTime");
     private static readonly uint FSpellTotalTime = HashAlgorithms.Fnv1a("spellTotalTime");
     private static readonly uint FLegacyMissileSpeed = HashAlgorithms.Fnv1a("missileSpeed");
+    private static readonly uint FHitBoneName = HashAlgorithms.Fnv1a("mHitBoneName");
+    private static readonly uint FHaveHitBone = HashAlgorithms.Fnv1a("bHaveHitBone");
+    private static readonly uint FHitEffectOrientType = HashAlgorithms.Fnv1a("mHitEffectOrientType");
+    private static readonly uint FHaveHitEffect = HashAlgorithms.Fnv1a("bHaveHitEffect");
+    private static readonly uint FStartBoneName = HashAlgorithms.Fnv1a("mStartBoneName");
+    private static readonly uint FTargetHeightAugment = HashAlgorithms.Fnv1a("mTargetHeightAugment");
+    private static readonly uint FOffsetInitialTargetHeight = HashAlgorithms.Fnv1a("mOffsetInitialTargetHeight");
+    private static readonly uint FUseHeightOffsetAtEnd = HashAlgorithms.Fnv1a("mUseHeightOffsetAtEnd");
+    private static readonly uint FTracksTarget = HashAlgorithms.Fnv1a("mTracksTarget");
+    private static readonly uint FVerticalFacing = HashAlgorithms.Fnv1a("verticalFacing");
+    private static readonly uint FHeightSolver = HashAlgorithms.Fnv1a("heightSolver");
+    private static readonly uint FBehaviors = HashAlgorithms.Fnv1a("behaviors");
+    private static readonly uint FAcceleration = HashAlgorithms.Fnv1a("mAcceleration");
+    private static readonly uint FMinSpeed = HashAlgorithms.Fnv1a("mMinSpeed");
+    private static readonly uint FMaxSpeed = HashAlgorithms.Fnv1a("mMaxSpeed");
     private static readonly uint FAbilities = HashAlgorithms.Fnv1a("mAbilities");
     private static readonly uint FPassiveSpell = HashAlgorithms.Fnv1a("mCharacterPassiveSpell");
     private static readonly uint FPassiveLuaName = HashAlgorithms.Fnv1a("passiveLuaName");
@@ -529,6 +581,10 @@ public static class ChampionSpellData
                     crit)
                 {
                     Probability = slot is BinTreeStruct ss && Unwrap(Get(ss.Properties, FAttackProbability)) is BinTreeF32 pr ? pr.Value : 0f,
+                    HitBoneName = NonEmpty(spell, FHitBoneName) ?? "",
+                    HaveHitBone = OptBool(spell, FHaveHitBone),
+                    HitEffectOrientType = Get(spell.Properties, FHitEffectOrientType) is BinTreeU32 aot ? aot.Value : null,
+                    HaveHitEffect = OptBool(spell, FHaveHitEffect),
                 });
             }
 
@@ -643,6 +699,75 @@ public static class ChampionSpellData
             ScriptName = tree.Objects.TryGetValue(rootSpell, out var rootObject)
                          && Get(rootObject.Properties, FScriptName) is BinTreeString rsn ? rsn.Value : "",
             RootSpellHash = rootSpell,
+            HitBoneName = data is null ? "" : NonEmpty(data, FHitBoneName) ?? "",
+            HaveHitBone = data is null ? null : OptBool(data, FHaveHitBone),
+            HitEffectOrientType = data is not null && Get(data.Properties, FHitEffectOrientType) is BinTreeU32 hot ? hot.Value : null,
+            HaveHitEffect = data is null ? null : OptBool(data, FHaveHitEffect),
+        };
+    }
+
+    /// <summary>M893: the class names of the missile components, by hash (the hash tables are not needed to read a record). Resolved by Fnv1a so a class absent
+    /// here comes back as "0x........" instead of vanishing.</summary>
+    private static readonly IReadOnlyDictionary<uint, string> ComponentClasses = new[]
+    {
+        // movement
+        "FixedSpeedMovement", "FixedTimeMovement", "AcceleratingMovement", "FixedSpeedSplineMovement", "FixedTimeSplineMovement", "CircleMovement",
+        "SyncCircleMovement", "DecelToLocationMovement", "PhysicsMovement", "WallFollowMovement", "TrackMouseMovement",
+        // height solvers
+        "BlendedLinearHeightSolver", "GravityHeightSolver", "FollowTerrainHeightSolver", "SinusoidalHeightSolver", "CurveTheDifferenceHeightSolver",
+        // vertical facing
+        "VeritcalFacingMatchVelocity", "VerticalFacingFaceTarget",
+        // behaviours
+        "DestroyOnMovementComplete", "CastOnMovementComplete", "CastOnHit", "DestroyOnHit", "TriggerOnHit", "FixedDistanceIgnoringTerrain", "DelayStart",
+        "TriggerFromScript", "TriggerOnDelay", "TriggerOnMovementComplete", "WidthPerSecond", "ResimulateTrailVfxOnEnterVisibility",
+        "ReturnToCasterOnMovementComplete",
+    }.ToDictionary(HashAlgorithms.Fnv1a, name => name);
+
+    private static readonly IReadOnlyDictionary<uint, string> SolverFieldNames = new[]
+    {
+        "mGravity", "mHeightOffset", "mMaxSlope", "mAmplitude", "mNumberOfPeriods", "mVerticalOffset", "PhaseShift", "mInitialTargetHeightOffset",
+    }.ToDictionary(HashAlgorithms.Fnv1a, name => name);
+
+    private static string ClassName(uint hash) => hash == 0 ? "" : ComponentClasses.TryGetValue(hash, out var n) ? n : $"0x{hash:x8}";
+
+    private static string? NonEmpty(BinTreeStruct s, uint key) =>
+        Get(s.Properties, key) is BinTreeString { Value.Length: > 0 } str ? str.Value : null;
+
+    private static float? OptF32(BinTreeStruct s, uint key) => Get(s.Properties, key) is BinTreeF32 f ? f.Value : null;
+    private static bool? OptBool(BinTreeStruct s, uint key) => Get(s.Properties, key) is BinTreeBool b ? b.Value : null;
+
+    /// <summary>M893: the flight facts of a missile spec; every field raw, classes by name (or hash).</summary>
+    private static MissileFlight ReadFlight(BinTreeStruct spec)
+    {
+        BinTreeStruct? movement = Get(spec.Properties, FMovement) as BinTreeStruct;
+        var solverFields = new SortedDictionary<string, float>(StringComparer.Ordinal);
+        string? solver = null;
+        if (Get(spec.Properties, FHeightSolver) is BinTreeStruct hs)
+        {
+            solver = ClassName(hs.ClassHash);
+            foreach (var (key, value) in hs.Properties)
+                if (value is BinTreeF32 f) solverFields[SolverFieldNames.TryGetValue(key, out var n) ? n : $"0x{key:x8}"] = f.Value;
+        }
+        string? facing = Get(spec.Properties, FVerticalFacing) is BinTreeStruct vf ? ClassName(vf.ClassHash) : null;
+
+        var behaviors = new List<string>();
+        if (Get(spec.Properties, FBehaviors) is BinTreeContainer list)
+            foreach (var element in list.Elements)
+                behaviors.Add(element is BinTreeStruct b ? ClassName(b.ClassHash) : "?");
+
+        return new MissileFlight(
+            movement is null ? "" : ClassName(movement.ClassHash),
+            movement is null ? null : NonEmpty(movement, FStartBoneName),
+            movement is null ? null : OptF32(movement, FTargetHeightAugment),
+            movement is null ? null : OptF32(movement, FOffsetInitialTargetHeight),
+            movement is null ? null : OptBool(movement, FUseHeightOffsetAtEnd),
+            movement is null ? null : OptBool(movement, FTracksTarget),
+            facing, solver, solverFields, behaviors)
+        {
+            InitialSpeed = movement is null ? null : OptF32(movement, FInitialSpeed),
+            Acceleration = movement is null ? null : OptF32(movement, FAcceleration),
+            MinSpeed = movement is null ? null : OptF32(movement, FMinSpeed),
+            MaxSpeed = movement is null ? null : OptF32(movement, FMaxSpeed),
         };
     }
 
@@ -665,7 +790,15 @@ public static class ChampionSpellData
         }
 
         string name = Get(spellObject.Properties, FScriptName) is BinTreeString sn ? sn.Value : "";
-        return new AbilityMissile(name, missileKey, hitKey, motion, width) { LegacySpeed = F32(spell, FLegacyMissileSpeed) };
+        return new AbilityMissile(name, missileKey, hitKey, motion, width)
+        {
+            LegacySpeed = F32(spell, FLegacyMissileSpeed),
+            Flight = spec is null ? null : ReadFlight(spec),
+            HitBoneName = NonEmpty(spell, FHitBoneName) ?? "",
+            HaveHitBone = OptBool(spell, FHaveHitBone),
+            HitEffectOrientType = Get(spell.Properties, FHitEffectOrientType) is BinTreeU32 ot ? ot.Value : null,
+            HaveHitEffect = OptBool(spell, FHaveHitEffect),
+        };
     }
 
     /// <summary>

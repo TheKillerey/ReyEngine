@@ -355,15 +355,28 @@ public sealed partial class MeshPreviewViewModel
             if (missile.MissileEffectKey == 0) continue;
             if (!_vfxResourceMap.TryGetValue(missile.MissileEffectKey, out var systemHash)) continue;
             if (!_vfxDefs.TryGetValue(systemHash, out var def)) continue;
-            float dist = (target - caster).Length();
-            float seconds = missile.Motion.SecondsFor(dist) ?? (dist > 1f ? dist / 1800f : 0f);
-            flight = MathF.Max(flight, seconds);
-            items.Add(BuildItem(def, Formats.Vfx.VfxCastFrame.Toward(caster, target, caster)) with
+            // M893: the authored start bone and end height; an attack whose record authors none flies from the caster position to the target as before
+            var from = caster; var to = target;
+            var spec = missile.Flight;
+            if (spec is { HasHeightData: true })
             {
-                TravelTo = target,
+                float launch = 0f;
+                if (spec.StartBoneName is { } startBone && CasterBoneWorld(startBone, null, windup, new System.Collections.Generic.Dictionary<string, ReyEngine.Formats.Animation.AnimationClip?>()) is { } boneAt)
+                { from = boneAt; launch = boneAt.Y - caster.Y; }
+                to = target + new Vector3(0f, spec.EndHeightAboveGround(launch), 0f);
+            }
+            var flat = to - from; flat.Y = 0f;
+            float dist = flat.Length();
+            float seconds = missile.SecondsFor(dist) ?? (dist > 1f ? dist / 1800f : 0f);
+            flight = MathF.Max(flight, seconds);
+            items.Add(BuildItem(def, Formats.Vfx.VfxCastFrame.Toward(from, to, from)) with
+            {
+                TravelTo = to,
                 TravelSeconds = seconds,
                 StartDelay = windup,
                 HostIsCaster = false,   // M874: a missile is not on the caster
+                TravelPath = spec is { HasHeightData: true } ? spec.Path(seconds) : null,
+                TravelFollowsPath = spec is not null && string.Equals(spec.VerticalFacing, Formats.Characters.MissileFlight.MatchVelocityFacing, StringComparison.Ordinal),
             });
         }
 

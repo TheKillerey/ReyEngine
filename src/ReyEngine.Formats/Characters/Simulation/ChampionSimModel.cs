@@ -32,7 +32,7 @@ public sealed record ChampionSimDefinition(
 {
     public const int CurrentSchemaVersion = 1;
     /// <summary>Bumped whenever the generator's output for the same data would change.</summary>
-    public const string CurrentGeneratorVersion = "M891.1";
+    public const string CurrentGeneratorVersion = "M893.1";
 }
 
 /// <summary>A reference to a VFX system. <see cref="Name"/> is null when it did not resolve.</summary>
@@ -62,7 +62,24 @@ public sealed record MissileSim(
     float? Duration,
     string? MotionSource,
     float Width,
-    string Source);
+    string Source)
+{
+    // ---- M893: the flight facts. Every value is "authored"; FlightSources names the field each came from. ----
+
+    /// <summary>The movement / height / facing / behaviour facts of the <c>mMissileSpec</c>, raw. Null for a convention missile and for a spell with no spec.</summary>
+    public MissileFlight? Flight { get; init; }
+    /// <summary>The missile spell's <c>mHitBoneName</c> (the TARGET bone its hit effect rides), <c>bHaveHitBone</c>, <c>mHitEffectOrientType</c> (raw; meaning not established, unused) and <c>bHaveHitEffect</c>.</summary>
+    public string? HitBone { get; init; }
+    public bool? HaveHitBone { get; init; }
+    public uint? HitEffectOrientType { get; init; }
+    public bool? HaveHitEffect { get; init; }
+    /// <summary>"behavior:ReturnToCasterOnMovementComplete" (authored), "name" (a sibling spell called "...Return...", a convention) or null: this missile is a return leg.</summary>
+    public string? ReturnSource { get; init; }
+    /// <summary>The "...ReturnDead" variant for a dead caster: stored, not played.</summary>
+    public bool IsDeadVariant { get; init; }
+    /// <summary>Field-by-field origin of the values above ("FixedSpeedMovement.mStartBoneName" -> "authored").</summary>
+    public IReadOnlyList<FieldSource>? FlightSources { get; init; }
+}
 
 /// <summary>The animation clip chosen for an ability. <see cref="Source"/>: "authored" (the spell names the clip), "authored-composite" (the spell names a graph
 /// sequencer/selector/parametric/condition entry and this is the atomic clip it plays first) or "convention".</summary>
@@ -146,7 +163,12 @@ public sealed record AbilitySim(
     /// <summary>M891: buff effects the chain's <c>.luabin64</c> scripts author (AutoBuffActivateEffect and its attach bone).</summary>
     IReadOnlyList<BuffEffectSim>? BuffEffects = null,
     /// <summary>M891: the game paths of the preload and luabin64 files that were read for the three fields above.</summary>
-    IReadOnlyList<string>? ScriptFiles = null);
+    IReadOnlyList<string>? ScriptFiles = null,
+    /// <summary>M893: the root spell's <c>mHitBoneName</c> (the TARGET bone a hit effect rides), <c>bHaveHitBone</c>, <c>mHitEffectOrientType</c> (raw, unused: the enum is not established) and <c>bHaveHitEffect</c>.</summary>
+    string? HitBoneName = null,
+    bool? HaveHitBone = null,
+    uint? HitEffectOrientType = null,
+    bool? HaveHitEffect = null);
 
 /// <summary>M891: an effect a spell script attaches while its buff is active. Authored in the script's property table; <see cref="AttachBone"/> is null when the script names none.</summary>
 public sealed record BuffEffectSim(string Spell, string? BuffName, string Effect, string? AttachBone, string File);
@@ -163,4 +185,9 @@ public sealed record AttackSim(
     float? CastSeconds,
     SimSystemRef? HitEffect,
     IReadOnlyList<MissileSim> Missiles,
-    IReadOnlyList<string> Issues);
+    IReadOnlyList<string> Issues,
+    /// <summary>M893: the attack spell's own <c>mHitBoneName</c> / <c>bHaveHitBone</c>, <c>mHitEffectOrientType</c> (raw, unused) / <c>bHaveHitEffect</c>.</summary>
+    string? HitBoneName = null,
+    bool? HaveHitBone = null,
+    uint? HitEffectOrientType = null,
+    bool? HaveHitEffect = null);

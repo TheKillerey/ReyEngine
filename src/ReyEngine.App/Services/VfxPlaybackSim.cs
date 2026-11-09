@@ -31,6 +31,24 @@ public static class VfxPlaybackSim
             : anchor;
     }
 
+    /// <summary>M893: where a travelling item is at fraction <paramref name="t01"/> of its flight and how it is turned. A straight flight is the old lerp with the
+    /// item's own rotation; an item with an authored height path takes that path's height, and with TravelFollowsPath an arc turns it along the tangent
+    /// (the same flight basis M881 builds in CharacterItem).</summary>
+    public static Matrix4x4 TravelTransform(VfxPlaybackItem item, Vector3 destination, float t01)
+    {
+        if (item.TravelPath is not { } path)
+            return VfxCastFrame.RotationOf(item.Transform) * Matrix4x4.CreateTranslation(Vector3.Lerp(item.WorldPos, destination, t01));
+
+        var pos = path.PositionAt(t01, item.WorldPos, destination);
+        if (item.TravelFollowsPath && path.IsArc && path.DirectionAt(t01, item.WorldPos, destination) is var d && d.LengthSquared() > 1e-6f)
+        {
+            var flight = VfxOrientationMath.ToMatrix(VfxOrientationMath.Flight(d));
+            flight.Translation = pos;
+            return flight;
+        }
+        return VfxCastFrame.RotationOf(item.Transform) * Matrix4x4.CreateTranslation(pos);
+    }
+
     public static VfxPlayback Combine(VfxPlayback? map, VfxPlayback? character) => new(
         (map?.Items ?? Array.Empty<VfxPlaybackItem>()).Select(item =>
             map?.CullByCamera == false ? item with { SkipCameraCulling = true } : item).Concat(

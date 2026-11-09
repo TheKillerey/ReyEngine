@@ -97,6 +97,12 @@ public sealed record VfxPlaybackItem(
     public Vector3? TravelTo { get; init; }
     public float TravelSeconds { get; init; }
 
+    /// <summary>M893: the missile's authored height solver (gravity / sinusoidal / curve-the-difference / blended): the height along the flight from
+    /// the start height of <see cref="Transform"/> to the height of <see cref="TravelTo"/>. Null flies the straight line.</summary>
+    public ReyEngine.Formats.Characters.MissileHeightPath? TravelPath { get; init; }
+    /// <summary>M893: the missile's <c>verticalFacing</c> is MatchVelocity, so with an arc its local +Y follows the arc's tangent (M881 keeps +Y along travel).</summary>
+    public bool TravelFollowsPath { get; init; }
+
     /// <summary>A travelling tether connects back to its launch point, rather than to the
     /// preview's target dummy ahead of the projectile.</summary>
     public Vector3? BeamTarget { get; init; }

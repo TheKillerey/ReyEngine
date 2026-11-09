@@ -938,23 +938,76 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 if (Make(h, hit, caster, null) is { } i)
                     // M869: a simulated ability lands its impact when the planner says the hit happens (a missile's arrival), not at t=0
                     items.Add(_simHitDelay is { } hitDelay ? i with { StartDelay = hitDelay } : i);
-        foreach (var h in ev.MissileSystems)
-            if (Make(h, caster, flightEnd, flightEnd) is { } i)
+        // M893: the authored flight. The start bone, the end heights, the height solver and the return leg come from the spell record (MissileFlight);
+        // a missile whose record authors none of them flies exactly as before.
+        var clipCache = new Dictionary<string, AnimationClip?>(StringComparer.OrdinalIgnoreCase);
+        var hitBone = ability?.Missiles.Select(m => m.HitBoneName).FirstOrDefault(n => n.Length > 0) ?? ability?.HitBoneName;
+        if (!string.IsNullOrEmpty(hitBone) && ability?.HaveHitBone != false && ev.TargetSystems.Count > 0)
+            LogDx11?.Invoke("Simulation", $"hit effect: mHitBoneName = {hitBone}; the target dummy is a static prop without a skeleton, so the effect plays at its root");
+        var returnLegSystems = new HashSet<uint>();   // a sibling "...Return..." missile is a leg back, never a second outbound missile
+        if (ability is not null)
+            foreach (var rm in ability.Missiles)
+                if (rm.ReturnSource == "name" && _vfxResourceMap.TryGetValue(rm.MissileEffectKey, out var rs)) returnLegSystems.Add(rs);
+        Formats.Characters.AbilityMissile? MissileOf(uint sys) => ability?.Missiles.FirstOrDefault(m => m.ReturnSource != "name"
+                && _vfxResourceMap.TryGetValue(m.MissileEffectKey, out var x) && x == sys)
+            ?? ability?.Missiles.FirstOrDefault(m => m.ReturnSource != "name" && m.Flight is not null);
+
+        VfxPlaybackItem? Fly(uint sys, Formats.Characters.AbilityMissile? spec)
+        {
+            var flight = spec?.Flight;
+            var from = caster; var to = flightEnd;
+            if (flight is { HasHeightData: true })
             {
-                var returns = ev.ReturnMissileSystems.Where(back => _vfxDefs[back].Name.Equals(
-                    _vfxDefs[h].Name + "_return", StringComparison.OrdinalIgnoreCase)).ToArray();
-                if (returns.Length == 0) { items.Add(i); continue; }
-                float arrival = i.StartDelay + i.TravelSeconds;
-                items.Add(i with { EndTime = arrival });
-                foreach (var back in returns)
-                    if (Make(back, flightEnd, caster, caster) is { } returning)
-                        items.Add(returning with
-                        {
-                            StartDelay = arrival,
-                            EndTime = arrival + returning.TravelSeconds,
-                            BeamTarget = caster,
-                        });
+                float launch = 0f;
+                if (flight.StartBoneName is { } startBone)
+                {
+                    if (CasterBoneWorld(startBone, ev.ClipAnmFile, castDelay, clipCache) is { } boneAt) { from = boneAt; launch = boneAt.Y - caster.Y; }
+                    else LogDx11?.Invoke("Simulation", $"missile start bone {startBone} (mStartBoneName) is not in this skeleton; it leaves from the caster position");
+                }
+                to = flightEnd + new System.Numerics.Vector3(0f, flight.EndHeightAboveGround(launch), 0f);
             }
+            if (Make(sys, from, to, to) is not { } item) return null;
+            var flat = to - from; flat.Y = 0f;
+            // an accelerating missile takes its authored acceleration into account (its initial speed alone made Ahri Q's return leg a crawl)
+            if (flight is not { HasHeightData: true })
+                return flight?.AcceleratingSeconds(flat.Length()) is > 0f and var accel ? item with { TravelSeconds = accel } : item;
+            float seconds = spec!.SecondsFor(flat.Length()) is > 0f and var s2 ? s2 : item.TravelSeconds;
+            return item with
+            {
+                TravelSeconds = seconds,
+                TravelPath = flight.Path(seconds),
+                TravelFollowsPath = string.Equals(flight.VerticalFacing, Formats.Characters.MissileFlight.MatchVelocityFacing, StringComparison.Ordinal),
+            };
+        }
+
+        var returnsPlayed = new HashSet<uint>();
+        void AddReturnLeg(uint sys, Formats.Characters.AbilityMissile? spec, System.Numerics.Vector3 turnAt, float arrival)
+        {
+            if (!returnsPlayed.Add(sys) || Make(sys, turnAt, caster, caster) is not { } back) return;
+            var flat = turnAt - caster; flat.Y = 0f;
+            float seconds = spec?.SecondsFor(flat.Length()) is > 0f and var s2 ? s2 : back.TravelSeconds;
+            items.Add(back with { StartDelay = arrival, TravelSeconds = seconds, EndTime = arrival + seconds, BeamTarget = caster });
+        }
+
+        float? outboundArrival = null;
+        System.Numerics.Vector3? outboundTurn = null;
+        bool siblingLegs = returnLegSystems.Count > 0;
+        foreach (var h in ev.MissileSystems)
+        {
+            if (returnLegSystems.Contains(h)) continue;
+            var spec = MissileOf(h);
+            if (Fly(h, spec) is not { } i) continue;
+            float arrival = i.StartDelay + i.TravelSeconds;
+            var turn = i.TravelTo ?? flightEnd;
+            outboundArrival ??= arrival; outboundTurn ??= turn;
+            var returns = ev.ReturnMissileSystems.Where(back => _vfxDefs[back].Name.Equals(
+                _vfxDefs[h].Name + "_return", StringComparison.OrdinalIgnoreCase)).ToArray();
+            bool selfReturn = spec?.Flight is { ReturnsToCaster: true };
+            if (returns.Length == 0 && !selfReturn && !siblingLegs) { items.Add(i); continue; }
+            items.Add(i with { EndTime = arrival });
+            foreach (var back in returns) AddReturnLeg(back, null, turn, arrival);
+            if (selfReturn) AddReturnLeg(h, spec, turn, arrival);
+        }
 
         // M631: the missile the spell record NAMES, when the token rule did not already find it. The
         // record says which system is the missile outright - 280 of 692 slots do - where the tokens infer
@@ -962,14 +1015,56 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // RebuildChampionEvents already prefers resolved record missiles over name matches. This pass
         // also reaches authored systems whose names contain no spell token; it must not duplicate them.
         if (ability is not null)
+        {
             foreach (var missile in ability.Missiles)
             {
-                if (missile.MissileEffectKey == 0) continue;
+                if (missile.ReturnSource == "name" || missile.MissileEffectKey == 0) continue;
                 if (!_vfxResourceMap.TryGetValue(missile.MissileEffectKey, out var systemHash)) continue;
                 if (ev.MissileSystems.Contains(systemHash) || ev.CasterSystems.Contains(systemHash)) continue;
-                if (Make(systemHash, caster, flightEnd, flightEnd) is { } authored) items.Add(authored);
+                if (Fly(systemHash, missile) is { } authored)
+                {
+                    float arrival = authored.StartDelay + authored.TravelSeconds;
+                    outboundArrival ??= arrival; outboundTurn ??= authored.TravelTo ?? flightEnd;
+                    bool selfReturn = missile.Flight is { ReturnsToCaster: true };
+                    items.Add(siblingLegs || selfReturn ? authored with { EndTime = arrival } : authored);
+                    if (selfReturn) AddReturnLeg(systemHash, missile, authored.TravelTo ?? flightEnd, arrival);
+                }
             }
+            // the legs back: the ability sibling return missiles (not the dead-caster variant), after the outbound they follow
+            foreach (var missile in ability.Missiles)
+            {
+                if (missile.ReturnSource != "name" || missile.IsDeadVariant || missile.MissileEffectKey == 0) continue;
+                if (outboundArrival is not { } leaves || outboundTurn is not { } turnAt) continue;
+                if (_vfxResourceMap.TryGetValue(missile.MissileEffectKey, out var legSystem)) AddReturnLeg(legSystem, missile, turnAt, leaves);
+            }
+        }
         return items;
+    }
+
+    /// <summary>
+    /// M893: where a caster bone is in the world when the spell fires - the named joint (case-insensitive) of this skeleton, posed in the cast clip at
+    /// <paramref name="seconds"/>, under the model transform. Null when the skeleton has no such joint, in which case the caller keeps the position it used before.
+    /// </summary>
+    private System.Numerics.Vector3? CasterBoneWorld(string bone, string? clipFile, float seconds, Dictionary<string, AnimationClip?> cache)
+    {
+        if (Skeleton is not { } skeleton) return null;
+        var joint = skeleton.Joints.FirstOrDefault(j => string.Equals(j.Name, bone, StringComparison.OrdinalIgnoreCase));
+        if (joint is null) return null;
+
+        AnimationClip? clip = CurrentAnimation;
+        if (clipFile is { Length: > 0 } anm)
+        {
+            if (!cache.TryGetValue(anm, out var loaded))
+            {
+                var entry = Animation.Animations.FirstOrDefault(a => string.Equals(a.Name, anm, StringComparison.OrdinalIgnoreCase));
+                loaded = entry is null ? null : Animation.ClipLoader?.Invoke(entry.Entry);
+                cache[anm] = loaded;
+            }
+            clip = loaded ?? clip;
+        }
+        var globals = BonePalette.Globals(skeleton, clip, seconds);
+        if (!globals.TryGetValue(joint.Name, out var matrix)) return null;
+        return (matrix * ModelWorld).Translation;
     }
 
     // ---- M122: skybox (same catalogue as the map viewport, independent pick) ----
@@ -1307,6 +1402,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         if (_vfxDefs.Count > 0 || _allClips.Count > 0)
             foreach (var ev in ChampionEventBuilder.Build(_vfxDefs, _allClips,
                          _abilities.ToDictionary(a => a.Slot, a => (IReadOnlyList<uint>)a.Missiles
+                             .Where(m => m.ReturnSource != "name")   // M893: a sibling return missile is a leg back, not a second outbound missile
                              .Select(m => _vfxResourceMap.TryGetValue(m.MissileEffectKey, out var h) ? h : 0u)
                              .Where(h => _vfxDefs.ContainsKey(h)).Distinct().ToList(), StringComparer.OrdinalIgnoreCase)))
                 ChampionEvents.Add(ev);

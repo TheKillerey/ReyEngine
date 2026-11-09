@@ -74,7 +74,7 @@ public sealed class M882Tests(ITestOutputHelper output)
     [Fact]
     public void AClipLessRootWithAChildAttackPlaysNoCastClipAndFollowsWithTheChildsAttack()
     {
-        Assert.Equal("M891.1", ChampionSimDefinition.CurrentGeneratorVersion);
+        Assert.Equal("M893.1", ChampionSimDefinition.CurrentGeneratorVersion);
         if (!Directory.Exists(Champions)) { output.WriteLine("SKIPPED: no game install"); return; }
 
         var blitz = Def("Blitzcrank");

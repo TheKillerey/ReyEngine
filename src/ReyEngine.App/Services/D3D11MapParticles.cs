@@ -369,8 +369,7 @@ public sealed class D3D11MapParticles
             float progress = Math.Clamp((elapsed - item.StartDelay) / item.TravelSeconds, 0f, 1f);
             // M635: the AIM travels with it. Rebuilding the matrix from the lerped position alone threw the
             // item's rotation away on the first tick of flight, so a missile flew sideways-on.
-            sim.SetWorldTransform(VfxCastFrame.RotationOf(item.Transform)
-                * Matrix4x4.CreateTranslation(Vector3.Lerp(item.WorldPos, destination, progress)));
+            sim.SetWorldTransform(VfxPlaybackSim.TravelTransform(item, destination, progress));   // M893: the authored height path, when there is one
         }
     }
 
