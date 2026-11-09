@@ -258,7 +258,8 @@ public static class Dx11CharacterScene
                 continue;
             }
 
-            var slice = BuildSlice(sub, binding, cache, perms, fallbackShader, scene, sb, state);
+            var slice = BuildSlice(sub, binding, cache, perms, fallbackShader, scene, sb, state,
+                InlineTextureOverride(bindings, binding, sub.Material));
             // M724: the submesh this slice draws, carried so runtime visibility can address it. Without it
             // the D3D11 character had no way to be told which range to stop drawing, and every hide - the
             // checkboxes, Show All / None, and every per-clip visibility event - moved only the GL image.
@@ -503,9 +504,29 @@ public static class Dx11CharacterScene
         return null;
     }
 
+    /// <summary>M885: the texture of a submesh's inline <c>materialOverride</c> (a binding that names this
+    /// submesh and authors NO shader, only <c>texture</c>) when the material that draws the submesh is the
+    /// skin's DEFAULT static material. <see cref="MaterialFor"/> prefers a binding that names a shader, so
+    /// such a submesh resolves to the default material - and its own texture was dropped, which drew
+    /// Primordian Aatrox's sword and shoulder with the BODY atlas on their UVs (patchy white shards).
+    /// Null when the submesh has no such override or is not drawn by the default material.</summary>
+    public static string? InlineTextureOverride(IReadOnlyList<MaterialBinding> bindings, MaterialBinding chosen, string submesh)
+    {
+        if (!chosen.IsDefault || string.IsNullOrWhiteSpace(chosen.RenderShader)) return null;
+        foreach (var b in bindings)
+        {
+            if (ReferenceEquals(b, chosen) || b.IsDefault || !string.IsNullOrWhiteSpace(b.RenderShader)) continue;
+            if (!b.Submeshes.Any(x => x.Equals(submesh, StringComparison.OrdinalIgnoreCase))) continue;
+            string? path = b.Diffuse?.Path;
+            if (!string.IsNullOrWhiteSpace(path)) return path;
+        }
+        return null;
+    }
+
     private static CharacterSlice? BuildSlice(
         SubMeshInfo sub, MaterialBinding b, ShaderCacheReader cache, ShaderPermutationIndex? perms,
-        string? fallbackShader, PreparedCharacterScene scene, StringBuilder sb, MaterialDriverState state)
+        string? fallbackShader, PreparedCharacterScene scene, StringBuilder sb, MaterialDriverState state,
+        string? inlineTexture = null)
     {
         bool usedFallback = false;
         string? shader = b.RenderShader;
@@ -626,6 +647,14 @@ public static class Dx11CharacterScene
         // M790: one texture per slot, and a repeated sampler's FIRST copy takes it (the map path's rule, from
         // the same helper). This loop used to replace, so the LAST copy won.
         var textures = Dx11SceneBuilder.MaterialTextures(b, sampler => ResolveTextureTarget(sampler, ps, vs));
+        if (inlineTexture is not null && ResolveTextureTarget("texture", ps, vs) is { } diffuseTarget)
+        {
+            // M885: the inline override's texture replaces the default material's diffuse slot, nothing else
+            string key = inlineTexture.ToLowerInvariant();
+            int at = textures.FindIndex(t => t.Target.Equals(diffuseTarget, StringComparison.OrdinalIgnoreCase));
+            if (at >= 0) textures[at] = (diffuseTarget, key); else textures.Add((diffuseTarget, key));
+            sb.AppendLine($"   '{sub.Material}': inline texture override {inlineTexture} on {diffuseTarget} of {b.Name}");
+        }
 
         if (usedFallback)
         {
