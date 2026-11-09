@@ -46,6 +46,8 @@ public sealed partial class AnimationInspectorViewModel : ViewModelBase
     private bool _suppress;
 
     public Func<WadAssetEntry, AnimationClip?>? ClipLoader { get; set; }
+    /// <summary>M887: a clip that does not loop has just played to its end (after the clock reached the duration and paused).</summary>
+    public Action? ClipEnded { get; set; }
     public Action<AnimationClip?>? ClipChanged { get; set; }
     public Action<double>? TimeChanged { get; set; }
 
@@ -181,7 +183,7 @@ public sealed partial class AnimationInspectorViewModel : ViewModelBase
         if (t >= Duration)
         {
             if (Loop) t %= Duration;
-            else { t = Duration; Pause(); }
+            else { t = Duration; Pause(); Time = t; ClipEnded?.Invoke(); return; }   // M887
         }
         Time = t;
     }

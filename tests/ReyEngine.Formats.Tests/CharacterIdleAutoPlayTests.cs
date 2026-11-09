@@ -57,4 +57,29 @@ public sealed class CharacterIdleAutoPlayTests
         Assert.False(chosen.PlayLoadedIdle());
         Assert.Same(run, chosen.Animation.SelectedAnimation);
     }
+
+    [Fact]
+    public void ASpawnIntroPlaysOnceThenTheIdleLoops()
+    {
+        var vm = Load(10, new[] { "idle_in.anm", "idle1.anm" }, new[] { Clip("Idle_In", "idle_in.anm"), Clip("Idle1", "idle1.anm") });
+        Assert.True(vm.PlayLoadedIdle());
+        Assert.Equal("idle_in.anm", vm.Animation.SelectedAnimation?.Name);
+        Assert.False(vm.Animation.Loop);
+        vm.Animation.ClipEnded!();
+        Assert.Equal("idle1.anm", vm.Animation.SelectedAnimation?.Name);
+        Assert.True(vm.Animation.Loop);
+        vm.Animation.ClipEnded!();   // nothing pending: stays
+        Assert.Equal("idle1.anm", vm.Animation.SelectedAnimation?.Name);
+    }
+
+    [Fact]
+    public void APickDuringTheIntroEndsTheChain()
+    {
+        var vm = Load(10, new[] { "idle_in.anm", "idle1.anm", "run.anm" },
+            new[] { Clip("Idle_In", "idle_in.anm"), Clip("Idle1", "idle1.anm"), Clip("Run", "run.anm") });
+        Assert.True(vm.PlayLoadedIdle());
+        vm.Animation.SelectedAnimation = vm.Animation.Animations.First(a => a.Name == "run.anm");
+        vm.Animation.ClipEnded!();
+        Assert.Equal("run.anm", vm.Animation.SelectedAnimation?.Name);
+    }
 }

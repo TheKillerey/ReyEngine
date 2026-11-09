@@ -263,6 +263,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 ClearSoundSchedule();
             }
         };
+        Animation.ClipEnded = OnIntroClipEnded;   // M887
         Animation.TimeChanged = t =>
         {
             // M86: clip event VFX are one-shot — respawn them each time the looping clip wraps around

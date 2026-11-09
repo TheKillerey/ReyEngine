@@ -89,17 +89,50 @@ public sealed partial class MeshPreviewViewModel
     /// events arrive (M884). Returns true when an idle was started.</summary>
     public bool PlayLoadedIdle()
     {
+        _introEntry = null; _introFollowUp = null;
         if (!Animation.HasSkeleton || Animation.SelectedAnimation is not null || Animation.HasClip) return false;
         if (Animation.Animations.Count == 0 || _ownClips.Count == 0) return false;
         var info = Formats.Skeletons.AnimationClipGraph.Resolve("Idle1", _ownClips, _ownNodes)?.First
                    ?? Formats.Characters.PropAnimations.PickIdle(_ownClips);
         if (info is null) return false;
-        string file = System.IO.Path.GetFileName(info.AnmPath.Replace((char)92, (char)47));
-        var entry = Animation.Animations.FirstOrDefault(a => string.Equals(a.Name, file, StringComparison.OrdinalIgnoreCase));
+        var entry = EntryFor(info);
         if (entry is null) return false;
+
+        // M887: CONVENTION, not graph data - "spawn intro". The graph does not chain Idle_In to Idle1, but a skin
+        // whose idle shows no visibility events (Ahri skin97: small tails hidden only by Idle_In's events) expects
+        // the intro to have run first; the M884 carry-over then keeps the state it leaves. Played once, then Idle1.
+        var intro = Formats.Skeletons.AnimationClipGraph.Resolve("Idle_In", _ownClips, _ownNodes)?.First is { } introInfo
+            ? EntryFor(introInfo) : null;
+        if (intro is not null && !ReferenceEquals(intro, entry))
+        {
+            _introEntry = intro; _introFollowUp = entry;
+            Animation.Loop = false;
+            SelectClipInternal(intro, false);
+            return true;
+        }
         Animation.Loop = true;
         SelectClipInternal(entry, false);
         return true;
+    }
+
+    private AnimationEntryViewModel? _introEntry, _introFollowUp;
+
+    private AnimationEntryViewModel? EntryFor(Formats.Skeletons.AnimClipInfo info)
+    {
+        string file = System.IO.Path.GetFileName(info.AnmPath.Replace((char)92, (char)47));
+        return Animation.Animations.FirstOrDefault(a => string.Equals(a.Name, file, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>M887: the spawn intro played to its end - continue into the looped idle, unless something else was picked meanwhile.</summary>
+    private void OnIntroClipEnded()
+    {
+        if (_introEntry is null || _introFollowUp is null) return;
+        var next = _introFollowUp;
+        bool still = ReferenceEquals(Animation.SelectedAnimation, _introEntry);
+        _introEntry = null; _introFollowUp = null;
+        if (!still) return;
+        Animation.Loop = true;
+        SelectClipInternal(next, false);
     }
 
     partial void OnSelectedActionChanged(CharacterActionRowViewModel? value)
