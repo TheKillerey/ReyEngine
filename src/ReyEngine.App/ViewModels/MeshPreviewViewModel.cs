@@ -532,7 +532,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         {
             // no clip-authored events: the event bundle (spell composite) still plays (M116)
             if (_eventBundle is { Count: > 0 }) Playback = new VfxPlayback(_eventBundle);
-            else if (SelectedVfx is null) Playback = null;
+            else if (SelectedVfx is null)
+            {
+                Playback = null;
+                RepublishPlayback();   // M892: the skin's idle effects keep playing under a clip that authors none (the loaded idle, since M886, dropped them)
+            }
             return;
         }
 
@@ -592,7 +596,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         LogDx11?.Invoke("Event", $"clip '{anm}': {items.Count} item(s) to the viewport, "
             + $"{items.Count(i => i.AttachBone is { Length: > 0 })} bone-attached, "
             + $"{items.Count(i => i.EmitterMeshes is not null)} with mesh emitters");
-        if (items.Count > 0) Playback = new VfxPlayback(items);
+        if (items.Count > 0)
+        {
+            Playback = new VfxPlayback(items);
+            RepublishPlayback();   // M892: and under a clip that authors some
+        }
     }
 
     // ---- M114: target dummy — a stand-in unit so targeted-spell VFX have somewhere to land ----
