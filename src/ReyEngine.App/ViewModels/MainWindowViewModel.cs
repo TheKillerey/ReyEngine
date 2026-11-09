@@ -12278,6 +12278,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // M663: the FULL clip list, not the by-file one - see LoadSubmeshRules for what the by-file
                 // view drops.
                 MeshPreview.SetActions(BuildCharacterActions(entry, allClips));   // M612: Q/W/E/R, move, recall
+                MeshPreview.PlayLoadedIdle();   // M886: the skin's idle, looped - never the bind pose
                 MeshPreview.SetDx11Scene(dx11.Scene, dx11.Status);                  // M618: Riot's own shaders
                 // M619: the D3D11 particle driver takes its shaders from here. Opened lazily with the
                 // first scene build, so it is pushed on every load rather than once.

@@ -81,6 +81,27 @@ public sealed partial class MeshPreviewViewModel
                 : $"{playable} of {Actions.Count} actions have an animation in this skin";
     }
 
+    /// <summary>M886: after a skin loads, start its idle, looped - the game never shows a champion in bind pose.
+    /// The clip is what the skin's OWN graph answers for "Idle1" (a composite resolves to its first atomic clip,
+    /// as M873 does for spells), else the base-idle pick over the same graph's clips. Nothing happens without a
+    /// skeleton, without a resolvable idle in the list, or when a clip is already selected (the user's or a
+    /// simulation's). Runs after SetSubmeshRules, so the base visibility is already applied when the clip's
+    /// events arrive (M884). Returns true when an idle was started.</summary>
+    public bool PlayLoadedIdle()
+    {
+        if (!Animation.HasSkeleton || Animation.SelectedAnimation is not null || Animation.HasClip) return false;
+        if (Animation.Animations.Count == 0 || _ownClips.Count == 0) return false;
+        var info = Formats.Skeletons.AnimationClipGraph.Resolve("Idle1", _ownClips, _ownNodes)?.First
+                   ?? Formats.Characters.PropAnimations.PickIdle(_ownClips);
+        if (info is null) return false;
+        string file = System.IO.Path.GetFileName(info.AnmPath.Replace((char)92, (char)47));
+        var entry = Animation.Animations.FirstOrDefault(a => string.Equals(a.Name, file, StringComparison.OrdinalIgnoreCase));
+        if (entry is null) return false;
+        Animation.Loop = true;
+        SelectClipInternal(entry, false);
+        return true;
+    }
+
     partial void OnSelectedActionChanged(CharacterActionRowViewModel? value)
     {
         if (value is not null) PlayAction(value);
