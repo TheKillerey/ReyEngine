@@ -83,4 +83,28 @@ public sealed class CharacterIdleAutoPlayTests
         Assert.Equal("run.anm", vm.Animation.SelectedAnimation?.Name);
         Assert.True(vm.Animation.Loop);   // M889: the user's pick loops again - the intro's one-shot loop does not stick
     }
+
+    [Fact]
+    public void AnotherSkinsFileOfTheSameNameNeverStandsInForTheIdle()
+    {
+        // M889: Evelynn skin65's Idle1 is its own idle01.anm; skin24 ships a file of the same name for another rig
+        const string own = "assets/characters/evelynn/skins/skin65/animations/idle01.anm";
+        const string other = "assets/characters/evelynn/skins/skin24/animations/idle01.anm";
+        var entries = new[] { other, own }.Select(p => new AnimationEntryViewModel(new WadAssetEntry { Path = p })
+        {
+            SkinGroup = AnimationEntryViewModel.GroupFromPath(p),
+            IsCurrentSkin = true,   // the by-file-name highlight marks both
+        });
+        var ownAnms = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "idle01.anm", own };
+        var ordered = AnimationEntryViewModel.OrderForSkin(entries, ownAnms);
+        Assert.Equal(own, ordered[0].Entry.Path);
+
+        var clip = new AnimClipInfo("Idle1", own, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<uint>(), Array.Empty<uint>());
+        var vm = new MeshPreviewViewModel();
+        vm.Animation.SetSkeleton(277);
+        vm.Animation.SetAnimations(ordered);
+        vm.SetSubmeshRules(Array.Empty<string>(), null, new[] { clip }, new[] { clip }, Array.Empty<AnimClipNode>());
+        Assert.True(vm.PlayLoadedIdle());
+        Assert.Equal(own, vm.Animation.SelectedAnimation?.Entry.Path);
+    }
 }

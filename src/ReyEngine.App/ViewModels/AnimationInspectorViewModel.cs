@@ -21,6 +21,26 @@ public sealed class AnimationEntryViewModel
     public bool IsCurrentSkin { get; init; }
 
     /// <summary>Derive the group label from the .anm path (…/skins/skin02/animations/…).</summary>
+    /// <summary>
+    /// The Animate list's order: the loaded skin's clips first, then grouped by skin (Base, Skin 01..., Shared last), names within.
+    /// M889: the files the skin's graph names BY PATH come before everything else. Clips are looked up by file name all over the
+    /// character window (idle auto-play, action rows, casts, the simulation), and the by-name highlight also marks another skin's
+    /// file of the same name: Evelynn skin65's Idle1 is skins/skin65/animations/idle01.anm, but skins/skin24/animations/idle01.anm
+    /// sorted first ("Skin 24" before "Skin 65") and posed the 277-joint rig with a clip that animates 81 of its joints.
+    /// </summary>
+    public static List<AnimationEntryViewModel> OrderForSkin(IEnumerable<AnimationEntryViewModel> entries, IReadOnlySet<string>? ownAnms)
+    {
+        static int GroupRank(string g) => g == "Base" ? 0 : g == "Shared" ? 999 : 1;
+        bool OwnPath(AnimationEntryViewModel a) => ownAnms is { Count: > 0 } && ownAnms.Contains(a.Entry.Path.Replace((char)92, '/'));
+        return entries
+            .OrderByDescending(OwnPath)
+            .ThenByDescending(a => a.IsCurrentSkin)
+            .ThenBy(a => GroupRank(a.SkinGroup))
+            .ThenBy(a => a.SkinGroup, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public static string GroupFromPath(string path)
     {
         var parts = path.Replace('\\', '/').Split('/');

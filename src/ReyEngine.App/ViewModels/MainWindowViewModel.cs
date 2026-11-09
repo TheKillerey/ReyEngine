@@ -7636,6 +7636,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                     var file = Path.GetFileName(c.AnmPath.Replace('\\', '/'));
                     if (file.Length > 0 && !clips.ContainsKey(file)) clips[file] = c;
                     if (file.Length > 0) ownAnms.Add(file);   // M115: THIS skin's animation set
+                    if (file.Length > 0) ownAnms.Add(c.AnmPath.Replace((char)92, '/'));   // M889: and its full path - another skin's file of the same name must not win
                     if (c.Name.Length > 0) byClipName.TryAdd(c.Name, c);   // M663
                 }
             }
@@ -7704,14 +7705,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 foreach (var a in fb.Enumerate())
                     if (Match(a.VirtualPath, a.IsResolved) && seen.Add(a.PathHash)) list.Add(Make(a.ToEntry()));
 
-        // Loaded skin's clips first, then grouped by skin (Base, Skin 01…, Shared last), names within.
-        static int GroupRank(string g) => g == "Base" ? 0 : g == "Shared" ? 999 : 1;
-        return list
-            .OrderByDescending(a => a.IsCurrentSkin)
-            .ThenBy(a => GroupRank(a.SkinGroup))
-            .ThenBy(a => a.SkinGroup, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        return AnimationEntryViewModel.OrderForSkin(list, currentSkinAnms);
     }
 
     [RelayCommand]
