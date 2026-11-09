@@ -23,9 +23,18 @@ namespace ReyEngine.App.Services;
 /// </summary>
 public static class VfxPlaybackSim
 {
-    public static Matrix4x4 AttachmentTransform(VfxPlaybackItem item, Matrix4x4 bone, Matrix4x4 model)
+    /// <param name="skinScale">M895: the skin's skinScale, already inside <paramref name="model"/>. It moves the anchor (the bone stands where the scaled
+    /// character's bone stands) but is taken back out of the system's own size: nothing shows the game scaling an attached particle system by it.</param>
+    public static Matrix4x4 AttachmentTransform(VfxPlaybackItem item, Matrix4x4 bone, Matrix4x4 model, float skinScale = 1f)
     {
         var anchor = bone * model;
+        if (skinScale is > 0f and not 1f)
+        {
+            float k = 1f / skinScale;
+            anchor.M11 *= k; anchor.M12 *= k; anchor.M13 *= k;
+            anchor.M21 *= k; anchor.M22 *= k; anchor.M23 *= k;
+            anchor.M31 *= k; anchor.M32 *= k; anchor.M33 *= k;
+        }
         return item.PreserveCastDirection
             ? VfxCastFrame.RotationOf(item.Transform) * Matrix4x4.CreateTranslation(anchor.Translation)
             : anchor;

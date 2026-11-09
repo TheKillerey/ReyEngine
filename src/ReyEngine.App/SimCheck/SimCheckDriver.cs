@@ -366,7 +366,7 @@ internal sealed class SimCheckDriver
             // M873: the caster's own pixels are left out of the effect ratio - at its start AND along any dash, blink or leap (the union of its boxes over
             // the whole cast window), so a caster that merely travels is not mistaken for an effect
             var casterBoxes = new List<PixelRect>();
-            void AddBox(Vector3 world) { if (CasterBox(b1, world) is { } box) casterBoxes.Add(box); }
+            void AddBox(Vector3 world) { if (CasterBox(b1, world, 190f * Mp.SkinScale) is { } box) casterBoxes.Add(box); }
             AddBox(script.ChampionPosition);
             foreach (var d in script.All(SimStepKind.Displace)) { if (d.From is { } f) AddBox(f); if (d.To is { } t) AddBox(t); }
             // M874: a unit a mechanic moves or summons is no effect either: the boxes of the spawned units, and of the dummy or ally a MoveUnit moves (start, end, and the top of a knock-up)
@@ -604,10 +604,10 @@ internal sealed class SimCheckDriver
         return region;
     }
 
-    private PixelRect? CasterBox(Dx11FrameCapture tap, Vector3 position)
+    private PixelRect? CasterBox(Dx11FrameCapture tap, Vector3 position, float tall = 190f)   // M895: the caster is as tall as its skinScale makes it
     {
         if (!SimCheckFrames.ProjectToPixel(tap.View, tap.Projection, position, tap.Width, tap.Height, true, out float fx, out float fy)
-            || !SimCheckFrames.ProjectToPixel(tap.View, tap.Projection, position + new Vector3(0f, 190f, 0f), tap.Width, tap.Height, true, out _, out float hy))
+            || !SimCheckFrames.ProjectToPixel(tap.View, tap.Projection, position + new Vector3(0f, tall, 0f), tap.Width, tap.Height, true, out _, out float hy))
             return null;
         float height = MathF.Max(8f, MathF.Abs(fy - hy));
         return SimCheckFrames.Around(fx, fy, height * 0.7f, height * 1.2f, height * 0.15f, tap.Width, tap.Height);

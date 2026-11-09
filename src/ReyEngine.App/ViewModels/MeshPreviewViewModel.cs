@@ -313,6 +313,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Title = title;
         Mesh = mesh;
         Skeleton = skeleton;
+        SkinScale = 1f;   // M895: the caller sets the chosen skin's own AFTER Show
         Textures = textures;
         // M873: the previous skin's animation graph must never reach a later load path (SetSubmeshRules installs this skin's own)
         _ownClips = Array.Empty<Formats.Skeletons.AnimClipInfo>(); _ownNodes = Array.Empty<Formats.Skeletons.AnimClipNode>();

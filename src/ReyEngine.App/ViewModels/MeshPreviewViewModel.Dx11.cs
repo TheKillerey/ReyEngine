@@ -122,8 +122,20 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>M620: where the character is standing, as one matrix. The SAME composition the GL
     /// viewport builds (scale, then facing, then position), so control mode moves the character the same
     /// way whichever renderer is drawing it.</summary>
+    /// <summary>M895: the loaded skin's own <c>skinScale</c> (SkinMeshDataProperties), 1 when it authors none. The game scales the whole
+    /// model by it, so it sits in <see cref="ModelWorld"/> beside the user's scale slider: the mesh, the skeleton, the attached-effect
+    /// bones, host-mesh shells, missile start bones and the outline all follow. Set from the CHOSEN skin bin by the host (a chroma has its own).</summary>
+    public float SkinScale
+    {
+        get => _skinScale;
+        private set { if (_skinScale == value) return; _skinScale = value; OnPropertyChanged(); OnPropertyChanged(nameof(ModelWorld)); }
+    }
+    private float _skinScale = 1f;
+
+    public void SetSkinScale(float scale) => SkinScale = float.IsFinite(scale) && scale > 0f ? scale : 1f;
+
     public Matrix4x4 ModelWorld =>
-        Matrix4x4.CreateScale((float)ModelScale)
+        Matrix4x4.CreateScale((float)ModelScale * SkinScale)
         * Matrix4x4.CreateRotationY((float)RenderedCharacterYaw)
         * Matrix4x4.CreateTranslation(CharacterPosition);
 

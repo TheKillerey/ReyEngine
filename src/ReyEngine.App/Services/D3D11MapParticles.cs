@@ -235,6 +235,7 @@ public sealed class D3D11MapParticles
 
     private IReadOnlyDictionary<string, Matrix4x4>? _boneGlobals;
     private Matrix4x4 _boneModelWorld = Matrix4x4.Identity;
+    private float _boneSkinScale = 1f;   // M895
     private Vector3? _beamTarget;
     /// <summary>How long each travelling placement has been in flight. Keyed by the item, like _sims, so a
     /// rebuild drops the elapsed time with the simulator it belonged to.</summary>
@@ -246,10 +247,11 @@ public sealed class D3D11MapParticles
     ///
     /// <para>Null for a map, which has no skeleton - and then nothing is re-anchored, which is the
     /// behaviour this driver had before.</para></summary>
-    public void SetBoneGlobals(IReadOnlyDictionary<string, Matrix4x4>? bones, Matrix4x4 modelWorld)
+    public void SetBoneGlobals(IReadOnlyDictionary<string, Matrix4x4>? bones, Matrix4x4 modelWorld, float skinScale = 1f)
     {
         _boneGlobals = bones;
         _boneModelWorld = modelWorld;
+        _boneSkinScale = skinScale;
     }
 
     /// <summary>Where beams terminate. Pushed every frame rather than at build time so dragging the target
@@ -355,7 +357,7 @@ public sealed class D3D11MapParticles
             if (item.AttachBone is { Length: > 0 } bone
                 && _boneGlobals is { } bones && bones.TryGetValue(bone, out var bm))
             {
-                sim.SetWorldTransform(VfxPlaybackSim.AttachmentTransform(item, bm, _boneModelWorld));
+                sim.SetWorldTransform(VfxPlaybackSim.AttachmentTransform(item, bm, _boneModelWorld, _boneSkinScale));
                 continue;
             }
 

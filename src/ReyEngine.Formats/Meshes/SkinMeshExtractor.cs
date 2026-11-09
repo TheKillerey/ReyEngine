@@ -7,7 +7,7 @@ namespace ReyEngine.Formats.Meshes;
 
 /// <summary>What a character skin's <c>skinMeshProperties</c> points at (M41): the mesh, skeleton and
 /// default diffuse, plus any submeshes the skin hides. Enough to load and render the prop mesh.</summary>
-public sealed record SkinMeshRef(string? SimpleSkin, string? Skeleton, string? DefaultTexture, IReadOnlyList<string> HiddenSubmeshes);
+public sealed record SkinMeshRef(string? SimpleSkin, string? Skeleton, string? DefaultTexture, IReadOnlyList<string> HiddenSubmeshes, float Scale = 1f);
 
 /// <summary>
 /// Reads the <c>simpleSkin</c> / <c>skeleton</c> / default <c>texture</c> from a champion/creature skin .bin
@@ -19,6 +19,7 @@ public static class SkinMeshExtractor
     private static readonly uint F_simpleSkin = HashAlgorithms.Fnv1a("simpleSkin");   // 0xd6a00df6
     private static readonly uint F_skeleton = HashAlgorithms.Fnv1a("skeleton");        // 0xb14c976e
     private static readonly uint F_texture = HashAlgorithms.Fnv1a("texture");          // 0x3c6468f4
+    private static readonly uint F_skinScale = HashAlgorithms.Fnv1a("skinScale");
     private static readonly uint F_hide = HashAlgorithms.Fnv1a("initialSubmeshToHide"); // 0x80b7f78f
 
     /// <param name="resolveWadPath">M590: simpleSkin/skeleton/texture became WadChunkLink in 16.17.</param>
@@ -36,10 +37,18 @@ public static class SkinMeshExtractor
                 Meta.BinTexturePath.Read(Get(smp.Properties, F_simpleSkin), resolveWadPath) is { Length: > 0 } sk ? sk : null,
                 Meta.BinTexturePath.Read(Get(smp.Properties, F_skeleton), resolveWadPath) is { Length: > 0 } sl ? sl : null,
                 Meta.BinTexturePath.Read(Get(smp.Properties, F_texture), resolveWadPath) is { Length: > 0 } tx ? tx : null,
-                hidden);
+                hidden,
+                ScaleOf(Get(smp.Properties, F_skinScale)));
         }
         return null;
     }
+
+    /// <summary>M895: the skin's <c>skinScale</c>, 1 when absent (the game's default) or not a usable positive number.</summary>
+    public static float ScaleOf(BinTreeProperty? p) =>
+        p is BinTreeF32 f && float.IsFinite(f.Value) && f.Value > 0f ? f.Value : 1f;
+
+    /// <summary>M895: the scale of THIS skin bin - the chosen one, a chroma's own included. 1 when the bin has none or cannot be read.</summary>
+    public static float SkinScaleOf(byte[]? skinBin) => skinBin is { Length: > 0 } ? Extract(skinBin)?.Scale ?? 1f : 1f;
 
     /// <summary>initialSubmeshToHide is a space-separated list of submesh names. M724: through the one
     /// splitter, which also accepts the comma/semicolon forms hand-edited mod bins carry.</summary>

@@ -262,6 +262,7 @@
                              PreviewMode="{Binding PreviewMode}"
                              ModelSubmeshVisible="{Binding SubmeshVisible}"
                              ModelScale="{Binding ModelScale}"
+                             SkinScale="{Binding SkinScale}"
                              ModelPosition="{Binding CharacterPosition}"
                              ModelYaw="{Binding RenderedCharacterYaw}"
                              BackgroundMesh="{Binding BackgroundMesh}"

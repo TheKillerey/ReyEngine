@@ -12285,6 +12285,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var dx11 = await Task.Run(() => BuildCharacterDx11Scene(entry, skinBin: binPath));
             // M726: the skin's own idle effects, off the UI thread with everything else.
             var idleEffects = await Task.Run(() => TryLoadIdleEffects(entry, binPath));
+            float skinScale = await Task.Run(() => TryReadSkinScale(entry, binPath));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -12300,6 +12301,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MeshPreview.Materials = textures.Materials;
                 // M812: the CHROMA card scans THIS skin's bin, on demand. Nothing is read here - opening a skin gets no slower.
                 MeshPreview.SetChromaSkin(binPath);
+                MeshPreview.SetSkinScale(skinScale);   // M895: the chosen skin bin's skinScale
                 MeshPreview.SetSubmeshRules(initialHide, clipsByAnm, allClips, ownClips, ownNodes);
                 MeshPreview.SetAnimations(mesh.CanSkin && skeleton is not null
                     ? FindAnimations(entry, ownAnms)
@@ -12337,6 +12339,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// so a walk would mount another skin's effects on this skin's joints. M728: and that bin is the one the
     /// skin was opened with, not the bin in its mesh's folder.</para>
     /// </summary>
+    /// <summary>M895: <c>skinScale</c> of the skin bin that was chosen (a chroma's own); 1 when none.</summary>
+    private float TryReadSkinScale(WadAssetEntry skn, string? skinBin)
+    {
+        try
+        {
+            var binPath = SkinPaths.PreviewBinPath(skinBin, skn.IsResolved ? skn.Path : null);
+            if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry)) return 1f;
+            return SkinMeshExtractor.SkinScaleOf(GetAssetBytes(binEntry));
+        }
+        catch { return 1f; }
+    }
+
     private IReadOnlyList<ReyEngine.Formats.Characters.SkinIdleEffect> TryLoadIdleEffects(WadAssetEntry skn, string? skinBin = null)
     {
         try

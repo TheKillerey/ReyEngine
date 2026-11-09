@@ -240,6 +240,8 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, double>(nameof(BackgroundBrightness), 0.55);
     public static readonly StyledProperty<bool> ShowGridProperty =                   // M89: reference grid toggle
         AvaloniaProperty.Register<ViewportControl, bool>(nameof(ShowGrid), true);
+    public static readonly StyledProperty<double> SkinScaleProperty =                // M895: the skin's own skinScale, under the slider
+        AvaloniaProperty.Register<ViewportControl, double>(nameof(SkinScale), 1.0);
     public static readonly StyledProperty<double> ModelScaleProperty =               // M90: preview model scale
         AvaloniaProperty.Register<ViewportControl, double>(nameof(ModelScale), 1.0);
     // M613: where the previewed character is standing and which way it faces. Zero and zero for every
@@ -334,10 +336,11 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Scale, then facing, then position — the transform the previewed model is drawn with.
     /// Identity for every caller that leaves the M613 properties alone.</summary>
     public Matrix4x4 ModelWorldTransform =>
-        Matrix4x4.CreateScale((float)ModelScale)
+        Matrix4x4.CreateScale((float)(ModelScale * SkinScale))
         * Matrix4x4.CreateRotationY((float)ModelYaw)
         * Matrix4x4.CreateTranslation(ModelPosition);
 
+    public double SkinScale { get => GetValue(SkinScaleProperty); set => SetValue(SkinScaleProperty, value); }
     public double ModelScale { get => GetValue(ModelScaleProperty); set => SetValue(ModelScaleProperty, value); }
     public Vector3 ModelPosition { get => GetValue(ModelPositionProperty); set => SetValue(ModelPositionProperty, value); }
     /// <summary>Radians about Y. 0 faces +Z — measured against the viewport, see CharacterController.</summary>
@@ -2165,7 +2168,7 @@ public sealed class ViewportControl : OpenGlControlBase
                  || change.Property == LightFalloffSoftnessProperty                              // M160
                  || change.Property == NvrSunProperty || change.Property == NvrUseMapSunProperty                // M149
                  || change.Property == BackgroundSunProperty || change.Property == BackgroundUseMapSunProperty) { RequestNextFrameRendering(); }   // M729
-        else if (change.Property == ModelScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
+        else if (change.Property == ModelScaleProperty || change.Property == SkinScaleProperty) { _skinDirty = true; RequestNextFrameRendering(); }   // M90: rescale attached VFX too
         else if (change.Property == ModelPositionProperty || change.Property == ModelYawProperty)
         { _skinDirty = true; RequestNextFrameRendering(); }   // M613: move the model and its attached VFX
         else if (change.Property == BackgroundOffsetProperty || change.Property == BackgroundRotationProperty)
@@ -2256,7 +2259,7 @@ public sealed class ViewportControl : OpenGlControlBase
                     _lastBoneGlobals = bones;   // M726: the beam loop reads these too
                     foreach (var (item, sim) in _particleSimCache)
                         if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
-                            sim.SetWorldTransform(Services.VfxPlaybackSim.AttachmentTransform(item, bm, modelM));
+                            sim.SetWorldTransform(Services.VfxPlaybackSim.AttachmentTransform(item, bm, modelM, (float)SkinScale));
                 }
                 _wasAnimating = true;
             }
@@ -2337,7 +2340,7 @@ public sealed class ViewportControl : OpenGlControlBase
         var modelM = ModelWorldTransform;
         foreach (var (item, sim) in _particleSimCache)
             if (item.AttachBone is { Length: > 0 } bone && bones.TryGetValue(bone, out var bm))
-                sim.SetWorldTransform(Services.VfxPlaybackSim.AttachmentTransform(item, bm, modelM));
+                sim.SetWorldTransform(Services.VfxPlaybackSim.AttachmentTransform(item, bm, modelM, (float)SkinScale));
     }
 
     /// <summary>M726: this frame's bone transforms - animated while a clip plays, bind pose otherwise.
@@ -2376,12 +2379,13 @@ public sealed class ViewportControl : OpenGlControlBase
     public bool FrameCamera(double width, double height)
     {
         if (Mesh is not { } m) return false;
-        float radius = MathF.Max(m.Radius, 1f);
+        float skinScale = (float)SkinScale;   // M895: the character is drawn at its skin's scale, so it is framed at it
+        float radius = MathF.Max(m.Radius * skinScale, 1f);
         float dist = radius / MathF.Sin(_camera.FieldOfView * 0.5f) * 1.25f; // fit sphere + margin
         if (MapFrame is not { } frame || !(width > 0 && height > 0)
             || !Services.MapViewCamera.TryApply(_camera, frame, (float)(width / height)))
         {
-            _camera.Target = m.Center;
+            _camera.Target = m.Center * skinScale;
             _camera.Distance = Math.Clamp(dist, 5f, 100000f);
         }
         // A CEILING only. EffectiveNear tightens this as Distance drops; latching the framing distance
