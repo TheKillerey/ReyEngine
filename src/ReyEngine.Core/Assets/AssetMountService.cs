@@ -42,6 +42,10 @@ public sealed class AssetMountService : IDisposable
     private IAssetMount[] _fallback = Array.Empty<IAssetMount>();
 
     public IReadOnlyList<IAssetMount> Mounts => _mounts;
+    /// <summary>M891: the game-wide file index, consulted LAST for the bytes of a hash that no mount and no fallback holds (a summoned unit's texture in another WAD, a Scripts.wad file). Bytes only:
+    /// <see cref="Has"/> and <see cref="TryGet"/> keep answering for the mounted sources, so nothing is listed or counted from it. Returns null when no archive holds the file.</summary>
+    public Func<ulong, byte[]?>? GameFiles { get; set; }
+
     public IReadOnlyList<IAssetMount> Fallback => Volatile.Read(ref _fallback);
     public IReadOnlyCollection<MountedAsset> Assets => Volatile.Read(ref _index).Values;
     public int Count => Volatile.Read(ref _index).Count;
@@ -229,7 +233,7 @@ public sealed class AssetMountService : IDisposable
         if (Volatile.Read(ref _index).TryGetValue(pathHash, out var a)) return a.Source.Read(pathHash);
         foreach (var f in Volatile.Read(ref _fallback))
             if (f.Contains(pathHash)) return f.Read(pathHash);
-        return null;
+        return GameFiles?.Invoke(pathHash);
     }
 
     /// <summary>Does any mount or fallback hold this hash?</summary>
@@ -247,7 +251,7 @@ public sealed class AssetMountService : IDisposable
     {
         foreach (var f in Volatile.Read(ref _fallback))
             if (f.Contains(pathHash)) return f.Read(pathHash);
-        return null;
+        return GameFiles?.Invoke(pathHash);
     }
 
     /// <summary>

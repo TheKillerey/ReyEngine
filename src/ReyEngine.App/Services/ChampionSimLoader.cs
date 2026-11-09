@@ -6,6 +6,7 @@ using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Wad;
 using ReyEngine.Formats.Characters;
 using ReyEngine.Formats.Characters.Simulation;
+using ReyEngine.Formats.LtkGameData;
 
 namespace ReyEngine.App.Services;
 
@@ -58,6 +59,7 @@ public static class ChampionSimLoader
                 ResolveWadPath = resolveWadPath,
                 Client = client,
                 ClientAbilities = abilities,
+                ReadGameFile = GameFileIndex.GameDirectoryOf(finalDirectory) is { } gameDir ? GameFileIndex.Shared(gameDir).AsReader() : null,
             };
             ChampionSimDefinition def;
             using (var wad = WadArchive.Open(ChampionSimBatch.WadPathOf(championsDirectory, name), resolver))

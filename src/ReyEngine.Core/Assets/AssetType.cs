@@ -19,6 +19,8 @@ public enum AssetType
     Shader,         // shader source / cache
     Json,
     Text,
+    Preload,        // M891: .preload - an ASCII Lua table of assets a script loads
+    LuaBytecode,    // M891: .luabin64 - compiled Lua 5.1 (little-endian, 64-bit size_t)
 }
 
 /// <summary>Detects an asset's type from its path extension and/or magic bytes.</summary>
@@ -43,7 +45,9 @@ public static class AssetTypeDetector
             "bnk" or "wpk" => AssetType.Audio,
             "json" => AssetType.Json,
             "txt" or "cfg" or "ini" or "log" => AssetType.Text,
-            "fx" or "vs_2_0" or "ps_2_0" or "preload" => AssetType.Shader,
+            "fx" or "vs_2_0" or "ps_2_0" => AssetType.Shader,
+            "preload" => AssetType.Preload,
+            "luabin64" => AssetType.LuaBytecode,
             _ => AssetType.Unknown,
         };
     }

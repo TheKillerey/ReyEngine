@@ -16,6 +16,8 @@ public sealed class ChampionSimContext
     public ClientNameCatalog? Client { get; init; }
     /// <summary>Optional: the client's ability names and icons.</summary>
     public ClientAbilityCatalog? ClientAbilities { get; init; }
+    /// <summary>M891: reads a game file by path through the game-wide index: (path, preferred archive file name) to bytes, null when no archive holds it. Null disables the script data.</summary>
+    public Func<string, string, byte[]?>? ReadGameFile { get; init; }
 }
 
 /// <summary>
@@ -246,6 +248,18 @@ public static class ChampionSimGenerator
             var scenario = Scenario(slot, missiles, targets);
             sources.Add(new FieldSource("scenario", "convention"));
 
+            SimScriptData.Result? script = null;
+            if (_ctx.ReadGameFile is { } readFile && hasRoot)
+            {
+                script = SimScriptData.Read(_in.Champion, new[] { slot.ScriptName }.Concat(rec.Children.Select(c => c.Name)), readFile);
+                if (script.Files.Count > 0)
+                {
+                    sources.Add(new FieldSource("preload", "authored"));
+                    if (script.BuffEffects.Count > 0) sources.Add(new FieldSource("buffEffects", "authored"));
+                }
+                issues.AddRange(script.Issues);
+            }
+
             return new AbilitySim(
                 key, null, slot.Index, rec.SpellEntry, rec.AbilityName, slot.ScriptName,
                 slot.RootSpellHash != 0 ? Hex(slot.RootSpellHash) : null,
@@ -256,7 +270,8 @@ public static class ChampionSimGenerator
                 slot.Tags, slot.AffectsTypeFlags,
                 authored, clip, castSeconds, slot.SpellTotalTime, slot.SpellCastTime,
                 missiles, SortRefs(casters), SortRefs(targets), SortRefs(returns),
-                particles, sounds, scenario, sources, issues, clipChain, SortRefs(aims), followUpAttack);
+                particles, sounds, scenario, sources, issues, clipChain, SortRefs(aims), followUpAttack,
+                script?.Characters, script?.Spells, script?.BuffEffects, script?.Files);
         }
 
         private AbilitySim BuildSubCast(string name, ChampionEvent ev, AbilitySim owner, AbilityRecordData rec)

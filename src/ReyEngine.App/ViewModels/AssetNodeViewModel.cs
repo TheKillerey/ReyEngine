@@ -113,7 +113,8 @@ public sealed partial class AssetNodeViewModel : ViewModelBase
             AssetType.Bin => "BIN",
             AssetType.Audio => "SND",
             AssetType.Shader => "FX",
-            AssetType.Json or AssetType.Text => "TXT",
+            AssetType.Json or AssetType.Text or AssetType.Preload => "TXT",
+            AssetType.LuaBytecode => "LUA",
             AssetType.Unknown => "?",
             _ => "BIN",
         };

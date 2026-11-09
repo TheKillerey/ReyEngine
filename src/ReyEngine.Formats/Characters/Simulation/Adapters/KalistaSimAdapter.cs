@@ -109,6 +109,16 @@ public sealed class KalistaSimAdapter : ISimAdapter
 
     // ================================================================== W: the Sentinel
 
+    public const string SentinelFallback = "KalistaSpawn";
+
+    /// <summary>M891: the Sentinel's character as W's own preload file names it (BBPreloadCharacter kalistaspawn), in the constant's casing when it is the same name; the constant when the definition carries none.</summary>
+    internal static string SentinelCharacter(AbilitySim w)
+    {
+        string? named = w.PreloadCharacters?.FirstOrDefault(n => n.Length > 0);
+        if (named is null) return SentinelFallback;
+        return named.Equals(SentinelFallback, StringComparison.OrdinalIgnoreCase) ? SentinelFallback : named;
+    }
+
     private static SimScript Sentinel(ChampionSimDefinition def, AbilitySim w, SimStage stage, SimScript script)
     {
         var (axis, enemy) = Layout(stage);
@@ -122,6 +132,7 @@ public sealed class KalistaSimAdapter : ISimAdapter
         float walk = Flat(aim - spawnAt).Length() / SentinelSpeed;
         float loop = (Flat(patrolA - aim).Length() + Flat(patrolB - patrolA).Length() + Flat(aim - patrolB).Length()) / SentinelSpeed;
         float despawnAt = MathF.Max(script.EndTime, cast + walk + PatrolLoops * loop + 0.6f);
+        string sentinel = SentinelCharacter(w);
 
         // the five W systems belong to the Sentinel, not to Kalista: they are not played at the caster
         var sentinelSystems = w.CasterSystems.Where(r => r.Name is not null).Select(r => r.Name!).ToList();
@@ -131,11 +142,11 @@ public sealed class KalistaSimAdapter : ISimAdapter
         var extra = new List<SimStep>
         {
             new(SimStepKind.Spawn, cast, Adapter,
-                $"Sentinel (KalistaSpawn) appears at the cast and walks {F(Flat(aim - spawnAt).Length())} units at {F(SentinelSpeed)} u/s, then patrols")
+                $"Sentinel ({sentinel}) appears at the cast and walks {F(Flat(aim - spawnAt).Length())} units at {F(SentinelSpeed)} u/s, then patrols")
             {
-                Unit = "sentinel", Resource = "KalistaSpawn", IdleClip = "Idle1", RunClip = "Run", From = spawnAt, To = aim, Speed = SentinelSpeed,
+                Unit = "sentinel", Resource = sentinel, IdleClip = "Idle1", RunClip = "Run", From = spawnAt, To = aim, Speed = SentinelSpeed,
                 Path = new[] { aim, patrolA, patrolB }, Loop = true, EndTime = despawnAt,
-                Why = "the unit is Characters/KalistaSpawn (record: baseMoveSpeed 560, mesh, graph, initialSubmeshToHide Alert; the loaded skin's own sentinel skin when it has one); "
+                Why = $"the unit is Characters/{sentinel} (record: baseMoveSpeed 560, mesh, graph, initialSubmeshToHide Alert; the loaded skin's own sentinel skin when it has one); "
                       + "where it goes (about 600 units ahead, beside the enemy), the spawn delay (the cast time 0.5 s), the patrol (a 500-unit back-and-forth, two loops) and the lifetime are conventions",
             },
         };

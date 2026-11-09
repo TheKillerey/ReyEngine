@@ -9,6 +9,7 @@ using ReyEngine.App.Documents;
 using ReyEngine.App.Imaging;
 using ReyEngine.App.Services;
 using ReyEngine.Core.Assets;
+using ReyEngine.Formats.LtkGameData;
 using ReyEngine.Core.Build;
 using ReyEngine.Core.Decoding;
 using ReyEngine.Core.Painting;
@@ -71,7 +72,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (mounts is not null)
             return mounts.Read(hash) ?? throw new FileNotFoundException($"0x{hash:x16} not in any mount.");
         if (_overrides.TryGet(hash, out var ov) && File.Exists(ov.OverrideFile)) return File.ReadAllBytes(ov.OverrideFile);
-        return archive!.Extract(hash);
+        if (archive!.TryGetEntry(hash, out _)) return archive.Extract(hash);
+        // M891: single-WAD mode: a file the open WAD does not hold comes from the game-wide index (the throw below is what a miss was)
+        return ReadGameFile(hash, archive) ?? archive.Extract(hash);
+    }
+
+    // ---- M891: the game-wide file index as the LAST source of a read ----------------------------------------
+    private GameFileIndex? _gameFileIndex;
+    private string? _gameFileIndexFolder;
+
+    /// <summary>The index of the game folder the project points at, or null without one. Kept per folder; its table is built once per process (cache file in LocalAppData).</summary>
+    private GameFileIndex? GameFiles()
+    {
+        string? folder = Project?.GameDirectory;
+        if (_gameFileIndex is not null && string.Equals(_gameFileIndexFolder, folder, StringComparison.OrdinalIgnoreCase)) return _gameFileIndex;
+        GameFileIndex? index = null;
+        if (GameReferenceLibrary.FindFinalDirectory(folder) is { } final && GameFileIndex.GameDirectoryOf(final) is { } game)
+            index = GameFileIndex.Shared(game);
+        _gameFileIndexFolder = folder;
+        return _gameFileIndex = index;
+    }
+
+    /// <summary>The bytes the index holds for <paramref name="hash"/>, preferring the archives mounted or open (the champion's, the map's); null when no archive holds it or there is no game folder.</summary>
+    private byte[]? ReadGameFile(ulong hash, WadArchive? open = null, AssetMountService? mounts = null)
+    {
+        try
+        {
+            if (GameFiles() is not { } index) return null;
+            var preferred = new List<string>();
+            if (open is not null) preferred.Add(open.Name);
+            if (mounts is not null) foreach (var m in mounts.Fallback) preferred.Add(m.Name);
+            return index.TryRead(hash, out var bytes, preferred.Count > 0 ? preferred.ToArray() : null) ? bytes : null;
+        }
+        catch (Exception ex) { _log.Warn("GameIndex", ex.Message); return null; }
+    }
+
+    private void AttachGameFileIndex(AssetMountService mounts)
+    {
+        var index = GameFiles();
+        if (index is null) return;
+        mounts.GameFiles = hash => ReadGameFile(hash, null, mounts);
+        _ = Task.Run(() => { try { index.EnsureBuilt(); } catch { /* the first read reports it */ } });   // warm the table off the UI thread
     }
 
     private bool TryResolveEntry(ulong hash, out WadAssetEntry entry)
@@ -7519,6 +7560,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var hash = Formats.Meta.BinTexturePath.HashOfReference(path);
             if (TryResolveEntry(hash, out _) && ReadAsset(hash) is { } bytes) return bytes;
+            if (ReadGameFile(hash, _archive, _mounts) is { } fromGame) return fromGame;   // M891: not in the mounted sources - the game-wide index
         }
         if (_workshopPreviewAliases is null || _workshopCatalog is null) return null;
         string source = _workshopPreviewAliases.TryGetValue(path, out var alias) ? alias : path;
@@ -15754,6 +15796,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         InvalidateMapThumbnails();   // M807: what is queued was described against the old mounts; the tile in hand finishes on them
         RetireMapThumbnailReader(_mounts);   // M807: and they are disposed the moment it has
         _mounts = new AssetMountService();
+        AttachGameFileIndex(_mounts);   // M891
         // M819: the project's own mounts by the layer they ship in, in the order they win in - where the base of a GameData target is read from
         var layerMounts = new Dictionary<string, List<IAssetMount>>(StringComparer.Ordinal);
         var rawMounts = new List<IAssetMount>();

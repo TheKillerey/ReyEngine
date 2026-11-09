@@ -32,7 +32,7 @@ public sealed record ChampionSimDefinition(
 {
     public const int CurrentSchemaVersion = 1;
     /// <summary>Bumped whenever the generator's output for the same data would change.</summary>
-    public const string CurrentGeneratorVersion = "M882.1";
+    public const string CurrentGeneratorVersion = "M891.1";
 }
 
 /// <summary>A reference to a VFX system. <see cref="Name"/> is null when it did not resolve.</summary>
@@ -138,7 +138,18 @@ public sealed record AbilitySim(
     IReadOnlyList<SimSystemRef>? AimSystems = null,
     /// <summary>M882: a root spell that authors no clip of its own but has a child <c>*Attack</c> spell that does (Blitzcrank E PowerFistAttack, Nasus Q): the root plays no cast clip and the
     /// simulation plays this attack - the child's clip, cast time and hit effect - on the basic attack that follows. Null otherwise.</summary>
-    AttackSim? FollowUpAttack = null);
+    AttackSim? FollowUpAttack = null,
+    /// <summary>M891: characters the ability's <c>.preload</c> chain names (BBPreloadCharacter) - the units it summons. Null when no game-file reader was given; empty when the scripts name none.</summary>
+    IReadOnlyList<string>? PreloadCharacters = null,
+    /// <summary>M891: helper spells the preload chain names (BBPreloadSpell), in discovery order, not including the ability's own scripts.</summary>
+    IReadOnlyList<string>? PreloadSpells = null,
+    /// <summary>M891: buff effects the chain's <c>.luabin64</c> scripts author (AutoBuffActivateEffect and its attach bone).</summary>
+    IReadOnlyList<BuffEffectSim>? BuffEffects = null,
+    /// <summary>M891: the game paths of the preload and luabin64 files that were read for the three fields above.</summary>
+    IReadOnlyList<string>? ScriptFiles = null);
+
+/// <summary>M891: an effect a spell script attaches while its buff is active. Authored in the script's property table; <see cref="AttachBone"/> is null when the script names none.</summary>
+public sealed record BuffEffectSim(string Spell, string? BuffName, string Effect, string? AttachBone, string File);
 
 /// <summary>A basic attack (or crit) from the champion record.</summary>
 public sealed record AttackSim(

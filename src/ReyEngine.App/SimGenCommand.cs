@@ -5,6 +5,7 @@ using ReyEngine.Core.Hashing;
 using ReyEngine.Core.Projects;
 using ReyEngine.Formats.Characters;
 using ReyEngine.Formats.Characters.Simulation;
+using ReyEngine.Formats.LtkGameData;
 
 namespace ReyEngine.App;
 
@@ -64,6 +65,10 @@ internal static class SimGenCommand
             return 2;
         }
 
+        {
+            var built = GameFileIndex.Shared(game!).EnsureBuilt();
+            Console.WriteLine($"game file index: {built.Archives} archives, {built.Chunks} chunks, {(built.FromCache ? "cache" : "built")} in {built.Elapsed.TotalMilliseconds:0} ms, table {built.TableBytes / 1048576.0:0.0} MiB");
+        }
         var db = new HashSyncService().LoadLocal(_ => { });
         var resolver = new WadPathResolver(db);
         var client = ClientNameCatalog.Load(ClientNameCatalog.FindDataWad(ClientNameCatalog.InstallRootFromChampions(championsDir) ?? ""));
@@ -76,6 +81,7 @@ internal static class SimGenCommand
             ResolveWadPath = h => db.TryGetPath(h, out var p) ? p : null,
             Client = client,
             ClientAbilities = abilities,
+            ReadGameFile = GameFileIndex.Shared(game!).AsReader(),
         };
 
         Console.WriteLine($"simgen {version}: {champions.Count} champion(s) -> {outDir}");
