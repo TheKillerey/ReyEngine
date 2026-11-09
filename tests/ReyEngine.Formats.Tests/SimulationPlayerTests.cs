@@ -629,6 +629,39 @@ public sealed class SimulationPlayerTests(ITestOutputHelper output) : IDisposabl
     }
 
     [Fact]
+    public async Task A_second_load_ends_in_the_same_idle_effect_state_as_one_load()
+    {
+        if (Skip()) return;
+        var skin = ReadSkin("Lux");
+        // the visual systems the skin resolves: two of them stand in for the skin's idle records
+        var keys = skin.Resources.Where(kv => skin.Systems.TryGetValue(kv.Value, out var d) && d.Emitters.Any(e => e.IsVisual)).Select(kv => kv.Key).Take(2).ToList();
+        Assert.Equal(2, keys.Count);
+        var idle = keys.Select(k => new SkinIdleEffect(k, "")).ToList();
+
+        // one load: systems, idle effects, then the loaded idle clip is selected (ClipChanged runs for an internal selection)
+        var one = new MeshPreviewViewModel();
+        one.SetVfx(skin.Systems, skin.Resources);
+        one.SetIdleEffects(idle);
+        one.Animation.ClipChanged!(null);
+        var oneNames = one.Playback?.Items.Select(i => i.System.Name).ToList();
+
+        // two loads in one window: the first load, then the whole sequence again
+        var two = new MeshPreviewViewModel();
+        two.SetVfx(skin.Systems, skin.Resources);
+        two.SetIdleEffects(idle);
+        two.Animation.ClipChanged!(null);
+        two.Playback = null;                                   // what Show does to the previous skin's playback
+        two.SetVfx(skin.Systems, skin.Resources);
+        two.SetIdleEffects(idle);
+        two.Animation.ClipChanged!(null);
+
+        Assert.NotNull(oneNames);
+        Assert.Equal(2, oneNames!.Count);                       // the idle effects survive the clip selection
+        Assert.Equal(oneNames, two.Playback?.Items.Select(i => i.System.Name).ToList());
+        Assert.Equal(one.IdleEffectCount, two.IdleEffectCount);
+    }
+
+    [Fact]
     public async Task A_returning_missile_flies_back_to_the_caster_after_it_arrives()
     {
         if (Skip()) return;

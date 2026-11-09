@@ -259,7 +259,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             {
                 _eventBundle = null; _activeEvent = null;
                 if (SelectedVfx is null) Playback = null;
-                if (userPick) RepublishPlayback();   // M883: the skin's idle effects are all that remains
+                // M883: the skin's idle effects are all that remains. M894: for EVERY clip change, not only a pick by the user - the load's own
+                // PlayLoadedIdle (and a simulation's clip) are internal selections, and this branch had just dropped the idle effects SetIdleEffects
+                // published. The first load was rescued by a dummy-move replay that a second load in the same window never gets.
+                if (SelectedVfx is null) RepublishPlayback();
                 ClearSoundSchedule();
             }
         };
