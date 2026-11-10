@@ -164,6 +164,10 @@ public sealed record AbilitySlot(
     public uint? HitEffectOrientType { get; init; }
     public bool? HaveHitEffect { get; init; }
 
+    /// <summary>M896: the root spell's <c>DataValues</c> (SpellDataValue: <c>name</c> and the per-level <c>values</c>; older records <c>mDataValues</c> / <c>mName</c> / <c>mValues</c>), each at rank 1 the way
+    /// <see cref="Rank1"/> reads a level array. Empty when the spell authors none. The tooltip numbers: "Duration", "ZoneDuration", "SlowDuration"...</summary>
+    public IReadOnlyList<KeyValuePair<string, float>> DataValues { get; init; } = Array.Empty<KeyValuePair<string, float>>();
+
     /// <summary>Riot's "no range limit": 132 of 661 authored ranges are exactly 25,000, and everything at
     /// or above 20,000 (139) is a dash, a self-cast or a global, not a distance anyone measured.</summary>
     public bool IsUnboundedRange => CastRange >= 20000f;
@@ -377,6 +381,13 @@ public static class ChampionSpellData
     private static readonly uint FAcceleration = HashAlgorithms.Fnv1a("mAcceleration");
     private static readonly uint FMinSpeed = HashAlgorithms.Fnv1a("mMinSpeed");
     private static readonly uint FMaxSpeed = HashAlgorithms.Fnv1a("mMaxSpeed");
+    // M896: 16.22 writes DataValues / name / values (read off Morgana's record); older records the m-prefixed names. Both are read.
+    private static readonly uint FDataValues = HashAlgorithms.Fnv1a("DataValues");
+    private static readonly uint FDataValueName = HashAlgorithms.Fnv1a("name");
+    private static readonly uint FDataValueValues = HashAlgorithms.Fnv1a("values");
+    private static readonly uint FDataValuesOld = HashAlgorithms.Fnv1a("mDataValues");
+    private static readonly uint FDataValueNameOld = HashAlgorithms.Fnv1a("mName");
+    private static readonly uint FDataValueValuesOld = HashAlgorithms.Fnv1a("mValues");
     private static readonly uint FAbilities = HashAlgorithms.Fnv1a("mAbilities");
     private static readonly uint FPassiveSpell = HashAlgorithms.Fnv1a("mCharacterPassiveSpell");
     private static readonly uint FPassiveLuaName = HashAlgorithms.Fnv1a("passiveLuaName");
@@ -703,7 +714,23 @@ public static class ChampionSpellData
             HaveHitBone = data is null ? null : OptBool(data, FHaveHitBone),
             HitEffectOrientType = data is not null && Get(data.Properties, FHitEffectOrientType) is BinTreeU32 hot ? hot.Value : null,
             HaveHitEffect = data is null ? null : OptBool(data, FHaveHitEffect),
+            DataValues = DataValuesOf(data),
         };
+    }
+
+    /// <summary>M896: <c>DataValues</c> at rank 1, in authored order. A value without a name or without a float at rank 1 is skipped.</summary>
+    private static IReadOnlyList<KeyValuePair<string, float>> DataValuesOf(BinTreeStruct? spell)
+    {
+        if (spell is null || (Unwrap(Get(spell.Properties, FDataValues)) ?? Unwrap(Get(spell.Properties, FDataValuesOld))) is not BinTreeContainer { Elements.Count: > 0 } list)
+            return Array.Empty<KeyValuePair<string, float>>();
+        var values = new List<KeyValuePair<string, float>>();
+        foreach (var element in list.Elements)
+        {
+            if (element is not BinTreeStruct dv
+                || (Get(dv.Properties, FDataValueName) ?? Get(dv.Properties, FDataValueNameOld)) is not BinTreeString { Value.Length: > 0 } name) continue;
+            if ((Rank1(dv, FDataValueValues) ?? Rank1(dv, FDataValueValuesOld)) is { } v) values.Add(new(name.Value, v));
+        }
+        return values;
     }
 
     /// <summary>M893: the class names of the missile components, by hash (the hash tables are not needed to read a record). Resolved by Fnv1a so a class absent

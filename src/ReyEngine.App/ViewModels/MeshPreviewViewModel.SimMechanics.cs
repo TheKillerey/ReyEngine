@@ -334,6 +334,8 @@ public sealed partial class MeshPreviewViewModel
         public required VfxPlaybackItem Template { get; init; }
         public required double EndClock { get; init; }
         public required string Name { get; init; }
+        /// <summary>M896: the item as first published; every later republish hands the viewport this same item, so it keeps the effect's simulator running.</summary>
+        public VfxPlaybackItem? Published;
     }
 
     private readonly List<SimFx> _simFx = new();
@@ -370,12 +372,17 @@ public sealed partial class MeshPreviewViewModel
     private readonly List<SimBundle> _simBundles = new();
     private readonly HashSet<VfxPlaybackItem> _simBundleOriginals = new();
     private readonly HashSet<VfxPlaybackItem> _simBundlePublished = new();
+    /// <summary>M896: per bundle item (by reference), the copy last published and the clock it was published at. A copy that has started is published again AS IS.</summary>
+    private readonly Dictionary<VfxPlaybackItem, (VfxPlaybackItem Published, double At)> _simBundleLive = new(ReferenceEqualityComparer.Instance);
+    /// <summary>M896: the run's Release step has passed - every effect of the cast (not the skin's idle effects) is published Released.</summary>
+    private bool _simReleased;
 
     /// <summary>
-    /// Put the live effects - and what an earlier step started and has not finished - back into the one playback. Every playback change builds a fresh VfxPlayback, which the D3D11
-    /// surface treats as a restart of everything in it, so a step that rebuilds the playback (a composite, an attack, a clip) would otherwise cut off the missile and impact of the step
-    /// before it. This runs after each such step and after an Effect starts: an earlier bundle's items that are still in the future are re-timed to this moment; one that has begun and
-    /// has no delay or flight (a persistent caster system) starts again for a few seconds; a missile or impact that is already past is not replayed. Expired effects are dropped.
+    /// Put the live effects - and what an earlier step started and has not finished - back into the one playback. A step that rebuilds the playback (a composite, an attack, a clip)
+    /// would otherwise cut off the missile and impact of the step before it. This runs after each such step and after an Effect starts: an earlier bundle's items that are still in
+    /// the future are re-timed to this moment. M896: an item that has started is published again as the SAME item, and the character viewport
+    /// (D3D11MapParticles.KeepRunningAcrossRebuild) keeps its running simulator - before, the D3D11 surface restarted everything in a new playback, so a persistent caster system
+    /// started over (and was dropped after 4 s) and an impact or zone already playing vanished at the next republish. After the Release step every cast item is published Released.
     /// </summary>
     private void RepublishSimEffects(double clock)
     {
@@ -402,21 +409,36 @@ public sealed partial class MeshPreviewViewModel
             double elapsed = clock - bundle.Start;
             foreach (var original in bundle.Items)
             {
-                bool event_ = original.StartDelay > 0f || original.TravelTo is not null;
                 float remaining = (float)(original.StartDelay - elapsed);
                 VfxPlaybackItem? copy = null;
-                if (event_) { if (remaining >= -0.02f) copy = original with { StartDelay = Math.Max(0f, remaining) }; }
-                else if (elapsed < 4.0) copy = original;
+                if (_simBundleLive.TryGetValue(original, out var live) && clock + 0.02 >= live.At + live.Published.StartDelay)
+                    copy = live.Published;                                                   // running: the same item, the same simulator
+                else if (remaining >= -0.02f)
+                {
+                    // not started yet: re-timed to this playback; in character form already, so the Playback setter keeps the instance
+                    copy = CharacterItem(original.StartDelay > 0f ? original with { StartDelay = Math.Max(0f, remaining) } : original);
+                    _simBundleLive[original] = (copy, clock);
+                }
                 if (copy is null) continue;
+                if (_simReleased && !copy.Released) copy = copy with { Released = true };
                 _simBundlePublished.Add(copy);
                 items.Add(copy);
             }
         }
         foreach (var fx in _simFx)
         {
-            var item = fx.Template with { StartDelay = 0f, EndTime = (float)Math.Max(0.05, fx.EndClock - clock) };
+            var item = fx.Published ??= CharacterItem(fx.Template with { StartDelay = 0f, EndTime = (float)Math.Max(0.05, fx.EndClock - clock) });
+            if (_simReleased && !item.Released) item = item with { Released = true };
             _simFxPublished.Add(item);
             items.Add(item);
+        }
+        if (_simReleased)
+        {
+            // the clip's own particle events and anything else the cast published: released too; the skin's idle effects keep playing
+            var idle = new HashSet<VfxPlaybackItem>(_idleItems.Select(CharacterItem));
+            foreach (var raw in _idleItems) idle.Add(raw);
+            for (int i = 0; i < items.Count; i++)
+                if (!items[i].Released && !idle.Contains(items[i])) items[i] = items[i] with { Released = true };
         }
         Playback = items.Count > 0 ? new VfxPlayback(items) : null;
     }
@@ -463,7 +485,8 @@ public sealed partial class MeshPreviewViewModel
         _simAllyHidden = false;
         _simFx.Clear();
         _simFxPublished.Clear();
-        _simBundles.Clear(); _simBundleOriginals.Clear(); _simBundlePublished.Clear();
+        _simBundles.Clear(); _simBundleOriginals.Clear(); _simBundlePublished.Clear(); _simBundleLive.Clear();
+        _simReleased = false;
         _simFrameExtras.Clear();
         _simPropsDirty = false;
         _simLastTrack = double.NegativeInfinity;

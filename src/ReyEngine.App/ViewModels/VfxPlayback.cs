@@ -108,6 +108,10 @@ public sealed record VfxPlaybackItem(
     public Vector3? BeamTarget { get; init; }
     /// <summary>Optional end of this playback phase, measured from the start of the whole cast.</summary>
     public float? EndTime { get; init; }
+    /// <summary>M896: the simulation's Release step - the system stops emitting and its live particles run out their linger (VfxParticleSimulator.Stop), instead of
+    /// vanishing at the End. A viewport that keeps running simulators across a playback change (D3D11MapParticles.KeepRunningAcrossRebuild) matches this item
+    /// to its running unreleased twin and stops that one rather than starting a new one.</summary>
+    public bool Released { get; init; }
 
     /// <summary>
     /// M726: the skeleton joint this system's beam aims at, re-read every skinned frame like

@@ -173,6 +173,7 @@ public partial class MeshPreviewWindow
         UpdateArenaPlayback(vm, map);
         surface.PropMeshes = _arenaCombinedProps;
         surface.ParticlePlayback = _arenaCombinedVfx;
+        surface.KeepRunningAcrossRebuild = true;   // M896: a republish mid-cast must not restart the effects already playing (nor the map's own)
     }
 
     private void UpdateArenaPlayback(MeshPreviewViewModel vm, MainWindowViewModel map)

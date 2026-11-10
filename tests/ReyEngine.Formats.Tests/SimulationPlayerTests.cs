@@ -976,4 +976,51 @@ public sealed class SimulationPlayerTests(ITestOutputHelper output) : IDisposabl
         using var wad = WadArchive.Open(Path.Combine(Final, "Champions", champion + ".wad.client"), Hashes.Value.Resolver);
         return ChampionSpellData.ReadAttacks(wad.Extract(HashAlgorithms.WadPath(ChampionRecord.PathFor(champion.ToLowerInvariant()))), champion);
     }
+
+    // ---- M896: effects play for their real length, and a republish does not restart them ----
+
+    [Fact]
+    public async Task M896_Morgana_W_runs_past_the_clip_and_releases_its_zone_at_the_authored_duration()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Morgana");
+        vm.PlaySimulation("W");
+        var script = vm.SimCurrentScript!;
+        var release = script.Find(SimStepKind.Release);
+        output.WriteLine($"end {script.EndTime}; {string.Join(" | ", script.Notes)}");
+        Assert.NotNull(release);
+        Assert.Equal("authored", release!.Source);                          // DataValues WDuration = 5
+        Assert.True(script.EndTime > 5f, $"end {script.EndTime}");           // was the 1.57 s clip
+        int guard = 0;
+        while (vm.SimRunning && vm.SimTime < release.Time - 0.2 && guard++ < 2000) vm.AdvanceSimulation(0.05);
+        var before = vm.Playback!.Items.Where(i => !i.Released).ToList();
+        Assert.NotEmpty(before);
+        while (vm.SimRunning && vm.SimTime < release.Time + 0.05 && guard++ < 4000) vm.AdvanceSimulation(0.05);
+        Assert.True(vm.SimRunning);                                          // the End waits for the die-out
+        var after = vm.Playback!.Items;
+        Assert.Contains(after, i => i.Released);
+        // every cast item that played before the Release is still there - the same item, released - so the viewport stops it instead of dropping it
+        foreach (var item in before.Where(i => after.Any(a => a.Released)))
+            Assert.Contains(after, a => a.Equals(item) || a.Equals(item with { Released = true }));
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task M896_A_republish_after_the_hit_keeps_the_running_impact_as_the_same_item()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Ezreal");
+        vm.PlaySimulation("Q");
+        var hit = vm.SimCurrentScript!.Find(SimStepKind.Hit)!;
+        int guard = 0;
+        while (vm.SimRunning && vm.SimTime < hit.Time + 0.3 && guard++ < 2000) vm.AdvanceSimulation(0.02);
+        var impact = vm.Playback!.Items.First(i => i.System.Name.EndsWith("_tar"));
+        var others = vm.Playback.Items.ToList();
+        // what an Attack, Effect or clip step does mid-run
+        typeof(MeshPreviewViewModel).GetMethod("RepublishSimEffects", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(vm, new object[] { vm.SimTime });
+        Assert.Contains(vm.Playback!.Items, i => ReferenceEquals(i, impact) || i.Equals(impact));   // before M896: dropped ("already past")
+        foreach (var item in others) Assert.Contains(vm.Playback.Items, i => i.Equals(item));      // nothing running was replaced by a new item
+        vm.StopControl();
+    }
 }

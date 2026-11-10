@@ -273,7 +273,8 @@ public static class ChampionSimGenerator
                 missiles, SortRefs(casters), SortRefs(targets), SortRefs(returns),
                 particles, sounds, scenario, sources, issues, clipChain, SortRefs(aims), followUpAttack,
                 script?.Characters, script?.Spells, script?.BuffEffects, script?.Files,
-                slot.HitBoneName.Length > 0 ? slot.HitBoneName : null, slot.HaveHitBone, slot.HitEffectOrientType, slot.HaveHitEffect);
+                slot.HitBoneName.Length > 0 ? slot.HitBoneName : null, slot.HaveHitBone, slot.HitEffectOrientType, slot.HaveHitEffect,
+                SimDuration.Pick(slot.DataValues)?.Value, SimDuration.Pick(slot.DataValues)?.Key);
         }
 
         private AbilitySim BuildSubCast(string name, ChampionEvent ev, AbilitySim owner, AbilityRecordData rec)

@@ -23,6 +23,9 @@ public enum SimStepKind
     Effect,
     /// <summary>M893: a returning missile flies back from where it arrived to the caster (Ahri Q, Sivir Q, Ekko Q). From = the turn-around point, To = the caster, Time..EndTime = the flight back.</summary>
     Return,
+    /// <summary>M896: the systems of the cast that never end by themselves (a zone, a storm, a buff loop) stop emitting; their particles die out before the End step.
+    /// Its <see cref="SimStep.Why"/> says where the hold came from (an authored duration or the convention).</summary>
+    Release,
 }
 
 public enum SimDisplaceKind
@@ -149,6 +152,14 @@ public static class SimulationPlanner
     public const float MaxSeconds = 8f;
     public const float HitLinger = 1f;
     public const float DisplaceLinger = 0.5f;
+    /// <summary>M896: the most seconds the effects of a cast may extend a script to. A convention: long enough for the authored zones and buffs of the
+    /// abilities measured, short enough for a check run; a longer one is clipped and the plan says so in its notes.</summary>
+    public const float EffectMaxSeconds = 10f;
+    /// <summary>M896: how long a system that never ends by itself is held when the spell authors no duration. A convention (the particle preview's own
+    /// endless-emitter cycle, VfxParticleSimulator.InfiniteRunSeconds), counted from the system's start.</summary>
+    public const float EndlessHoldSeconds = 3f;
+    /// <summary>M896: the most seconds the End waits after a Release for the stopped particles to die out.</summary>
+    public const float ReleaseTailMaxSeconds = 2f;
     public const float PassiveSeconds = 3f;
     public const float ConventionDashSeconds = 0.25f;
     /// <summary>A dash stops this far short of the enemy.</summary>
@@ -188,16 +199,20 @@ public static class SimulationPlanner
 
     /// <param name="playedClip">M873: the clip the player will actually play (its duration measured from the file), when that is not the definition's base-skin clip - a skin that
     /// overrides the clip with a different length. The Clip step and the script end are timed from it; null keeps the definition's clip.</param>
-    public static SimScript Plan(ChampionSimDefinition def, AbilitySim ability, SimStage stage, IEnumerable<ISimAdapter>? adapters = null, SimClip? playedClip = null)
+    /// <param name="spanOf">M896: the natural duration of a system the cast plays (<see cref="SimEffectSpan"/>), or null when it is not known. With it the End covers
+    /// every caster, aim, target and clip-event system to its last particle and the systems that never end by themselves get a Release step; without it the
+    /// End is the clip / hit / displacement timing alone, as before.</param>
+    public static SimScript Plan(ChampionSimDefinition def, AbilitySim ability, SimStage stage, IEnumerable<ISimAdapter>? adapters = null, SimClip? playedClip = null,
+        Func<SimSystemRef, SimSystemSpan?>? spanOf = null)
     {
-        var script = PlanCore(def, ability, stage, playedClip);
+        var script = PlanCore(def, ability, stage, playedClip, spanOf);
         foreach (var adapter in adapters ?? Adapters)
             if (adapter.Champion.Equals(def.Champion, StringComparison.OrdinalIgnoreCase))
                 script = adapter.Adapt(def, ability, stage, script);
         return script;
     }
 
-    private static SimScript PlanCore(ChampionSimDefinition def, AbilitySim a, SimStage stage, SimClip? playedClip = null)
+    private static SimScript PlanCore(ChampionSimDefinition def, AbilitySim a, SimStage stage, SimClip? playedClip = null, Func<SimSystemRef, SimSystemSpan?>? spanOf = null)
     {
         var notes = new List<string>();
         var steps = new List<SimStep>();
@@ -441,6 +456,28 @@ public static class SimulationPlanner
             if (end <= 0f) end = 1f;
             if (end > MaxSeconds) { end = MaxSeconds; notes.Add($"end: capped at {MaxSeconds:0} s"); }
         }
+        if (spanOf is not null)
+        {
+            float hitAt = steps.Where(x => x.Kind == SimStepKind.Hit).Select(x => x.Time).DefaultIfEmpty(cast).Min();
+            var effects = EffectEnd(a, spanOf, hitAt, hitPlanned && !passive, end, cast);
+            if (effects.Release is { } release)
+            {
+                if (release.EndTime > EffectMaxSeconds)
+                    release = release with { Time = MathF.Max(0f, EffectMaxSeconds - (release.EndTime - release.Time)), EndTime = EffectMaxSeconds };
+                steps.Add(release);
+            }
+            if (effects.End > end + 1e-4f)
+            {
+                notes.Add($"end: the effects play to {F2(effects.End)} s ({effects.Longest}); the timing alone ended at {F2(end)} s");
+                end = effects.End;
+                endSource = effects.Source;
+            }
+            if (end > EffectMaxSeconds)
+            {
+                notes.Add($"end: the effects want {F2(end)} s; clipped at the {EffectMaxSeconds:0} s cap");
+                end = EffectMaxSeconds;
+            }
+        }
         steps.Add(new SimStep(SimStepKind.End, end, endSource, $"end at {end.ToString("0.##", CultureInfo.InvariantCulture)} s, then clean up")
         { EndTime = end });
 
@@ -450,6 +487,59 @@ public static class SimulationPlanner
             .Select(x => x.s).ToList();
 
         return new SimScript(def.Champion, a.Key, champion, yaw, enemy, ally, aimAt, aim, a.TargetingKind, ordered, end, notes);
+    }
+
+    private static string F2(float v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// M896: when the systems of a cast are done. Caster and aim systems start with the cast composite (t = 0), target systems at the hit, clip particle events
+    /// at their authored second - the times the player starts them. A system that ends by itself plays to its last particle. One that never does is held
+    /// until the spell's authored duration from the cast (<see cref="AbilitySim.DurationSeconds"/>), else <see cref="EndlessHoldSeconds"/> from its start
+    /// and no earlier than the timing's own end; then the Release step stops it and the End waits for its particles (at most <see cref="ReleaseTailMaxSeconds"/>).
+    /// Missiles are not counted: the player ends a missile at its arrival.
+    /// </summary>
+    public static (float End, string Source, string Longest, SimStep? Release) EffectEnd(AbilitySim a, Func<SimSystemRef, SimSystemSpan?> spanOf,
+        float hitAt, bool hitPlanned, float timingEnd, float cast)
+    {
+        var played = new List<(SimSystemRef Ref, float Start, float? AuthoredEnd)>();
+        foreach (var r in a.CasterSystems) played.Add((r, 0f, null));
+        foreach (var r in a.AimSystems ?? Array.Empty<SimSystemRef>()) played.Add((r, 0f, null));
+        if (hitPlanned) foreach (var r in a.TargetSystems) played.Add((r, hitAt, null));
+        foreach (var e in a.ClipParticleEvents) if (e.System is { } sys) played.Add((sys, MathF.Max(0f, e.Seconds), e.EndSeconds));
+
+        float finite = 0f, tail = 0f;
+        string longest = "";
+        var endless = new List<(string Name, float Start, float? AuthoredEnd)>();
+        foreach (var (r, start, authoredEnd) in played)
+        {
+            if (r.Visual == false || spanOf(r) is not { } span) continue;
+            if (span.Endless)
+            {
+                endless.Add((span.Name, start, authoredEnd));
+                tail = MathF.Max(tail, span.StopTail);
+            }
+            float at = start + span.Seconds;
+            // a clip event authored to stop at its end second stops there and its particles die out
+            if (authoredEnd is { } ae && ae > start && at > ae + span.StopTail) at = ae + span.StopTail;
+            if (at > finite) { finite = at; longest = $"{span.Name} to {F2(at)} s"; }
+        }
+        if (endless.Count == 0) return (finite, "convention", longest, null);
+
+        bool authored = a.DurationSeconds is > 0f;
+        float hold = authored ? cast + a.DurationSeconds!.Value
+            : MathF.Max(timingEnd, endless.Max(x => x.AuthoredEnd is { } ae && ae > x.Start ? ae : x.Start + EndlessHoldSeconds));
+        float stopTail = MathF.Min(tail, ReleaseTailMaxSeconds);
+        float end = MathF.Max(finite, hold + stopTail);
+        var names = endless.Select(x => x.Name).Distinct().ToList();
+        string list = string.Join(", ", names.Take(4)) + (names.Count > 4 ? ", ..." : "");
+        string why = authored
+            ? $"held for DataValues '{a.DurationField}' = {F2(a.DurationSeconds!.Value)} s from the cast (which value is the effect's duration is a name rule, SimDuration)"
+            : $"the spell authors no duration; held {EndlessHoldSeconds:0} s from the system's start, no earlier than the cast's own end (a convention)";
+        var release = new SimStep(SimStepKind.Release, hold, authored ? "authored" : "convention",
+            $"release {names.Count} endless system(s) ({list}); their particles die out over {F2(stopTail)} s")
+        { EndTime = hold + stopTail, Why = why, Name = list };
+        if (hold + stopTail >= finite) longest = $"{list} held to {F2(hold)} s + {F2(stopTail)} s die-out";
+        return (end, authored ? "authored" : "convention", longest, release);
     }
 
     /// <summary>How far from <paramref name="from"/> along <paramref name="dir"/> the ground stays walkable, up to <paramref name="distance"/>.</summary>

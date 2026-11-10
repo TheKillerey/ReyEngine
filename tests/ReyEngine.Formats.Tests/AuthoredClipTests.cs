@@ -253,7 +253,7 @@ public sealed class AuthoredClipTests(ITestOutputHelper output) : IDisposable
     [Fact]
     public void The_generator_version_records_the_change_and_the_definition_round_trips()
     {
-        Assert.Equal("M893.1", ChampionSimDefinition.CurrentGeneratorVersion);
+        Assert.Equal("M896.1", ChampionSimDefinition.CurrentGeneratorVersion);
         if (Skip()) return;
         var (_, def) = Load("Ahri");
         var bytes = ChampionSimJson.Write(def);

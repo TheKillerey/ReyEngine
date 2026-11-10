@@ -182,7 +182,16 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     /// flight (VfxCastFrame.RotationOf), so it is set once here.</summary>
     public static VfxPlaybackItem CharacterItem(VfxPlaybackItem i)
     {
-        if (i.CharacterSemantics) return i with { EmitSingleOnce = true };
+        if (i.CharacterSemantics) return i.EmitSingleOnce ? i : i with { EmitSingleOnce = true };
+        // M896: one conversion per item instance. The conversion rebuilds the child lists, and a record holding a different list is a different item: without
+        // this every republish handed the viewport a "new" idle effect and it restarted.
+        return CharacterItems.GetValue(i, ConvertToCharacter);
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<VfxPlaybackItem, VfxPlaybackItem> CharacterItems = new();
+
+    private static VfxPlaybackItem ConvertToCharacter(VfxPlaybackItem i)
+    {
         var item = i with { EmitSingleOnce = true, CharacterSemantics = true };
         // M882: the children carry the character semantics too - VfxPlaybackSim.CreateChildSim reads them off the child item
         if (i.EmitterChildren is { } kids)

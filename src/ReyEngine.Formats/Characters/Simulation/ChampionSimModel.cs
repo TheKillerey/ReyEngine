@@ -32,7 +32,7 @@ public sealed record ChampionSimDefinition(
 {
     public const int CurrentSchemaVersion = 1;
     /// <summary>Bumped whenever the generator's output for the same data would change.</summary>
-    public const string CurrentGeneratorVersion = "M893.1";
+    public const string CurrentGeneratorVersion = "M896.1";
 }
 
 /// <summary>A reference to a VFX system. <see cref="Name"/> is null when it did not resolve.</summary>
@@ -168,7 +168,11 @@ public sealed record AbilitySim(
     string? HitBoneName = null,
     bool? HaveHitBone = null,
     uint? HitEffectOrientType = null,
-    bool? HaveHitEffect = null);
+    bool? HaveHitEffect = null,
+    /// <summary>M896: how long the ability's lasting effect (a zone, a field, a buff) is authored to last, at rank 1, from the root spell's <c>DataValues</c>;
+    /// <see cref="DurationField"/> names the value it came from. Null when the spell authors no duration-like value.</summary>
+    float? DurationSeconds = null,
+    string? DurationField = null);
 
 /// <summary>M891: an effect a spell script attaches while its buff is active. Authored in the script's property table; <see cref="AttachBone"/> is null when the script names none.</summary>
 public sealed record BuffEffectSim(string Spell, string? BuffName, string Effect, string? AttachBone, string File);

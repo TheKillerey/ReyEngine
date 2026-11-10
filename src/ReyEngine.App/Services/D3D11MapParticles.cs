@@ -301,6 +301,17 @@ public sealed class D3D11MapParticles
     /// <summary>M185: the manual Stop toggle. False everywhere except the Particle Editor's preview.</summary>
     public bool Stopped { get; set; }
 
+    /// <summary>
+    /// M896: a playback change keeps the simulator of every placement that is still in the new playback (the same item by VALUE, its <see cref="VfxPlaybackItem.Released"/>
+    /// flag aside) instead of starting it over; an item marked Released stops its kept simulator so its particles die out. The character window's simulation republishes
+    /// the playback at every cast, attack, clip and effect step, and without this each republish restarted every running effect - a zone, a buff loop, an impact - from
+    /// its first frame. Off by default: the map viewport and the Particle Editor keep "a rebuilt playback starts over".
+    /// </summary>
+    public bool KeepRunningAcrossRebuild { get; set; }
+
+    /// <summary>M896: how many simulators the last rebuild kept running (tests and the status line).</summary>
+    public int KeptRunning { get; private set; }
+
     /// <summary>M862: the ground plane a VfxPrimitivePlanarProjection lands on, or null to keep each emitter's own height. A host that
     /// knows its floor (the character window: the character's feet) sets it; a map leaves it null.</summary>
     public float? ProjectionGroundY { get; set; }
@@ -406,6 +417,20 @@ public sealed class D3D11MapParticles
     {
         _dirty = false;
 
+        // M896: what may keep running - by item value, the Released flag ignored, with its flight time
+        Dictionary<VfxPlaybackItem, Queue<(VfxParticleSimulator Sim, float Travel, bool Warm)>>? kept = null;
+        if (KeepRunningAcrossRebuild && _sims.Count > 0)
+        {
+            kept = new();
+            foreach (var (item, sim) in _sims)
+            {
+                var key = item.Released ? item with { Released = false } : item;
+                if (!kept.TryGetValue(key, out var q)) kept[key] = q = new();
+                q.Enqueue((sim, _travelElapsed.GetValueOrDefault(item), _warmed.Contains(sim)));
+            }
+        }
+        KeptRunning = 0;
+
         // Only ours. ClearMaterials would take the ~1,600-material map scene with it, and rebuilding that
         // costs seconds - a particle selection click must not do that.
         int removed = _renderer.RemoveMaterials(m => _mine.Contains(m));
@@ -481,9 +506,23 @@ public sealed class D3D11MapParticles
         {
             // M266: seed, transform, tint and start delay all come from the one shared contract - see
             // VfxPlaybackSim for why a second copy of the seed expression could never be shown to agree.
-            var sim = VfxPlaybackSim.Create(item);
-            if (sim is null) { emptySystems++; continue; }
-            VfxPlaybackSim.ApplySimulationAssets(sim, item);
+            VfxParticleSimulator? sim = null;
+            if (kept is not null && kept.TryGetValue(item.Released ? item with { Released = false } : item, out var q) && q.Count > 0)
+            {
+                // M896: the same placement, still playing: its simulator carries on where it was
+                var (keptSim, travel, warm) = q.Dequeue();
+                sim = keptSim;
+                if (travel > 0f) _travelElapsed[item] = travel;
+                if (warm) _warmed.Add(sim);
+                KeptRunning++;
+            }
+            else
+            {
+                sim = VfxPlaybackSim.Create(item);
+                if (sim is null) { emptySystems++; continue; }
+                VfxPlaybackSim.ApplySimulationAssets(sim, item);
+            }
+            if (item.Released) sim.Stop();   // M896: idempotent - its particles run out their linger
             _sims[item] = sim;
             _allPairs.Add((item, sim));   // M783: the rig's own re-anchor walks every placement, not just the active ones
 

@@ -461,6 +461,9 @@ public sealed class Dx11ViewportSurface : IDisposable
     /// Particle Editor's preview.</summary>
     public bool AutoStop { get; set; }
 
+    /// <summary>M896: forwarded to <see cref="D3D11MapParticles.KeepRunningAcrossRebuild"/>. Set by the Character window, whose simulation republishes the playback mid-cast.</summary>
+    public bool KeepRunningAcrossRebuild { get; set; }
+
     /// <summary>M266: call after a scene build. <c>Dx11SceneBuilder.Commit</c> calls ClearMaterials, which
     /// disposes the particle materials and empties the texture pool along with the map's - so the retained
     /// playback has to be registered again, AFTER the commit.</summary>
@@ -720,6 +723,7 @@ public sealed class Dx11ViewportSurface : IDisposable
             Particles.Rig = Rig;
             Particles.Stopped = Stopped;
             Particles.AutoStop = AutoStop;
+            Particles.KeepRunningAcrossRebuild = KeepRunningAcrossRebuild;   // M896
 
             var particleView = _capture?.View ?? PreviewPose?.ViewMatrix ?? camera.View;
             if (settings.MirrorX) particleView = Matrix4x4.CreateScale(-1f, 1f, 1f) * particleView;

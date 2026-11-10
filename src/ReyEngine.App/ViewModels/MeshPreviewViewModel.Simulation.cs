@@ -612,7 +612,9 @@ public sealed partial class MeshPreviewViewModel
         var nav = _arena?.Nav;
         var plan = SimulationPlanner.Plan(def, ability,
             new SimStage(stage.Champion, stage.Yaw, stage.Dummy, null, nav is null ? null : p => NavGridPath.GroundHeight(nav, p), nav,
-                nav is null ? null : p => NavGridPath.IsWalkable(nav, p)), null, PlayedClipFor(ability));
+                nav is null ? null : p => NavGridPath.IsWalkable(nav, p)), null, PlayedClipFor(ability), SimSystemSpanOf);
+        foreach (var note in plan.Notes.Where(n => n.StartsWith("end:", StringComparison.Ordinal)))
+            LogDx11?.Invoke("Simulation", $"{ability.Key}: {note}");   // M896: what decided the end, and when the cap clipped it
 
         // Place: champion, enemy dummy, ally dummy; then frame all of them
         _controller.Teleport(plan.ChampionPosition, plan.ChampionYaw);
@@ -652,6 +654,23 @@ public sealed partial class MeshPreviewViewModel
         EnsureSimTimer();
         ProcessDueSteps();
         UpdateSimStatus();
+    }
+
+    /// <summary>
+    /// M896: the natural duration of a system the cast plays, in the LOADED skin: its effect key through the skin's resource map first (a skin may map the key to its own
+    /// system), the definition's base-skin object hash second. Children resolve the same way (an effectKey through the map, an effect link directly). Null when the
+    /// system is not in the skin's library.
+    /// </summary>
+    public Formats.Characters.Simulation.SimSystemSpan? SimSystemSpanOf(SimSystemRef r)
+    {
+        static uint? Hex(string? h) => h is { Length: > 2 } && uint.TryParse(h.AsSpan(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var v) ? v : null;
+        Formats.Vfx.VfxSystemDefinition? def = null;
+        if (Hex(r.KeyHash) is { } key && _vfxResourceMap.TryGetValue(key, out var mapped)) _vfxDefs.TryGetValue(mapped, out def);
+        if (def is null && Hex(r.ObjectHash) is { } obj) _vfxDefs.TryGetValue(obj, out def);
+        if (def is null) return null;
+        return Formats.Characters.Simulation.SimEffectSpan.Of(def, id =>
+            id.EffectLink != 0 && _vfxDefs.TryGetValue(id.EffectLink, out var linked) ? linked
+            : id.EffectKey != 0 && _vfxResourceMap.TryGetValue(id.EffectKey, out var o) && _vfxDefs.TryGetValue(o, out var keyed) ? keyed : null);
     }
 
     private string DescribeAbility(AbilitySim a) => a.DisplayName is { Length: > 0 } n ? $"{a.Key} - {n}" : a.Key;
@@ -773,6 +792,13 @@ public sealed partial class MeshPreviewViewModel
             case SimStepKind.Return:
                 // M893: the return leg itself is part of the cast's playback bundle (BuildEventBundle); this is the log line
                 AddSimLog(step.Time, step.Text + tag);
+                break;
+            case SimStepKind.Release:
+                // M896: the cast's effects stop emitting; their particles die out before the End cleans up
+                AddSimLog(step.Time, step.Text + tag);
+                if (step.Why is { Length: > 0 } why) AddSimLog(step.Time, why);
+                _simReleased = true;
+                RepublishSimEffects(run.Clock);
                 break;
             case SimStepKind.End:
                 AddSimLog(step.Time, $"{a.Key} done" + tag);
