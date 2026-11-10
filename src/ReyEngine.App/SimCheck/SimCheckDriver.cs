@@ -314,7 +314,7 @@ internal sealed class SimCheckDriver
     private sealed record StageSnapshot(Vector3 Champion, Vector3? Dummy, List<string> Idle);
 
     private List<string> PlaybackNames() =>
-        Mp.Playback?.Items.Select(i => i.System.Name ?? "?").OrderBy(n => n, StringComparer.Ordinal).ToList() ?? new List<string>();
+        Mp.Playback?.Items.Where(i => !i.Released).Select(i => i.System.Name ?? "?").OrderBy(n => n, StringComparer.Ordinal).ToList() ?? new List<string>();
 
     // ================================================================ one ability
 
@@ -479,6 +479,9 @@ internal sealed class SimCheckDriver
             if (timedOut) Mp.SimPaused = false;
         }
         catch (Exception ex) { exception = ex.GetType().Name + ": " + ex.Message; }
+
+        // M897: the cast clip returns to the idle when it ends, so a sample may land after it; the clips the cast selected are on record
+        if (clipExpected is not null && Mp.SimClipHistory.FirstOrDefault(c => SameFile(c, clipExpected)) is { } playedClip) { clipSeen = playedClip; clipAdvanced = true; }
 
         // ---- the evidence
         var trace = Mp.SimTrace.Where(t => t.Key == ability.Key).ToList();

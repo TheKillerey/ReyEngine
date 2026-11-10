@@ -126,13 +126,48 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>M887: the spawn intro played to its end - continue into the looped idle, unless something else was picked meanwhile.</summary>
     private void OnIntroClipEnded()
     {
-        if (_introEntry is null || _introFollowUp is null) return;
+        if (_introEntry is null || _introFollowUp is null) { OnPlainClipEnded(); return; }
         var next = _introFollowUp;
         bool still = ReferenceEquals(Animation.SelectedAnimation, _introEntry);
         _introEntry = null; _introFollowUp = null;
         if (!still) return;
         Animation.Loop = true;
         SelectClipInternal(next, false);
+    }
+
+    /// <summary>M897: the entry for what the skin's own graph answers for "Idle1" (PlayLoadedIdle's resolution), else the base-idle pick; null when the skin has none.</summary>
+    private AnimationEntryViewModel? ResolveIdleEntry()
+    {
+        if (_ownClips.Count == 0 || Animation.Animations.Count == 0) return null;
+        var info = Formats.Skeletons.AnimationClipGraph.Resolve("Idle1", _ownClips, _ownNodes)?.First
+                   ?? Formats.Characters.PropAnimations.PickIdle(_ownClips);
+        return info is null ? null : EntryFor(info);
+    }
+
+    /// <summary>M897 channel hold: a clip that ended inside a scripted Channel span is left as it is; the idle follows when the span ends.</summary>
+    private bool _idleReturnDeferred;
+    /// <summary>M897: the looped idle shown by the return - the cast's clip-bound state (particle re-arming at the loop seam, sound schedule) must not follow its time.</summary>
+    private bool _onIdleReturn, _idleReturnSelect;
+
+    /// <summary>M897: a non-looping clip reached its end - the champion goes back to the looped idle (cast, scripted Attack / step, or a clip the user picked with Loop off).
+    /// The cast's effects and the skin's idle effects are not touched. Never while a channel holds the clip.</summary>
+    private void OnPlainClipEnded()
+    {
+        if (Animation.Loop || !Animation.HasSkeleton || Animation.SelectedAnimation is null) return;
+        if (InChannelSpan()) { _idleReturnDeferred = true; return; }
+        ReturnToIdle();
+    }
+
+    private void ReturnToIdle()
+    {
+        _idleReturnDeferred = false;
+        var entry = ResolveIdleEntry();
+        if (entry is null) return;
+        Animation.Loop = true;
+        _idleReturnSelect = true;
+        try { SelectClipInternal(entry, true); }
+        finally { _idleReturnSelect = false; }
+        _onIdleReturn = true;
     }
 
     partial void OnSelectedActionChanged(CharacterActionRowViewModel? value)

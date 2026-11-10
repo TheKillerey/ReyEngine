@@ -532,7 +532,7 @@ public sealed partial class MeshPreviewViewModel
     [RelayCommand]
     public void StopSimulationAndReset()
     {
-        bool had = _simRun is not null || SimRunning || _simQueue.Count > 0;
+        bool had = _simRun is not null || SimRunning || _simQueue.Count > 0 || _simFading.Count > 0;
         StopSimulation();
         if (!had)
         {
@@ -545,7 +545,8 @@ public sealed partial class MeshPreviewViewModel
     /// <summary>Stop the run and put the scene back: playback, sounds, queue, positions, ally. Safe at any time; does nothing when idle.</summary>
     public void StopSimulation()
     {
-        bool had = _simRun is not null || SimRunning || _simQueue.Count > 0;
+        bool had = _simRun is not null || SimRunning || _simQueue.Count > 0 || _simFading.Count > 0;
+        _simFading.Clear();                // M897: a stop cuts the fading casts too
         _simQueue.Clear();
         _simShowcase = false;
         _simGap = 0;
@@ -607,6 +608,7 @@ public sealed partial class MeshPreviewViewModel
     {
         if (_simDef is not { } def) return;
         if (SimPaused) SimPaused = false;                  // a new run starts moving; a leftover pause would freeze it at t=0
+        RetireRunningCast();                               // M897: a run still going lets its effects fade out instead of cutting them
         if (!_simSceneClean) RestoreScene();               // a clean slate: nothing from the last run may reach this one
         var stage = _stage ?? ArenaStage.Origin;
         var nav = _arena?.Nav;
@@ -627,6 +629,8 @@ public sealed partial class MeshPreviewViewModel
         FrameScene();
 
         _simSceneClean = false;
+        SimClipHistory.Clear();
+        _idleReturnDeferred = false;
         _castPlan = BuildSimCastPlan(ability, plan);
         // the target systems play when the ability reaches the enemy, not at the start of the cast
         _simHitDelay = plan.Find(SimStepKind.Hit) is { } hitStep ? hitStep.Time : null;
@@ -706,6 +710,7 @@ public sealed partial class MeshPreviewViewModel
     /// </summary>
     public void AdvanceSimulation(double wallSeconds)
     {
+        if (!SimPaused) AgeFadingCasts(Math.Max(0.0, wallSeconds) * SimSpeed);
         if (!SimRunning || SimPaused) return;
         double dt = Math.Max(0.0, wallSeconds) * SimSpeed;
 
@@ -724,6 +729,7 @@ public sealed partial class MeshPreviewViewModel
         if (_simRun is null) return;           // the End step finished the run
         ApplyDisplacement(run);
         TickMechanics(run);
+        if (_idleReturnDeferred && !InChannelSpan()) ReturnToIdle();   // M897: the channel that held the ended clip is over
         UpdateSimStatus();
     }
 
@@ -916,7 +922,7 @@ public sealed partial class MeshPreviewViewModel
         _simShowcase = false;
         SimRunning = false;
         SimPaused = false;
-        _simTimer?.Stop();
+        if (_simFading.Count == 0) _simTimer?.Stop();   // M897: the timer also ages the fading casts
         SimCurrentStep = "done";
         SimStatusLine = $"{run.Ability.Key} done at {run.Script.EndTime.ToString("0.00", CultureInfo.InvariantCulture)} s.";
     }
@@ -940,6 +946,73 @@ public sealed partial class MeshPreviewViewModel
     }
 
     private bool _simSceneClean;
+
+    // ---- M897: casting again while a run is going ----
+
+    /// <summary>The most casts that fade at once: when a fifth starts, the oldest is cut.</summary>
+    public const int MaxFadingCasts = 4;
+    /// <summary>How long (simulation seconds) a retired cast's released effects are kept in the playback to die out.</summary>
+    public const double FadingCastSeconds = 8.0;
+
+    private sealed class FadingCast { public required List<VfxPlaybackItem> Items { get; init; } public double Age; }
+    private readonly List<FadingCast> _simFading = new();
+    /// <summary>The number of earlier casts still fading out beside the current one.</summary>
+    public int SimFadingCasts => _simFading.Count;
+    /// <summary>The clip files the running cast selected, in order (the return to idle is not in it): what --simcheck grades, since the clip may be over before a sample.</summary>
+    public List<string> SimClipHistory { get; } = new();
+
+    /// <summary>
+    /// Play pressed while a run is going: the run's effects are released (they stop emitting; their particles die out) and kept in the playback for
+    /// <see cref="FadingCastSeconds"/> while the new cast plays. The scripted state - units, the hidden ally, moves, a dash - is cleaned up by the scene restore that follows,
+    /// and the champion starts the new cast on the stage spot (the Follow camera setting only moves the view). At most <see cref="MaxFadingCasts"/> fade; older ones are cut.
+    /// </summary>
+    private void RetireRunningCast()
+    {
+        if (_simRun is not { } run) return;
+        _simReleased = true;
+        RepublishSimEffects(run.Clock);
+        var already = new HashSet<VfxPlaybackItem>(_simFading.SelectMany(f => f.Items));
+        var cast = Playback?.Items.Where(i => i.Released && !already.Contains(i)).ToList();
+        if (cast is { Count: > 0 })
+        {
+            _simFading.Add(new FadingCast { Items = cast });
+            while (_simFading.Count > MaxFadingCasts) _simFading.RemoveAt(0);
+        }
+    }
+
+    private void AgeFadingCasts(double dt)
+    {
+        if (_simFading.Count == 0) return;
+        List<VfxPlaybackItem>? gone = null;
+        foreach (var f in _simFading)
+        {
+            f.Age += dt;
+            if (f.Age >= FadingCastSeconds) (gone ??= new()).AddRange(f.Items);
+        }
+        if (gone is null) return;
+        _simFading.RemoveAll(f => f.Age >= FadingCastSeconds);
+        var drop = new HashSet<VfxPlaybackItem>(gone);
+        var kept = Playback?.Items.Where(i => !drop.Contains(i)).ToList();
+        Playback = kept is { Count: > 0 } ? new VfxPlayback(kept) : null;
+        if (_simFading.Count == 0 && !SimRunning) _simTimer?.Stop();
+    }
+
+    /// <summary>The fading casts' items ride in every playback this view-model publishes (a republish by a later step, an idle republish): they are added where the playback is set.</summary>
+    private VfxPlayback? WithFadingCasts(VfxPlayback? value)
+    {
+        if (_simFading.Count == 0) return value;
+        var items = value is null ? new List<VfxPlaybackItem>() : new List<VfxPlaybackItem>(value.Items);
+        var have = new HashSet<VfxPlaybackItem>(items);
+        bool added = false;
+        foreach (var f in _simFading)
+            foreach (var i in f.Items)
+                if (have.Add(i)) { items.Add(i); added = true; }
+        return added ? (value is null ? new VfxPlayback(items) : value with { Items = items }) : value;
+    }
+
+    /// <summary>True while the running script is inside a Channel span - the clip may stay where it ended until the span is over.</summary>
+    private bool InChannelSpan() =>
+        _simRun is { } r && r.Script.Steps.Any(s => s.Kind == SimStepKind.Channel && s.Time <= r.Clock + 1e-9 && r.Clock < s.EndTime);
 
     /// <summary>Seconds after the cast starts at which the planned hit lands; the composite's target systems are delayed to it. Null outside a run.</summary>
     private float? _simHitDelay;

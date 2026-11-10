@@ -398,7 +398,7 @@ public sealed partial class MeshPreviewViewModel
             // M882: the Playback setter rewrites every item to character semantics, so what we published earlier is no longer Equal to what we
             // remember; compare against both forms or the idle effects and republished copies would double on every republish.
             var known = new HashSet<VfxPlaybackItem>();
-            foreach (var set in new IEnumerable<VfxPlaybackItem>[] { _idleItems, _simFxPublished, _simBundleOriginals, _simBundlePublished })
+            foreach (var set in new IEnumerable<VfxPlaybackItem>[] { _idleItems, _simFxPublished, _simBundleOriginals, _simBundlePublished, _simFading.SelectMany(f => f.Items) })
                 foreach (var k in set) { known.Add(k); known.Add(CharacterItem(k)); }
             items.AddRange(current.Items.Where(i => !known.Contains(i)));
         }

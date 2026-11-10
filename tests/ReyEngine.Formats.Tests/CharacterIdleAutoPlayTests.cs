@@ -107,4 +107,51 @@ public sealed class CharacterIdleAutoPlayTests
         Assert.True(vm.PlayLoadedIdle());
         Assert.Equal(own, vm.Animation.SelectedAnimation?.Entry.Path);
     }
+
+    // ---- M897: a clip that reaches its end goes back to the looped idle ----
+
+    private static MeshPreviewViewModel WithIdleAndSpell(out AnimationEntryViewModel spell)
+    {
+        var vm = Load(10, new[] { "idle1.anm", "spell1.anm" }, new[] { Clip("Idle1", "idle1.anm"), Clip("Spell1", "spell1.anm") });
+        Assert.True(vm.PlayLoadedIdle());
+        spell = vm.Animation.Animations.First(a => a.Name == "spell1.anm");
+        return vm;
+    }
+
+    [Fact]
+    public void M897_a_cast_clip_that_ends_returns_to_the_looped_idle_and_keeps_the_playback()
+    {
+        var vm = WithIdleAndSpell(out var spell);
+        var item = (VfxPlaybackItem)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(VfxPlaybackItem));
+        var bundle = new List<VfxPlaybackItem> { item };
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        typeof(MeshPreviewViewModel).GetField("_eventPlaybackActive", flags)!.SetValue(vm, true);
+        typeof(MeshPreviewViewModel).GetField("_eventBundle", flags)!.SetValue(vm, bundle);
+        typeof(MeshPreviewViewModel).GetField("_playback", flags)!.SetValue(vm, new VfxPlayback(bundle));
+        var playback = vm.Playback;
+        typeof(MeshPreviewViewModel).GetMethod("SelectClipInternal", flags)!.Invoke(vm, new object[] { spell, true });
+        vm.Animation.Loop = false;
+
+        vm.Animation.ClipEnded!();
+
+        Assert.Equal("idle1.anm", vm.Animation.SelectedAnimation?.Name);
+        Assert.True(vm.Animation.Loop);
+        Assert.Same(playback, vm.Playback);   // the effects the cast published are not re-driven by the idle
+        Assert.NotNull(typeof(MeshPreviewViewModel).GetField("_eventBundle", flags)!.GetValue(vm));
+    }
+
+    [Fact]
+    public void M897_a_looping_clip_is_not_taken_back_and_a_user_picked_one_shot_returns_to_idle()
+    {
+        var vm = WithIdleAndSpell(out var spell);
+        vm.Animation.SelectedAnimation = spell;   // the Animate tab
+        vm.Animation.Loop = true;
+        vm.Animation.ClipEnded!();                // a looping clip never ends; a stray callback changes nothing
+        Assert.Same(spell, vm.Animation.SelectedAnimation);
+
+        vm.Animation.Loop = false;                // Loop off: it plays once, then the idle
+        vm.Animation.ClipEnded!();
+        Assert.Equal("idle1.anm", vm.Animation.SelectedAnimation?.Name);
+        Assert.True(vm.Animation.Loop);
+    }
 }

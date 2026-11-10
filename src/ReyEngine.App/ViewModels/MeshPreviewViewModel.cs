@@ -172,6 +172,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         {
             if (value is not null && value.Items.Any(i => !i.EmitSingleOnce || !i.CharacterSemantics))
                 value = value with { Items = value.Items.Select(i => i.EmitSingleOnce && i.CharacterSemantics ? i : CharacterItem(i)).ToList() };
+            value = WithFadingCasts(value);   // M897
             SetProperty(ref _playback, value);
         }
     }
@@ -253,6 +254,10 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Animation.ClipChanged = clip =>
         {
             CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility();
+            // M897: the return to the looped idle changes only the pose; the running spell's playback, sounds and composite are not re-driven by it
+            if (_idleReturnSelect) return;
+            _onIdleReturn = false;
+            if (clip is not null && SimRunning) SimClipHistory.Add(Animation.CurrentName);
             // M883: a clip the USER picks (Animate tab, an action row without a composite) ends the previous spell: the event stays 'active' otherwise and ApplyClipParticles keeps republishing its bundle
             bool userPick = clip is not null && !_internalClipSelect && (_eventPlaybackActive || _eventBundle is not null);
             if (userPick)
@@ -290,7 +295,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         {
             // M86: clip event VFX are one-shot — respawn them each time the looping clip wraps around
             // (manual VFX picks are left alone). Backward jump in time = the loop restarted.
-            if (t + 0.05 < _lastAnimTime && _eventPlaybackActive)
+            if (t + 0.05 < _lastAnimTime && _eventPlaybackActive && !_onIdleReturn)
             {
                 // M726: REPLAY the built set rather than rebuilding it. ApplyClipParticles publishes a new
                 // VfxPlayback, and the viewports respond to a new playback by tearing down and rebuilding
@@ -309,7 +314,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             // recall hides two pieces at 0 and shows three at 9. Re-folding here is what makes the model
             // change DURING playback instead of showing the clip's union from the first frame.
             if (_visSteps.Length > 0 || Submeshes.Any(s => s.IsOverridden)) ApplyAutoVisibility();
-            if (_eventPlaybackActive) TickSoundSchedule(t);   // M91: frame-accurate SFX
+            if (_eventPlaybackActive && !_onIdleReturn) TickSoundSchedule(t);   // M91: frame-accurate SFX
         };
     }
 

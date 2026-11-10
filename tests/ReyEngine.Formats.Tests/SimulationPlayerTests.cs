@@ -1023,4 +1023,84 @@ public sealed class SimulationPlayerTests(ITestOutputHelper output) : IDisposabl
         foreach (var item in others) Assert.Contains(vm.Playback.Items, i => i.Equals(item));      // nothing running was replaced by a new item
         vm.StopControl();
     }
+
+    // ===================================================== M897: casting again mid-run, and the return to idle
+
+    [Fact]
+    public async Task M897_a_second_play_mid_run_starts_at_once_and_releases_the_first_casts_effects()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Morgana");
+        vm.PlaySimulation("W");
+        var first = vm.SimCurrentScript!;
+        for (int i = 0; i < 40; i++) vm.AdvanceSimulation(0.016);   // 0.64 s in: still running
+        Assert.True(vm.SimRunning);
+        Assert.True((vm.Playback?.Items.Count ?? 0) > 0, "the first cast published no effects");
+        Assert.DoesNotContain(vm.Playback!.Items, i => i.Released);
+
+        vm.PlaySimulation("Q");                                       // no waiting
+        Assert.True(vm.SimRunning);
+        Assert.NotSame(first, vm.SimCurrentScript);
+        Assert.True(vm.SimClock < 0.05, "the new cast starts from its own zero");
+        Assert.Equal(1, vm.SimFadingCasts);
+        Assert.Contains(vm.Playback!.Items, i => i.Released);          // released, not removed
+
+        // the old effects die out on their own and leave nothing behind
+        for (int i = 0; i < 700 && vm.SimFadingCasts > 0; i++) vm.AdvanceSimulation(0.016);
+        Assert.Equal(0, vm.SimFadingCasts);
+        RunToEnd(vm);
+        Assert.DoesNotContain(vm.Playback?.Items ?? new List<VfxPlaybackItem>(), i => i.Released);
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task M897_at_most_four_casts_fade_at_once_and_stop_cuts_them_all()
+    {
+        if (Skip()) return;
+        var vm = await PlayerAsync("Morgana");
+        foreach (var key in new[] { "W", "Q", "W", "Q", "W", "Q", "W", "Q" })
+        {
+            vm.PlaySimulation(key);
+            for (int i = 0; i < 20; i++) vm.AdvanceSimulation(0.016);
+            Assert.True(vm.SimFadingCasts <= MeshPreviewViewModel.MaxFadingCasts);
+        }
+        Assert.Equal(MeshPreviewViewModel.MaxFadingCasts, vm.SimFadingCasts);
+        vm.StopSimulation();
+        Assert.Equal(0, vm.SimFadingCasts);
+        Assert.DoesNotContain(vm.Playback?.Items ?? new List<VfxPlaybackItem>(), i => i.Released);
+        vm.StopControl();
+    }
+
+    [Fact]
+    public async Task M897_a_clip_that_ends_inside_a_channel_is_left_alone_and_goes_to_idle_when_the_channel_is_over()
+    {
+        if (Skip()) return;
+        foreach (var champion in new[] { "Katarina", "Karthus", "MissFortune", "Janna" })
+        {
+            var skin = ReadSkin(champion);
+            var vm = await PlayerAsync(champion);
+            vm.Animation.SetSkeleton(10);
+            vm.Animation.SetAnimations(skin.Clips.Select(c => new ReyEngine.App.ViewModels.AnimationEntryViewModel(new ReyEngine.Core.Assets.WadAssetEntry { Path = c.AnmPath })).GroupBy(e => e.Name).Select(g => g.First()));
+            vm.SetSubmeshRules(Array.Empty<string>(), null, skin.Clips, skin.Clips, Array.Empty<AnimClipNode>());
+            foreach (var row in vm.SimAbilities.ToList())
+            {
+                vm.PlaySimulation(row.Key);
+                var channel = vm.SimCurrentScript?.Find(SimStepKind.Channel);
+                if (channel is null || channel.EndTime <= channel.Time + 0.2f) { vm.StopSimulation(); continue; }
+                while (vm.SimRunning && vm.SimClock < channel.Time + 0.1) vm.AdvanceSimulation(0.016);
+                var held = vm.Animation.SelectedAnimation;
+                vm.Animation.Loop = false;
+                vm.Animation.ClipEnded!();                                  // the cast clip ended inside the channel
+                Assert.Same(held, vm.Animation.SelectedAnimation);          // the channel is not fought
+                Assert.False(vm.Animation.Loop);
+                while (vm.SimRunning && vm.SimClock < channel.EndTime + 0.05) vm.AdvanceSimulation(0.016);
+                if (vm.SimRunning) Assert.True(vm.Animation.Loop, "the idle takes over once the channel is over");
+                output.WriteLine($"{champion} {row.Key}: channel {channel.Time:0.00}-{channel.EndTime:0.00} s held, then idle {vm.Animation.SelectedAnimation?.Name}");
+                vm.StopControl();
+                return;
+            }
+            vm.StopControl();
+        }
+        output.WriteLine("no channel ability found in the sample champions; the channel rule is covered by the code path only");
+    }
 }
