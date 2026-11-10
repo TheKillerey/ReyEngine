@@ -1103,4 +1103,27 @@ public sealed class SimulationPlayerTests(ITestOutputHelper output) : IDisposabl
         }
         output.WriteLine("no channel ability found in the sample champions; the channel rule is covered by the code path only");
     }
+
+    [Fact]
+    public async Task M898_every_scripted_step_of_Kalista_and_Talon_lands_before_the_End()
+    {
+        if (Skip()) return;
+        foreach (var champion in new[] { "Kalista", "Talon" })
+        {
+            var vm = await PlayerAsync(champion);
+            foreach (var row in vm.SimAbilities.ToList())
+            {
+                vm.PlaySimulation(row.Key);
+                var script = vm.SimCurrentScript;
+                if (script is null) continue;
+                var end = script.Steps.Last();
+                Assert.Equal(SimStepKind.End, end.Kind);
+                Assert.True(script.EndTime <= SimulationPlanner.EffectMaxSeconds + 1e-4f);
+                foreach (var st in script.Steps.Where(x => x.Kind != SimStepKind.End))
+                    Assert.True(st.Time < end.Time, $"{champion} {row.Key}: {st.Kind} at {st.Time} is not before the End at {end.Time}");
+                vm.StopSimulation();
+            }
+            vm.StopControl();
+        }
+    }
 }

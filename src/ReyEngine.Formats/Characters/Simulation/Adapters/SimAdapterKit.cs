@@ -112,11 +112,26 @@ public static class SimAdapterKit
         }
     }
 
+    private static SimStep Fit(SimStep s, float end, float inside)
+    {
+        if (s.Kind == SimStepKind.End) return s;
+        float time = s.Time >= end ? MathF.Max(0f, end - inside) : s.Time;
+        float stop = s.EndTime > end ? end : s.EndTime;
+        return time == s.Time && stop == s.EndTime ? s : s with { Time = time, EndTime = MathF.Max(stop, time) };
+    }
+
     /// <summary>The script with <paramref name="extra"/> added and the End moved to <paramref name="end"/> (capped), steps in stable time order, End last.</summary>
     public static SimScript Rebuild(SimScript basis, IEnumerable<SimStep> keep, IEnumerable<SimStep> extra, float end, IEnumerable<string>? notes = null,
         Vector3? champion = null, float? yaw = null, Vector3? enemy = null, Vector3? ally = null, SimAimTarget? aimAt = null, Vector3? aim = null)
     {
-        if (end > SimulationPlanner.MaxSeconds) end = SimulationPlanner.MaxSeconds;
+        // M898: the End covers the adapter's own steps, up to the effects cap (the planner's End may already be past the 8 s timing cap since M896); a step that would
+        // still land at or after the capped End is pulled just inside it, so it runs before the End instead of never.
+        const float inside = 0.02f;
+        var all = keep.Concat(extra).Where(s => s.Kind != SimStepKind.End).ToList();
+        if (all.Count > 0) end = MathF.Max(end, all.Max(s => s.Time) + inside);
+        if (end > SimulationPlanner.EffectMaxSeconds) end = SimulationPlanner.EffectMaxSeconds;
+        keep = keep.Select(s => Fit(s, end, inside)).ToList();
+        extra = extra.Select(s => Fit(s, end, inside)).ToList();
         // every value that is not data says so: the stage layout is the editor's convention, and an adapter's Hit is placed by the adapter
         const string placeWhy = "the stage layout (the champion at the stage point, the enemy dummy ahead) is the editor's convention; the data has none";
         const string hitWhy = "when the ability lands is the adapter's script (the record has no hit time for this mechanic)";
