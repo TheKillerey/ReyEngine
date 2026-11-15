@@ -140,6 +140,42 @@ public class BloomChainTests
         Assert.Equal(1f / 540f, vy, 7);
     }
 
+    // ------------------------------------------------------------------ the upsample weight
+
+    [Fact]
+    public void A_broad_glow_keeps_the_brightness_the_material_wrote()
+    {
+        // The user-reported blow-out: a One/One upsample SUMMED all five levels, so a glow wider than the
+        // coarsest mip reached level 1 at 5x (clamped to 1). Mantis writes 0.147 to RT1's red for its cyan
+        // emissive; summed that became 0.735 and the screen blend washed the panel to white.
+        int n = BloomChain.Levels(1920, 1080).Count;
+        Assert.Equal(6, n);
+        Assert.Equal(0.147f, BloomChain.ClimbUniform(0.147f, n), 5);
+        Assert.Equal(1f, BloomChain.ClimbUniform(1f, n), 5);
+    }
+
+    [Fact]
+    public void Level_one_is_the_mean_of_the_chain_with_equal_weight_per_level()
+    {
+        // Contribution of each level to level 1 after the climb: (1-w) for the level written, times the w of
+        // every pass above it. Every level must end at 1/(n-1).
+        int n = 6;
+        for (int level = 1; level < n; level++)
+        {
+            float c = level == n - 1 ? 1f : 1f - BloomChain.UpsampleWeight(level + 1, n);
+            for (int i = level; i >= 2; i--) c *= BloomChain.UpsampleWeight(i, n);
+            Assert.Equal(1f / (n - 1), c, 5);
+        }
+    }
+
+    [Fact]
+    public void The_first_upsample_averages_the_two_coarsest_levels()
+    {
+        Assert.Equal(0.5f, BloomChain.UpsampleWeight(5, 6), 6);
+        Assert.Equal(0.8f, BloomChain.UpsampleWeight(2, 6), 6);
+        Assert.Equal(1f, BloomChain.UpsampleWeight(6, 6), 6);     // nothing above: degenerate, never asked
+    }
+
     // ------------------------------------------------------------------ the composite
 
     [Theory]

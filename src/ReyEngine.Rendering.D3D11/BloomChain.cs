@@ -81,6 +81,41 @@ public static class BloomChain
     }
 
     /// <summary>
+    /// The weight the upsample of level <paramref name="sourceLevel"/> carries when it is blended onto level
+    /// <paramref name="sourceLevel"/>-1: <c>dest = up * w + dest * (1 - w)</c>, with <c>w = (n - i) / (n - i + 1)</c>.
+    ///
+    /// <para><b>A CALIBRATION, not a recovered Riot constant.</b> DXBC carries no pass list, so how Riot's
+    /// upsample meets the level below is unmeasured (frame-pipeline.md §7 item 2). M460 chose a plain
+    /// one-over-one add, which SUMS every level: a glow wider than the coarsest mip reaches level 1 at
+    /// (n-1) = 5 times its own value, clamped at 1 in the UNORM chain at every rung. On top of Riot's own
+    /// source - Mantis_Env_Baked_PBR writes 2x its emissive to RT1 - that turned saturated cyan panels white
+    /// and spread a halo far wider than the game's (user report against an in-game screenshot of Map11).
+    /// This weight makes level 1 the MEAN of levels 1..n-1 instead: a broad glow keeps the brightness the
+    /// material wrote, every level's own detail still survives the climb, and the coarse levels add a faint
+    /// wide skirt rather than dominating. The tent filter and the 13-tap are Riot's blobs, unchanged.</para>
+    /// </summary>
+    public static float UpsampleWeight(int sourceLevel, int levelCount)
+    {
+        int remaining = levelCount - sourceLevel;          // levels sourceLevel..n-1 already averaged in the source
+        if (remaining <= 0) return 1f;
+        return remaining / (float)(remaining + 1);
+    }
+
+    /// <summary>What level 1 holds after the whole climb, for a glow that is <paramref name="value"/> on every
+    /// level - the CPU twin of the upsample loop, for tests.</summary>
+    public static float ClimbUniform(float value, int levelCount)
+    {
+        if (levelCount < 2) return value;
+        float acc = value;                                  // the coarsest level, n-1
+        for (int i = levelCount - 1; i >= 2; i--)
+        {
+            float w = UpsampleWeight(i, levelCount);
+            acc = MathF.Min(1f, acc * w + value * (1f - w));
+        }
+        return acc;
+    }
+
+    /// <summary>
     /// The final composite, <c>out = 1 - (1 - scene) * (1 - bloom)</c> — a SCREEN blend, not an additive
     /// one. Measured off <c>gamma/ps_copy_post.ps</c> blob 1 (the <c>BLOOM=1</c> permutation), lines 36-41:
     /// both inputs are inverted, multiplied, and the product inverted again. This is what lets the whole

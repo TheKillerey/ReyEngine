@@ -253,17 +253,18 @@ public sealed unsafe partial class ShaderPreviewRenderer
         if (_device.CreateBlendState(in opaque, ref bo) < 0) { Log("bloom: opaque blend state failed"); return false; }
         _bloomBlendOpaque = bo;
 
-        // ADDITIVE, for the upsample only. frame-pipeline.md §7 item 2 records this as NOT measured: DXBC
-        // carries no pass list, so the shader shows a 3x3 tent (/16) and says nothing about how the result
-        // meets the level below. One-over-one is the standard mip-chain bloom, and it is the reading that
-        // makes the tent a filter rather than a replacement - a replacing upsample would discard every
-        // level's own detail on the way back up and leave only the coarsest. Flagged rather than asserted.
+        // The upsample BLENDS onto the level below: dest = up * w + dest * (1 - w), w per pass from
+        // BloomChain.UpsampleWeight via the blend factor. frame-pipeline.md §7 item 2 records how Riot's
+        // upsample meets the level below as NOT measured (DXBC carries no pass list). M460 used One/One,
+        // which summed all five levels into level 1 and blew Riot's glow out to white with a wide halo;
+        // the weighted form keeps every level's detail but leaves level 1 the MEAN of the chain. A
+        // calibration against the game's look, not a recovered constant - see UpsampleWeight.
         var add = new BlendDesc();
         add.RenderTarget[0] = new RenderTargetBlendDesc
         {
             BlendEnable = 1,
-            SrcBlend = Blend.One, DestBlend = Blend.One, BlendOp = BlendOp.Add,
-            SrcBlendAlpha = Blend.One, DestBlendAlpha = Blend.One, BlendOpAlpha = BlendOp.Add,
+            SrcBlend = Blend.BlendFactor, DestBlend = Blend.InvBlendFactor, BlendOp = BlendOp.Add,
+            SrcBlendAlpha = Blend.BlendFactor, DestBlendAlpha = Blend.InvBlendFactor, BlendOpAlpha = BlendOp.Add,
             RenderTargetWriteMask = (byte)ColorWriteEnable.All,
         };
         ComPtr<ID3D11BlendState> ba = default;
@@ -346,24 +347,26 @@ public sealed unsafe partial class ShaderPreviewRenderer
         {
             var src = i == 1 ? _glowSrv : _bloomMipSrv[i - 1];
             var (sx, sy) = BloomChain.UvStep(_bloomLevels[i - 1]);
-            BloomPass(_bloomMipRtv[i], _bloomLevels[i], src, _bloomDownPs, sx, sy, additive: false);
+            BloomPass(_bloomMipRtv[i], _bloomLevels[i], src, _bloomDownPs, sx, sy, upsampleWeight: null);
         }
 
-        // 2. UP, additively, stopping at level 1. Nothing coarser than level 1 is ever composited on its
-        // own; level 1 accumulates the whole chain and is what the Gaussian then works on.
+        // 2. UP, blended, stopping at level 1. Nothing coarser than level 1 is ever composited on its own;
+        // level 1 ends as the MEAN of the whole chain (BloomChain.UpsampleWeight) and is what the Gaussian
+        // then works on.
         for (int i = n - 1; i >= 2; i--)
         {
             var (sx, sy) = BloomChain.UvStep(_bloomLevels[i]);
-            BloomPass(_bloomMipRtv[i - 1], _bloomLevels[i - 1], _bloomMipSrv[i], _bloomUpPs, sx, sy, additive: true);
+            BloomPass(_bloomMipRtv[i - 1], _bloomLevels[i - 1], _bloomMipSrv[i], _bloomUpPs, sx, sy,
+                upsampleWeight: BloomChain.UpsampleWeight(i, n));
         }
 
         // 3. The 7-tap separable Gaussian, horizontal then vertical, both at level 1. The vertical pass
         // writes back into level 1 while reading the scratch, so the two never alias.
         var lvl1 = _bloomLevels[1];
         var (hx, hy) = BloomChain.BlurStep(lvl1, horizontal: true);
-        BloomPass(_bloomBlurRtv, lvl1, _bloomMipSrv[1], _bloomBlurPs, hx, hy, additive: false);
+        BloomPass(_bloomBlurRtv, lvl1, _bloomMipSrv[1], _bloomBlurPs, hx, hy, upsampleWeight: null);
         var (vx, vy) = BloomChain.BlurStep(lvl1, horizontal: false);
-        BloomPass(_bloomMipRtv[1], lvl1, _bloomBlurSrv, _bloomBlurPs, vx, vy, additive: false);
+        BloomPass(_bloomMipRtv[1], lvl1, _bloomBlurSrv, _bloomBlurPs, vx, vy, upsampleWeight: null);
 
         // 4. COMPOSITE. gamma/ps_copy_post.ps blob 1 (the BLOOM=1 permutation) reads
         // SAMPLER_BACK_BUFFER_COPY at t0 and BLOOM_TEXTURE at t1 and does
@@ -419,10 +422,11 @@ public sealed unsafe partial class ShaderPreviewRenderer
 
     /// <summary>One full-screen filter pass. <paramref name="stepX"/>/<paramref name="stepY"/> are the
     /// <c>$Globals.UVStep</c> the shader offsets its taps by; see <see cref="BloomChain"/> for why they are
-    /// the SOURCE level's texel size.</summary>
+    /// the SOURCE level's texel size. <paramref name="upsampleWeight"/> null writes opaquely; a value blends
+    /// the pass onto the target as <c>src * w + dest * (1 - w)</c>.</summary>
     private void BloomPass(ComPtr<ID3D11RenderTargetView> dst, BloomLevel level,
         ComPtr<ID3D11ShaderResourceView> src, ComPtr<ID3D11PixelShader> ps,
-        float stepX, float stepY, bool additive)
+        float stepX, float stepY, float? upsampleWeight)
     {
         // Drop the previous pass's source before binding this pass's target: the level being written now
         // was very often the level read a moment ago, and D3D11 resolves that hazard by silently unbinding
@@ -447,8 +451,9 @@ public sealed unsafe partial class ShaderPreviewRenderer
         _ctx.PSSetShaderResources(0, 1, ref s);
         _ctx.PSSetShader(ps, null, 0);
 
-        var factor = stackalloc float[4] { 0f, 0f, 0f, 0f };
-        _ctx.OMSetBlendState(additive ? _bloomBlendAdd : _bloomBlendOpaque, factor, 0xFFFFFFFF);
+        float w = upsampleWeight ?? 0f;
+        var factor = stackalloc float[4] { w, w, w, w };
+        _ctx.OMSetBlendState(upsampleWeight is null ? _bloomBlendOpaque : _bloomBlendAdd, factor, 0xFFFFFFFF);
         _ctx.Draw(6, 0);
         BloomPasses++;
     }
