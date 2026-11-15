@@ -348,8 +348,15 @@
           <Border Grid.Column="1" Width="22" Height="12" CornerRadius="2" BorderBrush="#555" BorderThickness="1"
                   Background="{Binding SelectedLight.ColorHex}" />
         </Grid>
-        <Slider Minimum="0" Maximum="8" Value="{Binding SelectedLight.Intensity}"
-                ToolTip.Tip="This light's own strength. The Lighting flyout's Strength slider multiplies every light on top of this." />
+        <!-- M901: slider for the common range, a box for an exact (or larger) value. A light placed in the map writes this to its intensityScale. -->
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+          <Slider Grid.Column="0" Minimum="0" Maximum="{Binding SelectedLight.StrengthSliderMax}" Value="{Binding SelectedLight.StrengthSlider}"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="This light's own strength. The Lighting flyout's Strength slider multiplies every light on top of this." />
+          <NumericUpDown Grid.Column="1" Width="92" Value="{Binding SelectedLight.Intensity}" Minimum="0" Maximum="100000"
+                         Increment="0.1" FormatString="0.###" FontSize="10" ShowButtonSpinner="False"
+                         ToolTip.Tip="Exact strength. The D3D11 preview draws up to 64; a larger value is still written to the map." />
+        </Grid>
 
         <TextBlock Text="{Binding SelectedLight.Radius, StringFormat='Radius: {0:0}'}" FontSize="10" />
         <Slider Minimum="10" Maximum="5000" Value="{Binding SelectedLight.Radius}" />
@@ -366,7 +373,7 @@
           <Button Classes="tool" Content="⧉ Duplicate" Command="{Binding DuplicateLightCommand}" FontSize="10" Padding="7,2" />
           <Button Classes="tool" Content="✕ Delete" Command="{Binding DeleteLightCommand}" FontSize="10" Padding="7,2" />
         </StackPanel>
-        <TextBlock Text="Light.dat stores no strength field — Save folds it into the light's colour."
+        <TextBlock Text="{Binding SelectedLight.StrengthNote}"
                    FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
       </StackPanel>
     </Border>
@@ -385,6 +392,16 @@
         <TextBlock Text="{Binding SelectedSpotlight.Label}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
         <TextBlock Text="Move and rotate it with the viewport gizmo - it shines along its local -Z (the wireframe shows the frustum)."
                    FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+        <!-- M901: strength = the largest colour component; the slider rescales R, G and B together so the hue is kept -->
+        <TextBlock Text="{Binding SelectedSpotlight.Strength, StringFormat='Strength: {0:0.00}'}" FontSize="10" Margin="0,3,0,0" />
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+          <Slider Grid.Column="0" Minimum="0" Maximum="20" Value="{Binding SelectedSpotlight.StrengthSlider}" VerticalAlignment="Center"
+                  ToolTip.Tip="How bright the spotlight is. The game reads only the colour, so this scales R, G and B together and keeps the hue." />
+          <NumericUpDown Grid.Column="1" Width="92" Value="{Binding SelectedSpotlight.Strength}" Minimum="0" Maximum="64"
+                         Increment="0.1" FormatString="0.###" FontSize="10" ShowButtonSpinner="False"
+                         ToolTip.Tip="Exact strength (the largest of R, G, B). The slider covers 0-20; type a larger value here." />
+        </Grid>
 
         <TextBlock Text="COLOUR (LINEAR, MAY EXCEED 1)" FontSize="8" FontWeight="SemiBold" Margin="0,3,0,0"
                    Foreground="{DynamicResource ReyTextDimBrush}" />

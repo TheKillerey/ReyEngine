@@ -133,6 +133,10 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// <summary>M900: the cookie (<c>ProjectedTexture</c>) as a path or a 0x hex hash; "" removes it, null leaves it alone.
     /// The wire form already on the entry is kept (String or WadChunkLink); a new one is a WadChunkLink (16.22).</summary>
     public string? SpotCookie { get; init; }
+
+    /// <summary>M901: replacement <c>intensityScale</c> on a <c>MapDynamicPointLight</c> placement. Only that one float is
+    /// written (added when the light omits it); colour, radius, transform and every unmodelled field are left alone.</summary>
+    public float? PointLightIntensity { get; init; }
 }
 
 /// <summary>
@@ -525,7 +529,10 @@ public static class MapPlaceableWriter
     private static readonly uint F_SpotNear = HashAlgorithms.Fnv1a("Near");
     private static readonly uint F_SpotAspect = HashAlgorithms.Fnv1a("Aspect");
     private static readonly uint F_SpotProjected = HashAlgorithms.Fnv1a("ProjectedTexture");
-    private static readonly uint MapAudioClass = HashAlgorithms.Fnv1a("MapAudio");
+    // M901: MapDynamicPointLight and its intensity field - see Lighting/DynamicPointLights.cs
+    private static readonly uint PointLightClass = HashAlgorithms.Fnv1a("MapDynamicPointLight");
+    private static readonly uint F_intensityScale = HashAlgorithms.Fnv1a("intensityScale");
+    private static readonly uint MapAudioClass =HashAlgorithms.Fnv1a("MapAudio");
     private static readonly uint F_eventName = HashAlgorithms.Fnv1a("eventName");
 
     // M696: the decorative character placement. Its class has no name in the hash database; the value is
@@ -762,6 +769,12 @@ public static class MapPlaceableWriter
                     s.Properties[F_SpotProjected] = newLink;
                 }
             }
+        }
+        if (edit.PointLightIntensity is { } strength)
+        {
+            // M901: a light-only verb. Refused on any other class rather than adding a field the client would drop.
+            if (s.ClassHash != PointLightClass || !float.IsFinite(strength)) return false;
+            s.Properties[F_intensityScale] = new BinTreeF32(F_intensityScale, strength);
         }
         if (edit.EventName is { } ev && !edit.CreateSound) s.Properties[F_eventName] = new BinTreeString(F_eventName, ev);
         if (edit.VisibilityFlags is { } visibility)

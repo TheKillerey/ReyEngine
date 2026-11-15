@@ -321,6 +321,7 @@ public sealed partial class SpotlightViewModel : MapOutlinerItemViewModel
         vm.Name = spot.Name; vm.ColorR = spot.Color.X; vm.ColorG = spot.Color.Y; vm.ColorB = spot.Color.Z;   // _loading: no edit is recorded
         vm.Fov = spot.Fov; vm.Far = spot.Far; vm.Near = spot.Near; vm.Aspect = spot.Aspect; vm.Cookie = spot.CookiePath;
         vm._loading = false;
+        vm.TrackHue();
         return vm;
     }
 
@@ -373,10 +374,50 @@ public sealed partial class SpotlightViewModel : MapOutlinerItemViewModel
     public string Label => $"{(string.IsNullOrWhiteSpace(Name) ? "(unnamed)" : Name)}  ({Position.X:0}, {Position.Y:0}, {Position.Z:0})";
     public string Info => $"fov {Fov:0.#}  near {Near:0.#}  far {Far:0.#}  cookie: {(string.IsNullOrEmpty(Cookie) ? "none" : Cookie)}";
 
-    private void Edited()
+    // ---- M901: strength. The game's spot shader reads only Color, so brightness IS the colour's size. ----
+
+    /// <summary>The colour's direction (largest component 1), remembered so a light dragged to zero and back keeps its hue.</summary>
+    private Vector3 _hue = Vector3.One;
+
+    private void TrackHue()
+    {
+        double max = Strength;
+        if (max > 1e-6) _hue = new Vector3((float)(ColorR / max), (float)(ColorG / max), (float)(ColorB / max));
+    }
+
+    /// <summary>Strength = the largest colour component. Setting it rescales R, G and B together, so the hue stays; a black light
+    /// takes the last hue it had (white if it never had one). One notification, so one drag tick is one republish.</summary>
+    public double Strength
+    {
+        get => Math.Max(ColorR, Math.Max(ColorG, ColorB));
+        set
+        {
+            value = double.IsFinite(value) ? Math.Max(value, 0) : 0;
+            double now = Strength;
+            if (Math.Abs(value - now) < 1e-9) return;
+            Vector3 dir = now > 1e-6 ? new Vector3((float)(ColorR / now), (float)(ColorG / now), (float)(ColorB / now)) : _hue;
+            _loading = true;
+            try { ColorR = dir.X * value; ColorG = dir.Y * value; ColorB = dir.Z * value; }
+            finally { _loading = false; }
+            Edited(trackHue: false);
+        }
+    }
+
+    /// <summary>The slider's value: <see cref="Strength"/> held inside the slider's 0-20 range so the control never writes a clamped
+    /// value back; the numeric box beside it takes anything.</summary>
+    public double StrengthSlider
+    {
+        get => Math.Min(Strength, StrengthSliderMax);
+        set { if (Math.Abs(value - StrengthSlider) > 1e-9) Strength = value; }
+    }
+    public const double StrengthSliderMax = 20;
+
+    private void Edited(bool trackHue = true)
     {
         if (_loading) return;
+        if (trackHue) TrackHue();
         OnPropertyChanged(nameof(HasEdits)); OnPropertyChanged(nameof(Label)); OnPropertyChanged(nameof(Info));
+        OnPropertyChanged(nameof(Strength)); OnPropertyChanged(nameof(StrengthSlider));
         StateChanged?.Invoke(this);
     }
 
@@ -626,7 +667,8 @@ public sealed partial class MapContentViewModel : ViewModelBase
         || Sounds.Any(v => v.HasEdits && !v.Sound.FromParticleSystem)
         || AllProps.Any(v => v.HasEdits)
         || Probes.Any(v => v.HasEdits)
-        || Spotlights.Any(v => v.HasEdits && !(v.IsNew && v.IsRemoved));   // M900
+        || Spotlights.Any(v => v.HasEdits && !(v.IsNew && v.IsRemoved))   // M900
+        || Lights.Any(l => l.StrengthEdited);                              // M901
 
     public ObservableCollection<AnimatedPropGroupViewModel> PropGroups { get; } = new();
     /// <summary>Placed cubemap reflection probes (M38).</summary>

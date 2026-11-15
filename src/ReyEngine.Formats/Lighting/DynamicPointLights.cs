@@ -3,6 +3,7 @@ using LeagueToolkit.Core.Meta;
 using LeagueToolkit.Core.Meta.Properties;
 using ReyEngine.Core.Hashing;
 using ReyEngine.Formats.Baking;
+using ReyEngine.Formats.MapGeo;
 using ReyEngine.Formats.Meta;
 
 namespace ReyEngine.Formats.Lighting;
@@ -10,6 +11,9 @@ namespace ReyEngine.Formats.Lighting;
 /// <summary>One <c>MapDynamicPointLight</c> placement, in the terms the rest of the engine already uses.</summary>
 public readonly record struct DynamicPointLight(
     string Name, Vector3 Position, Vector3 Color, float Radius, float IntensityScale);
+
+/// <summary>M901: a <see cref="DynamicPointLight"/> and where it lives in the bin.</summary>
+public readonly record struct PlacedPointLight(MapPlacementId Id, DynamicPointLight Light);
 
 /// <summary>
 /// M446: read and write the modern dynamic point lights, and bridge the legacy light systems onto them.
@@ -61,6 +65,33 @@ public static class DynamicPointLights
                     if (kv.Value is BinTreeStruct s && s.ClassHash == LightClass)
                         found.Add(FromStruct(s));
             }
+        return found;
+    }
+
+    /// <summary>
+    /// M901: every dynamic point light WITH its identity in the bin - the (container, item key) the placement writer
+    /// addresses. <see cref="Read"/> cannot give this (it walks any map and drops the keys); the editor needs it to write one
+    /// light's <c>intensityScale</c> back without rebuilding the others. Only <c>MapPlaceableContainer</c> objects count,
+    /// because that is all <see cref="MapPlaceableWriter"/> can address. Never throws.
+    /// </summary>
+    public static IReadOnlyList<PlacedPointLight> ReadPlacements(byte[] materialsBin)
+    {
+        var found = new List<PlacedPointLight>();
+        if (materialsBin is null || materialsBin.Length == 0) return found;
+
+        BinTree tree;
+        try { tree = SafeBinTree.Parse(materialsBin); }
+        catch { return found; }
+
+        uint containerClass = HashAlgorithms.Fnv1a("MapPlaceableContainer");
+        foreach (var obj in tree.Objects.Values)
+        {
+            if (obj.ClassHash != containerClass
+                || !obj.Properties.TryGetValue(ItemsField, out var ip) || ip is not BinTreeMap map) continue;
+            foreach (var kv in map)
+                if (kv.Value is BinTreeStruct s && s.ClassHash == LightClass && kv.Key is BinTreeHash h)
+                    found.Add(new PlacedPointLight(new MapPlacementId(obj.PathHash, h.Value), FromStruct(s)));
+        }
         return found;
     }
 

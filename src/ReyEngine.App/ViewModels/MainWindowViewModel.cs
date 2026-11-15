@@ -4243,6 +4243,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             if (Project.ProjectFilePath is not null) ReyProjectService.Save(Project, Project.ProjectFilePath);
             UpdateTitle();
+            // M901: the port re-keyed every placement, so the old links point at entries that no longer exist.
+            ClearPlacedLightLinks();
 
             _log.Success("Lighting", $"Wrote {written:n0} dynamic point light(s) into the map"
                 + (removed > 0 ? $", replacing {removed:n0} existing" : "")
@@ -11628,10 +11630,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var editedProps = MapContent.AllProps.Where(p => p.HasEdits).ToList();
         var editedProbes = MapContent.Probes.Where(p => p.HasEdits).ToList();
         var editedSpots = MapContent.Spotlights.Where(p => p.HasEdits && !(p.IsNew && p.IsRemoved)).ToList();   // M900
+        var editedLights = EditedPlacedLights();   // M901
         int derivedSounds = MapContent.Sounds.Count(s => s.HasEdits && s.Sound.FromParticleSystem);
         if (derivedSounds > 0)
             _log.Info("Sounds", $"{derivedSounds} moved sound(s) follow their particle system and are saved with it.");
-        if (moved.Count == 0 && movedSounds.Count == 0 && editedProps.Count == 0 && editedProbes.Count == 0 && editedSpots.Count == 0)
+        if (moved.Count == 0 && movedSounds.Count == 0 && editedProps.Count == 0 && editedProbes.Count == 0 && editedSpots.Count == 0 && editedLights.Count == 0)
         { _log.Info("Map Content", "No placement edits to save."); return; }   // M700: MapContent.HasPlacementEdits is this set
         foreach (var prop in editedProps.Where(p => !string.IsNullOrWhiteSpace(p.EditedSkin)
                      && !p.EffectiveSkin.Equals(p.Prop.Skin, StringComparison.OrdinalIgnoreCase)))
@@ -11714,6 +11717,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Warn("Map Content", $"{unaddressableOthers} prop/probe placement(s) have no identity and were skipped.");
 
         var source = GetAssetBytes(binEntry);
+        placementEdits.AddRange(editedLights.Select(l => new MapPlacementEdit(l.PlacementId) { PointLightIntensity = l.EffectiveIntensity }));   // M901: intensityScale only
         try { placementEdits.AddRange(BuildSpotlightEdits(source, editedSpots)); }   // M900
         catch (Exception ex) { _log.Error("Spotlights", $"Could not prepare the spotlight edits: {ex.Message}"); return; }
         string? err = null;
@@ -11736,6 +11740,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 UpdateTitle();
                 HasParticleMoves = false;
                 if (editedSpots.Count > 0) ReloadSpotlightsAfterSave(bytes);   // M900
+                foreach (var l in editedLights) l.CommitStrength();           // M901
                 _log.Success("Map Content",
                     $"Saved {placementEdits.Count} placement edit(s) to {projectFile}. Build Package will include it.");
                 return;
@@ -11757,6 +11762,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             UpdateTitle();
             HasParticleMoves = false;
             if (editedSpots.Count > 0) ReloadSpotlightsAfterSave(bytes);   // M900
+            foreach (var l in editedLights) l.CommitStrength();           // M901
             _log.Success("Map Content", $"Saved {placementEdits.Count} placement edit(s) to the materials.bin override. Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("Particles", ex.Message); }
@@ -12622,6 +12628,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 // just overwritten sun/sky with the map's own values and forced SunIntensity to 1.0, which
                 // is correct as a starting point and wrong as a final answer once the project holds edits.
                 RestoreMapLighting(entry);
+                LinkPlacedLightsFromMap(entry.Path);   // M901: after the restore, which replaces the panel's lights
                 // M515: from here on the user's edits are their own again.
                 _applyingLighting = wasApplyingLighting;
                 // M844: THE bump is here, after the map's lights are in DynamicLights, and not where the map is
@@ -18418,6 +18425,59 @@ public sealed partial class PointLightViewModel : ObservableObject
 
     public System.Numerics.Vector3 Position => new((float)X, (float)Y, (float)Z);
 
+    // ---- M901: the light's identity in the map's materials.bin, when it is one of the map's own MapDynamicPointLights ----
+
+    /// <summary>Where this light lives in the bin ((container, item key)); invalid for a Light.dat or editor-made light,
+    /// whose strength has no <c>intensityScale</c> to go to.</summary>
+    public MapPlacementId PlacementId { get; private set; }
+    /// <summary>The <c>intensityScale</c> the bin carries for it. Only meaningful while <see cref="IsPlacedInMap"/>.</summary>
+    public float AuthoredIntensity { get; private set; }
+    public bool IsPlacedInMap => PlacementId.IsValid;
+
+    /// <summary>The strength as it would be written: what ToPointLight hands the renderer.</summary>
+    public float EffectiveIntensity => (float)Math.Max(Intensity, 0);
+
+    /// <summary>True when this placed light's strength differs from the bin's - the only thing Save to Mod writes for it.</summary>
+    public bool StrengthEdited => IsPlacedInMap && EffectiveIntensity != AuthoredIntensity;
+
+    public void LinkToPlacement(MapPlacementId id, float authoredIntensity)
+    {
+        PlacementId = id; AuthoredIntensity = authoredIntensity;
+        OnPropertyChanged(nameof(IsPlacedInMap)); OnPropertyChanged(nameof(StrengthEdited)); OnPropertyChanged(nameof(StrengthNote));
+        OnPropertyChanged(nameof(StrengthSliderMax));
+    }
+
+    public void ClearPlacementLink()
+    {
+        PlacementId = default; AuthoredIntensity = 0;
+        OnPropertyChanged(nameof(IsPlacedInMap)); OnPropertyChanged(nameof(StrengthEdited)); OnPropertyChanged(nameof(StrengthNote));
+    }
+
+    /// <summary>After Save to Mod wrote it: the bin now carries this strength.</summary>
+    public void CommitStrength()
+    {
+        if (!IsPlacedInMap) return;
+        AuthoredIntensity = EffectiveIntensity;
+        OnPropertyChanged(nameof(StrengthEdited)); OnPropertyChanged(nameof(StrengthNote));
+    }
+
+    /// <summary>Slider end stop: 8, or higher when the light is authored brighter - a slider whose maximum is below the value it
+    /// shows would clamp that value on the first touch. The numeric box accepts anything the game does (up to 100000).</summary>
+    public double StrengthSliderMax => Math.Max(8, Math.Ceiling(AuthoredIntensity * 1.25));   // depends on the AUTHORED value only, so it holds still during a drag
+
+    /// <summary>The slider's own value: <see cref="Intensity"/> held inside the slider's range so the control never writes a
+    /// clamped value back.</summary>
+    public double StrengthSlider
+    {
+        get => Math.Min(Intensity, StrengthSliderMax);
+        set { if (Math.Abs(value - Intensity) > 1e-9) Intensity = value; }
+    }
+
+    public string StrengthNote => IsPlacedInMap
+        ? (StrengthEdited ? "Placed in the map - Save to Mod writes this strength to its intensityScale."
+                          : "Placed in the map - changing the strength and choosing Save to Mod writes its intensityScale.")
+        : "Light.dat stores no strength field - Save folds it into the light's colour.";
+
     public PointLight ToPointLight() => new(
         Position,
         new System.Numerics.Vector3((float)(R / 255.0), (float)(G / 255.0), (float)(B / 255.0)),
@@ -18477,7 +18537,13 @@ public sealed partial class PointLightViewModel : ObservableObject
     partial void OnGChanged(double v) => Changed();
     partial void OnBChanged(double v) => Changed();
     partial void OnRadiusChanged(double v) => Changed();
-    partial void OnIntensityChanged(double v) => Changed();
+    partial void OnIntensityChanged(double v)
+    {
+        Changed();
+        if (_loading) return;
+        OnPropertyChanged(nameof(StrengthSlider)); OnPropertyChanged(nameof(StrengthEdited)); OnPropertyChanged(nameof(StrengthNote));
+        if (IsPlacedInMap) _owner.NotifyPlacedLightStrengthChanged();
+    }
     partial void OnNameChanged(string v) => Changed();
 
     private void Changed()
