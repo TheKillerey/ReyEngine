@@ -119,6 +119,20 @@ public sealed record MapPlacementEdit(MapPlacementId Id)
     /// <see cref="MapPlaceableWriter.WhyNotConvertible"/> rather than dropped.
     /// </summary>
     public bool ConvertToAnimatedProp { get; init; }
+
+    /// <summary>M900: create a <c>MapDynamicSpotlight</c>. Requires <see cref="Transform"/>; uses <see cref="Name"/> and the
+    /// <c>Spot*</c> fields. Only the fields that are set are written - an absent field takes the schema default.</summary>
+    public bool CreateSpotlight { get; init; }
+    /// <summary>M900: spotlight <c>Color</c> (Vec4). Brightness lives here - the shader does not read <c>intensity</c>.</summary>
+    public Vector4? SpotColor { get; init; }
+    /// <summary>M900: spotlight <c>fov</c>, <c>far</c>, <c>Near</c> and <c>Aspect</c> (the MapFrustum base).</summary>
+    public float? SpotFov { get; init; }
+    public float? SpotFar { get; init; }
+    public float? SpotNear { get; init; }
+    public float? SpotAspect { get; init; }
+    /// <summary>M900: the cookie (<c>ProjectedTexture</c>) as a path or a 0x hex hash; "" removes it, null leaves it alone.
+    /// The wire form already on the entry is kept (String or WadChunkLink); a new one is a WadChunkLink (16.22).</summary>
+    public string? SpotCookie { get; init; }
 }
 
 /// <summary>
@@ -503,6 +517,14 @@ public static class MapPlaceableWriter
         return ids;
     }
 
+    // M900: MapDynamicSpotlight (0x9063268e) and the fields of its bases - see Lighting/DynamicSpotlights.cs
+    private static readonly uint SpotlightClass = HashAlgorithms.Fnv1a("MapDynamicSpotlight");
+    private static readonly uint F_SpotColor = HashAlgorithms.Fnv1a("Color");
+    private static readonly uint F_SpotFov = HashAlgorithms.Fnv1a("fov");
+    private static readonly uint F_SpotFar = HashAlgorithms.Fnv1a("far");
+    private static readonly uint F_SpotNear = HashAlgorithms.Fnv1a("Near");
+    private static readonly uint F_SpotAspect = HashAlgorithms.Fnv1a("Aspect");
+    private static readonly uint F_SpotProjected = HashAlgorithms.Fnv1a("ProjectedTexture");
     private static readonly uint MapAudioClass = HashAlgorithms.Fnv1a("MapAudio");
     private static readonly uint F_eventName = HashAlgorithms.Fnv1a("eventName");
 
@@ -662,6 +684,32 @@ public static class MapPlaceableWriter
                     .Append(new(new BinTreeHash(0, edit.Id.ItemKey), new BinTreeStruct(0, AnimatedPropClass, fields))));
             container.Properties[F_items] = items;
         }
+        else if (edit.CreateSpotlight)
+        {
+            if (items.Any(e => e.Key is BinTreeHash k && k.Value == edit.Id.ItemKey) || edit.Transform is null) return false;
+            // The point-light form plus the MapFrustum / MapProjectedTexture fields (see DynamicSpotlights). Absent = default.
+            var fields = new List<BinTreeProperty>
+            {
+                new BinTreeMatrix44(F_transform, edit.Transform.Value),
+                new BinTreeString(F_name, edit.Name ?? "Spotlight"),
+            };
+            if (edit.SpotFov is { } cf) fields.Add(new BinTreeF32(F_SpotFov, cf));
+            if (edit.SpotFar is { } cfar) fields.Add(new BinTreeF32(F_SpotFar, cfar));
+            if (edit.SpotNear is { } cn) fields.Add(new BinTreeF32(F_SpotNear, cn));
+            if (edit.SpotAspect is { } ca) fields.Add(new BinTreeF32(F_SpotAspect, ca));
+            if (!string.IsNullOrEmpty(edit.SpotCookie))
+            {
+                var cookieLink = new BinTreeWadChunkLink(F_SpotProjected, 0UL);
+                Meta.BinTexturePath.Write(cookieLink, edit.SpotCookie);
+                fields.Add(cookieLink);
+            }
+            if (edit.SpotColor is { } cc) fields.Add(new BinTreeVector4(F_SpotColor, cc));
+            if (edit.VisibilityFlags is { } cv) fields.Add(new BinTreeU8(F_visibilityFlags, (byte)Math.Clamp(cv, 0, 255)));
+            items = new BinTreeMap(F_items, items.KeyType, items.ValueType,
+                items.Select(e => new KeyValuePair<BinTreeProperty, BinTreeProperty>(e.Key, e.Value))
+                    .Append(new(new BinTreeHash(0, edit.Id.ItemKey), new BinTreeStruct(0, SpotlightClass, fields))));
+            container.Properties[F_items] = items;
+        }
 
         BinTreeProperty? key = null, value = null;
         foreach (var e in items)
@@ -697,6 +745,24 @@ public static class MapPlaceableWriter
             s.Properties[F_name] = s.Properties.GetValueOrDefault(F_name) is BinTreeHash
                 ? new BinTreeHash(F_name, HashAlgorithms.Fnv1a(n))
                 : new BinTreeString(F_name, n);
+        if (s.ClassHash == SpotlightClass && !edit.CreateSpotlight)
+        {
+            if (edit.SpotColor is { } sc) s.Properties[F_SpotColor] = new BinTreeVector4(F_SpotColor, sc);
+            if (edit.SpotFov is { } sf) s.Properties[F_SpotFov] = new BinTreeF32(F_SpotFov, sf);
+            if (edit.SpotFar is { } sfar) s.Properties[F_SpotFar] = new BinTreeF32(F_SpotFar, sfar);
+            if (edit.SpotNear is { } sn) s.Properties[F_SpotNear] = new BinTreeF32(F_SpotNear, sn);
+            if (edit.SpotAspect is { } sa) s.Properties[F_SpotAspect] = new BinTreeF32(F_SpotAspect, sa);
+            if (edit.SpotCookie is { } cookie)
+            {
+                if (cookie.Length == 0) s.Properties.Remove(F_SpotProjected);
+                else if (!s.Properties.TryGetValue(F_SpotProjected, out var cur) || !Meta.BinTexturePath.Write(cur, cookie))
+                {
+                    var newLink = new BinTreeWadChunkLink(F_SpotProjected, 0UL);   // absent or an unknown form: the 16.22 File
+                    Meta.BinTexturePath.Write(newLink, cookie);
+                    s.Properties[F_SpotProjected] = newLink;
+                }
+            }
+        }
         if (edit.EventName is { } ev && !edit.CreateSound) s.Properties[F_eventName] = new BinTreeString(F_eventName, ev);
         if (edit.VisibilityFlags is { } visibility)
         {
@@ -735,7 +801,7 @@ public static class MapPlaceableWriter
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
         // M206: a clone's key is absent from `before` on purpose, so it must not read as an intruder.
         var addedByContainer = edits.Where(e => e.CloneOf is not null || e.CreateParticle || e.CreateSound || e.CreateCharacter
-                                                || e.CreateAnimatedProp)
+                                                || e.CreateAnimatedProp || e.CreateSpotlight)
             .GroupBy(e => e.Id.ContainerHash)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Id.ItemKey).ToHashSet());
 

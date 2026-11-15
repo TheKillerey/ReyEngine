@@ -34,6 +34,7 @@ public sealed partial class MainWindowViewModel
         if (SelectedSound is { } sound) return sound.Position;
         if (SelectedAddedMesh is { } added) return added.PivotWorld;
         if (SelectedLight is { } light) return LightWorldPosition(light);
+        if (SelectedSpotlight is { } spot) return spot.Position;   // M900
         if (SelectedPropNode is { } prop) return prop.Position;
         if (SelectedProbe is { } probe) return probe.Position;
         if (!_selection.IsEmpty && GizmoPivot is { } pivot) return pivot;

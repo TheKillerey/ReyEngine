@@ -469,6 +469,8 @@
                 SelectedParticlePosition="{Binding SelectedParticleMarker}"
                 PropMarkers="{Binding PropMarkers}"
                 ProbeMarkers="{Binding ProbeMarkers}"
+                SpotlightMarkers="{Binding SpotlightMarkers}"
+                SpotlightFrustumLines="{Binding SpotlightFrustumLines}"
                 SoundMarkers="{Binding SoundMarkers}"
                 BucketGridLines="{Binding BucketGridLines}"
                 BushCellLines="{Binding BushCellLines}"
@@ -767,8 +769,8 @@
                                 ToolTip.Tip="Show placed particle-system markers (MapParticle)" />
                       <!-- M577: the one that was missing. It existed as a checkbox buried in the Lighting
                            window, which is not where you look when the map is covered in light icons. -->
-                      <CheckBox IsChecked="{Binding ShowLightMarkers}" Content="💡 Point-light markers" FontSize="11"
-                                ToolTip.Tip="Show a glow icon at each dynamic point light. Turning this off also stops the icons being clickable, so the gizmo stops picking lights - the lights themselves keep lighting the map either way." />
+                      <CheckBox IsChecked="{Binding ShowLightMarkers}" Content="💡 Light markers" FontSize="11"
+                                ToolTip.Tip="Show a glow icon at each dynamic point light and a spotlight icon at each spotlight. Turning this off also stops the icons being clickable, so the gizmo stops picking lights - the lights themselves keep lighting the map either way." />
                       <CheckBox IsChecked="{Binding ShowPlaceables}" Content="◈ Probes and placeables" FontSize="11"
                                 ToolTip.Tip="Show markers for cubemap probes and placed characters" />
                       <!-- M659: how far each light reaches, beside the switch that shows the lights. -->

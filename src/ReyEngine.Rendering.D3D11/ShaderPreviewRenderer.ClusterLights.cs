@@ -77,6 +77,12 @@ public sealed unsafe partial class ShaderPreviewRenderer
     // --- the CPU-side grid and what it was built from ---------------------------------------------
     private ClusterLightGrid? _clusterGrid;
     private object? _clusterLightsSource;
+    // M900: the spotlights the grid was built from, and the cookie atlas they sample.
+    private object? _clusterSpotSource;
+    private int _clusterSpotCount = -1;
+    private object? _spotAtlasSource;
+    private ComPtr<ID3D11ShaderResourceView> _spotCookieSrv;   // SPOT_PROJECTED_TEXTURE: the atlas (or white)
+    private ComPtr<ID3D11ShaderResourceView> _spotWhiteSrv;    // the 1x1 white a map without cookies binds
     private int _clusterLightsCount = -1;
     private (float Intensity, float RadiusScale, float Spread, Vector2 ScaleXZ, Vector2 Offset, bool On) _clusterKnobs
         = (float.NaN, 0, 0, Vector2.Zero, Vector2.Zero, false);
@@ -138,6 +144,9 @@ public sealed unsafe partial class ShaderPreviewRenderer
         if (!AnyClusterLitMaterial) return;
 
         var lights = s.DynamicLights;
+        // M900: spotlights ride the same grid (loop 4) and the same Dynamic-lighting switch as the point lights.
+        var spots = s.SpotLights;
+        bool spotsOn = s.DynamicLightsEnabled && spots is { Count: > 0 };
         bool on = s.DynamicLightsEnabled && lights is { Count: > 0 };
 
         // The same clamps the overlay and the GL viewport apply, so the two paths cannot disagree about
@@ -149,7 +158,7 @@ public sealed unsafe partial class ShaderPreviewRenderer
         float spread = Math.Clamp(s.DynamicLightPositionScale, 0.05f, 20f);
         var scaleXZ = Vector2.Clamp(s.DynamicLightPositionScaleXZ, new Vector2(0.05f), new Vector2(20f));
         var offset = s.DynamicLightPositionOffset;
-        if (intensity <= 0f) on = false;
+        if (intensity <= 0f) { on = false; spotsOn = false; }
 
         var bounds = ClusterWorldBounds();
         var knobs = (intensity, radiusScale, spread, scaleXZ, offset, on);
@@ -159,7 +168,9 @@ public sealed unsafe partial class ShaderPreviewRenderer
         // a moved or retuned light always arrives as a different object. The count is checked too, so a
         // caller that does mutate in place still gets a rebuild whenever a light is added or removed.
         bool sameLights = ReferenceEquals(_clusterLightsSource, lights)
-                          && _clusterLightsCount == (lights?.Count ?? 0);
+                          && _clusterLightsCount == (lights?.Count ?? 0)
+                          && ReferenceEquals(_clusterSpotSource, spotsOn ? spots : null)
+                          && _clusterSpotCount == (spotsOn ? spots!.Count : 0);
         if (_clusterGrid is not null && sameLights && _clusterKnobs.Equals(knobs)
             && _clusterBounds.Equals(bounds))
         {
@@ -169,6 +180,9 @@ public sealed unsafe partial class ShaderPreviewRenderer
 
         _clusterLightsSource = lights;
         _clusterLightsCount = lights?.Count ?? 0;
+        _clusterSpotSource = spotsOn ? spots : null;
+        _clusterSpotCount = spotsOn ? spots!.Count : 0;
+        UpdateSpotCookieAtlas(s.SpotCookieAtlas);
         _clusterKnobs = knobs;
         _clusterBounds = bounds;
 
@@ -184,7 +198,11 @@ public sealed unsafe partial class ShaderPreviewRenderer
             }
         }
 
-        _clusterGrid = ClusterLightBuilder.Build(packed, bounds.Min, bounds.Max);
+        // The Strength slider multiplies every light, spots included (their colour carries all of their brightness).
+        IReadOnlyList<ClusterSpotLight>? spotArg = !spotsOn ? null
+            : intensity == 1f ? spots
+            : spots!.Select(sp => sp with { Color = sp.Color * intensity }).ToList();
+        _clusterGrid = ClusterLightBuilder.Build(packed, bounds.Min, bounds.Max, spotLights: spotArg);
         ClusterLightCount = _clusterGrid.LightCount;
         ClusterNonEmptyCells = _clusterGrid.NonEmptyCells;
         ClusterUint4Count = _clusterGrid.Uint4Count;
@@ -347,6 +365,7 @@ public sealed unsafe partial class ShaderPreviewRenderer
 
         // RGBA8 zero, which MakeTexture handles: it assumes 4 bytes per texel throughout.
         if (MakeTexture(new byte[] { 0, 0, 0, 0 }, 1, 1) is { } zf) _zeroFloat4Srv = zf;
+        if (MakeTexture(new byte[] { 255, 255, 255, 255 }, 1, 1) is { } white) _spotWhiteSrv = white;   // M900
 
         // R32G32B32A32_UINT, built HERE rather than through MakeTexture, because that method's length
         // check and SysMemPitch are both hardcoded to 4 bytes per texel and this format is 16.
@@ -561,6 +580,23 @@ public sealed unsafe partial class ShaderPreviewRenderer
         else Log("sky: IBL cube-array stand-in failed; ambient stays neutral white");
     }
 
+    // ---------------------------------------------------------------- M900: the spot cookie atlas
+
+    /// <summary>Upload the cookie atlas the host packed (one cell per distinct cookie), or fall back to 1x1 white so a
+    /// spotlight without a cookie is a plain square pool - the shader multiplies by the cookie in EVERY spot loop, so
+    /// what is bound when nothing is authored decides whether such a light shows at all. Only re-uploaded when the
+    /// atlas object changes.</summary>
+    private void UpdateSpotCookieAtlas(SpotCookieAtlas? atlas)
+    {
+        if (ReferenceEquals(_spotAtlasSource, atlas) && (_spotCookieSrv.Handle is not null || atlas is null)) return;
+        _spotAtlasSource = atlas;
+        _spotCookieSrv.Dispose();
+        _spotCookieSrv = default;
+        if (atlas is null || atlas.Width <= 0 || atlas.Height <= 0 || atlas.Rgba.Length < atlas.Width * atlas.Height * 4) return;
+        if (MakeTexture(atlas.Rgba, atlas.Width, atlas.Height) is { } srv) _spotCookieSrv = srv;
+        else Log("spotlight: cookie atlas upload failed; spotlights use a white cookie");
+    }
+
     // ---------------------------------------------------------------- binding
 
     /// <summary>Is this reflected name an ENGINE-owned lighting resource - one this file supplies and no
@@ -571,8 +607,9 @@ public sealed unsafe partial class ShaderPreviewRenderer
     /// comparisons per call is real time spent proving that <c>DiffuseTexture__TX</c> is still not the
     /// cluster map. One char rejects almost everything.</para></summary>
     private static bool IsEngineLightingResource(string name) => name.Length > 0
-        && name[0] is 'C' or 'L' or 'D'
+        && name[0] is 'C' or 'L' or 'D' or 'S'
         && (name.Equals("CLUSTER_MAP_SharedTexture", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("SPOT_PROJECTED_TEXTURE_SharedTexture", StringComparison.OrdinalIgnoreCase)
             || name.Equals("CLUSTER_DATA_BUFFER_SharedDataBuffer", StringComparison.OrdinalIgnoreCase)
             || name.Equals("LightRegionInfo_SharedDataBuffer", StringComparison.OrdinalIgnoreCase)
             || name.Equals("DYNAMIC_ENV_LIGHT_IDS_SharedTexture", StringComparison.OrdinalIgnoreCase)
@@ -589,6 +626,8 @@ public sealed unsafe partial class ShaderPreviewRenderer
         EnsureClusterStandIns();
         if (name.Equals("CLUSTER_MAP_SharedTexture", StringComparison.OrdinalIgnoreCase))
             return _clusterMapSrv;
+        if (name.Equals("SPOT_PROJECTED_TEXTURE_SharedTexture", StringComparison.OrdinalIgnoreCase))
+            return _spotCookieSrv.Handle is not null ? _spotCookieSrv : _spotWhiteSrv;   // M900
         if (name.Equals("CLUSTER_DATA_BUFFER_SharedDataBuffer", StringComparison.OrdinalIgnoreCase))
             return _clusterDataSrv;
         if (name.Equals("LightRegionInfo_SharedDataBuffer", StringComparison.OrdinalIgnoreCase))
@@ -643,6 +682,13 @@ public sealed unsafe partial class ShaderPreviewRenderer
         _clusterDataSrv.Dispose(); _clusterDataBuf.Dispose();
         _lightRegionSrv.Dispose(); _lightRegionBuf.Dispose();
         _zeroFloat4Srv.Dispose(); _zeroUint4Srv.Dispose();
+        _spotCookieSrv.Dispose(); _spotWhiteSrv.Dispose();
         _skyIblSrv.Dispose();
     }
 }
+
+/// <summary>
+/// M900: the projected-texture ("cookie") atlas for spotlights: straight RGBA, row-major, top-down. Built by the host
+/// (one cell per distinct cookie, cells side by side); each <see cref="ClusterSpotLight.CookieScaleBias"/> addresses its cell.
+/// </summary>
+public sealed record SpotCookieAtlas(byte[] Rgba, int Width, int Height);

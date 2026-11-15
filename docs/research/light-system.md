@@ -495,6 +495,19 @@ float s = T.SampleCmpLevelZero(s6, sUV, b.y)
 atten *= s * 0.2;
 ```
 
+### 2.5a M900: the spot record, as ReyEngine feeds it (verified on a real draw)
+
+The four words at +0..+3 are the ROWS of a row-vector world-to-light matrix: the shader computes output component k as
+`dp4(float4(P, 1), float4(w0.k, w1.k, w2.k, w3.k))` (DefaultEnv_Flat blob 245, `mov r20.x, r15.x / r17.x / r18.x / r19.x`).
+`DynamicSpotlights.WorldToLight` builds it as view (right, up, forward = local -Z) times a projection that maps the cone to
+`uv = xy / w` in [0,1], `z / w` from the Near plane (0) to the Far plane (1), and `w = distance along the axis`. A point behind
+the light has `z / w` above 1, so the shader's `z <= 1` test rejects it for free. Word 5 is `(position, 1 / far)`, word 6 the cookie
+`(scale.xy, bias.zw)`; the sampler is the shared one of `SPOT_PROJECTED_TEXTURE_SharedTexture`, which the D3D11 renderer binds to a
+cookie ATLAS (128 px cell per cookie, cell 0 white for a light without one). The header's `.y & 0xFFFF` counts the spots and the
+spot records follow the point records. Measured: Map30 `arenaa` with one spotlight aimed down draws a square pool without a cookie
+and a round one with a soft-disc cookie (`SpotlightDeviceTests`). A TFT board (Map22) does not show even a point light through
+this path in the offscreen draw, so it is not a usable proof surface.
+
 ### 2.6 Where the cluster grid is built — nowhere we can read
 
 `assets/shaders/hlsl/renderer/` (7 stage TOCs: `ps_worldvertex`, `ps_worldvertex_greyscale`, four

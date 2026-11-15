@@ -97,6 +97,11 @@ public sealed class PreviewSettings
     /// <see cref="ShaderPreviewRenderer.DrawDynamicLights"/>.</summary>
     public IReadOnlyList<ReyEngine.Formats.Lighting.PointLight>? DynamicLights;
     public bool DynamicLightsEnabled;
+    /// <summary>M900: the map's <c>MapDynamicSpotlight</c>s, already packed for Riot's spot loop (the host owns the transform,
+    /// colour and cookie addressing) - fed through the same cluster grid as the point lights and gated by the same switch.</summary>
+    public IReadOnlyList<ReyEngine.Formats.Lighting.ClusterSpotLight>? SpotLights;
+    /// <summary>M900: the cookie atlas those spotlights sample; null = every spotlight is lit white.</summary>
+    public SpotCookieAtlas? SpotCookieAtlas;
     public float DynamicLightIntensity = 1f;
     public float DynamicLightRadiusScale = 1f;
     public float DynamicLightFalloffSoftness;
@@ -614,7 +619,7 @@ public sealed unsafe partial class ShaderPreviewRenderer : IDisposable
     private ComPtr<ID3D11PixelShader> _overlayPsTex;
     private ComPtr<ID3D11InputLayout> _overlayLayoutTex;
     private ComPtr<ID3D11SamplerState> _iconSampler;
-    private readonly ComPtr<ID3D11ShaderResourceView>[] _glyphSrv = new ComPtr<ID3D11ShaderResourceView>[5];
+    private readonly ComPtr<ID3D11ShaderResourceView>[] _glyphSrv = new ComPtr<ID3D11ShaderResourceView>[6];   // M900: + the spotlight
     private ComPtr<ID3D11Buffer> _vb, _ib;
 
     /// <summary>M381: per-triangle EDGE indices, so the selection highlight can be drawn as GL draws it -

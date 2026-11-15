@@ -371,6 +371,64 @@
       </StackPanel>
     </Border>
 
+    <!-- M900: SPOTLIGHT (MapDynamicSpotlight) - selected in the outliner's Spotlights folder or picked in the viewport.
+         Position and aim come from the gizmo (it shines along the light's local -Z); the frustum is drawn while selected.
+         Brightness lives in the colour: the game's spot shader does not read the light's intensity. -->
+    <Border Classes="card" IsVisible="{Binding SelectedSpotlight, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <StackPanel Spacing="4">
+        <Grid ColumnDefinitions="*,Auto">
+          <TextBlock Classes="cardTitle" Grid.Column="0" Text="SPOTLIGHT" VerticalAlignment="Center" />
+          <Button Classes="tool" Grid.Column="1" Content="🎯 Focus" Command="{Binding FocusSelectedPlaceableCommand}"
+                  FontSize="10" Padding="6,1" ToolTip.Tip="Frame the camera on this spotlight" />
+        </Grid>
+        <TextBox Text="{Binding SelectedSpotlight.Name}" FontSize="11" PlaceholderText="Spotlight name" />
+        <TextBlock Text="{Binding SelectedSpotlight.Label}" FontSize="9" Foreground="{DynamicResource ReyTextDimBrush}" TextWrapping="Wrap" />
+        <TextBlock Text="Move and rotate it with the viewport gizmo - it shines along its local -Z (the wireframe shows the frustum)."
+                   FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+
+        <TextBlock Text="COLOUR (LINEAR, MAY EXCEED 1)" FontSize="8" FontWeight="SemiBold" Margin="0,3,0,0"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,*" ColumnSpacing="3">
+          <TextBlock Grid.Column="0" Text="R" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="1" Value="{Binding SelectedSpotlight.ColorR}" Minimum="0" Maximum="64" Increment="0.05" FormatString="0.###" FontSize="10" ShowButtonSpinner="False" />
+          <TextBlock Grid.Column="2" Text="G" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="3" Value="{Binding SelectedSpotlight.ColorG}" Minimum="0" Maximum="64" Increment="0.05" FormatString="0.###" FontSize="10" ShowButtonSpinner="False" />
+          <TextBlock Grid.Column="4" Text="B" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="5" Value="{Binding SelectedSpotlight.ColorB}" Minimum="0" Maximum="64" Increment="0.05" FormatString="0.###" FontSize="10" ShowButtonSpinner="False" />
+        </Grid>
+
+        <TextBlock Text="CONE" FontSize="8" FontWeight="SemiBold" Margin="0,3,0,0"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="6" RowSpacing="3">
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="fov" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding SelectedSpotlight.Fov}" Minimum="1" Maximum="170" Increment="1" FormatString="0.##" FontSize="10" ShowButtonSpinner="False"
+                         ToolTip.Tip="Full opening angle of the square frustum, in degrees (default 60)" />
+          <TextBlock Grid.Row="0" Grid.Column="2" Text="aspect" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Row="0" Grid.Column="3" Value="{Binding SelectedSpotlight.Aspect}" Minimum="0.05" Maximum="20" Increment="0.05" FormatString="0.###" FontSize="10" ShowButtonSpinner="False"
+                         ToolTip.Tip="Width over height of the frustum (default 1: a square)" />
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="near" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding SelectedSpotlight.Near}" Minimum="0.01" Maximum="100000" Increment="1" FormatString="0.##" FontSize="10" ShowButtonSpinner="False"
+                         ToolTip.Tip="Start of the frustum (default 10)" />
+          <TextBlock Grid.Row="1" Grid.Column="2" Text="far" FontSize="9" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Row="1" Grid.Column="3" Value="{Binding SelectedSpotlight.Far}" Minimum="1" Maximum="100000" Increment="10" FormatString="0.##" FontSize="10" ShowButtonSpinner="False"
+                         ToolTip.Tip="How far the light reaches: it falls off linearly to nothing here (default 500)" />
+        </Grid>
+
+        <TextBlock Text="COOKIE" FontSize="8" FontWeight="SemiBold" Margin="0,3,0,0"
+                   Foreground="{DynamicResource ReyTextDimBrush}" />
+        <TextBox Text="{Binding SelectedSpotlight.Cookie}" FontSize="10" PlaceholderText="ASSETS/.../cookie.tex  (empty = a plain square pool)"
+                 ToolTip.Tip="The projected texture, multiplied into the light: a soft round white disc gives a round pool. A path in the map's WAD or project, or a 0x hash." />
+
+        <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,4,0,0">
+          <Button Classes="tool" Content="⧉ Duplicate" Command="{Binding DuplicateSpotlightCommand}" FontSize="10" Padding="7,2" />
+          <Button Classes="tool" Content="↺ Reset" Command="{Binding ResetSpotlightEditsCommand}" FontSize="10" Padding="7,2" />
+          <Button Classes="tool" Content="✕ Delete" Command="{Binding DeleteSpotlightCommand}" FontSize="10" Padding="7,2" />
+        </StackPanel>
+        <TextBlock Text="Lights the map in the D3D11 viewport while Dynamic lighting is on. Save to Mod writes it into the map's materials.bin."
+                   FontSize="9" TextWrapping="Wrap" Foreground="{DynamicResource ReyTextDimBrush}" />
+      </StackPanel>
+    </Border>
+
     <!-- M79: ADDED MESH (imported, queued for append) — material picker + gizmo hint + save/remove -->
     <Border Classes="card" IsVisible="{Binding SelectedAddedMesh, Converter={x:Static ObjectConverters.IsNotNull}}">
       <StackPanel Spacing="4">

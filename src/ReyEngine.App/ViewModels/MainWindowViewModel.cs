@@ -1248,6 +1248,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 if (s.IsDisabled != (s.EffectiveVisibilityFlags == 0))
                     s.EditedVisibilityFlags = s.IsDisabled ? 0 : (s.Sound.VisibilityFlags == 0 ? 255 : null);
                 break;
+            case SpotlightViewModel spotItem:   // M900
+                OnSpotlightStateChanged(spotItem);
+                break;
             case MapPieceViewModel piece when _currentMap is { } map
                 && map.Meshes.FirstOrDefault(m => m.Index == piece.MeshIndex) is { } mesh:
                 if (piece.IsDisabled != (mesh.EffectiveVisibility == 0))
@@ -1763,6 +1766,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>True when the gizmo should operate on a placement (no mesh selected, placement is).</summary>
     public bool HasPlacementGizmoTarget => SelectedParticleNode is not null || SelectedSound is not null
                                            || SelectedAddedMesh is not null || SelectedLight is not null   // M154
+                                           || SelectedSpotlight is not null                                // M900
                                            || SelectedPropNode is not null;                                // M699
 
     /// <summary>Drag-start state for the active placement (sounds report identity rotation/scale).
@@ -1773,6 +1777,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         : SelectedAddedMesh is { } a ? (a.Offset, a.RotationDegrees, a.Scale)
         : SelectedPropNode is { } r ? (r.Offset, r.RotationDegrees, r.Scale)   // M699 (M766: after added meshes, as the write-back)
         : SelectedLight is { } l ? (LightWorldPosition(l), System.Numerics.Vector3.Zero, System.Numerics.Vector3.One)
+        : SelectedSpotlight is { } sl ? (sl.Offset, sl.RotationDegrees, System.Numerics.Vector3.One)   // M900
         : (SelectedSound?.Offset ?? System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero, System.Numerics.Vector3.One);
 
     // M76: undo support — the whole drag is ONE step, captured at press, pushed at release.
@@ -1784,6 +1789,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         _placementDragTarget = (object?)SelectedParticleNode ?? (object?)SelectedSound
                                ?? (object?)SelectedAddedMesh ?? (object?)SelectedLight   // M154
+                               ?? (object?)SelectedSpotlight                              // M900
                                ?? SelectedPropNode;                                       // M699
         if (_placementDragTarget is { } t) _placementDragBefore = PlacementTransformCommand.State.Capture(t);
     }
@@ -1810,6 +1816,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             case PointLightViewModel l:   // M154
                 if (ReferenceEquals(l, SelectedLight)) GizmoPivot = LightWorldPosition(l);
                 RepublishLights();
+                break;
+            case SpotlightViewModel sp:   // M900
+                if (ReferenceEquals(sp, SelectedSpotlight)) { SelectedParticleMarker = sp.Position; GizmoPivot = sp.Position; }
+                sp.TransformChanged();
+                RepublishSpotlights();
                 break;
             case AnimatedPropViewModel r:   // M699
                 if (ReferenceEquals(r, SelectedPropNode))
@@ -1866,6 +1877,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             GizmoPivot = LightWorldPosition(light);
             return;
         }
+        if (SelectedSpotlight is { } spot)   // M900
+        {
+            spot.Offset = absoluteOffset;
+            spot.TransformChanged();
+            SelectedParticleMarker = spot.Position;
+            GizmoPivot = spot.Position;
+            RepublishSpotlights();
+            return;
+        }
         if (SelectedParticleNode is { } p)
         {
             p.Offset = absoluteOffset;
@@ -1902,7 +1922,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>Extra local rotation for the selected particle/added-mesh (sounds are point emitters — no-op).</summary>
     public void RotateSelectedPlacementTo(System.Numerics.Vector3 rotationDegrees)
     {
-        if (SelectedParticleNode is { } p) p.RotationDegrees = rotationDegrees;
+        if (SelectedSpotlight is { } spot) { spot.RotationDegrees = rotationDegrees; spot.TransformChanged(); RepublishSpotlights(); }   // M900
+        else if (SelectedParticleNode is { } p) p.RotationDegrees = rotationDegrees;
         else if (SelectedAddedMesh is { } a) { a.RotationDegrees = rotationDegrees; GizmoPivot = a.PivotWorld; PublishAddedMeshPreview(); }
         else if (SelectedPropNode is { } r) { r.RotationDegrees = rotationDegrees; RefreshPropInstanceTransforms(); }   // M699
         if (GizmoLocalSpace) OnPropertyChanged(nameof(GizmoAxes));   // M766: local axes turn with the placement
@@ -1924,7 +1945,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             var after = PlacementTransformCommand.State.Capture(target);
             if (after != _placementDragBefore)
-                UndoService.PushApplied(new PlacementTransformCommand(target, _placementDragBefore, after, _currentMap, RefreshPlacementVisuals));
+                UndoService.PushApplied(new PlacementTransformCommand(target, _placementDragBefore, after, target is SpotlightViewModel ? target : _currentMap, RefreshPlacementVisuals));
             _placementDragTarget = null;
         }
         if (SelectedParticleNode is { } p)
@@ -4847,7 +4868,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// be rebuilt so the new lights get Riot's in-shader loop instead of the additive overlay.</summary>
     public bool ShouldRebuildDx11ForLights()
     {
-        if (!ShouldRebuildForLights(UseDx11Viewport, _currentMap is not null, _applyingLighting, _dx11SceneBuiltUnpinned, HasDynamicLights))
+        if (!ShouldRebuildForLights(UseDx11Viewport, _currentMap is not null, _applyingLighting, _dx11SceneBuiltUnpinned,
+                HasDynamicLights || MapContent.Spotlights.Count > 0))
             return false;
         _dx11SceneBuiltUnpinned = false;   // the rebuild re-reads and re-records it
         return true;
@@ -4907,7 +4929,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // window rebuilds once via ShouldRebuildDx11ForLights - recorded below as _dx11SceneBuiltUnpinned.
         // Turning the lights OFF afterwards is fine - an empty cluster grid makes the in-shader loop a no-op.
         // LoadMapGeoAsync bumps MapGeneration only after the lights are published, so this read is final.
-        bool hasDynamicLights = DynamicLights is { Count: > 0 };
+        bool hasDynamicLights = DynamicLights is { Count: > 0 } || MapContent.Spotlights.Count > 0;   // M900: spots ride the same loop
         _dx11SceneBuiltUnpinned = !hasDynamicLights;
 
         Services.Dx11SceneBuilder.PreparedScene? prepared = null;
@@ -6693,7 +6715,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// a fixed world size vanishes when you pull back over a 97,000-unit map and swallows the screen when
     /// you fly in.</para>
     /// </summary>
-    private IReadOnlyList<System.Numerics.Vector3>? _dx11IconParticles, _dx11IconSounds, _dx11IconProps, _dx11IconProbes;
+    private IReadOnlyList<System.Numerics.Vector3>? _dx11IconParticles, _dx11IconSounds, _dx11IconProps, _dx11IconProbes, _dx11IconSpots;
     private IReadOnlyList<PointLight>? _dx11IconLights;
     private float _dx11IconSize, _dx11IconSpread, _dx11IconScaleX, _dx11IconScaleZ, _dx11IconOffsetX, _dx11IconOffsetZ;
     private bool _dx11IconShowLights;
@@ -6712,6 +6734,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             && ReferenceEquals(_dx11IconSounds, SoundMarkers)
             && ReferenceEquals(_dx11IconProps, PropMarkers)
             && ReferenceEquals(_dx11IconProbes, ProbeMarkers)
+            && ReferenceEquals(_dx11IconSpots, SpotlightMarkers)   // M900
             && ReferenceEquals(_dx11IconLights, DynamicLights)
             && _dx11IconSize == size && _dx11IconShowLights == ShowLightMarkers
             && _dx11IconSpread == spread && _dx11IconScaleX == scaleX && _dx11IconScaleZ == scaleZ
@@ -6719,7 +6742,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return _dx11IconCache;
 
         _dx11IconParticles = ParticleMarkers; _dx11IconSounds = SoundMarkers;
-        _dx11IconProps = PropMarkers; _dx11IconProbes = ProbeMarkers; _dx11IconLights = DynamicLights;
+        _dx11IconProps = PropMarkers; _dx11IconProbes = ProbeMarkers; _dx11IconLights = DynamicLights; _dx11IconSpots = SpotlightMarkers;
         _dx11IconSize = size; _dx11IconShowLights = ShowLightMarkers; _dx11IconSpread = spread;
         _dx11IconScaleX = scaleX; _dx11IconScaleZ = scaleZ; _dx11IconOffsetX = offsetX; _dx11IconOffsetZ = offsetZ;
 
@@ -6739,6 +6762,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         Add(SoundMarkers, plain, ReyEngine.Core.Assets.ViewportIcon.Sound);
         Add(PropMarkers, plain, ReyEngine.Core.Assets.ViewportIcon.Prop);
         Add(ProbeMarkers, plain, ReyEngine.Core.Assets.ViewportIcon.Probe);
+        if (SpotlightMarkers is { } spotPts)   // M900: the spotlight's own painted icon, sized like the light icon
+            foreach (var p in spotPts) outp.Add((p, plain, size * 1.2f, ReyEngine.Core.Assets.ViewportIcon.Spotlight));
         if (ShowLightMarkers && DynamicLights is { Count: > 0 } lights)
         {
             var scaleXZ = new System.Numerics.Vector2(scaleX, scaleZ);
@@ -6765,6 +6790,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// rings are a few thousand floats.</para>
     /// </summary>
     public float[]? Dx11LightRangeLines()
+    {
+        // M900: the selected spotlight's frustum rides the same line buffer as the point-light rings.
+        var rings = Dx11PointLightRangeLines();
+        var frustum = SelectedSpotlight is null ? null : SpotlightFrustumLines;
+        if (frustum is null) return rings;
+        if (ReferenceEquals(rings, _dx11RangePoint) && ReferenceEquals(frustum, _dx11RangeFrustum)) return _dx11RangeCombined;
+        _dx11RangePoint = rings; _dx11RangeFrustum = frustum;
+        return _dx11RangeCombined = rings is null ? frustum : rings.Concat(frustum).ToArray();
+    }
+
+    private float[]? _dx11RangePoint, _dx11RangeFrustum, _dx11RangeCombined;
+
+    private float[]? Dx11PointLightRangeLines()
     {
         bool shown = ShowLightRanges && ShowLightMarkers;
         var knobs = (DynamicLightRadiusScale, DynamicLightPositionScale, DynamicLightScaleX,
@@ -7096,10 +7134,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         IReadOnlyList<MapLevelProp>? LevelProps = null,   // M806: the level props (decoded again when shown)
         MapOpenFrame? Frame = null,   // M808: the area Frame frames
         ReyEngine.Rendering.OrbitCameraPose? Camera = null,
-        FaceEditorState? Faces = null)   // M808: where the camera was when the tab was left
+        FaceEditorState? Faces = null,   // M808: where the camera was when the tab was left
+        IReadOnlyList<SpotlightViewModel>? Spotlights = null)   // M900: the spotlights, edits and identities included
     {
         /// <summary>M819: the tab was left with edits nobody has saved - moved or deleted meshes. Dropping its snapshot would drop them.</summary>
-        public bool HasUnsavedWork => Faces is { Dirty: true } || Faces?.Grows.Count > 0 || HasMoves || Pieces.Any(p => p.IsRemoved) || MapGeoWriter.HasMoves(Map.Meshes) || MapGeoLayerWriter.HasEdits(Map.Meshes);
+        public bool HasUnsavedWork => Faces is { Dirty: true } || Faces?.Grows.Count > 0 || HasMoves || Pieces.Any(p => p.IsRemoved) || MapGeoWriter.HasMoves(Map.Meshes) || MapGeoLayerWriter.HasEdits(Map.Meshes)
+            || Spotlights?.Any(s => s.HasEdits) == true;
     }
 
     /// <summary>User opened an asset — create or focus its tab and activate it.</summary>
@@ -7334,7 +7374,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _selection.Items.Select(m => m.Index).ToArray(),
             MapContent.LayerGroups.ToList(), MapContent.MapName, MapContent.Pieces.ToList(),
             SnapshotBoardStage(), SnapshotMapEvents(), _mapBanners, _mapLevelProps,
-            CurrentMapFrame, CaptureCameraPose?.Invoke(), FaceState);
+            CurrentMapFrame, CaptureCameraPose?.Invoke(), FaceState, MapContent.Spotlights.ToList());
     }
 
     private void RestoreMapScene(MapScene s)
@@ -7370,6 +7410,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelProbes = s.Probes;
         CurrentModelProps = s.Props;
         CurrentModelSounds = s.Sounds;                 // M55
+        MapContent.SetSpotlights(Array.Empty<Formats.Lighting.DynamicSpotlight>());   // M900: the tab's own spotlights, edits kept
+        foreach (var kept in s.Spotlights ?? Array.Empty<SpotlightViewModel>()) MapContent.AddSpotlight(kept);
+        RepublishSpotlights();
         MapContent.SetBucketGrids(s.Map.BucketGrids);  // M55
         HasBucketGrids = s.Map.BucketGrids.Count > 0;  // M77
         RebuildBucketGridLines();
@@ -8662,6 +8705,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         CurrentModelProbes = null;
         CurrentModelProps = null;
         CurrentModelSounds = null;                                        // M55
+        SelectedSpotlight = null;                                         // M900
+        MapContent.SetSpotlights(Array.Empty<Formats.Lighting.DynamicSpotlight>());
+        RepublishSpotlights();
         Sound.StopAll(); _activeAmbience.Clear(); _mapAudioBanks = null;   // M56
         SelectedSound = null; AmbienceEnabled = false;
         BucketGridLines = null;
@@ -9362,6 +9408,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             .Concat(MapContent.AllProps)
             .Concat(MapContent.Probes)
             .Concat(MapContent.Sounds)
+            .Concat(MapContent.Spotlights)   // M900
             .Concat(MapContent.AddedMeshes)
             .ToList();
 
@@ -9695,6 +9742,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnSelectedOutlinerItemChanged(object? value)
     {
         if (_syncingTreeSelection) return;
+        if (value is not SpotlightViewModel && SelectedSpotlight is not null) SelectedSpotlight = null;   // M900: exclusive
         if (!_outlinerMultiSelecting && value is MapOutlinerItemViewModel leaf)
             SetMapContentSelection(new[] { leaf }, leaf);
         switch (value)
@@ -9711,6 +9759,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 break;
             case CubemapProbeViewModel pr:
                 SelectedProbe = pr;
+                break;
+            case SpotlightViewModel spotItem:   // M900: the League spotlights
+                SelectedSpotlight = spotItem;
                 break;
             case PointLightViewModel lt:   // M153: lights are scene objects now
                 _selection.Clear();
@@ -9842,6 +9893,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             // M828: lights hit at the position their icon is DRAWN at (the fitted one).
             if (CanPickLights)
                 foreach (var l in MapContent.Lights) TestPx(l, LightWorldPosition(l));
+            if (CanPickSpotlights)   // M900
+                foreach (var sp in MapContent.Spotlights.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) TestPx(sp, sp.Position);
             if (bestPx is not null) { SelectedOutlinerItem = bestPx; return; }
         }
 
@@ -9882,6 +9935,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         // M153: point lights pick like any other placement, so you can click one in the viewport.
         if (CanPickLights && !additive)
             foreach (var l in MapContent.Lights) Test(l, LightWorldPosition(l));
+        if (CanPickSpotlights && !additive)   // M900
+            foreach (var sp in MapContent.Spotlights.Where(v => v.IsEditorVisible && !v.IsDisabled && !v.IsRemoved)) Test(sp, sp.Position);
 
         // nearest placeable beats a farther mesh face (icons draw on top, so this matches what you see)
         if (PickDiagnostics)
@@ -10029,6 +10084,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedSound is not null) SelectedSound = null;
         if (SelectedAddedMesh is not null) SelectedAddedMesh = null;   // M79
         if (SelectedLight is not null) SelectedLight = null;           // M153
+        if (SelectedSpotlight is not null) SelectedSpotlight = null;   // M900
         SelectedParticleMarker = null;
         SelectedPlaceableInfo = "";
         if (_selection.IsEmpty) GizmoPivot = null;
@@ -10080,6 +10136,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (SelectedPropTreeItem is not null) SelectedPropTreeItem = null;
         if (SelectedProbe is not null) SelectedProbe = null;
         if (SelectedSound is not null) SelectedSound = null;   // M56
+        // M900: lights are placeables too - a mesh click left the point light (and now the spotlight) selected, so the gizmo drove it
+        if (SelectedLight is not null) SelectedLight = null;
+        if (SelectedSpotlight is not null) SelectedSpotlight = null;
         SelectedPlaceableInfo = "";
 
         // M50b: outline highlight (mesh wireframe overlay) + the selection's assigned materials.
@@ -10243,6 +10302,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (_selection.Primary is { } mesh) return (mesh.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.Xyz, identity);
         if (SelectedParticleNode is { } p) return (p.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.YawPitchRoll, p.Placement.Transform);
         if (SelectedAddedMesh is { } a) return (a.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.YawPitchRoll, identity);
+        if (SelectedSpotlight is { } spot) return (spot.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.YawPitchRoll, spot.Spot.Transform);   // M900
         if (SelectedPropNode is { } r) return (r.RotationDegrees, ReyEngine.Rendering.GizmoEulerOrder.YawPitchRoll, r.Prop.Transform);
         return null;
     }
@@ -11567,10 +11627,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var movedSounds = MapContent.Sounds.Where(s => s.HasEdits && !s.Sound.FromParticleSystem).ToList();
         var editedProps = MapContent.AllProps.Where(p => p.HasEdits).ToList();
         var editedProbes = MapContent.Probes.Where(p => p.HasEdits).ToList();
+        var editedSpots = MapContent.Spotlights.Where(p => p.HasEdits && !(p.IsNew && p.IsRemoved)).ToList();   // M900
         int derivedSounds = MapContent.Sounds.Count(s => s.HasEdits && s.Sound.FromParticleSystem);
         if (derivedSounds > 0)
             _log.Info("Sounds", $"{derivedSounds} moved sound(s) follow their particle system and are saved with it.");
-        if (moved.Count == 0 && movedSounds.Count == 0 && editedProps.Count == 0 && editedProbes.Count == 0)
+        if (moved.Count == 0 && movedSounds.Count == 0 && editedProps.Count == 0 && editedProbes.Count == 0 && editedSpots.Count == 0)
         { _log.Info("Map Content", "No placement edits to save."); return; }   // M700: MapContent.HasPlacementEdits is this set
         foreach (var prop in editedProps.Where(p => !string.IsNullOrWhiteSpace(p.EditedSkin)
                      && !p.EffectiveSkin.Equals(p.Prop.Skin, StringComparison.OrdinalIgnoreCase)))
@@ -11653,6 +11714,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             _log.Warn("Map Content", $"{unaddressableOthers} prop/probe placement(s) have no identity and were skipped.");
 
         var source = GetAssetBytes(binEntry);
+        try { placementEdits.AddRange(BuildSpotlightEdits(source, editedSpots)); }   // M900
+        catch (Exception ex) { _log.Error("Spotlights", $"Could not prepare the spotlight edits: {ex.Message}"); return; }
         string? err = null;
         byte[]? bytes = placementEdits.Count > 0
             ? MapPlaceableWriter.WriteEdits(source, placementEdits, out err)
@@ -11672,6 +11735,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 Project.IsDirty = true;
                 UpdateTitle();
                 HasParticleMoves = false;
+                if (editedSpots.Count > 0) ReloadSpotlightsAfterSave(bytes);   // M900
                 _log.Success("Map Content",
                     $"Saved {placementEdits.Count} placement edit(s) to {projectFile}. Build Package will include it.");
                 return;
@@ -11692,6 +11756,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             Project.IsDirty = true;
             UpdateTitle();
             HasParticleMoves = false;
+            if (editedSpots.Count > 0) ReloadSpotlightsAfterSave(bytes);   // M900
             _log.Success("Map Content", $"Saved {placementEdits.Count} placement edit(s) to the materials.bin override. Build Package will include it.");
         }
         catch (Exception ex) { _log.Error("Particles", ex.Message); }
@@ -12639,6 +12704,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var particleSounds = MapParticleAudioExtractor.Extract(particles, _vfxSystems);
             var sounds = directSounds.Concat(particleSounds).ToList();
             CurrentModelProbes = probes.Count > 0 ? probes : null;
+            LoadSpotlights(binBytes);   // M900: before the scene is built (MapGeneration++ is later)
             CurrentModelProps = props.Count > 0 ? props : null;
             CurrentModelSounds = sounds.Count > 0 ? sounds : null;
             if (probes.Count > 0 || props.Count > 0 || sounds.Count > 0)

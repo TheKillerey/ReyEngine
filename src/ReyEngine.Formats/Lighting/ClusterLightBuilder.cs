@@ -7,6 +7,17 @@ namespace ReyEngine.Formats.Lighting;
 /// GPU form after the fit/scale knobs have already been applied by the caller.</summary>
 public readonly record struct ClusterLight(Vector3 Position, float Radius, Vector3 Color, float Intensity);
 
+/// <summary>
+/// M900: one SPOT light with a cookie, as Riot's loop 4 wants it (light-system.md 2.5, 7 uint4s per record): the
+/// world-to-light projection (<see cref="DynamicSpotlights.WorldToLight"/>), a colour that already carries the whole
+/// brightness (the Lambert shader never reads word 4's w), the position with 1 / far, and the cookie's UV scale and bias into
+/// the bound projected-texture atlas.
+/// </summary>
+/// <param name="BoundsMin">World AABB of the frustum (apex included), for binning.</param>
+public readonly record struct ClusterSpotLight(
+    Vector3 Position, float Far, Vector3 Color, Matrix4x4 WorldToLight, Vector4 CookieScaleBias,
+    Vector3 BoundsMin, Vector3 BoundsMax);
+
 /// <summary>The three CPU-side structures Riot's pixel shaders read, ready to upload.
 /// Every field maps to exactly one binding - see <see cref="ClusterLightBuilder"/>.</summary>
 public sealed class ClusterLightGrid
@@ -42,6 +53,9 @@ public sealed class ClusterLightGrid
     /// reciprocal in the record.</summary>
     public int LightCount { get; init; }
 
+    /// <summary>M900: how many of <see cref="LightCount"/> are spot lights (loop 4).</summary>
+    public int SpotLightCount { get; init; }
+
     /// <summary>Cells holding at least one light.</summary>
     public int NonEmptyCells { get; init; }
 
@@ -63,7 +77,7 @@ public sealed class ClusterLightGrid
 /// map, the data stream and the visibility masks are all engine-authored and uploaded - there is no Riot
 /// shader to copy for this half.</para>
 ///
-/// <para><b>Scope: plain point lights only</b> - loop 1 of the six the shader runs. Spot lights, stationary
+/// <para><b>Scope: plain point lights (loop 1) and, since M900, spot lights with a cookie (loop 4).</b> Stationary
 /// masks, cube shadows, PCF spot shadows and light regions (loops 2-6) are deliberately absent; their
 /// header counts are written as zero, which makes the shader skip each of those loops outright.</para>
 ///
@@ -146,7 +160,8 @@ public static class ClusterLightBuilder
         IReadOnlyList<ClusterLight> lights,
         Vector3 boundsMin, Vector3 boundsMax,
         int dimX = DefaultDimX, int dimY = DefaultDimY, int dimZ = DefaultDimZ,
-        int maxLightsPerCell = DefaultMaxLightsPerCell)
+        int maxLightsPerCell = DefaultMaxLightsPerCell,
+        IReadOnlyList<ClusterSpotLight>? spotLights = null)
     {
         dimX = Math.Clamp(dimX, 1, 256);
         dimY = Math.Clamp(dimY, 1, 256);
@@ -164,6 +179,16 @@ public static class ClusterLightBuilder
             usable.Add(l);
         }
 
+        // M900: a spot with no finite range / bounds / position cannot be packed either.
+        var spots = new List<ClusterSpotLight>();
+        if (spotLights is not null)
+            foreach (var sp in spotLights)
+            {
+                if (!(sp.Far > 0f) || !float.IsFinite(sp.Far)) continue;
+                if (!IsFinite(sp.Position) || !IsFinite(sp.BoundsMin) || !IsFinite(sp.BoundsMax)) continue;
+                spots.Add(sp);
+            }
+
         var lo = boundsMin;
         var hi = boundsMax;
         if (!float.IsFinite(lo.X) || !float.IsFinite(hi.X) || hi.X < lo.X) { lo = Vector3.Zero; hi = Vector3.Zero; }
@@ -171,6 +196,11 @@ public static class ClusterLightBuilder
         {
             lo = Vector3.Min(lo, l.Position - new Vector3(l.Radius));
             hi = Vector3.Max(hi, l.Position + new Vector3(l.Radius));
+        }
+        foreach (var sp in spots)
+        {
+            lo = Vector3.Min(lo, sp.BoundsMin);
+            hi = Vector3.Max(hi, sp.BoundsMax);
         }
 
         // A degenerate axis would divide by zero. One unit of slack keeps the affine map finite and puts
@@ -221,6 +251,30 @@ public static class ClusterLightBuilder
             }
         }
 
+        // M900: spots are binned after the points, with indices OFFSET by the point count, so a cell's list reads points first
+        // and then spots - the order the shader walks its loops in.
+        // The per-cell cap is per LOOP: points and spots are separate loops with separate uint16 counts in the header, so a dense
+        // cell of points must not push a spotlight out (and the other way round).
+        var spotsInCell = spots.Count > 0 ? new int[cellCount] : Array.Empty<int>();
+        for (int i = 0; i < spots.Count; i++)
+        {
+            var sp = spots[i];
+            int x0 = CellIndex(sp.BoundsMin.X, sx, bx, dimX), x1 = CellIndex(sp.BoundsMax.X, sx, bx, dimX);
+            int y0 = CellIndex(sp.BoundsMin.Y, sy, by, dimY), y1 = CellIndex(sp.BoundsMax.Y, sy, by, dimY);
+            int z0 = CellIndex(sp.BoundsMin.Z, sz, bz, dimZ), z1 = CellIndex(sp.BoundsMax.Z, sz, bz, dimZ);
+            for (int z = z0; z <= z1; z++)
+            for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
+            {
+                int c = x + y * dimX + z * dimX * dimY;
+                var list = cells[c];
+                if (list is null) { cells[c] = list = new List<int>(4); nonEmpty++; }
+                if (spotsInCell[c] >= maxLightsPerCell) { dropped++; continue; }
+                spotsInCell[c]++;
+                list.Add(usable.Count + i);
+            }
+        }
+
         var map = new uint[cellCount];                 // 0 = the shared empty header, written below
         var data = new List<uint>(4 + nonEmpty * 8);
         data.AddRange(new uint[] { 0, 0, 0, 0 });      // element 0: counts 0, mask 0 -> the shader skips it
@@ -238,7 +292,7 @@ public static class ClusterLightBuilder
             {
                 at = (uint)(data.Count / 4);
                 blocks[key] = at;
-                AppendBlock(data, key, usable);
+                AppendBlock(data, key, usable, spots);
             }
             map[c] = at;
         }
@@ -250,7 +304,8 @@ public static class ClusterLightBuilder
             MaxClamp = new Vector3(dimX - 1, dimY - 1, dimZ - 1),
             Map = map,
             Data = data.ToArray(),
-            LightCount = usable.Count,
+            LightCount = usable.Count + spots.Count,
+            SpotLightCount = spots.Count,
             NonEmptyCells = nonEmpty,
             DistinctBlocks = blocks.Count,
             DroppedBindings = dropped,
@@ -290,19 +345,46 @@ public static class ClusterLightBuilder
     public static int MaskWordCount(int lightCount) => (lightCount + 7) / 8;
 
     /// <summary>The header uint4 for a block that holds only plain point lights.</summary>
-    public static (uint X, uint Y, uint Z, uint W) Header(int pointLightCount)
+    public static (uint X, uint Y, uint Z, uint W) Header(int pointLightCount, int spotLightCount = 0)
     {
-        int maskWords = MaskWordCount(pointLightCount);
+        int maskWords = MaskWordCount(pointLightCount + spotLightCount);
         return (
             (uint)pointLightCount & 0xFFFFu,   // loop 1 count; the high half (loop 2) stays 0
-            0u,                                 // loops 4 and 5
+            (uint)spotLightCount & 0xFFFFu,    // loop 4 (spot + cookie) in the low half; loop 5 stays 0
             0u,                                 // loops 3 and 6
             ((uint)maskWords << 16) | VisibilityMaskAll);
     }
 
-    private static void AppendBlock(List<uint> data, int[] indices, List<ClusterLight> lights)
+    /// <summary>M900: one spot record, 7 uint4s (28 uints): the four ROWS of the world-to-light matrix, colour, position with
+    /// 1 / far, and the cookie scale / bias. Verified against DefaultEnv_Flat blob 245 (dp4 of float4(P, 1) with
+    /// (w0.k, w1.k, w2.k, w3.k) gives output component k).</summary>
+    public static void WriteSpotRecord(Span<uint> dst, in ClusterSpotLight l)
     {
-        var (hx, hy, hz, hw) = Header(indices.Length);
+        var m = l.WorldToLight;
+        void Put(Span<uint> d, int at, float a, float b, float c, float e)
+        {
+            d[at] = BitConverter.SingleToUInt32Bits(a); d[at + 1] = BitConverter.SingleToUInt32Bits(b);
+            d[at + 2] = BitConverter.SingleToUInt32Bits(c); d[at + 3] = BitConverter.SingleToUInt32Bits(e);
+        }
+        Put(dst, 0, m.M11, m.M12, m.M13, m.M14);
+        Put(dst, 4, m.M21, m.M22, m.M23, m.M24);
+        Put(dst, 8, m.M31, m.M32, m.M33, m.M34);
+        Put(dst, 12, m.M41, m.M42, m.M43, m.M44);
+        Put(dst, 16, l.Color.X, l.Color.Y, l.Color.Z, 1f);                       // w is ignored by the Lambert family
+        Put(dst, 20, l.Position.X, l.Position.Y, l.Position.Z, 1f / l.Far);      // linear falloff: 1 - saturate(dist / far)
+        Put(dst, 24, l.CookieScaleBias.X, l.CookieScaleBias.Y, l.CookieScaleBias.Z, l.CookieScaleBias.W);
+    }
+
+    public const int SpotRecordUints = 28;
+
+    private static bool IsFinite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
+
+    private static void AppendBlock(List<uint> data, int[] indices, List<ClusterLight> lights, List<ClusterSpotLight> spots)
+    {
+        int pointCount = 0;
+        foreach (int i in indices) if (i < lights.Count) pointCount++;
+        int spotCount = indices.Length - pointCount;
+        var (hx, hy, hz, hw) = Header(pointCount, spotCount);
         data.Add(hx); data.Add(hy); data.Add(hz); data.Add(hw);
 
         // The packed per-light mask list, all bits set. The exact bit-walk is item 3 of the doc's unknowns
@@ -314,8 +396,16 @@ public static class ClusterLightBuilder
         Span<uint> rec = stackalloc uint[8];
         foreach (int idx in indices)
         {
+            if (idx >= lights.Count) continue;
             WriteLightRecord(rec, lights[idx]);
             for (int i = 0; i < 8; i++) data.Add(rec[i]);
+        }
+        Span<uint> spotRec = stackalloc uint[SpotRecordUints];
+        foreach (int idx in indices)
+        {
+            if (idx < lights.Count) continue;
+            WriteSpotRecord(spotRec, spots[idx - lights.Count]);
+            for (int i = 0; i < SpotRecordUints; i++) data.Add(spotRec[i]);
         }
     }
 

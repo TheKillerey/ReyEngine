@@ -7,7 +7,7 @@ namespace ReyEngine.Core.Assets;
 
 /// <summary>The placement kinds the viewport marks. The order is part of the D3D11 glyph array's
 /// indexing, so append rather than reorder.</summary>
-public enum ViewportIcon { Particle = 0, Sound = 1, Prop = 2, Probe = 3, Light = 4 }
+public enum ViewportIcon { Particle = 0, Sound = 1, Prop = 2, Probe = 3, Light = 4, Spotlight = 5 }
 
 /// <summary>One decoded icon, ready to upload: straight (non-premultiplied) RGBA, row-major, top-down.</summary>
 public sealed record ViewportIconImage(byte[] Rgba, int Size);
@@ -34,7 +34,7 @@ public static class ViewportIcons
     private const string Prefix = "ReyEngine.Core.Assets.ViewportIcons.";
 
     private static readonly string[] Files =
-        { "particles.png", "sounds.png", "mobs-props.png", "reflection-probes.png", "lights.png" };
+        { "particles.png", "sounds.png", "mobs-props.png", "reflection-probes.png", "lights.png", "spotlights.png" };
 
     /// <summary>
     /// M657: the largest a placement marker may get on screen, as a fraction of the viewport HEIGHT.

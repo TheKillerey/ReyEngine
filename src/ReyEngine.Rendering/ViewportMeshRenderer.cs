@@ -1123,6 +1123,8 @@ void main() { FragColor = uColor; }";
         _soundVbo = gl.GenBuffer();
         _lightMkVao = gl.GenVertexArray(); // M71: dynamic-light positions
         _lightMkVbo = gl.GenBuffer();
+        _spotMkVao = gl.GenVertexArray();  // M900: spotlight positions
+        _spotMkVbo = gl.GenBuffer();
         _bucketVao = gl.GenVertexArray();  // M55: bucket-grid overlay lines
         _bucketVbo = gl.GenBuffer();
         _bucketMeshVao = gl.GenVertexArray();  // M77b: bucket-grid baked-mesh wireframe (triangles + barycentrics)
@@ -1163,6 +1165,7 @@ void main() { FragColor = uColor; }";
         ConfigureMarkerVao(_probeVao, _probeVbo);
         ConfigureMarkerVao(_soundVao, _soundVbo);
         ConfigureMarkerVao(_lightMkVao, _lightMkVbo);
+        ConfigureMarkerVao(_spotMkVao, _spotMkVbo);
         // M657: painted art, with the drawn glyph as the fallback so a decode failure costs fidelity
         // rather than markers. M76's shapes are kept for exactly that.
         _icoSparkle = UploadIcon(ViewportIcon.Particle, IconSparkle(96));
@@ -1170,12 +1173,13 @@ void main() { FragColor = uColor; }";
         _icoRing = UploadIcon(ViewportIcon.Probe, IconRing(48));
         _icoSpeaker = UploadIcon(ViewportIcon.Sound, IconSpeaker(48));
         _icoLight = UploadIcon(ViewportIcon.Light, IconLight(96));
+        _icoSpot = UploadIcon(ViewportIcon.Spotlight, IconLight(96));   // M900: painted art, the bulb as the drawn fallback
 
         _ready = true;
     }
 
     // ---- M53 placement icons ----
-    private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing, _icoSpeaker, _icoLight;
+    private uint _markerProgram, _markerQuadVbo, _icoSparkle, _icoPerson, _icoRing, _icoSpeaker, _icoLight, _icoSpot;
     private uint _soundVao, _soundVbo, _bucketVao, _bucketVbo;   // M55: sounds + bucket-grid overlay
     private uint _bucketMeshVao, _bucketMeshVbo, _bucketMeshProgram;   // M77b: baked-mesh wireframe
     private uint _bushMeshVao, _bushMeshVbo;                           // M562: navgrid flag cells
@@ -1189,6 +1193,9 @@ void main() { FragColor = uColor; }";
     private int _faceSelVerts;
     private int _bucketMeshVerts, _bwMvp, _bwColor;
     private uint _lightMkVao, _lightMkVbo;                       // M71: dynamic-light position icons
+    private uint _spotMkVao, _spotMkVbo;                         // M900: spotlight position icons
+    private int _spotMkVerts;
+    private float _spotMkSize = 20f;
     private int _soundVerts, _bucketVerts, _lightMkVerts;
     private int _mkViewProj, _mkCamRight, _mkCamUp, _mkSize, _mkColor, _mkTex, _mkViewportH, _mkMaxPx, _mkTint;
 
@@ -2446,6 +2453,10 @@ void main(){
     public void SetLightMarkers(IReadOnlyList<Vector3> positions, float size)
     { _lightMkSize = size * 1.4f; SetIconMarkers(_lightMkVbo, positions, out _lightMkVerts); }
 
+    /// <summary>M900: spotlight positions - the painted spotlight icon at each MapDynamicSpotlight.</summary>
+    public void SetSpotlightMarkers(IReadOnlyList<Vector3> positions, float size)
+    { _spotMkSize = size * 1.4f; SetIconMarkers(_spotMkVbo, positions, out _spotMkVerts); }
+
     /// <summary>M172e: the paint brush's footprint, drawn as a ring lying on the surface under the cursor.
     ///
     /// Built in world space rather than as a screen-space circle on purpose: the brush IS a world-space
@@ -3203,7 +3214,7 @@ void main(){
         // M53: placement ICONS (Unity-style camera-facing sprites), always on top: particles = cyan
         // sparkle, mobs/props = orange person, probes = green ring, sounds = violet speaker;
         // selected = larger bright yellow.
-        if (_particleVerts > 0 || _particleSelVerts > 0 || _propVerts > 0 || _probeVerts > 0 || _soundVerts > 0 || _lightMkVerts > 0)
+        if (_particleVerts > 0 || _particleSelVerts > 0 || _propVerts > 0 || _probeVerts > 0 || _soundVerts > 0 || _lightMkVerts > 0 || _spotMkVerts > 0)
         {
             Matrix4x4.Invert(view, out var invView);
             var camRight = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitX, invView));
@@ -3230,6 +3241,7 @@ void main(){
             DrawIconSet(_probeVao, _probeVerts, _icoRing, _probeMarkerSize, 1f, 1f, 1f, 0.95f);
             DrawIconSet(_soundVao, _soundVerts, _icoSpeaker, _soundMarkerSize, 1f, 1f, 1f, 0.95f);
             DrawIconSet(_lightMkVao, _lightMkVerts, _icoLight, _lightMkSize, 1f, 1f, 1f, 0.95f);
+            DrawIconSet(_spotMkVao, _spotMkVerts, _icoSpot, _spotMkSize, 1f, 1f, 1f, 0.95f);   // M900
             // The selected marker: the same art, drawn larger and washed toward the selection yellow so it
             // is unmistakable without becoming a flat silhouette.
             DrawIconSet(_particleSelVao, _particleSelVerts, _icoSparkle, _particleSelSize, 1.0f, 0.92f, 0.25f, 1f,

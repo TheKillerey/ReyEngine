@@ -343,7 +343,7 @@ public sealed class FocusSelectionTests(ITestOutputHelper output)
         // the GL control is no longer asked to do it for the main viewport: one path, not two that both fire under GL
         Assert.DoesNotContain("ParticleFocusPoint", xaml);
         Assert.DoesNotContain("ParticleFocusPoint", vm);
-        Assert.Equal(5, System.Text.RegularExpressions.Regex.Matches(inspector, "Command=\"\\{Binding FocusSelectedPlaceableCommand\\}\"").Count);
+        Assert.Equal(6, System.Text.RegularExpressions.Regex.Matches(inspector, "Command=\"\\{Binding FocusSelectedPlaceableCommand\\}\"").Count);
 
         // ...and the control keeps what other hosts (the Mesh Preview window's arena) still use under GL
         Assert.Contains("public void FocusOnPoint(Vector3 p)", control);

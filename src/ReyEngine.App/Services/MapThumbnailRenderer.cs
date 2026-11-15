@@ -168,6 +168,13 @@ public sealed class MapThumbnailRenderer : IMapThumbnailRenderer
     /// <summary>Props are part of the picture. A test turns them off to see what they add; nothing else does.</summary>
     public bool DrawProps { get; init; } = true;
 
+    /// <summary>M900: pin Riot's in-shader dynamic-light loop (what the editor does for a map that has lights), so a test can feed the
+    /// frame lights. Off for the Content Browser picture, which draws the map as its start state shows it.</summary>
+    public bool PinDynamicLighting { get; init; }
+
+    /// <summary>M900: a hook on the frame's settings, with the camera framing and the renderer - how a test lights the picture (point lights, spotlights).</summary>
+    public Action<PreviewSettings, MapThumbnailFrame, ShaderPreviewRenderer>? ConfigureFrame { get; init; }
+
     /// <summary>Diagnostics: asked after the heavy stages, its text goes into the timings (the harness passes process memory).</summary>
     public Func<string>? MemoryProbe { get; init; }
     private string Mem() => MemoryProbe is null ? "" : $" [{MemoryProbe()}]";
@@ -248,7 +255,7 @@ public sealed class MapThumbnailRenderer : IMapThumbnailRenderer
             // the texture loop asks, per texture, whether to wait (the editor is loading a map) or stop (the job is cancelled)
             var limits = Limits with { Checkpoint = () => Proceed(job) };
             var prepared = Dx11SceneBuilder.Prepare(cache, _perms, map, doc.Materials, job.ReadCounted, job.MapGeoPath, grassTint,
-                pinDynamicLighting: false, limits);
+                pinDynamicLighting: PinDynamicLighting, limits);
             timings.Add($"prepare {step.ElapsedMilliseconds} ms{Mem()}");
             Check(job);   // a loop that was told to stop returns a scene with textures missing: this throws before anything uses it
             if (prepared.Slices.Count == 0)
@@ -326,6 +333,7 @@ public sealed class MapThumbnailRenderer : IMapThumbnailRenderer
                 MapSun = sun,
                 EnvFog = sun.FogEnabled ? MapSunProperties.EnvFogConstants(sun, true) : null,
             };
+            ConfigureFrame?.Invoke(settings, frame, renderer);
             byte[]? frameBytes = renderer.RenderFrame(MapThumbnailKey.RenderWidth, MapThumbnailKey.RenderHeight, settings, out string? renderError);
             if (frameBytes is null) { _discardDevice = true; return Fail("the frame could not be rendered: " + renderError, false, total); }
             frameBytes = (byte[])frameBytes.Clone();   // the renderer reuses its readback buffer

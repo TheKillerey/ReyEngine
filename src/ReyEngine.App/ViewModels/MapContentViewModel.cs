@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Numerics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ReyEngine.Formats.Lighting;
 using ReyEngine.Formats.MapGeo;
 
 namespace ReyEngine.App.ViewModels;
@@ -279,6 +280,139 @@ public sealed partial class CubemapProbeViewModel : MapOutlinerItemViewModel
     { OnPropertyChanged(nameof(HasEdits)); base.NotifyStateChanged(); }
 }
 
+/// <summary>
+/// M900: one <c>MapDynamicSpotlight</c> in the outliner - the League spotlight, beside the dynamic point lights. It is an
+/// ordinary map placement (a <c>MapPlaceableContainer.items</c> entry) so it is addressed by (container, key) and saved through
+/// <see cref="MapPlaceableWriter"/>, which keeps every field the editor does not model.
+///
+/// <para>The authored <see cref="Spot"/> never changes; every edit lives in the properties below and <see cref="Current"/> is
+/// the spotlight as it would be saved. A move or turn from the gizmo composes into the authored transform the way a prop's
+/// does (<see cref="Offset"/>, <see cref="RotationDegrees"/>), so an unmoved light writes no transform at all.</para>
+/// </summary>
+public sealed partial class SpotlightViewModel : MapOutlinerItemViewModel
+{
+    private bool _loading = true;
+
+    /// <summary>The spotlight as authored; for a NEW one the values it was created with.</summary>
+    public required DynamicSpotlight Spot { get; init; }
+
+    /// <summary>Created in the editor and not in the .bin yet: Save to Mod inserts it under an identity minted at save.</summary>
+    public bool IsNew { get; init; }
+
+    /// <summary>Where it lives in the bin. A new light has none until it is saved (see MainWindowViewModel.Spotlights).</summary>
+    public MapPlacementId Id { get; set; }
+
+    [ObservableProperty] private string _name = "";
+    /// <summary>The colour in LINEAR units. NOT clamped to 1: authored spotlights carry HDR values (t46: 1.447), and the
+    /// game's spot shader multiplies this straight into the lighting - brightness lives here.</summary>
+    [ObservableProperty] private double _colorR, _colorG, _colorB;
+    [ObservableProperty] private double _fov, _far, _near, _aspect;
+    /// <summary>The cookie (<c>ProjectedTexture</c>) as an asset path or a 0x hash; empty = none (a plain square pool).</summary>
+    [ObservableProperty] private string _cookie = "";
+    [ObservableProperty] private int? _editedVisibilityFlags;
+
+    public Vector3 Offset;                       // accumulated move (world space)
+    public Vector3 RotationDegrees;              // extra local rotation on top of the authored transform
+
+    public static SpotlightViewModel Create(DynamicSpotlight spot, bool isNew, Action<MapOutlinerItemViewModel>? stateChanged)
+    {
+        var vm = new SpotlightViewModel { Spot = spot, IsNew = isNew, Id = spot.Id, StateChanged = stateChanged,
+            IsDisabled = spot.HasVisibilityFlags && spot.VisibilityFlags == 0 };
+        vm.Name = spot.Name; vm.ColorR = spot.Color.X; vm.ColorG = spot.Color.Y; vm.ColorB = spot.Color.Z;   // _loading: no edit is recorded
+        vm.Fov = spot.Fov; vm.Far = spot.Far; vm.Near = spot.Near; vm.Aspect = spot.Aspect; vm.Cookie = spot.CookiePath;
+        vm._loading = false;
+        return vm;
+    }
+
+    public Vector3 Position => Spot.Position + Offset;
+    public bool IsMoved => Offset != Vector3.Zero || RotationDegrees != Vector3.Zero;
+    public int EffectiveVisibilityFlags => EditedVisibilityFlags ?? (Spot.HasVisibilityFlags ? Spot.VisibilityFlags : 255);
+
+    /// <summary>The authored transform with the gizmo's extra rotation composed in its local space (row-vector convention:
+    /// v * Delta * Original), then the translation replaced.</summary>
+    public Matrix4x4 CurrentTransform
+    {
+        get
+        {
+            var t = Spot.Transform;
+            if (RotationDegrees != Vector3.Zero)
+            {
+                const float d2r = MathF.PI / 180f;
+                t = Matrix4x4.CreateFromYawPitchRoll(RotationDegrees.Y * d2r, RotationDegrees.X * d2r, RotationDegrees.Z * d2r) * t;
+            }
+            t.Translation = Position;
+            return t;
+        }
+    }
+
+    /// <summary>The spotlight as it would be saved right now.</summary>
+    public DynamicSpotlight Current
+    {
+        get
+        {
+            bool cookieSame = string.Equals(Cookie, Spot.CookiePath, StringComparison.Ordinal);
+            var cookie = (Cookie ?? "").Trim();
+            return Spot with
+            {
+                Name = Name ?? "",
+                Transform = IsMoved ? CurrentTransform : Spot.Transform,
+                Color = new Vector4((float)ColorR, (float)ColorG, (float)ColorB, Spot.Color.W),
+                Fov = (float)Fov, Far = (float)Far, Near = (float)Near, Aspect = (float)Aspect,
+                CookiePath = cookieSame ? Spot.CookiePath : cookie,
+                CookieHash = cookieSame ? Spot.CookieHash : (cookie.Length == 0 ? 0UL : ReyEngine.Formats.Meta.BinTexturePath.HashOfReference(cookie)),
+                VisibilityFlags = EditedVisibilityFlags ?? Spot.VisibilityFlags,
+                HasVisibilityFlags = EditedVisibilityFlags is not null || Spot.HasVisibilityFlags,
+            };
+        }
+    }
+
+    /// <summary>Anything to save: a new light, a pending delete, or any field that differs from the authored one.</summary>
+    public bool HasEdits => IsNew || IsRemoved || Current != Spot;
+
+    /// <summary>Outliner label: name and where it is.</summary>
+    public string Label => $"{(string.IsNullOrWhiteSpace(Name) ? "(unnamed)" : Name)}  ({Position.X:0}, {Position.Y:0}, {Position.Z:0})";
+    public string Info => $"fov {Fov:0.#}  near {Near:0.#}  far {Far:0.#}  cookie: {(string.IsNullOrEmpty(Cookie) ? "none" : Cookie)}";
+
+    private void Edited()
+    {
+        if (_loading) return;
+        OnPropertyChanged(nameof(HasEdits)); OnPropertyChanged(nameof(Label)); OnPropertyChanged(nameof(Info));
+        StateChanged?.Invoke(this);
+    }
+
+    partial void OnNameChanged(string value) => Edited();
+    partial void OnColorRChanged(double value) => Edited();
+    partial void OnColorGChanged(double value) => Edited();
+    partial void OnColorBChanged(double value) => Edited();
+    partial void OnFovChanged(double value) => Edited();
+    partial void OnFarChanged(double value) => Edited();
+    partial void OnNearChanged(double value) => Edited();
+    partial void OnAspectChanged(double value) => Edited();
+    partial void OnCookieChanged(string value) => Edited();
+    partial void OnEditedVisibilityFlagsChanged(int? value)
+    { IsDisabled = EffectiveVisibilityFlags == 0; Edited(); }
+
+    protected override void NotifyStateChanged()
+    { OnPropertyChanged(nameof(HasEdits)); base.NotifyStateChanged(); }
+
+    /// <summary>Called after the gizmo moved or turned the light.</summary>
+    public void TransformChanged()
+    { OnPropertyChanged(nameof(HasEdits)); OnPropertyChanged(nameof(Label)); }
+
+    /// <summary>Drop every pending edit and go back to the authored light.</summary>
+    public void ResetEdits()
+    {
+        _loading = true;
+        Offset = Vector3.Zero; RotationDegrees = Vector3.Zero;
+        Name = Spot.Name; ColorR = Spot.Color.X; ColorG = Spot.Color.Y; ColorB = Spot.Color.Z;
+        Fov = Spot.Fov; Far = Spot.Far; Near = Spot.Near; Aspect = Spot.Aspect; Cookie = Spot.CookiePath;
+        EditedVisibilityFlags = null;
+        _loading = false;
+        IsDisabled = Spot.HasVisibilityFlags && Spot.VisibilityFlags == 0; IsRemoved = false; IsEditorVisible = true;
+        Edited();
+    }
+}
+
 /// <summary>One VFX system in a loaded champion skin's effect library (M37) — select it to play it.</summary>
 public sealed class VfxSystemItemViewModel
 {
@@ -409,6 +543,7 @@ public sealed partial class MapContentViewModel : ViewModelBase
         OutlinerRoots.Add(new("🪞", "Reflection Probes", Probes));
         OutlinerRoots.Add(new("🔊", "Sounds", Sounds));           // M55: MapAudio placements
         OutlinerRoots.Add(new("💡", "Lights", Lights));           // M153: Light.dat point lights
+        OutlinerRoots.Add(new("🔦", "Spotlights", Spotlights));   // M900: MapDynamicSpotlight placements
         OutlinerRoots.Add(new("➕", "Added Meshes", AddedMeshes)); // M79: meshes queued for append
         OutlinerRoots.Add(new("⌗", "Bucket Grid", BucketGrids)); // M55: scene culling grid(s)
     }
@@ -420,6 +555,31 @@ public sealed partial class MapContentViewModel : ViewModelBase
     /// outliner, editable in the Inspector, movable with the viewport gizmo. Owned by MainWindowViewModel
     /// (which republishes the render list); this collection is the outliner's view of it.</summary>
     public ObservableCollection<PointLightViewModel> Lights { get; } = new();
+
+    /// <summary>M900: the map's <c>MapDynamicSpotlight</c> placements.</summary>
+    public ObservableCollection<SpotlightViewModel> Spotlights { get; } = new();
+    [ObservableProperty] private bool _hasSpotlights;
+
+    public void SetSpotlights(IReadOnlyList<DynamicSpotlight> spotlights)
+    {
+        Spotlights.Clear();
+        foreach (var s in spotlights)
+            Spotlights.Add(SpotlightViewModel.Create(s, false, ItemChanged));
+        HasSpotlights = Spotlights.Count > 0;
+    }
+
+    public void AddSpotlight(SpotlightViewModel spot)
+    {
+        spot.StateChanged = ItemChanged;
+        Spotlights.Add(spot);
+        HasSpotlights = true;
+    }
+
+    public void RemoveSpotlight(SpotlightViewModel spot)
+    {
+        Spotlights.Remove(spot);
+        HasSpotlights = Spotlights.Count > 0;
+    }
 
     // ---- M55: sound placements (MapAudio) + bucket grids ----
     public ObservableCollection<MapSoundViewModel> Sounds { get; } = new();
@@ -465,7 +625,8 @@ public sealed partial class MapContentViewModel : ViewModelBase
         AllParticles.Any(v => v.HasEdits)
         || Sounds.Any(v => v.HasEdits && !v.Sound.FromParticleSystem)
         || AllProps.Any(v => v.HasEdits)
-        || Probes.Any(v => v.HasEdits);
+        || Probes.Any(v => v.HasEdits)
+        || Spotlights.Any(v => v.HasEdits && !(v.IsNew && v.IsRemoved));   // M900
 
     public ObservableCollection<AnimatedPropGroupViewModel> PropGroups { get; } = new();
     /// <summary>Placed cubemap reflection probes (M38).</summary>
@@ -568,6 +729,8 @@ public sealed partial class MapContentViewModel : ViewModelBase
         HasParticles = false;
         PropGroups.Clear();
         Probes.Clear();
+        Spotlights.Clear();   // M900
+        HasSpotlights = false;
         HasProps = false;
         HasProbes = false;
         HasMap = false;

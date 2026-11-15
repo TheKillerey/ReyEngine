@@ -87,6 +87,11 @@ public sealed class ViewportControl : OpenGlControlBase
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(PropMarkers));
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> ProbeMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(ProbeMarkers));
+    // M900: the spotlight icons, and the selected spotlight's frustum wireframe (line list, xyz per vertex)
+    public static readonly StyledProperty<IReadOnlyList<Vector3>?> SpotlightMarkersProperty =
+        AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(SpotlightMarkers));
+    public static readonly StyledProperty<float[]?> SpotlightFrustumLinesProperty =
+        AvaloniaProperty.Register<ViewportControl, float[]?>(nameof(SpotlightFrustumLines));
     public static readonly StyledProperty<IReadOnlyList<Vector3>?> SoundMarkersProperty =
         AvaloniaProperty.Register<ViewportControl, IReadOnlyList<Vector3>?>(nameof(SoundMarkers));      // M55
     // M412: the bucket-grid bake volume preview. A tiny value type, so it is compared by VALUE in the
@@ -382,6 +387,8 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>World positions of cubemap-probe markers (M38); green.</summary>
     public IReadOnlyList<Vector3>? ProbeMarkers { get => GetValue(ProbeMarkersProperty); set => SetValue(ProbeMarkersProperty, value); }
     public IReadOnlyList<Vector3>? SoundMarkers { get => GetValue(SoundMarkersProperty); set => SetValue(SoundMarkersProperty, value); }
+    public IReadOnlyList<Vector3>? SpotlightMarkers { get => GetValue(SpotlightMarkersProperty); set => SetValue(SpotlightMarkersProperty, value); }
+    public float[]? SpotlightFrustumLines { get => GetValue(SpotlightFrustumLinesProperty); set => SetValue(SpotlightFrustumLinesProperty, value); }
     public (Vector3 Min, Vector3 Max)? BakeBox { get => GetValue(BakeBoxProperty); set => SetValue(BakeBoxProperty, value); }
     public float[]? BucketGridLines { get => GetValue(BucketGridLinesProperty); set => SetValue(BucketGridLinesProperty, value); }
     public float[]? BushCellLines { get => GetValue(BushCellLinesProperty); set => SetValue(BushCellLinesProperty, value); }
@@ -1105,6 +1112,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _meshRenderer.SetPropMarkers(PropMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize);
             _meshRenderer.SetProbeMarkers(ProbeMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.4f);
             _meshRenderer.SetSoundMarkers(SoundMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.2f);
+            _meshRenderer.SetSpotlightMarkers(SpotlightMarkers ?? (IReadOnlyList<Vector3>)Array.Empty<Vector3>(), _markerSize * 1.2f);   // M900
             // M77 perf: the bucket-grid overlay can be megabytes of data — re-upload ONLY when the array
             // instance actually changed, not on every marker refresh (gizmo drags dirty markers per frame).
             // M77b: the array is pos3+bary3 triangle soup for the barycentric wireframe path.
@@ -1158,14 +1166,16 @@ public sealed class ViewportControl : OpenGlControlBase
                     for (int i = 0; i < lights.Count; i++)
                         rings.AddRange(Rendering.ViewportMeshRenderer.BuildLightRangeRings(
                             pts[i], lights[i].Radius * radiusScale));
+                    // M900: the selected spotlight's frustum shares the buffer
+                    if (SpotlightFrustumLines is { Length: > 0 } fr) rings.AddRange(fr);
                     _meshRenderer.SetLightRangeLines(rings.Count > 0 ? rings.ToArray() : null);
                 }
-                else _meshRenderer.SetLightRangeLines(null);
+                else _meshRenderer.SetLightRangeLines(SpotlightFrustumLines is { Length: > 0 } fr2 ? fr2 : null);
             }
             else
             {
                 _meshRenderer.SetLightMarkers(Array.Empty<Vector3>(), _markerSize);
-                _meshRenderer.SetLightRangeLines(null);
+                _meshRenderer.SetLightRangeLines(SpotlightFrustumLines is { Length: > 0 } fr3 ? fr3 : null);   // M900
             }
             _lightMarkersDirty = false;
         }
@@ -2199,6 +2209,7 @@ public sealed class ViewportControl : OpenGlControlBase
         { _skinDirty = true; RequestNextFrameRendering(); }
         else if (change.Property == ParticleMarkersProperty || change.Property == SelectedParticlePositionProperty
                  || change.Property == PropMarkersProperty || change.Property == ProbeMarkersProperty
+                 || change.Property == SpotlightMarkersProperty
                  || change.Property == SoundMarkersProperty || change.Property == BucketGridLinesProperty
                  || change.Property == BushCellLinesProperty || change.Property == BushCellLayersProperty
                  || change.Property == SelectedFaceLinesProperty
@@ -2228,6 +2239,8 @@ public sealed class ViewportControl : OpenGlControlBase
                  // M659: the radius rings are built in the same place and move with the same knobs.
                  || change.Property == ShowLightRangesProperty || change.Property == DynamicLightRadiusScaleProperty)
         { _lightMarkersDirty = true; RequestNextFrameRendering(); }   // M71: light transform moves the icons too
+        else if (change.Property == SpotlightFrustumLinesProperty)
+        { _lightMarkersDirty = true; RequestNextFrameRendering(); }   // M900: shares the light-range line buffer
         else if (change.Property == IconsThroughWallsProperty)
         { RequestNextFrameRendering(); }   // M659: a draw-state flag - nothing to rebuild
         else if (change.Property == PropMeshesProperty)

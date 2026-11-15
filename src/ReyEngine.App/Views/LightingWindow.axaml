@@ -255,6 +255,9 @@
             <Button Classes="tool" Content="+ Add light" Command="{Binding AddLightCommand}"
                     HorizontalAlignment="Stretch" FontSize="11" Padding="8,4"
                     ToolTip.Tip="Add a point light at the gizmo (or the origin) — then drag it into place." />
+            <Button Classes="tool" Content="+ Add spotlight" Command="{Binding AddSpotlightCommand}"
+                    HorizontalAlignment="Stretch" FontSize="11" Padding="8,4" Margin="0,4,0,0"
+                    ToolTip.Tip="Add a League spotlight (MapDynamicSpotlight) above the gizmo, aimed down - then move and aim it with the gizmo. It is saved into the map's materials.bin." />
             <!-- M449: height. The fit panel offsets X/Z only (LightPositionOffset is a Vector2 and the
                  bake's ResolvePosition has no Y term), so this edits each light's own Y instead. -->
             <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,8,0,0">

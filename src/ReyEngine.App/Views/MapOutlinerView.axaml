@@ -235,6 +235,18 @@
           </StackPanel></Border>
         </DataTemplate>
 
+        <!-- M900: a League spotlight (MapDynamicSpotlight) - the painted spotlight icon sits in the viewport, the torch here -->
+        <DataTemplate DataType="vm:SpotlightViewModel">
+          <Border Classes="outRow" Classes.selected="{Binding IsSelected}" CornerRadius="2" Padding="3,0" Margin="-3,0"><StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
+            <TextBlock Text="🔦" FontSize="9" VerticalAlignment="Center" />
+            <TextBlock Text="NEW" FontSize="8" Foreground="{DynamicResource ReyAccentBrush}" IsVisible="{Binding IsNew}" />
+            <TextBlock Text="OFF" FontSize="8" Foreground="{DynamicResource ReyWarningBrush}" IsVisible="{Binding IsDisabled}" />
+            <TextBlock Text="DEL" FontSize="8" Foreground="{DynamicResource ReyErrorBrush}" IsVisible="{Binding IsRemoved}" />
+            <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ReyTextDimBrush}"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          </StackPanel></Border>
+        </DataTemplate>
+
         <DataTemplate DataType="vm:PointLightViewModel">
           <StackPanel Orientation="Horizontal" Spacing="5" ToolTip.Tip="{Binding Info}">
             <Border Width="9" Height="9" CornerRadius="2" VerticalAlignment="Center"

@@ -452,6 +452,8 @@ public partial class MainWindow : Window, ReyEngine.App.ViewModels.ICinematicHos
         // in XAML (DynamicLights / ShowDynamicLights / the fit sliders). Pushed every frame like the sun,
         // because every one of them is live-editable from the Lighting window.
         _dx11.Lights = vm.DynamicLights;
+        _dx11.SpotLights = vm.Dx11SpotLights;           // M900: spotlights ride the same cluster grid
+        _dx11.SpotCookieAtlas = vm.Dx11SpotCookieAtlas;
         _dx11.ShowDynamicLights = vm.ShowDynamicLights;
         _dx11.DynamicLightIntensity = vm.DynamicLightIntensity;
         _dx11.DynamicLightRadiusScale = vm.DynamicLightRadiusScale;

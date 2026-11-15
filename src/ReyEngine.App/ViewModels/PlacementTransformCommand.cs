@@ -22,6 +22,7 @@ public sealed class PlacementTransformCommand : IEditorCommand
             AnimatedPropViewModel r => new State(r.Offset, r.RotationDegrees, r.Scale),   // M699
             // M154: a light stores an ABSOLUTE position, so that stands in for the offset here.
             PointLightViewModel l => new State(l.Position, Vector3.Zero, Vector3.One),
+            SpotlightViewModel sp => new State(sp.Offset, sp.RotationDegrees, Vector3.One),   // M900
             _ => default,
         };
 
@@ -43,6 +44,9 @@ public sealed class PlacementTransformCommand : IEditorCommand
                     break;
                 case PointLightViewModel l:   // M154
                     l.MoveTo(Offset);
+                    break;
+                case SpotlightViewModel sp:   // M900
+                    sp.Offset = Offset; sp.RotationDegrees = Rotation;
                     break;
             }
         }
@@ -68,6 +72,7 @@ public sealed class PlacementTransformCommand : IEditorCommand
             ParticlePlacementViewModel p => $"Transform Particle '{p.Name}'",
             MapSoundViewModel s => $"Move Sound '{s.Name}'",
             AddedMapMeshViewModel a => $"Transform Added Mesh '{a.Name}'",   // M79
+            SpotlightViewModel sp => $"Transform Spotlight '{sp.Name}'",     // M900
             _ => "Transform Placement",
         };
     }

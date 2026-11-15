@@ -42,6 +42,7 @@ public static class IconGlyphs
                 ViewportIcon.Sound => Speaker(u, v),
                 ViewportIcon.Prop => Cube(u, v),
                 ViewportIcon.Probe => Probe(u, v),
+                ViewportIcon.Spotlight => Spotlight(u, v),
                 _ => Light(u, v),
             };
             int o = (y * Size + x) * 4;
@@ -115,6 +116,16 @@ public static class IconGlyphs
         float ring = Smooth(0.74f, 0.06f, r) - Smooth(0.58f, 0.06f, r);
         float dot = Smooth(0.17f, 0.06f, Dist(u, v, -0.24f, 0.26f));
         return MathF.Min(1f, MathF.Max(ring, dot * 0.9f));
+    }
+
+    // M900: a spotlight: the lamp as a disc at the top left, and a cone of light opening towards the bottom right.
+    private static float Spotlight(float u, float v)
+    {
+        const float w = 0.06f;
+        float lamp = Smooth(0.22f, 0.05f, Dist(u, v, -0.5f, 0.5f));
+        float edges = MathF.Max(Seg(u, v, -0.38f, 0.34f, 0.78f, -0.18f, w), Seg(u, v, -0.34f, 0.38f, 0.18f, -0.78f, w));
+        float far = Seg(u, v, 0.78f, -0.18f, 0.18f, -0.78f, w);
+        return MathF.Max(lamp, MathF.Max(edges, far));
     }
 
     // A compact sun/bulb mark: solid centre with eight short rays.

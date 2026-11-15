@@ -173,6 +173,9 @@ public sealed class Dx11ViewportSurface : IDisposable
     public IReadOnlyList<ReyEngine.Formats.Lighting.PointLight>? Lights { get; set; }
     /// <summary>Mirrors <c>ShowDynamicLights</c> - the same gate GL applies via SetDynamicLightsEnabled.</summary>
     public bool ShowDynamicLights { get; set; }
+    /// <summary>M900: the map's spotlights, packed for Riot's spot loop, and the cookie atlas they sample.</summary>
+    public IReadOnlyList<ReyEngine.Formats.Lighting.ClusterSpotLight>? SpotLights { get; set; }
+    public ReyEngine.Rendering.D3D11.SpotCookieAtlas? SpotCookieAtlas { get; set; }
     public double DynamicLightIntensity { get; set; } = 1.0;
     public double DynamicLightRadiusScale { get; set; } = 1.0;
     public double LightFalloffSoftness { get; set; }   // M457: 0 = Riot's linear falloff
@@ -684,6 +687,8 @@ public sealed class Dx11ViewportSurface : IDisposable
             // M452: the point-light overlay. Ungated here beyond the toggle - the renderer applies the
             // same clamps the GL setters do, so the two viewports see identical values.
             DynamicLights = Lights,
+            SpotLights = SpotLights,
+            SpotCookieAtlas = SpotCookieAtlas,
             DynamicLightsEnabled = ShowDynamicLights,
             DynamicLightIntensity = (float)DynamicLightIntensity,
             DynamicLightRadiusScale = (float)DynamicLightRadiusScale,
