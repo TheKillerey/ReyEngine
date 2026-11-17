@@ -729,7 +729,12 @@ public sealed partial class MeshPreviewViewModel
         if (_simRun is null) return;           // the End step finished the run
         ApplyDisplacement(run);
         TickMechanics(run);
-        if (_idleReturnDeferred && !InChannelSpan()) ReturnToIdle();   // M897: the channel that held the ended clip is over
+        if (_idleReturnDeferred && !InChannelSpan())   // M897: the channel that held the ended clip is over
+        {
+            _visNaturalEnd = true;   // M902: the clip being left ran out; it was not cut
+            try { ReturnToIdle(); }
+            finally { _visNaturalEnd = false; }
+        }
         UpdateSimStatus();
     }
 

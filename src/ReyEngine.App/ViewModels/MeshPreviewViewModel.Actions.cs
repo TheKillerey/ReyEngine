@@ -90,6 +90,7 @@ public sealed partial class MeshPreviewViewModel
     public bool PlayLoadedIdle()
     {
         _introEntry = null; _introFollowUp = null;
+        _idleSteps = null; _idleCycleEntry = null; _idleQueue.Clear(); _idleCursor = 0;
         if (!Animation.HasSkeleton || Animation.SelectedAnimation is not null || Animation.HasClip) return false;
         if (Animation.Animations.Count == 0 || _ownClips.Count == 0) return false;
         var info = Formats.Skeletons.AnimationClipGraph.Resolve("Idle1", _ownClips, _ownNodes)?.First
@@ -110,9 +111,80 @@ public sealed partial class MeshPreviewViewModel
             SelectClipInternal(intro, false);
             return true;
         }
-        Animation.Loop = true;
-        SelectClipInternal(entry, false);
+        _idleRandom = new Random(IdleSeed);
+        BeginIdle(entry, restart: false, asReturn: false);
         return true;
+    }
+
+    // ---- M902: the idle CYCLE. PlayLoadedIdle took the graph's first clip and looped it, so a skin's idle variants were never reached: Ahri skin 97's
+    // Idle1 is a bool condition whose false branch is a sequencer of idle1.anm and a selector of Idle_Var2 / Idle_Var3 (50 each). The game plays idle1,
+    // then one variant picked by mProbability, then starts the sequencer over. A graph that resolves to one clip stays the plain loop it was. ----
+
+    /// <summary>The seed of the idle cycle's pick. Fixed on purpose: --simcheck grades a run, and a run must not depend on the dice. The picks still
+    /// vary along one session (the generator advances per pick), they just vary the same way every time.</summary>
+    private const int IdleSeed = 0x1D1E;
+
+    private IReadOnlyList<Formats.Skeletons.IdleStep>? _idleSteps;
+    private int _idleCursor;
+    private readonly Queue<Formats.Skeletons.AnimClipInfo> _idleQueue = new();
+    private AnimationEntryViewModel? _idleCycleEntry;
+    private Random _idleRandom = new(IdleSeed);
+
+    private static bool IsIdleCycle(IReadOnlyList<Formats.Skeletons.IdleStep>? steps) =>
+        steps is { Count: > 0 } && (steps.Count > 1 || steps[0].Choices is not null || steps[0].Clips.Count > 1);
+
+    /// <summary>Start the idle: a single clip loops (as it always did); a cycle plays its first step and then advances as clips end.
+    /// <paramref name="asReturn"/> marks the selection as M897's return to idle (the running spell's playback is not re-driven by it).</summary>
+    private void BeginIdle(AnimationEntryViewModel first, bool restart, bool asReturn)
+    {
+        var steps = Formats.Skeletons.AnimationClipGraph.ResolveSteps("Idle1", _ownClips, _ownNodes);
+        if (!IsIdleCycle(steps))
+        {
+            _idleSteps = null; _idleCycleEntry = null; _idleQueue.Clear();
+            Animation.Loop = true;
+            _idleReturnSelect = asReturn;
+            try { SelectClipInternal(first, restart); }
+            finally { _idleReturnSelect = false; }
+            return;
+        }
+        _idleSteps = steps; _idleCursor = 0; _idleQueue.Clear();
+        if (!AdvanceIdle(asReturn))
+        {
+            _idleSteps = null; _idleCycleEntry = null;
+            Animation.Loop = true;
+            _idleReturnSelect = asReturn;
+            try { SelectClipInternal(first, restart); }
+            finally { _idleReturnSelect = false; }
+        }
+    }
+
+    /// <summary>Play the cycle's next clip: the rest of the current step, else the next step (a selector step picks by its probabilities).
+    /// False when nothing in the cycle is playable.</summary>
+    private bool AdvanceIdle(bool asReturn)
+    {
+        if (_idleSteps is not { Count: > 0 } steps) return false;
+        for (int guard = 0; guard < steps.Count * 4 + 4; guard++)
+        {
+            if (_idleQueue.Count == 0)
+            {
+                var step = steps[_idleCursor % steps.Count];
+                _idleCursor = (_idleCursor + 1) % steps.Count;
+                var clips = step.Choices is { Count: > 0 } choices
+                    ? choices[Formats.Skeletons.AnimationClipGraph.PickChoice(choices, _idleRandom.NextDouble())].Clips
+                    : step.Clips;
+                foreach (var c in clips) _idleQueue.Enqueue(c);
+            }
+            if (_idleQueue.Count == 0) continue;
+            var entry = EntryFor(_idleQueue.Dequeue());
+            if (entry is null) continue;   // a clip with no .anm in this skin's list: the next one
+            _idleCycleEntry = entry;
+            Animation.Loop = false;        // a clip of the cycle plays once; its end brings the next
+            _idleReturnSelect = asReturn;
+            try { SelectClipInternal(entry, ReferenceEquals(Animation.SelectedAnimation, entry)); }
+            finally { _idleReturnSelect = false; }
+            return true;
+        }
+        return false;
     }
 
     private AnimationEntryViewModel? _introEntry, _introFollowUp;
@@ -131,8 +203,8 @@ public sealed partial class MeshPreviewViewModel
         bool still = ReferenceEquals(Animation.SelectedAnimation, _introEntry);
         _introEntry = null; _introFollowUp = null;
         if (!still) return;
-        Animation.Loop = true;
-        SelectClipInternal(next, false);
+        _idleRandom = new Random(IdleSeed);
+        BeginIdle(next, restart: false, asReturn: false);
     }
 
     /// <summary>M897: the entry for what the skin's own graph answers for "Idle1" (PlayLoadedIdle's resolution), else the base-idle pick; null when the skin has none.</summary>
@@ -154,6 +226,8 @@ public sealed partial class MeshPreviewViewModel
     private void OnPlainClipEnded()
     {
         if (Animation.Loop || !Animation.HasSkeleton || Animation.SelectedAnimation is null) return;
+        // M902: a clip of the idle cycle ran out - the next one of the cycle (a variant, then back to the base idle)
+        if (_idleCycleEntry is not null && ReferenceEquals(Animation.SelectedAnimation, _idleCycleEntry) && AdvanceIdle(true)) return;
         if (InChannelSpan()) { _idleReturnDeferred = true; return; }
         ReturnToIdle();
     }
@@ -163,10 +237,7 @@ public sealed partial class MeshPreviewViewModel
         _idleReturnDeferred = false;
         var entry = ResolveIdleEntry();
         if (entry is null) return;
-        Animation.Loop = true;
-        _idleReturnSelect = true;
-        try { SelectClipInternal(entry, true); }
-        finally { _idleReturnSelect = false; }
+        BeginIdle(entry, restart: true, asReturn: true);   // M902: a cycle starts over at its first clip; a single clip loops as before
         _onIdleReturn = true;
     }
 

@@ -280,7 +280,12 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 ClearSoundSchedule();
             }
         };
-        Animation.ClipEnded = OnIntroClipEnded;   // M887
+        Animation.ClipEnded = () =>   // M887
+        {
+            _visNaturalEnd = true;   // M902: whatever is selected next follows a clip that ran out
+            try { OnIntroClipEnded(); }
+            finally { _visNaturalEnd = false; }
+        };
         // M889: another clip chosen while the spawn intro plays ends the chain. A pick by the user (Animate tab, an action row) also
         // gets back the loop the intro switched off - it stayed off before, so that clip and every later one played once and stopped.
         // Internal selections (a cast, the simulation) set their own loop.
@@ -346,6 +351,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         AnimationTime = 0;
         Animation.SetSkeleton(skeleton?.BoneCount ?? 0);
         RebuildCasterBoneOptions();   // M663: this skeleton's joints, and a default among them
+        ResetPersistent();            // M902: the previous skin's persistent entries are not this skin's
         Playback = null;
         SelectedVfx = null;
         ImagePreview = null;    // M120: a model preview replaces a texture preview
@@ -1301,18 +1307,20 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private object? _visBuiltFor;      // the clip the cache belongs to (null = no clip)
     private int _visBuiltCount = -1;   // the submesh count it was built against
     private bool[]? _visLast;          // M884: last state the clip timeline produced (before user overrides)
+    private bool[]? _visLastIfCut;     // M902: the same, with the ranged events still inside their window taken back (what an interrupted clip leaves)
+    private bool _visNaturalEnd;       // M902: set for the duration of a ClipEnded handler - the next clip follows a clip that ran out, not one that was cut
     private bool _visForceBase;        // M884: next rebuild starts from the skin's base, not the carried state
     private bool _visCarryDropped;     // M884: a manual tick: stop recording until the next clip starts
 
     /// <summary>M884: forget the carried state; the next clip (or, with <paramref name="apply"/>, this one) starts from the skin base.</summary>
     private void ResetVisibilityCarry(bool apply)
     {
-        _visLast = null; _visForceBase = true; _visBuiltFor = new object();
+        _visLast = null; _visLastIfCut = null; _visForceBase = true; _visBuiltFor = new object();
         if (apply) ApplyAutoVisibility();
     }
 
     /// <summary>M884: the user ticked a submesh. The current clip keeps its picture; the NEXT clip starts from the skin base.</summary>
-    private void DropVisibilityCarry() { _visLast = null; _visCarryDropped = true; _visForceBase = true; }
+    private void DropVisibilityCarry() { _visLast = null; _visLastIfCut = null; _visCarryDropped = true; _visForceBase = true; }
 
     /// <summary>M724: resolve every name/hash match for the current clip once. The per-frame fold below is
     /// then pure boolean work - the user asked that the animation runtime not redo what does not change,
@@ -1329,7 +1337,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         // M884: the state the previous clip's events left behind is where this clip starts (the game keeps
         // submesh visibility across clips). Only the skin base when nothing was ever applied, or after a
         // skin load / Stop / manual tick.
-        _visBase = !_visForceBase && _visLast is { } last && last.Length == skinBase.Length ? (bool[])last.Clone() : skinBase;
+        // M902: a clip CUT SHORT (picked over, not ended) reverts the events whose window the playhead had not left - the game ends a ranged
+        // event with its window, and the window was cut. INFERRED: no client trace of an interrupted clip was available. A natural end keeps
+        // everything (the M884 carry-over above), as does a clip that was merely looping.
+        var carried = _visNaturalEnd ? _visLast : (_visLastIfCut ?? _visLast);
+        _visBase = !_visForceBase && carried is { } last && last.Length == skinBase.Length ? (bool[])last.Clone() : skinBase;
         _visForceBase = false;
         _visCarryDropped = false;
 
@@ -1363,11 +1375,13 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
 
         float frame = (float)AnimationTime / MathF.Max(1e-6f, FrameSeconds());
         bool record = AutoSubmeshVisibility && !_visCarryDropped;
-        var state = record ? new bool[Submeshes.Count] : null;
+        var computed = new bool[Submeshes.Count];
+        bool[]? ifCut = record ? new bool[Submeshes.Count] : null;
         for (int i = 0; i < Submeshes.Count; i++)
         {
             // 1. the skin's own picture
             bool visible = i < _visBase.Length && _visBase[i];
+            bool visibleIfCut = visible;
 
             // 2. the clip's events, in start order, only while their window contains the playhead
             if (AutoSubmeshVisibility)
@@ -1375,17 +1389,32 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                 {
                     if (frame < step.Start) continue;                        // not reached yet
                     if (step.End >= 0f && frame > step.End) continue;        // already expired
-                    if (i < step.Show.Length && step.Show[i]) visible = true;
-                    if (i < step.Hide.Length && step.Hide[i]) visible = false;
+                    bool rangedNow = step.End >= 0f;                         // M902: a window whose end the playhead has not reached
+                    if (i < step.Show.Length && step.Show[i]) { visible = true; if (!rangedNow) visibleIfCut = true; }
+                    if (i < step.Hide.Length && step.Hide[i]) { visible = false; if (!rangedNow) visibleIfCut = false; }
                 }
 
-            if (state is not null) state[i] = visible;
+            computed[i] = visible;
+            if (ifCut is not null) ifCut[i] = visibleIfCut;
+        }
+        if (record) { _visLast = (bool[])computed.Clone(); _visLastIfCut = ifCut; }
 
+        // M902: the persistent conditions read the picture above and add their own show/hide on top of it. NOT recorded in the carried state:
+        // they are re-derived from the conditions, so a carried copy would outlive the condition that made it.
+        var (pShow, pHide) = EvaluatePersistent(computed);
+
+        for (int i = 0; i < Submeshes.Count; i++)
+        {
+            bool visible = computed[i];
+            if (AutoSubmeshVisibility)
+            {
+                if (i < pShow.Length && pShow[i]) visible = true;
+                if (i < pHide.Length && pHide[i]) visible = false;
+            }
             // 3. the user's own answer, which outranks both
             var s = Submeshes[i];
             s.ApplyComputed(s.Override ?? visible);
         }
-        if (state is not null) _visLast = state;
     }
 
     /// <summary>M724: hand every submesh back to the skin + animation. Shown as a button because an
@@ -1494,6 +1523,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         IReadOnlyDictionary<uint, uint>? resourceMap = null)
     {
         _vfxDefs = systems;
+        _idleItemCache.Clear();   // M902: items are built from these definitions
         SetVfxBaseDefinitions(systems);   // M826: the effects recolour's preview starts from these
         _vfxResourceMap = resourceMap ?? new Dictionary<uint, uint>();
         VfxSystems.Clear();
@@ -1609,13 +1639,23 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     public void SetIdleEffects(IReadOnlyList<ReyEngine.Formats.Characters.SkinIdleEffect>? effects)
     {
         _idleEffects = effects ?? Array.Empty<ReyEngine.Formats.Characters.SkinIdleEffect>();
+        _idleItemCache.Clear();
         RebuildIdleItems();
         RepublishPlayback();
     }
 
+    /// <summary>M902: the idle records to mount - the skin's <c>idleParticlesEffects</c>, then the effects of the persistent entries that are on now.</summary>
+    private IReadOnlyList<ReyEngine.Formats.Characters.SkinIdleEffect> AllIdleRecords() =>
+        _persistentRecords.Count == 0 ? _idleEffects : _idleEffects.Concat(_persistentRecords).ToList();
+
+    // M902: an item built for one record is reused while that record stays - a re-evaluation that turns ONE persistent entry on must not
+    // restart the others (a new item is a different item to the viewport, and it replays from the top). Cleared when the effects change.
+    private readonly Dictionary<(uint Key, string Bone, string Target), VfxPlaybackItem> _idleItemCache = new();
+
     private void RebuildIdleItems()
     {
-        if (!IdleEffectsEnabled || _idleEffects.Count == 0 || _vfxDefs.Count == 0)
+        var records = AllIdleRecords();
+        if (!IdleEffectsEnabled || records.Count == 0 || _vfxDefs.Count == 0)
         {
             _idleItems = Array.Empty<VfxPlaybackItem>();
             IdleEffectCount = 0;
@@ -1623,7 +1663,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         }
 
         var items = new List<VfxPlaybackItem>();
-        foreach (var idle in _idleEffects)
+        foreach (var idle in records)
         {
             // through the skin's own ResourceResolver, the way the game resolves an effect key. No name
             // fallback here: an idle record that resolves to nothing is a deliberately switched-off effect,
@@ -1632,34 +1672,49 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             if (!_vfxDefs.TryGetValue(objHash, out var def)) continue;
             if (!def.Emitters.Any(e => e.IsVisual)) continue;
 
-            items.Add(BuildItem(def, System.Numerics.Vector3.Zero) with
+            var cacheKey = (idle.EffectKey, idle.BoneName, idle.TargetBoneName);
+            if (!_idleItemCache.TryGetValue(cacheKey, out var item))
             {
-                // an idle record names its bone in every one of the 1,855 records censused; an empty one
-                // rides the character's own origin rather than the world's
-                AttachBone = ResolveBoneName(idle.BoneName, 0),
-                TargetBone = ResolveBoneName(idle.TargetBoneName, 0),
-                // M712: a fixed seed - an idle is the same effect every launch, and deriving the seed from
-                // where the character stands would re-roll it whenever the character is moved
-                Seed = ReyEngine.Formats.Vfx.VfxRigDefaults.Seed,
-            });
+                // M902: the record's Position offset is NOT applied: a bone-attached item's Transform is replaced by the bone's every frame
+                // (VfxPlaybackSim.AttachmentTransform), so an offset would need a new field through both renderers - and no record of the 1,855
+                // idle ones censused authors one, nor does PersistentVfxData have the field.
+                item = BuildItem(def, System.Numerics.Vector3.Zero) with
+                {
+                    // an idle record names its bone in every one of the 1,855 records censused; an empty one
+                    // rides the character's own origin rather than the world's
+                    AttachBone = ResolveBoneName(idle.BoneName, 0),
+                    TargetBone = ResolveBoneName(idle.TargetBoneName, 0),
+                    // M712: a fixed seed - an idle is the same effect every launch, and deriving the seed from
+                    // where the character stands would re-roll it whenever the character is moved
+                    Seed = ReyEngine.Formats.Vfx.VfxRigDefaults.Seed,
+                };
+                _idleItemCache[cacheKey] = item;
+            }
+            items.Add(item);
         }
         _idleItems = items;
         IdleEffectCount = items.Count;
     }
+
+    // M902: the idle items the last publish carried (raw and character forms), so a set that SHRINKS is taken back out of the playback
+    private HashSet<VfxPlaybackItem> _publishedIdle = new();
 
     /// <summary>M726: idle effects play UNDER whatever else is playing - a clip's events, a spell composite
     /// or a hand-picked system - because in game they never stop. Every path that sets Playback goes through
     /// here so none of them can drop them.</summary>
     private void RepublishPlayback()
     {
-        if (_idleItems.Count == 0) return;
+        if (_idleItems.Count == 0 && _publishedIdle.Count == 0) return;
         var current = Playback;
         var items = new List<VfxPlaybackItem>(_idleItems);
         // M882: the Playback setter rewrites items to character semantics, so the idle items in 'current' are no longer Equal to _idleItems
         var idle = new HashSet<VfxPlaybackItem>(_idleItems);
         foreach (var raw in _idleItems) idle.Add(CharacterItem(raw));
-        if (current is not null) items.AddRange(current.Items.Where(i => !idle.Contains(i)));
-        Playback = new VfxPlayback(items);
+        var drop = new HashSet<VfxPlaybackItem>(idle);
+        drop.UnionWith(_publishedIdle);   // M902: and what was published last time but is no longer idle (a persistent entry that turned off)
+        if (current is not null) items.AddRange(current.Items.Where(i => !drop.Contains(i)));
+        _publishedIdle = idle;
+        Playback = items.Count == 0 && _idleItems.Count == 0 ? null : new VfxPlayback(items);
     }
 
     [ObservableProperty] private ReyEngine.Formats.Vfx.VfxRigMode _rigMode;

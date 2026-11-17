@@ -535,6 +535,23 @@
                       <TextBlock Text="{Binding IdleEffectCount, StringFormat='{}{0} idle effect(s) on bones'}"
                                  IsVisible="{Binding IdleEffectCount}"
                                  Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+                      <!-- M902: PersistentEffectConditions - effects that run only while a condition holds (Ahri's orb, Kai'Sa's
+                           engine glow). The switches are the buffs / gear the skin's own conditions ask about; the clip and the shown
+                           submeshes answer the rest. A switch that starts on is an inference (see PersistentConditions.DefaultOn). -->
+                      <TextBlock Text="{Binding PersistentActiveCount, StringFormat='{}{0} conditional effect(s) active'}"
+                                 IsVisible="{Binding HasPersistentGates}"
+                                 Foreground="{DynamicResource ReyTextDimBrush}" FontSize="10" />
+                      <ItemsControl ItemsSource="{Binding PersistentGates}" IsVisible="{Binding HasPersistentGates}">
+                        <ItemsControl.ItemsPanel>
+                          <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:PersistentGateViewModel">
+                            <ToggleButton Classes="vp" Content="{Binding Label}" IsChecked="{Binding IsOn}"
+                                          FontSize="10" Margin="0,0,4,4" ToolTip.Tip="{Binding Tip}" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
                       <!-- M715: the rig, for the manual pick only. A cast composite and a clip event
                            already move better than a rig can, so the viewport ignores it for both. -->
                       <StackPanel Spacing="5" IsVisible="{Binding SelectedVfx, Converter={x:Static ObjectConverters.IsNotNull}}">

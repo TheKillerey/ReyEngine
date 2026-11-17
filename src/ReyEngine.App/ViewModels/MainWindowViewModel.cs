@@ -12356,6 +12356,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var dx11 = await Task.Run(() => BuildCharacterDx11Scene(entry, skinBin: binPath));
             // M726: the skin's own idle effects, off the UI thread with everything else.
             var idleEffects = await Task.Run(() => TryLoadIdleEffects(entry, binPath));
+            var persistentEffects = await Task.Run(() => TryLoadPersistentEffects(entry, binPath));   // M902
             float skinScale = await Task.Run(() => TryReadSkinScale(entry, binPath));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -12380,6 +12381,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MeshPreview.SetVfx(vfx.systems, vfx.resourceMap);
                 // M726: AFTER SetVfx - an idle effect resolves through the resource map that call installs.
                 MeshPreview.SetIdleEffects(idleEffects);
+                // M902: and the effects that run only while a condition holds (Ahri's orb, Kai'Sa's engine glow, Aatrox's banner turbines)
+                MeshPreview.SetPersistentEffects(persistentEffects, ResolveBinName);
                 // M715: and what the game says each of them is for - the same three-bin walk M713 does for
                 // the particle editor, over the champion this window has just loaded.
                 MeshPreview.SetVfxRoles(BuildParticleRoles(entry.IsResolved ? entry.Path : null));
@@ -12420,6 +12423,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return SkinMeshExtractor.SkinScaleOf(GetAssetBytes(binEntry));
         }
         catch { return 1f; }
+    }
+
+    /// <summary>M902: the loaded skin's own <c>PersistentEffectConditions</c> - from the same one bin as its idle effects, for the same reason.</summary>
+    private IReadOnlyList<ReyEngine.Formats.Characters.PersistentEffectCondition> TryLoadPersistentEffects(WadAssetEntry skn, string? skinBin = null)
+    {
+        try
+        {
+            if (!ContentLoaded || !skn.IsResolved) return Array.Empty<ReyEngine.Formats.Characters.PersistentEffectCondition>();
+            var binPath = SkinPaths.PreviewBinPath(skinBin, skn.Path);
+            if (binPath is null || !TryResolveEntry(HashAlgorithms.WadPath(binPath), out var binEntry))
+                return Array.Empty<ReyEngine.Formats.Characters.PersistentEffectCondition>();
+            return ReyEngine.Formats.Characters.SkinPersistentEffects.Read(GetAssetBytes(binEntry));
+        }
+        catch { return Array.Empty<ReyEngine.Formats.Characters.PersistentEffectCondition>(); }
     }
 
     private IReadOnlyList<ReyEngine.Formats.Characters.SkinIdleEffect> TryLoadIdleEffects(WadAssetEntry skn, string? skinBin = null)

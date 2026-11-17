@@ -20,6 +20,12 @@ public sealed record AnimClipChild(uint NameHash, float? Value);
 /// </summary>
 public sealed record AnimClipNode(string Name, uint NameHash, AnimClipNodeKind Kind, string ClassName, IReadOnlyList<AnimClipChild> Children);
 
+/// <summary>M902: one option of a selector step - the clips it plays in order and its <c>mProbability</c> weight (null = not authored).</summary>
+public sealed record IdleChoice(float? Probability, IReadOnlyList<AnimClipInfo> Clips);
+
+/// <summary>M902: one step of an idle cycle - either fixed <see cref="Clips"/>, or a weighted <see cref="Choices"/> pick (Clips then empty).</summary>
+public sealed record IdleStep(IReadOnlyList<AnimClipInfo> Clips, IReadOnlyList<IdleChoice>? Choices);
+
 /// <summary>The atomic clips an authored name plays, in play order.</summary>
 /// <param name="Kind">"atomic" or the composite kind that was walked ("sequencer", "selector", "parametric", "conditionFloat").</param>
 /// <param name="Via">The composite names walked from the authored name down to the first clip (empty for an atomic clip).</param>
@@ -169,6 +175,93 @@ public static class AnimationClipGraph
         Expand(root, 0, byHash, nodeByHash, visiting, chain, via, firstOnly: false);
         return chain.Count == 0 ? null : new AnimClipResolution(chain, KindText(node.Kind), via);
     }
+
+    /// <summary>
+    /// M902: the idle CYCLE a name stands for, as steps. <see cref="Resolve"/> collapses a selector to its first pair; the game does not -
+    /// Ahri skin 97's <c>Idle1</c> is a bool condition (AhriR) whose false branch <c>Idle1_Base</c> is a sequencer of idle1.anm and a
+    /// selector of Idle_Var2 / Idle_Var3 (50 each), so the champion plays idle1, then one variant, and the sequencer starts over.
+    /// A sequencer yields its children's steps in order, a selector one <see cref="IdleStep.Choices"/> step, a bool condition its false
+    /// branch, anything else what <see cref="Resolve"/> picks. Null when the name resolves to nothing.
+    /// </summary>
+    public static IReadOnlyList<IdleStep>? ResolveSteps(string name, IEnumerable<AnimClipInfo> atomics, IEnumerable<AnimClipNode> nodes)
+    {
+        var byHash = new Dictionary<uint, AnimClipInfo>();
+        foreach (var c in atomics) byHash.TryAdd(HashOf(c.Name), c);
+        var nodeByHash = new Dictionary<uint, AnimClipNode>();
+        foreach (var n in nodes) nodeByHash.TryAdd(n.NameHash, n);
+
+        var steps = new List<IdleStep>();
+        StepsOf(HashOf(name), 0, byHash, nodeByHash, new HashSet<uint>(), steps);
+        return steps.Count == 0 ? null : steps;
+    }
+
+    private static void StepsOf(uint hash, int depth, Dictionary<uint, AnimClipInfo> atoms, Dictionary<uint, AnimClipNode> nodes,
+        HashSet<uint> visiting, List<IdleStep> into)
+    {
+        if (depth > MaxDepth) return;
+        if (atoms.TryGetValue(hash, out var atom)) { into.Add(new IdleStep(new[] { atom }, null)); return; }
+        if (!nodes.TryGetValue(hash, out var node) || !visiting.Add(hash)) return;
+        switch (node.Kind)
+        {
+            case AnimClipNodeKind.Sequencer:
+                foreach (var ch in node.Children) StepsOf(ch.NameHash, depth + 1, atoms, nodes, visiting, into);
+                break;
+            case AnimClipNodeKind.Selector:
+            {
+                var options = new List<IdleChoice>();
+                foreach (var ch in node.Children)
+                {
+                    var chain = new List<AnimClipInfo>();
+                    Expand(ch.NameHash, depth + 1, atoms, nodes, new HashSet<uint>(visiting), chain, new List<string>(), firstOnly: false);
+                    if (chain.Count > 0) options.Add(new IdleChoice(ch.Value, chain));
+                }
+                if (options.Count == 1) into.Add(new IdleStep(options[0].Clips, null));
+                else if (options.Count > 1) into.Add(new IdleStep(Array.Empty<AnimClipInfo>(), options));
+                break;
+            }
+            default:
+            {
+                // bool / float condition, parametric, parallel: the same single answer Resolve gives
+                var chain = new List<AnimClipInfo>();
+                Expand(hash, depth, atoms, nodes, new HashSet<uint>(visiting.Where(v => v != hash)), chain, new List<string>(), firstOnly: true);
+                if (node.Kind == AnimClipNodeKind.ConditionBool)
+                {
+                    // the false branch may itself be a sequencer/selector: walk it as steps
+                    var falseBranch = node.Children.FirstOrDefault(c => c.Value == 0f) ?? node.Children.FirstOrDefault();
+                    if (falseBranch is not null)
+                    {
+                        var inner = new List<IdleStep>();
+                        StepsOf(falseBranch.NameHash, depth + 1, atoms, nodes, visiting, inner);
+                        if (inner.Count > 0) { into.AddRange(inner); break; }
+                    }
+                }
+                foreach (var a in chain.Take(1)) into.Add(new IdleStep(new[] { a }, null));
+                break;
+            }
+        }
+        visiting.Remove(hash);
+    }
+
+    /// <summary>
+    /// M902: which of a selector's options to play. <paramref name="unit"/> is a uniform number in [0,1); the options are weighted by
+    /// <c>mProbability</c> (a pair that authors none weighs 1; negative weighs 0). With no positive weight the first option is taken.
+    /// </summary>
+    public static int PickChoice(IReadOnlyList<IdleChoice> choices, double unit)
+    {
+        if (choices.Count == 0) return -1;
+        double total = 0;
+        foreach (var c in choices) total += Weight(c);
+        if (total <= 0) return 0;
+        double at = Math.Clamp(unit, 0.0, 0.999999999) * total, acc = 0;
+        for (int i = 0; i < choices.Count; i++)
+        {
+            acc += Weight(choices[i]);
+            if (at < acc) return i;
+        }
+        return choices.Count - 1;
+    }
+
+    private static double Weight(IdleChoice c) => c.Probability is { } p ? Math.Max(0f, p) : 1.0;
 
     private static string KindText(AnimClipNodeKind k) => k switch
     {
