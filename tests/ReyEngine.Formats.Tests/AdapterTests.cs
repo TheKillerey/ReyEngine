@@ -97,9 +97,9 @@ public sealed class AdapterTests(ITestOutputHelper output)
     // ===================================================== the adapters
 
     [Fact]
-    public void Adapters_are_registered_for_Kalista_and_Talon_only()
+    public void Adapters_are_registered_for_Brand_Kalista_and_Talon_only()
     {
-        Assert.Equal(new[] { "Kalista", "Talon" }, SimulationPlanner.Adapters.Select(a => a.Champion).OrderBy(c => c, StringComparer.Ordinal));
+        Assert.Equal(new[] { "Brand", "Kalista", "Talon" }, SimulationPlanner.Adapters.Select(a => a.Champion).OrderBy(c => c, StringComparer.Ordinal));
     }
 
     [Fact]

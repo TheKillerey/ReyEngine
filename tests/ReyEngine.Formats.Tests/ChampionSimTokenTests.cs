@@ -70,11 +70,12 @@ public sealed class ChampionSimTokenTests
     }
 
     [Fact]
-    public void PassiveKeepsItsStatesOnTheCaster()
+    public void PassiveKeepsItsSelfStatesOnTheCasterAndPutsTheStatesOfTheEnemyOnTheTarget()
     {
-        var s = Skin("Lux_Base_P_debuff", "Lux_Base_P_tar");
+        // M903: a passive's own effects stay with the caster (M873) - except the ones whose name says they are on the enemy (a debuff, a mark)
+        var s = Skin("Lux_Base_P_debuff", "Lux_Base_P_tar", "Lux_Base_P_Idle_glow", "Lux_Base_P_buf");
         var ev = EventOf(s, "P");
-        Assert.Equal(new[] { "Lux_Base_P_debuff" }, Names(s, ev.CasterSystems));
-        Assert.Equal(new[] { "Lux_Base_P_tar" }, Names(s, ev.TargetSystems));
+        Assert.Equal(new[] { "Lux_Base_P_buf" }, Names(s, ev.CasterSystems));
+        Assert.Equal(new[] { "Lux_Base_P_debuff", "Lux_Base_P_tar" }, Names(s, ev.TargetSystems).OrderBy(n => n, StringComparer.Ordinal));
     }
 }

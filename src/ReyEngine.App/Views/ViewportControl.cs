@@ -1993,7 +1993,7 @@ public sealed class ViewportControl : OpenGlControlBase
             // M68: particleColorTexture is sampled on the CPU (in the simulator), so hand the emitter the
             // decoded RGBA gradient directly rather than uploading it to GL.
             var colorImg = item.EmitterColorTextures is { } cts && idx >= 0 && idx < cts.Count ? cts[idx] : null;
-            if (colorImg is not null)
+            if (colorImg is not null && !ReyEngine.App.Services.VfxPlaybackSim.Erodes(es.Def))   // M903: an eroding emitter gets no gradient (same rule as VfxPlaybackSim)
             {
                 es.ColorGradient = colorImg.Rgba;
                 es.ColorGradientW = colorImg.Width;

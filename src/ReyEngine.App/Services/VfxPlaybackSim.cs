@@ -230,7 +230,8 @@ public static class VfxPlaybackSim
             // directly rather than a texture handle - which is exactly why it belongs on this side of the
             // split instead of with the backend uploads.
             var colorImg = item.EmitterColorTextures is { } cts && idx < cts.Count ? cts[idx] : null;
-            if (colorImg is not null)
+            // M903: an eroding emitter gets no gradient - quad_ps compiled with ALPHA_EROSION binds no PARTICLE_COLOR_TEXTURE (docs/research/vfx-blend-modes.md)
+            if (colorImg is not null && !Erodes(es.Def))
             {
                 es.ColorGradient = colorImg.Rgba;
                 es.ColorGradientW = colorImg.Width;
@@ -238,6 +239,10 @@ public static class VfxPlaybackSim
             }
         }
     }
+
+    /// <summary>M903: the emitter compiles quad_ps with ALPHA_EROSION (the same define set the D3D11 permutation is picked from): that shader binds no PARTICLE_COLOR_TEXTURE.</summary>
+    public static bool Erodes(VfxEmitterDefinition def) =>
+        ReyEngine.Formats.Vfx.VfxShaderFlags.For(def, out _).ContainsKey("ALPHA_EROSION");
 
     /// <summary>M754: hand each emitter its emission surface. Both backends and the GL child systems come
     /// through here, so a surface cannot reach one viewport and not the other.</summary>
@@ -308,7 +313,9 @@ public static class VfxPlaybackSim
             {
                 if (sp.ChildIndex < 0 || sp.ChildIndex >= childItems.Count) continue;
                 var ci = childItems[sp.ChildIndex];
-                result.Add((item.AimAtDummy && !ci.AimAtDummy ? ci with { AimAtDummy = true } : ci, sp.Position));   // M882: a child aims where its parent aims
+                if (item.AimAtDummy && !ci.AimAtDummy) ci = ci with { AimAtDummy = true };   // M882: a child aims where its parent aims
+                if (!item.HostIsCaster && ci.HostIsCaster) ci = ci with { HostIsCaster = false };   // M903: and stands where its parent stands - a child of a target-side system draws no shell on the caster
+                result.Add((ci, sp.Position));
             }
         }
         return result;

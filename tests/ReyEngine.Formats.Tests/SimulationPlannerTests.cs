@@ -287,7 +287,7 @@ public sealed class SimulationPlannerTests(ITestOutputHelper output)
         Assert.Equal("adapter", script.Steps[^1].Source);
         Assert.Equal(1, mine.Calls);
         Assert.Equal(0, other.Calls);
-        Assert.Equal(new[] { "Kalista", "Talon" }, SimulationPlanner.Adapters.Select(a => a.Champion).OrderBy(c => c, StringComparer.Ordinal));   // M874
+        Assert.Equal(new[] { "Brand", "Kalista", "Talon" }, SimulationPlanner.Adapters.Select(a => a.Champion).OrderBy(c => c, StringComparer.Ordinal));   // M874
     }
 
     private sealed class Tag(string champion) : ISimAdapter

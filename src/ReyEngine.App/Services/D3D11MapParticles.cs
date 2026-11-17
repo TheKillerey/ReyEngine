@@ -1125,7 +1125,7 @@ public sealed class D3D11MapParticles
             if (c.Age > VfxPlaybackSim.ChildSimMaxAge) { RetireChild(c); _children.RemoveAt(i); continue; }
             if (Stopped) c.Sim.Stop();
             c.Sim.SetBeamTarget(c.Item.BeamTarget ?? BoneWorldPosition(c.Item.TargetBone) ?? (c.Item.AimAtDummy ? _beamTarget : null));   // M882: the same precedence as a root
-            VfxPlaybackSim.AttachHost(c.Sim, _emissionHost);
+            VfxPlaybackSim.AttachHost(c.Sim, c.Item.HostIsCaster ? _emissionHost : null);   // M903: as for a root
             c.Sim.Update(dt);
             SpawnQueuedChildren(c.Item, c.Sim);
         }

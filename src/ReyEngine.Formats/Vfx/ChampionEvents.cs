@@ -97,14 +97,40 @@ public static class ChampionSystemTokens
         return null;
     }
 
+    /// <summary>M903: tokens a PASSIVE's system carries when it is a state or an event on the enemy. The data has no field for it (the buff data authors no effect, the passive has no
+    /// missile or hit; the effects are spawned by the compiled script), so it is the name: a state token or a token that ends in "mark" (FireMark, FireMark2), or a detonation.
+    /// A ring or a timer counts only beside a mark of the same passive (<paramref name="names"/>): Brand's redring and Timer belong to his FireMarks, Singed's or Swain's own timer to themselves.
+    /// Self states (buf / buff / self) and sounds stay on the caster.</summary>
+    private static readonly HashSet<string> PassiveEnemyExtra = new(StringComparer.OrdinalIgnoreCase) { "detonate", "detonation" };
+    private static readonly HashSet<string> PassiveMarkFamily = new(StringComparer.OrdinalIgnoreCase) { "redring", "ring", "timer" };
+    private static readonly HashSet<string> PassiveSelfTokens = new(StringComparer.OrdinalIgnoreCase) { "buf", "buff", "self", "audio", "sound" };
+
+    private static string Stem(string token) => token.TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
+
+    private static bool IsMarkToken(string token)
+    {
+        string stem = Stem(token);
+        return stem.Length > 0 && (stem.Equals("mark", StringComparison.OrdinalIgnoreCase)
+            || (stem.Length > 4 && stem.EndsWith("mark", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool PassiveIsOnEnemy(string[] tokens, ISet<string>? names)
+    {
+        if (tokens.Any(t => PassiveSelfTokens.Contains(Stem(t)))) return false;
+        if (tokens.Any(t => TargetStateTokens.Contains(Stem(t)) || PassiveEnemyExtra.Contains(Stem(t)) || IsMarkToken(t))) return true;
+        return names is not null && tokens.Any(t => PassiveMarkFamily.Contains(Stem(t)))
+            && names.Any(n => n.Split('_', StringSplitOptions.RemoveEmptyEntries).Any(IsMarkToken));
+    }
+
     /// <summary>Where a surviving system plays. tar/hit and mis keep their existing meaning and win over the new tables.</summary>
-    public static Role Classify(string name, bool passive = false)
+    public static Role Classify(string name, bool passive = false, ISet<string>? names = null)
     {
         var tokens = name.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(t => t.ToLowerInvariant()).ToArray();
         if (tokens.Any(t => t is "tar" or "hit")) return Role.Target;
         if (tokens.Contains("mis")) return Role.Missile;
-        // a passive is not aimed and the planner gives it no hit: its states and placed effects stay with the caster (M873 behaviour)
-        if (passive) return Role.Caster;
+        // a passive is not aimed and the planner gives it no hit: its states and placed effects stay with the caster (M873 behaviour) -
+        // except the ones whose name says they are on the ENEMY (M903: Brand's FireMark / FireMark2 / FireMark3 stack marks, the detonation, the ring and the timer)
+        if (passive) return PassiveIsOnEnemy(tokens, names) ? Role.Target : Role.Caster;
         if (tokens.Any(TargetStateTokens.Contains)) return Role.Target;
         if (tokens.Any(AimTokens.Contains)) return Role.Aim;
         return Role.Caster;
@@ -166,7 +192,7 @@ public static class ChampionEventBuilder
             var key = (form, spellKey);
             if (!groups.TryGetValue(key, out var g)) groups[key] = g = (new List<uint>(), new List<uint>(), new List<uint>(), new List<uint>(), new List<string>());
             if (ChampionSystemTokens.DropReason(def.Name, allNames) is { } why) { g.Dropped.Add(def.Name + " (" + why + ")"); continue; }
-            switch (ChampionSystemTokens.Classify(def.Name, spellKey == "P"))
+            switch (ChampionSystemTokens.Classify(def.Name, spellKey == "P", allNames))
             {
                 case ChampionSystemTokens.Role.Target: g.Tar.Add(hash); break;
                 case ChampionSystemTokens.Role.Missile: g.Mis.Add(hash); break;

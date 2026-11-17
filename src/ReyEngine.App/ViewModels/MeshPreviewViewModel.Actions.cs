@@ -108,7 +108,8 @@ public sealed partial class MeshPreviewViewModel
         {
             _introEntry = intro; _introFollowUp = entry;
             Animation.Loop = false;
-            SelectClipInternal(intro, false);
+            _idleSelect = true;
+            try { SelectClipInternal(intro, false); } finally { _idleSelect = false; }
             return true;
         }
         _idleRandom = new Random(IdleSeed);
@@ -142,9 +143,9 @@ public sealed partial class MeshPreviewViewModel
         {
             _idleSteps = null; _idleCycleEntry = null; _idleQueue.Clear();
             Animation.Loop = true;
-            _idleReturnSelect = asReturn;
+            _idleReturnSelect = asReturn; _idleSelect = true;
             try { SelectClipInternal(first, restart); }
-            finally { _idleReturnSelect = false; }
+            finally { _idleReturnSelect = false; _idleSelect = false; }
             return;
         }
         _idleSteps = steps; _idleCursor = 0; _idleQueue.Clear();
@@ -152,9 +153,9 @@ public sealed partial class MeshPreviewViewModel
         {
             _idleSteps = null; _idleCycleEntry = null;
             Animation.Loop = true;
-            _idleReturnSelect = asReturn;
+            _idleReturnSelect = asReturn; _idleSelect = true;
             try { SelectClipInternal(first, restart); }
-            finally { _idleReturnSelect = false; }
+            finally { _idleReturnSelect = false; _idleSelect = false; }
         }
     }
 
@@ -179,9 +180,9 @@ public sealed partial class MeshPreviewViewModel
             if (entry is null) continue;   // a clip with no .anm in this skin's list: the next one
             _idleCycleEntry = entry;
             Animation.Loop = false;        // a clip of the cycle plays once; its end brings the next
-            _idleReturnSelect = asReturn;
+            _idleReturnSelect = asReturn; _idleSelect = true;
             try { SelectClipInternal(entry, ReferenceEquals(Animation.SelectedAnimation, entry)); }
-            finally { _idleReturnSelect = false; }
+            finally { _idleReturnSelect = false; _idleSelect = false; }
             return true;
         }
         return false;

@@ -171,8 +171,8 @@ public static class SimulationPlanner
 
     private static readonly string[] AllyTags = { "PositiveEffect_Boon", "Trait_Shield", "Trait_ActiveHeal" };
 
-    /// <summary>Adapters in effect when a caller passes none (M874: Kalista and Talon).</summary>
-    public static IReadOnlyList<ISimAdapter> Adapters { get; } = new ISimAdapter[] { new Adapters.KalistaSimAdapter(), new Adapters.TalonSimAdapter() };
+    /// <summary>Adapters in effect when a caller passes none (M874: Kalista and Talon; M903: Brand).</summary>
+    public static IReadOnlyList<ISimAdapter> Adapters { get; } = new ISimAdapter[] { new Adapters.KalistaSimAdapter(), new Adapters.TalonSimAdapter(), new Adapters.BrandSimAdapter() };
 
     /// <summary>True when the ability is staged with an ally: an adapter said so, or it is a boon / shield / heal that needs a unit.</summary>
     public static bool NeedsAlly(AbilitySim a) => a.Scenario.NeedsAlly || AllyByTags(a);
@@ -403,9 +403,10 @@ public static class SimulationPlanner
                 hitPlanned = true; lastHit = cast;
             }
         }
-        else if (!passive && hasTargetSystems && kind != "self")
+        else if ((!passive || a.TargetSystems.Count > 0) && hasTargetSystems && kind != "self")
         {
             // targeted / area / cone / melee, and a self-centred area: the target systems play at the cast
+            // M903: and a passive's own target-side systems (Annie's stun, Brand's marks): the composite plays target systems only where a hit lands, so without this step they played nowhere
             bool inside = kind != "selfaoe" || a.CastRadius <= 0f || hitDistance <= a.CastRadius;
             if (inside)
             {

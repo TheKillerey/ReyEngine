@@ -254,8 +254,11 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
         Animation.ClipChanged = clip =>
         {
             CurrentAnimation = clip; _lastAnimTime = 0; ApplyAutoVisibility();
+            // M903: the clip the idle (or the idle cycle) selected publishes ITS ParticleEventData as idle-layer items - Annie's flame is an event of
+            // RAW_Idle1, not an idleParticlesEffects record. Any other selection drops them; a cast or a user's pick plays its own events (or none).
+            SetIdleClipItems(_idleSelect && clip is not null && Animation.SelectedAnimation?.Name is { } idleAnm ? _clipsByAnm?.GetValueOrDefault(idleAnm) : null);
             // M897: the return to the looped idle changes only the pose; the running spell's playback, sounds and composite are not re-driven by it
-            if (_idleReturnSelect) return;
+            if (_idleReturnSelect) { if (SelectedVfx is null) RepublishPlayback(); return; }   // M903: the idle layer changed with the clip
             _onIdleReturn = false;
             if (clip is not null && SimRunning) SimClipHistory.Add(Animation.CurrentName);
             // M883: a clip the USER picks (Animate tab, an action row without a composite) ends the previous spell: the event stays 'active' otherwise and ApplyClipParticles keeps republishing its bundle
@@ -564,9 +567,28 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             return;
         }
 
+        var items = BuildClipEventItems(clip);
+        if (_eventBundle is { Count: > 0 }) items.AddRange(_eventBundle);   // M116: spell composite rides along
+        // M667: the whole playback about to reach the renderers, in one line. Item counts and bone
+        // attachments are what a native fault in the GL upload would need to be traced back to.
+        LogDx11?.Invoke("Event", $"clip '{anm}': {items.Count} item(s) to the viewport, "
+            + $"{items.Count(i => i.AttachBone is { Length: > 0 })} bone-attached, "
+            + $"{items.Count(i => i.EmitterMeshes is not null)} with mesh emitters");
+        if (items.Count > 0)
+        {
+            Playback = new VfxPlayback(items);
+            RepublishPlayback();   // M892: and under a clip that authors some
+        }
+    }
+
+    /// <summary>M86/M91/M903: the playback items of a clip's ParticleEventData, one per spawn pair. Shared by a clip played as an event
+    /// (<see cref="ApplyClipParticles"/>) and by the idle layer (<see cref="SetIdleClipItems"/>).</summary>
+    private List<VfxPlaybackItem> BuildClipEventItems(Formats.Skeletons.AnimClipInfo clip)
+    {
         var items = new List<VfxPlaybackItem>();
+        if (clip.ParticleEvents is null) return items;
         float frameSeconds = FrameSeconds();   // M724: the CLIP's tick, not just the .anm's fps
-        foreach (var ev in clip.ParticleEvents!)
+        foreach (var ev in clip.ParticleEvents)
         {
             // M726: a kill event's job is to STOP a system. Spawning it played a second copy that nothing
             // ever stopped. (Inert on shipped champion data - Riot never writes the flag true - but a mod
@@ -614,17 +636,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
                     EndTime = end,
                 });
         }
-        if (_eventBundle is { Count: > 0 }) items.AddRange(_eventBundle);   // M116: spell composite rides along
-        // M667: the whole playback about to reach the renderers, in one line. Item counts and bone
-        // attachments are what a native fault in the GL upload would need to be traced back to.
-        LogDx11?.Invoke("Event", $"clip '{anm}': {items.Count} item(s) to the viewport, "
-            + $"{items.Count(i => i.AttachBone is { Length: > 0 })} bone-attached, "
-            + $"{items.Count(i => i.EmitterMeshes is not null)} with mesh emitters");
-        if (items.Count > 0)
-        {
-            Playback = new VfxPlayback(items);
-            RepublishPlayback();   // M892: and under a clip that authors some
-        }
+        return items;
     }
 
     // ---- M114: target dummy — a stand-in unit so targeted-spell VFX have somewhere to land ----
@@ -1655,7 +1667,7 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
     private void RebuildIdleItems()
     {
         var records = AllIdleRecords();
-        if (!IdleEffectsEnabled || records.Count == 0 || _vfxDefs.Count == 0)
+        if (!IdleEffectsEnabled || (records.Count == 0 && _idleClipItems.Count == 0) || _vfxDefs.Count == 0)
         {
             _idleItems = Array.Empty<VfxPlaybackItem>();
             IdleEffectCount = 0;
@@ -1692,8 +1704,29 @@ public sealed partial class MeshPreviewViewModel : ObservableObject
             }
             items.Add(item);
         }
+        // M903: the idle clip's own events, minus what a record already mounts (same system on the same bone)
+        foreach (var clipItem in _idleClipItems)
+            if (!items.Any(i => i.System.PathHash == clipItem.System.PathHash
+                    && string.Equals(i.AttachBone, clipItem.AttachBone, StringComparison.OrdinalIgnoreCase)))
+                items.Add(clipItem);
         _idleItems = items;
         IdleEffectCount = items.Count;
+    }
+
+    // ---- M903: clip events of the idle layer ----
+
+    private IReadOnlyList<VfxPlaybackItem> _idleClipItems = Array.Empty<VfxPlaybackItem>();
+    /// <summary>True while the idle (the load's, the cycle's, the return to idle) selects its clip.</summary>
+    private bool _idleSelect;
+
+    /// <summary>The ParticleEventData of the idle clip, as idle-layer items: they stay for the clip (a looping event keeps going, a one-shot fires at its
+    /// start frame) and go with the next clip. Null clip = none. Items are built once per clip change, so a persistent re-evaluation keeps them running.</summary>
+    internal void SetIdleClipItems(Formats.Skeletons.AnimClipInfo? clip)
+    {
+        var next = clip is { ParticleEvents.Count: > 0 } ? BuildClipEventItems(clip) : new List<VfxPlaybackItem>();
+        if (next.Count == 0 && _idleClipItems.Count == 0) return;
+        _idleClipItems = next;
+        RebuildIdleItems();
     }
 
     // M902: the idle items the last publish carried (raw and character forms), so a set that SHRINKS is taken back out of the playback
