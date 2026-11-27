@@ -4946,6 +4946,15 @@ float4 psmain(VOut i) : SV_Target
                     // a missing input and cannot hide a genuinely destructive unbound constant.
                     "TEEMO_ACTIVE" => new[] { 0f, 0f, 0f, 0f },
 
+                    // M906: League 16.23 decodes the vertex normal (and Mantis's tangent) in the VERTEX shader:
+                    //     N = NORMAL * NTSB.x + NTSB.z;   T = TANGENT * NTSB.xxxy + NTSB.zzzw
+                    // (defaultenv_flat.vs: mad r1.xyz, v1.xyzx, cb1[4].xxxx, cb1[4].zzzz). 96 staticmesh vertex TOCs
+                    // declare it. The game sets it for its packed vertex formats; ReyEngine always uploads decoded
+                    // float normals and tangents (PreviewVertex), so the identity decode is the right value. Left at
+                    // zero, N = 0 and normalize(0) is NaN, so every max(dot(N, L), 0) is 0: the sun and every
+                    // dynamic point/spot light added nothing on the D3D11 map viewport.
+                    "NORMAL_TANGENT_SCALE_BIAS" => new[] { 1f, 1f, 0f, 0f },
+
                     // M465: the two depth biases, in the form the shader applies them (light-system.md §1.7,
                     // re-verified at DefaultEnv_Flat blob 226 lines 172-177):
                     //     bias = SLOPE_SCALED * (1 - dot(Ngeo, normalize(SUN_LIGHT_DIRECTION))) + CONSTANT
