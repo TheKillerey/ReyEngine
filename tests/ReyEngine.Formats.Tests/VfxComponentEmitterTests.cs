@@ -289,19 +289,23 @@ public sealed class VfxComponentEmitterTests(ITestOutputHelper output)
         var grid = all.Values.Single(s => s.Name == "HoL_26_CubeGrid");
         var grid02 = all.Values.Single(s => s.Name == "HoL_26_CubeGrid_02");
 
-        // CubeGrid: three Shimmer emitters (all disabled) beside three classic entries that carry the block
-        // and nothing else; CubeGrid_02: one of each. Structure first, then the conclusion.
-        Assert.Equal(new VfxComponentEmitters(3, 3, 3), grid.ComponentEmitters);
-        Assert.Equal(new VfxComponentEmitters(1, 1, 1), grid02.ComponentEmitters);
-        Assert.Equal(3, grid.Emitters.Count);
-        Assert.Single(grid02.Emitters);
+        // CubeGrid: N Shimmer emitters (all disabled) beside N classic entries that carry the block and nothing
+        // else (3 until the 16.23 map update, 2 now); CubeGrid_02 is the one-of-each case. The counts come from the
+        // data so a patch that adds or drops a cube does not fail a test whose subject is the structure.
+        int n = grid.ComponentEmitters!.ShimmerEmitters, n2 = grid02.ComponentEmitters!.ShimmerEmitters;
+        Assert.InRange(n, 1, 64);
+        Assert.InRange(n2, 1, 64);
+        Assert.Equal(new VfxComponentEmitters(n, n, n), grid.ComponentEmitters);
+        Assert.Equal(new VfxComponentEmitters(n2, n2, n2), grid02.ComponentEmitters);
+        Assert.Equal(n, grid.Emitters.Count);
+        Assert.Equal(n2, grid02.Emitters.Count);
 
         // the picture the user saw: not one emitter of either is visual, so nothing is drawn
         Assert.All(grid.Emitters.Concat(grid02.Emitters), e => Assert.False(e.IsVisual, e.Name));
         Assert.True(VfxNothingToDraw.Applies(grid));
         Assert.True(VfxNothingToDraw.Applies(grid02));
-        Assert.Contains("All 3 shipped Shimmer emitters here are disabled", grid.ComponentEmitters!.Note);
-        Assert.Contains("The only shipped Shimmer emitter here is disabled", grid02.ComponentEmitters!.Note);
+        Assert.Contains(n == 1 ? "The only shipped Shimmer emitter here is disabled" : $"All {n} shipped Shimmer emitters here are disabled", grid.ComponentEmitters!.Note);
+        Assert.Contains(n2 == 1 ? "The only shipped Shimmer emitter here is disabled" : $"All {n2} shipped Shimmer emitters here are disabled", grid02.ComponentEmitters!.Note);
 
         // and no other system in this bin is authored in the format
         Assert.Equal(2, all.Values.Count(s => s.ComponentEmitters is not null));
@@ -331,10 +335,12 @@ public sealed class VfxComponentEmitterTests(ITestOutputHelper output)
         vm.SelectedSystem = vm.Systems.Single(s => s.Name == "HoL_26_CubeGrid");
         var systemCard = vm.Cards[0];
         Assert.True(systemCard.IsSystemCard);
-        Assert.Equal(new VfxComponentEmitters(3, 3, 3).Note, systemCard.ComponentNote);
+        int n = vm.SelectedComponentEmitters!.ShimmerEmitters;   // the cube count is the data's (3 before the 16.23 map update, 2 now)
+        Assert.InRange(n, 1, 64);
+        Assert.Equal(new VfxComponentEmitters(n, n, n).Note, systemCard.ComponentNote);
         Assert.True(systemCard.HasComponentNote);
         Assert.All(vm.Cards.Skip(1), c => Assert.Null(c.ComponentNote));   // the note is the system's, once
-        Assert.Equal(3, vm.Cards.Count - 1);
+        Assert.Equal(n, vm.Cards.Count - 1);   // one card per emitter
 
         // D3D11 reports "no shader loaded" for this system; the editor says what is true instead
         Assert.Equal("Nothing to draw - component (Shimmer) VFX is not simulated; the game "

@@ -99,7 +99,16 @@ public sealed class MeshStageParityTests
         Assert.Contains("cb0[0].zwzz", qb[qi + 3]);
 
         // The substitution: the mesh reads the constant, the quad reads a vertex interpolant (v*).
-        Assert.Contains("cb0[0].xxxx", mb[mi + 2]);
+        // 16.23 reworked how the mesh shader gets it: it first picks the drive with
+        //   movc r0.x, cb2[1].x, v5.z, cb0[0].x
+        // - the per-instance interpolant for an INSTANCED draw (a switch this driver leaves off), the constant
+        // otherwise - and then subtracts r0.x. Before that, the subtract read the constant directly. Either way
+        // a non-instanced mesh draw takes the constant, never an interpolant, in the subtract.
+        bool readsConstantDirectly = mb[mi + 2].Contains("cb0[0].xxxx", StringComparison.Ordinal);
+        bool selectsConstantFirst = mb.Take(mi).Any(l => l.StartsWith("movc", StringComparison.Ordinal)
+            && l.EndsWith(", cb0[0].x", StringComparison.Ordinal));
+        Assert.True(readsConstantDirectly || selectsConstantFirst, "the mesh erosion drive is not taken from cAlphaErosionParams.x: " + mb[mi + 2]);
+        Assert.DoesNotMatch(@"v\d+\.[xyzw]{4}", mb[mi + 2]);
         Assert.Matches(@"\bv\d+\.[xyzw]{4}", qb[qi + 2]);
         Assert.DoesNotContain("cb0[0].xxxx", qb[qi + 2]);
     }

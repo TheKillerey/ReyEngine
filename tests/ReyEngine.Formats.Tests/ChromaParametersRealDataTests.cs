@@ -719,8 +719,13 @@ public sealed class ChromaParametersRealDataTests : IDisposable
     /// runs), and drawn again - with the textures switched OFF so that only the parameters can have moved the picture. The frames are written as
     /// PNGs when <c>REYENGINE_M825_SHOTS</c> names a folder.</summary>
     [Theory]
+    // Ahri 0 was a row here until M899: the only colour parameters her base skin still draws are two white scroll-texture tints and the
+    // tails' Bloom_Color, so the 2% of the frame that used to change was the bloom HALO, which M899 (the bloom chain averages its levels
+    // instead of summing them) shrank from thousands of pixels to nine. She stays in the scan/save/revert tests above and below; the rows here
+    // are skins whose parameters colour the surfaces themselves.
     [InlineData("Lillia", 49)]
-    [InlineData("Ahri", 0)]
+    [InlineData("Aatrox", 24)]
+    [InlineData("Lux", 38)]
     public async Task TheParameterRecolourReachesTheRealD3D11Frame(string champion, int skinNumber)
     {
         using var rig = Rig.Create(champion, skinNumber);

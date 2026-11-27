@@ -760,7 +760,8 @@ public sealed class MapEventRealDataTests(ITestOutputHelper output)
         if (OpenMap("Map11", "base_srx") is not { } rift) return;
         using var _ = rift;
 
-        Assert.Equal(new[] { "MapObjectESportSponsorBanners", "MSITrophy", "SR_Hall_Of_Legends" }, rift.Controllers.EventNames);
+        // the three the census found, by name; a patch may add more (16.23 added SR_Worlds_Trophies), so the set is a floor, not an equality
+        Assert.Subset(new HashSet<string>(rift.Controllers.EventNames), new HashSet<string> { "MapObjectESportSponsorBanners", "MSITrophy", "SR_Hall_Of_Legends" });
         Assert.Equal(0x4275b121u, H("MutatorMapVisibilityController"));
         // the three controllers are the ones the dump showed: path hash -> name
         foreach (var (hash, name) in new[] { (0x76c50391u, "SR_Hall_Of_Legends"), (0x11a9b55du, "MapObjectESportSponsorBanners"), (0x8f1ab207u, "MSITrophy") })
@@ -814,19 +815,26 @@ public sealed class MapEventRealDataTests(ITestOutputHelper output)
         var winners = particles.Where(p => p.Name is "SRU_MSI_Winner1" or "SRU_MSI_Winner2").ToList();
 
         Assert.Equal(2, winners.Count);
-        Assert.All(winners, p => Assert.Equal(0x8f1ab207u, p.VisibilityControllerHash));
+        // They hang off ONE event controller. It was MSITrophy until the 16.23 map update, which moved them under the Hall of Legends
+        // controller (the same one as the godrays); the rule is that they are an event's content, so the event is read from the data.
+        uint winnersController = winners[0].VisibilityControllerHash;
+        Assert.All(winners, p => Assert.Equal(winnersController, p.VisibilityControllerHash));
+        string winnersEvent = Assert.Single(rift.Controllers.Resolve(winnersController).Mutators);
+        Assert.Contains(winnersEvent, rift.Controllers.EventNames);
         foreach (var p in winners)
         {
             Assert.False(resolver.IsVisible(p.VisibilityFlags, p.VisibilityControllerHash, none, null, new HashSet<string>()));
-            Assert.True(resolver.IsVisible(p.VisibilityFlags, p.VisibilityControllerHash, none, null, new HashSet<string> { "MSITrophy" }));
-            Assert.False(resolver.IsVisible(p.VisibilityFlags, p.VisibilityControllerHash, none, null, new HashSet<string> { "SR_Hall_Of_Legends" }));
+            Assert.True(resolver.IsVisible(p.VisibilityFlags, p.VisibilityControllerHash, none, null, new HashSet<string> { winnersEvent }));
+            // any other event leaves them hidden
+            foreach (string other in rift.Controllers.EventNames.Where(n => n != winnersEvent))
+                Assert.False(resolver.IsVisible(p.VisibilityFlags, p.VisibilityControllerHash, none, null, new HashSet<string> { other }), other);
         }
 
         // and through the view model's own gate, for every placement in the bin
         var vm = Vm(rift, MapGeoDecoder.Decode(rift.MapGeo, ExtendedChannelRule.From(rift.Materials, rift.Name)), particles);
         bool Visible(MapParticlePlacement p) => (bool)typeof(MainWindowViewModel).GetMethod("IsParticleVisible", NonPublic)!.Invoke(vm, new object?[] { p, null })!;
-        int gatedByEvents = particles.Count(p => p.VisibilityControllerHash is 0x8f1ab207u or 0x76c50391u or 0x11a9b55du);
-        Assert.InRange(gatedByEvents, 3, 10);
+        int gatedByEvents = particles.Count(p => p.VisibilityControllerHash != 0 && rift.Controllers.Resolve(p.VisibilityControllerHash).Mutators.Count > 0);
+        Assert.InRange(gatedByEvents, 3, 20);
         Assert.False(Visible(winners[0]) || Visible(winners[1]));
         // M849: a named controller (e07edfa4, DefaultVisible false: the void-pit environments the server switches on) is hidden until
         // set, so those placements are off at the start too - the only Riot difference the controller tree makes to base_srx
@@ -835,10 +843,11 @@ public sealed class MapEventRealDataTests(ITestOutputHelper output)
         Assert.Equal(4, namedOff);
         Assert.Equal(particles.Count - gatedByEvents - namedOff, particles.Count(Visible));
 
-        vm.MapEvents.Single(e => e.Name == "MSITrophy").IsOn = true;
+        vm.MapEvents.Single(e => e.Name == winnersEvent).IsOn = true;
         Assert.True(Visible(winners[0]) && Visible(winners[1]));
-        Assert.Equal(particles.Count - (gatedByEvents - 2) - namedOff, particles.Count(Visible));
-        output.WriteLine($"ran: {particles.Count} placement(s) in base_srx; {gatedByEvents} gated by an event (SRU_MSI_Winner1/2 + the Hall of Legends godrays), "
+        int ofThatEvent = particles.Count(p => p.VisibilityControllerHash != 0 && rift.Controllers.Resolve(p.VisibilityControllerHash).Mutators.Contains(winnersEvent));
+        Assert.Equal(particles.Count - (gatedByEvents - ofThatEvent) - namedOff, particles.Count(Visible));
+        output.WriteLine($"ran: {particles.Count} placement(s) in base_srx; {gatedByEvents} gated by an event (SRU_MSI_Winner1/2 under {winnersEvent}, + the Hall of Legends godrays), "
             + $"{particles.Count(Visible)} shown with MSITrophy on; markers {vm.ParticleMarkers?.Count}");
     }
 
@@ -854,11 +863,20 @@ public sealed class MapEventRealDataTests(ITestOutputHelper output)
         var gatedMeshes = map.Meshes.Where(m => rift.Controllers.Resolve(m.EffectiveController).Mutators.Count > 0).ToList();
         int gatedGroups = map.Groups.Count(g => gatedMeshes.Any(m => m.Index == g.MeshIndex));
         Assert.True(gatedMeshes.Count >= 2);
-        Assert.All(gatedMeshes, m => Assert.Equal(new[] { "SR_Hall_Of_Legends" }, rift.Controllers.Resolve(m.EffectiveController).Mutators));
+        // one direct event each; the Hall of Legends was the only one until the 16.23 map update added the Worlds trophies, so the events are read from the data
+        string EventOf(MapGeoMesh m) => Assert.Single(rift.Controllers.Resolve(m.EffectiveController).Mutators);
+        var gatedEvents = gatedMeshes.Select(EventOf).Distinct(StringComparer.Ordinal).OrderBy(n => n, StringComparer.Ordinal).ToList();
+        Assert.Contains("SR_Hall_Of_Legends", gatedEvents);
 
         var atDefault = vm.CurrentModelSubmeshVisible!.ToList();
-        Assert.Equal(gatedGroups, atDefault.Count(v => !v));                                       // exactly those groups are hidden
-        Assert.Equal(map.Groups.Count - gatedGroups, atDefault.Count(v => v));
+        // A mesh bound to a render region is hidden while "Render regions" is off, which is the default view (the 16.23 base_srx ships 13 such
+        // groups, unrelated to any event). They are not event content, so they are counted separately: the EVENTS hide exactly the gated groups.
+        var gatedMeshIndices = gatedMeshes.Select(m => m.Index).ToHashSet();
+        bool RegionOnly(int group) => map.Groups[group].MeshIndex is var mi && !gatedMeshIndices.Contains(mi)
+            && map.Meshes.FirstOrDefault(m => m.Index == mi) is { RegionHash: not 0 };
+        int regionOnly = Enumerable.Range(0, map.Groups.Count).Count(RegionOnly);
+        Assert.Equal(gatedGroups + regionOnly, atDefault.Count(v => !v));                          // exactly those groups are hidden
+        Assert.Equal(map.Groups.Count - gatedGroups - regionOnly, atDefault.Count(v => v));
 
         // before M802 (events not evaluated) every group of the map showed: this is the visible default change
         var before = new MapVisibilityResolver(rift.Controllers, rift.Definition);
@@ -873,8 +891,17 @@ public sealed class MapEventRealDataTests(ITestOutputHelper output)
         Assert.Equal(atDefault, vm.CurrentModelSubmeshVisible);                                    // gates nothing the map draws
         vm.MapEvents.Single(e => e.Name == "MSITrophy").IsOn = true;
         Assert.Equal(atDefault, vm.CurrentModelSubmeshVisible);                                    // no MSI mesh in base_srx
-        vm.MapEvents.Single(e => e.Name == "SR_Hall_Of_Legends").IsOn = true;
-        Assert.All(vm.CurrentModelSubmeshVisible!, visible => Assert.True(visible));                                   // every group shows again
+        // each event brings back exactly its own groups
+        var on = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string gatedEvent in gatedEvents)
+        {
+            vm.MapEvents.Single(e => e.Name == gatedEvent).IsOn = true;
+            on.Add(gatedEvent);
+            var stillHidden = gatedMeshes.Where(m => !on.Contains(EventOf(m))).ToList();
+            Assert.Equal(map.Groups.Count(g => stillHidden.Any(m => m.Index == g.MeshIndex)) + regionOnly, vm.CurrentModelSubmeshVisible!.Count(v => !v));
+        }
+        // every event group shows again; what stays hidden is only the render-region groups
+        Assert.Equal(regionOnly, vm.CurrentModelSubmeshVisible!.Count(v => !v));
         output.WriteLine($"ran: base_srx {map.Meshes.Count} mesh(es) / {map.Groups.Count} group(s); default view hides {gatedMeshes.Count} mesh(es) "
             + $"({gatedGroups} group(s)) [{string.Join(", ", gatedMeshes.Select(m => m.Name))}], all {map.Groups.Count} shown before M802 and with the Hall of Legends ticked");
     }
