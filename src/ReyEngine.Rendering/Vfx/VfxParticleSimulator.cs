@@ -389,7 +389,13 @@ public sealed class VfxParticleSimulator
             s.InverseWorld = InverseOf(frame);
         }
         s.BasePos = Vector3.Transform(d.EmitterPosition.Constant, s.World);
-        (s.PlacementRight, s.PlacementUp, s.PlacementForward) = VfxEmitterOrientation.Basis(s.World, true, false);
+        // M909: an emitter authored non-local whose particles are particleIsLocalOrientation still turns its particles
+        // (placement basis) by the host's CURRENT rotation, as LTK Manager does; s.World stays host-free for spawn positions.
+        // Re-run per frame through SetWorldTransform, so it follows the bone.
+        var basisFrame = !local && d.Extras?.ParticleIsLocalOrientation == true
+            ? s.World * VfxCastFrame.RotationOf(worldTransform)
+            : s.World;
+        (s.PlacementRight, s.PlacementUp, s.PlacementForward) = VfxEmitterOrientation.Basis(basisFrame, true, false);
     }
 
     /// <summary>M881: character and simulation playback follow LTK Manager's VFX engine for orientation (see

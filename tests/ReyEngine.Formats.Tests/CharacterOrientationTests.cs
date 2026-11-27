@@ -100,6 +100,20 @@ public sealed class CharacterOrientationTests
     }
 
     [Fact]
+    public void NonLocalWithParticleLocalOrientationTurnsTheBasisByTheHostButNotThePosition()
+    {
+        var host = Matrix4x4.CreateRotationY(MathF.PI / 2f) * Matrix4x4.CreateTranslation(500f, 0f, 0f);
+        var both = Run(Emitter(new VfxEmitterExtras { IsLocalOrientation = false, ParticleIsLocalOrientation = true, TranslationOverride = new Vector3(0f, 0f, 100f) }), host);
+        Near(Vector3.UnitX, both.PlacementForward);               // host yaw 90: +Z -> +X
+        Near(-Vector3.UnitZ, both.PlacementRight);
+        Near(new Vector3(500f, 0f, 100f), both.BasePos);          // spawn frame still host-free
+        var nonLocalOnly = Run(Emitter(new VfxEmitterExtras { IsLocalOrientation = false }), host);
+        Near(Vector3.UnitZ, nonLocalOnly.PlacementForward);       // unchanged
+        var local = Run(Emitter(new VfxEmitterExtras { ParticleIsLocalOrientation = true }), host);
+        Near(Vector3.UnitX, local.PlacementForward);              // local unchanged
+    }
+
+    [Fact]
     public void Rotation0IntegratesEveryAxisAtSixtyPerSecondOfRate()
     {
         // keyed, 1.5 deg per 1/60 s on Y for 1 s = 90 deg; a constant is a fixed angle of c * 60 * lifetime from birth
