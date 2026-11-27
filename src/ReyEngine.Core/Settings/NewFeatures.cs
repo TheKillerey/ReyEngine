@@ -39,7 +39,7 @@ public static class NewFeatures
     /// <summary>The release whose highlights are currently on offer. Bumped when a release ADDS entries -
     /// a fix-only release (0.4.6) leaves it, so the What's New list keeps its newest header and nothing
     /// glows for a release that changed no entry point.</summary>
-    public const string CurrentVersion = "0.5.3";
+    public const string CurrentVersion = "0.5.4";
 
     /// <summary>
     /// The public, user-facing features introduced in <see cref="CurrentVersion"/>.
@@ -148,6 +148,11 @@ public static class NewFeatures
         NewFeature.Note("0.5.3", "League 16.21: maps, skins and their materials load and save in the patch's new material-name form"),
         NewFeature.Note("0.5.3", "Map visibility follows the game's own rules, and Visibility Layers lists what would stay hidden in the game"),
         NewFeature.Note("0.5.3", "Export .fantome writes LTK's new game_data.yaml declarations, and older LTK Manager versions still read the package"),
+        NewFeature.Note("0.5.4", "Character window: every champion stands on Summoner's Rift and plays its own abilities from Riot's data, with showcase, replay and Riot's ability video"),
+        NewFeature.Note("0.5.4", "Character window: skins show their idle, persistent and clip effects, idle variants, skin scale and the newest skins' meshes and animations"),
+        NewFeature.Note("0.5.4", "Spotlights: League's MapDynamicSpotlight can be added, aimed, edited and saved, and lights the Direct3D 11 viewport"),
+        NewFeature.Note("0.5.4", "Per-light Strength in the Object inspector for point lights and spotlights"),
+        NewFeature.Note("0.5.4", "Champion effects: missile bodies, trails, child systems, effect shells and ground projections draw on Direct3D 11"),
     };
 
     /// <summary>Replace the registry. Exists so tests can drive the logic without depending on whatever
