@@ -500,7 +500,7 @@
 
             <Canvas IsHitTestVisible="False">
               <Border x:Name="FaceSelectionBox" IsVisible="False" BorderThickness="1"
-                      BorderBrush="#619BEE" Background="#30619BEE" />
+                      BorderBrush="{DynamicResource ReyAccentBrush}" Background="{DynamicResource ReySelectionBrush}" />
             </Canvas>
 
             <!-- M172c: brush palette. Floats over the viewport bottom-left, out of the way of the

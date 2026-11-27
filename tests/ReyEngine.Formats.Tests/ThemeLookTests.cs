@@ -194,7 +194,10 @@ public sealed class ThemeLookTests
         Assert.NotNull(main); Assert.NotNull(outliner);
         Assert.Contains("Classes=\"docTab\" Classes.active=\"{Binding IsActive}\"", main);
         Assert.Contains("Classes=\"docTabLine\" Classes.active=\"{Binding IsActive}\"", main);
-        Assert.Equal(6, Regex.Matches(outliner!, "Classes=\"outRow\" Classes.selected=\"\\{Binding IsSelected\\}\"").Count);
+        // every outliner row (one per node kind; a new kind adds one) takes its selected look from the class
+        int outRows = Regex.Matches(outliner!, "Classes=\"outRow\"").Count;
+        Assert.True(outRows >= 6);
+        Assert.Equal(outRows, Regex.Matches(outliner!, "Classes=\"outRow\" Classes.selected=\"\\{Binding IsSelected\\}\"").Count);
         Assert.DoesNotContain("BoolToBrushConverter", main);
         Assert.DoesNotContain("BoolToBrushConverter", outliner);
         Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(dir)!, "Converters", "BoolToBrushConverter.cs")));
