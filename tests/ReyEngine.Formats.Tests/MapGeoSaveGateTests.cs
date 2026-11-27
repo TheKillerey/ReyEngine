@@ -28,7 +28,7 @@ public sealed class MapGeoSaveGateTests
     private static readonly (string Property, string Gate, string What)[] Kinds =
     {
         ("HasMapMoves", "hasMoves", "mesh moves"),
-        ("_faceEdits.Count > 0", "hasFaces", "face edits"),
+        ("HasFaceEdits", "hasFaces", "face edits"),
         ("_faceGrows.Count > 0", "hasGrows", "extrude/inset"),
         ("_blenderReshapes.Count > 0", "hasReshapes", "Blender reshapes"),
         ("MapContent.AddedMeshes.Count > 0", "added.Count == 0", "added meshes"),

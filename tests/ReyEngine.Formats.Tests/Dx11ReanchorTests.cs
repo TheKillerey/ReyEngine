@@ -157,7 +157,9 @@ public sealed class Dx11ReanchorTests
         Assert.True(setBeam > 0, "the per-frame beam target push must still exist");
         string call = text.Substring(setBeam, text.IndexOf(';', setBeam) - setBeam);
         Assert.StartsWith("sim.SetBeamTarget(item.BeamTarget ??", call, StringComparison.Ordinal);
-        Assert.EndsWith("?? _beamTarget)", call, StringComparison.Ordinal);
+        // M882 made the host fallback conditional on the item opting in (AimAtDummy), so the host target
+        // is still the LAST term, just guarded.
+        Assert.EndsWith("? _beamTarget : null))", call, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -179,7 +181,7 @@ public sealed class Dx11ReanchorTests
 
         Assert.Contains("_dx11.BoneGlobals = vm.CurrentBoneGlobals()", window);
         Assert.Contains("_dx11.BeamTarget = vm.TargetDummyPosition", window);
-        Assert.Contains("Particles?.SetBoneGlobals(BoneGlobals, BoneModelWorld)", surface);
+        Assert.Contains("Particles?.SetBoneGlobals(BoneGlobals, BoneModelWorld", surface);
         Assert.Contains("Particles?.SetBeamTarget(BeamTarget)", surface);
     }
 

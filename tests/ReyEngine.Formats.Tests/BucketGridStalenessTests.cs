@@ -26,7 +26,7 @@ public sealed class BucketGridStalenessTests
     {
         if (ViewModelSource() is not { } source) return;
 
-        int at = source.IndexOf("// 2b) M105: bucket grids bake per-face visibility", StringComparison.Ordinal);
+        int at = source.IndexOf("// 3b) M105: bucket grids bake per-face visibility", StringComparison.Ordinal);
         Assert.True(at > 0, "the bucket-grid regeneration block has moved");
         string block = source[at..(at + 1400)];
 

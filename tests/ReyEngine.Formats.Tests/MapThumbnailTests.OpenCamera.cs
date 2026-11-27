@@ -373,7 +373,7 @@ public sealed partial class MapThumbnailTests
         Assert.Contains("MapStartState.ResolveWith(map, _mapStartDefinition ?? MapVisibilityDefinition.Empty, _mapStartControllers,", openCamera);
         Assert.Contains("_mapStartDefinition = parsedVisibility;", vm);       // the shipping bin's own definition, before any axis is inferred
         // a tab: the scene carries the frame and the camera; restoring hands them back and never bumps the request
-        Assert.Contains("CurrentMapFrame, CaptureCameraPose?.Invoke());", vm);
+        Assert.Contains("CurrentMapFrame, CaptureCameraPose?.Invoke()", vm);   // later milestones append scene state (FaceState, spotlights) after the camera
         int restore = vm.IndexOf("private void RestoreMapScene(MapScene s)", StringComparison.Ordinal);
         string restoreBody = vm.Substring(restore, vm.IndexOf("/// <summary>Push the freshly-built asset tree", restore, StringComparison.Ordinal) - restore);
         Assert.Contains("CurrentMapFrame = s.Frame;", restoreBody);

@@ -88,7 +88,7 @@ public sealed class ClipParticleCueTests
 
         // gated on a clip being selected: with none - idle effects, and the particle editor - the clock
         // stays real time, because freezing there would mean idle effects that never move
-        Assert.Contains("if (AnimationClip is not null)", gl);
+        Assert.Contains("if (AnimationClip is not null && !ParticleFreeClock)", gl);   // M869: a simulated ability run is on real time, so the clip clock is skipped
         Assert.Contains("dt = MathF.Max(0f, t - _lastParticleAnimTime);", gl);
         // the editor's speed multiplier must not stack on top of the clip's own speed
         Assert.Contains("dt = ParticlePaused ? 0f : dt * (float)ParticleSpeed;", gl);

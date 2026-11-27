@@ -90,17 +90,27 @@ public sealed class CastFrameAndPaletteTests
         // M663: the caster's systems also carry a bone, so they ride the animated model instead of
         // standing where the cast started. Only the caster's - a missile is not bone-bound in game
         // either, and a target system belongs to whatever it hit.
-        Assert.Contains("Make(h, caster, aim, null, casterBone)", preview);
+        Assert.Contains("Make(h, caster, aim, null, casterBone", preview);
         Assert.Contains("Make(h, hit, caster, null)", preview);
-        Assert.Contains("Make(h, caster, flightEnd, flightEnd)", preview);
+        // M893 moved the missile into Fly(): it is made from the launch point toward the flight end, which is the caster
+        // (or the authored start bone) to flightEnd, and it still faces and travels to that same end.
+        Assert.Contains("var from = caster; var to = flightEnd;", preview);
+        Assert.Contains("Make(sys, from, to, to)", preview);
+        // M875: location / terminal systems play at the aim point, facing back at the caster.
+        Assert.Contains("Make(h, aim, caster, null)", preview);
         Assert.Contains("BuildItem(def, VfxCastFrame.Toward(at, faceToward, at))", preview);
 
-        // Both renderers re-issue the missile's matrix every tick; both keep the rotation now.
+        // Both renderers re-issue the missile's matrix every tick; both keep the rotation now. Since M893 that is ONE function they
+        // share (VfxPlaybackSim.TravelTransform, which carries the item's rotation), so each renderer is pinned to call it and the
+        // function to keep the rotation.
         var d3d = Source("src", "ReyEngine.App", "Services", "D3D11MapParticles.cs");
         var gl = Source("src", "ReyEngine.App", "Views", "ViewportControl.cs");
-        if (d3d is null || gl is null) return;
-        Assert.Contains("VfxCastFrame.RotationOf(item.Transform)", d3d);
-        Assert.Contains("VfxCastFrame.RotationOf(item.Transform)", gl);
+        var sim = Source("src", "ReyEngine.App", "Services", "VfxPlaybackSim.cs");
+        if (d3d is null || gl is null || sim is null) return;
+        Assert.Contains("VfxPlaybackSim.TravelTransform(item, destination, progress)", d3d);
+        Assert.Contains("VfxPlaybackSim.TravelTransform(item, dest, t01)", gl);
+        Assert.Contains("VfxCastFrame.RotationOf(item.Transform) * Matrix4x4.CreateTranslation(pos)", sim);
+        Assert.Contains("VfxCastFrame.RotationOf(item.Transform) * Matrix4x4.CreateTranslation(Vector3.Lerp(item.WorldPos, destination, t01))", sim);
         Assert.DoesNotContain("sim.SetWorldTransform(Matrix4x4.CreateTranslation(pos));", gl);
     }
 

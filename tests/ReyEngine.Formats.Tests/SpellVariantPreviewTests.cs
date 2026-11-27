@@ -53,9 +53,12 @@ public sealed class SpellVariantPreviewTests
             var ev = Assert.Single(events, e => e.Name == "Q" + cast);
             Assert.Equal($"aatrox_ground_q{cast}.anm", ev.ClipAnmFile);
             var names = ev.CasterSystems.Select(h => skin.Systems[h].Name).ToArray();
-            Assert.Equal(3, names.Length);
+            // M875: the indicator is a timed state ("indicator" is in TimedStateTokens) - it plays when the game
+            // reaches that phase, not at the cast, so it is listed as dropped rather than played.
+            Assert.Equal(2, names.Length);
             Assert.Contains($"Aatrox_Base_Q_cas{cast}", names);
-            Assert.Contains($"Aatrox_Base_Q_Indicator_0{cast}", names);
+            Assert.DoesNotContain($"Aatrox_Base_Q_Indicator_0{cast}", names);
+            Assert.Contains(ev.DroppedSystemNames, n => n.StartsWith($"Aatrox_Base_Q_Indicator_0{cast} (timed state", StringComparison.Ordinal));
             Assert.Contains($"Aatrox_Base_Q_Trail_0{cast}", names);
         }
         var actions = CharacterActions.Build(Array.Empty<string>(), skin.Clips);
@@ -95,24 +98,29 @@ public sealed class SpellVariantPreviewTests
             {
                 vm.CastAbility(0, vm.CharacterPosition + direction * 250);
                 Assert.Equal("Q" + cast, vm.SelectedEvent?.Name);
-                var indicator = Assert.Single(vm.Playback!.Items,
-                    i => i.System.Name == $"Aatrox_Base_Q_Indicator_0{cast}");
-                Assert.Equal("root", indicator.AttachBone);
-                Assert.True(indicator.PreserveCastDirection);
-                Assert.Equal(vm.CharacterPosition, indicator.WorldPos);
+                // M875: the Indicator systems no longer play at the cast; the Trail is the caster system that does.
+                var trail = Assert.Single(vm.Playback!.Items,
+                    i => i.System.Name == $"Aatrox_Base_Q_Trail_0{cast}");
+                Assert.Equal("root", trail.AttachBone);
+                Assert.True(trail.PreserveCastDirection);
+                Assert.Equal(vm.CharacterPosition, trail.WorldPos);
                 var attached = ReyEngine.App.Services.VfxPlaybackSim.AttachmentTransform(
-                    indicator, Matrix4x4.CreateRotationY(0.8f), vm.ModelWorld);
+                    trail, Matrix4x4.CreateRotationY(0.8f), vm.ModelWorld);
                 Assert.True(Vector3.Distance(direction, VfxCastFrame.WorldForward(attached)) < 0.0001f);
                 Assert.True(Vector3.Distance(Vector3.TransformNormal(Vector3.UnitZ, vm.ModelWorld),
                     VfxCastFrame.WorldForward(attached)) < 0.0001f);
-                // Verify the actual authored spawn, not just a forward vector agreeing with itself.
-                var sim = ReyEngine.App.Services.VfxPlaybackSim.Create(indicator)!;
+                // Verify the actual authored spawn, not just a forward vector agreeing with itself. The Trail's
+                // "Basic" particle is authored a fixed ~12 units to the RIGHT of the cast (measured on 16.22 data:
+                // |offset| = 12.13, along the aim = ~0), so its offset must turn with the aim.
+                var sim = ReyEngine.App.Services.VfxPlaybackSim.Create(trail)!;
                 sim.SetWorldTransform(attached);
                 sim.Update(0.1f);
-                var ground = Assert.Single(sim.Emitters, e => e.Def.Name == "GroundLines");
-                Assert.True(ground.InstanceCount > 0);
-                var particle = new Vector3(ground.Instances[0], ground.Instances[1], ground.Instances[2]);
-                Assert.True(Vector3.Dot(particle - vm.CharacterPosition, direction) > 190);
+                var basic = Assert.Single(sim.Emitters, e => e.Def.Name == "Basic");
+                Assert.True(basic.InstanceCount > 0);
+                var offset = new Vector3(basic.Instances[0], 0, basic.Instances[2]) - new Vector3(vm.CharacterPosition.X, 0, vm.CharacterPosition.Z);
+                var right = new Vector3(direction.Z, 0, -direction.X);
+                Assert.True(Vector3.Dot(offset, right) > 10f, $"cast {cast}: offset {offset} is not to the right of the aim {direction}");
+                Assert.True(MathF.Abs(Vector3.Dot(offset, direction)) < 1f, $"cast {cast}: offset {offset} drifts along the aim {direction}");
             }
         }
         finally { vm.StopControl(); }
