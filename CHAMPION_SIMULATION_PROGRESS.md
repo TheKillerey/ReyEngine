@@ -1,6 +1,6 @@
 # Champion simulation progress
 
-Game build: 16.22.8348910. Plan: `docs/plans/champion-simulation.md`.
+Game build: 16.22.8348910 (latest roster run: 16.23.8418428, see "Roster run (v0.5.4 + M907-M909)"). Plan: `docs/plans/champion-simulation.md`.
 
 ## Roster
 
@@ -47,6 +47,32 @@ First 20 champions (Aatrox..Briar): 9 COMPLETE, 11 INCOMPLETE, 0 BLOCKED; abilit
 show until attacks or other abilities trigger it), 4 extra spells (Aphelios E and Severum Q, Elise spider Q and W), 7 slots:
 Alistar W, Gwen Q, Kaisa Q, Kayn Q2 (assassin, since the dash fix), Leona Q, Talon Q (root), Zilean W.
 Memory over a long run: private bytes +37 MB per champion swap (native/GPU, not the checker's frames); see M874 notes.
+
+## Roster run (v0.5.4 + M907-M909, game 16.23.8418428, 2026-11-27/28)
+
+`--simcheck all` on the v0.5.4 build (7511 s, peak working set 13.7 GB): 149 / 173 auto-check, 24 INCOMPLETE.
+The per-champion table below is still the M873/M884 state; this section supersedes its totals.
+
+- 10 champions failed every ability on the cleanup check (AurelionSol, Aurora, Nami, Neeko, Sejuani, TahmKench,
+  Volibear, Yorick, Ziggs; Nilah W). Cause: Stop/Reset and a walk's end selected the Idle clip as a plain pick and
+  dropped the M903 idle-clip effects and the M902 idle cycle. Fixed in M907 (2699072). The check now takes its
+  baseline after a real reset and reports extra AND missing names. Re-run of the 11: 10 COMPLETE.
+- After M907: about 159 / 173. Still INCOMPLETE:
+  - Yunara Q/W/E/R: the count of `Yunara_Base_Idle_Orb` differs after a cast; probably passive orb state.
+  - 14 single slots, most of them passives with nothing to show without a trigger: Akali P, Annie P, Karma P,
+    Lulu P, Riven P, Shaco P, TwistedFate P, Varus P and Yone P; Leona Q, Zilean W, Aphelios E and Gnar big Q.
+  - Kalista P is flaky (0.0012 vs the 0.0015 threshold).
+- modelviewer.lol comparison, batch 2: Brand, Fiddlesticks, Hecarim, Jinx, Karthus, Lux, Thresh and Viego, skin 0 idle.
+  - Match: Jinx, Karthus, Thresh, Viego and Hecarim. Submesh hiding and blending are right on all 8.
+  - Fixed: Fiddlesticks' scythe glow (M908, 1534fa6). A finite emitter that would emit nothing in its life now
+    emits one particle.
+  - Fixed: Primordian Aatrox's banner turbines pointed down (M909, 870cd03). A world-space character emitter
+    flagged `particleIsLocalOrientation` now turns with its bone. The plumes are still bluer than the reference.
+  - Open: Lux idle `rays` (VfxPrimitiveRay) shows large rainbow fans. Either the M778 axis reading is wrong or
+    modelviewer.lol simply doesn't draw rays; this needs a look in the game.
+  - Open: Brand's hair flame is shorter and dimmer than the reference.
+- Still open from earlier: the target dummy has no skeleton (target host shells skipped), Brand's stack audio plays
+  at t=0, and Ezreal P and Zilean W are incomplete.
 
 ## Champions
 
