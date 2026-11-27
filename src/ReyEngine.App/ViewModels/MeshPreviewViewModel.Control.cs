@@ -239,6 +239,13 @@ public sealed partial class MeshPreviewViewModel
 
     private void PlayKind(CharacterActionKind kind)
     {
+        // M907: the stop of a walk returns to idle the way a finished cast does, so the idle-clip effects (M903) and the idle cycle (M902) come back
+        if (kind == CharacterActionKind.Idle && ResolveIdleEntry() is { } idleEntry)
+        {
+            _idleRandom = new Random(IdleSeed);
+            BeginIdle(idleEntry, restart: true, asReturn: false);
+            return;
+        }
         var row = Actions.FirstOrDefault(a => a.Action.Kind == kind && a.HasClip);
         if (row is null) return;
         SelectedAction = null;

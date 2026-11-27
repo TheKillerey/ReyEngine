@@ -520,6 +520,13 @@ public sealed partial class MeshPreviewViewModel
         _rangeRingCastSlot = -1;
         PlaceOnStage();
         StopMovement();                    // walk, attack, pending cast; the controller; back to idle
+        // M907: PlayKind(Idle) selects the Idle clip as a plain pick, which drops the idle-clip effects (M903) and the idle cycle (M902).
+        // The reset returns to idle the way PlayLoadedIdle / a finished cast does, so both are rebuilt.
+        if (ResolveIdleEntry() is { } idleEntry)
+        {
+            _idleRandom = new Random(IdleSeed);
+            BeginIdle(idleEntry, restart: true, asReturn: false);
+        }
         RefreshRangeRing();
     }
 

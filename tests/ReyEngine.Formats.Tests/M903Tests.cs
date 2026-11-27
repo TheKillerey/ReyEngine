@@ -142,6 +142,35 @@ public sealed class M903Tests(ITestOutputHelper output)
         Assert.Equal(0, vm.Playback?.Items.Count(IsFire) ?? 0);
     }
 
+    [Fact]
+    public void Annie0_a_reset_after_another_clip_brings_the_idle_clips_flame_back()
+    {
+        if (!Installed) { output.WriteLine("SKIPPED: no game install"); return; }
+        var vm = LoadAnnie(ReadAnnie());
+        vm.PlayLoadedIdle();
+        Assert.Equal(1, vm.Playback!.Items.Count(IsFire));
+        // M907: a clip picked by hand drops the idle layer (M883) ...
+        var run = vm.Animation.Animations.First(a => a.Name.Contains("run", StringComparison.OrdinalIgnoreCase));
+        vm.Animation.SelectedAnimation = run;
+        Assert.Equal(0, vm.Playback?.Items.Count(IsFire) ?? 0);
+        // ... and the reset (what StopSimulation ends in) returns to idle the way a finished cast does
+        vm.ResetScene();
+        Assert.Equal(1, vm.Playback?.Items.Count(IsFire) ?? 0);
+    }
+
+    [Fact]
+    public void Annie0_when_a_walk_stops_the_idle_clips_flame_comes_back()
+    {
+        if (!Installed) { output.WriteLine("SKIPPED: no game install"); return; }
+        var vm = LoadAnnie(ReadAnnie());
+        vm.PlayLoadedIdle();
+        var run = vm.Animation.Animations.First(a => a.Name.Contains("run", StringComparison.OrdinalIgnoreCase));
+        vm.Animation.SelectedAnimation = run;
+        Assert.Equal(0, vm.Playback?.Items.Count(IsFire) ?? 0);
+        vm.StopMovement();   // the control tick's stop-of-walk ends in PlayKind(Idle), as does this
+        Assert.Equal(1, vm.Playback?.Items.Count(IsFire) ?? 0);
+    }
+
     // ---------------------------------------------------------------- 2. Brand's passive
 
     private static readonly string[] BrandP =

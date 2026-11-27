@@ -241,7 +241,8 @@ internal sealed class SimCheckDriver
         Mp.SimSpeed = _options.Speed;
 
         // the stage, as the load left it: where cleanup must bring everyone back
-        Mp.StopSimulation();
+        Mp.StopSimulationAndReset();   // M907: StopSimulation alone is a no-op on a fresh load - the reset puts back what every run's end puts back
+        await Settle();   // M907: "at rest" is what an explicit stop/reset leaves, not a snapshot that may land inside Idle_In or mid-cycle
         var stage = new StageSnapshot(Mp.CharacterPosition, Mp.TargetDummyPosition, PlaybackNames());
 
         // M874: a freshly loaded stage is still warming up (the map's own particles come and go for a few seconds); the first ability would otherwise measure its particle baseline in that transient
@@ -511,7 +512,13 @@ internal sealed class SimCheckDriver
         if (Mp.SimRunning) cleanup.Add("the player is still running");
         if (Mp.SimCurrentScript is not null) cleanup.Add("a run is still held");
         var idleNow = PlaybackNames();
-        if (!idleNow.SequenceEqual(stage.Idle)) cleanup.Add($"playback holds {idleNow.Count} effect(s), {stage.Idle.Count} at rest ({string.Join(", ", idleNow.Except(stage.Idle).Take(3))})");
+        {
+            // M907: a multiset diff, both ways - a leaked ability effect is "extra", a lost idle effect is "missing"
+            var extra = idleNow.ToList(); foreach (var n in stage.Idle) extra.Remove(n);
+            var missing = stage.Idle.ToList(); foreach (var n in idleNow) missing.Remove(n);
+            if (extra.Count > 0 || missing.Count > 0)
+                cleanup.Add($"playback holds {idleNow.Count} effect(s), {stage.Idle.Count} at rest (extra: {string.Join(", ", extra.Take(3))}; missing: {string.Join(", ", missing.Take(3))})");
+        }
         if (Mp.SelectedEvent is not null) cleanup.Add("an event is still selected");
         if (Mp.SimAllyPosition is not null) cleanup.Add("the ally dummy is still on the stage");
         if (Mp.SimSpawnedUnits.Count > 0) cleanup.Add($"{Mp.SimSpawnedUnits.Count} summoned unit(s) are still on the stage ({string.Join(", ", Mp.SimSpawnedUnits)})");
