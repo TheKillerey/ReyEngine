@@ -107,6 +107,23 @@ public sealed class PostFogTests
         Assert.Equal(0f, R(80));   // depth fog off: zero maximum
     }
 
+    [Fact]
+    public void The_constants_follow_the_layout_the_blob_declares()
+    {
+        // the 16.23 layout: two uint debug flags first, every value 16 bytes later, 160 bytes wide
+        var shifted = new ShaderPreviewRenderer.PostFogLayout(16, 32, 96, 112, 128, 144, 160);
+        var eye = new Vector3(100f, 900f, 700f);
+        var vp = Matrix4x4.CreateLookAt(eye, Vector3.Zero, Vector3.UnitY)
+                 * Matrix4x4.CreatePerspectiveFieldOfView(0.9f, 1.3f, 10f, 20000f);
+        var fog = MapPostFog.ShaderParams(HeightOnly(new Vector4(0.25f, 0.5f, 0.75f, 1f)));
+        var legacy = ShaderPreviewRenderer.PostFogConstants(eye, vp, fog);
+        var b = ShaderPreviewRenderer.PostFogConstants(eye, vp, fog, shifted);
+        Assert.Equal(160, b.Length);
+        // the debug flags stay zero (the shader compares them to 1234) and every value is the legacy one 16 bytes on
+        Assert.All(b.Take(16), x => Assert.Equal(0, x));
+        Assert.Equal(legacy, b.Skip(16).Take(144).ToArray());
+    }
+
     // ---------------------------------------------------------------- the bin
 
     [Fact]
@@ -178,12 +195,18 @@ public sealed class PostFogTests
         // blob 0 reads its colours from $Globals, at the offsets PostFogConstants writes; the light-region
         // variant has no HeightFogColor at all (it takes the colour from LightRegionInfo)
         var globals = ps.ConstantBuffers.Single(c => c.Name == "$Globals").Variables.ToDictionary(v => v.Name, v => v.Offset);
-        Assert.Equal(0, globals["CameraPos"]);
-        Assert.Equal(16, globals["WorldViewProjInverse"]);
-        Assert.Equal(80, globals["DepthFogParams"]);
-        Assert.Equal(96, globals["DepthFogColor"]);
-        Assert.Equal(112, globals["HeightFogParams"]);
-        Assert.Equal(128, globals["HeightFogColor"]);
+        // 16.23 put two uint debug flags in front, which moves every value 16 bytes down; the ORDER and spacing are
+        // what blob 0 has always had, so assert those relative to CameraPos and that the renderer reads the same offsets
+        int shift = globals["CameraPos"];
+        Assert.True(shift is 0 or 16, $"CameraPos at {shift}");
+        Assert.Equal(shift + 16, globals["WorldViewProjInverse"]);
+        Assert.Equal(shift + 80, globals["DepthFogParams"]);
+        Assert.Equal(shift + 96, globals["DepthFogColor"]);
+        Assert.Equal(shift + 112, globals["HeightFogParams"]);
+        Assert.Equal(shift + 128, globals["HeightFogColor"]);
+        var layout = ShaderPreviewRenderer.PostFogLayout.From(ps);
+        Assert.Equal(new ShaderPreviewRenderer.PostFogLayout(shift, shift + 16, shift + 80, shift + 96, shift + 112, shift + 128, layout.Size), layout);
+        Assert.True(layout.Size >= shift + 140 && layout.Size % 16 == 0, $"cbuffer size {layout.Size}");
         Assert.Contains(ps.Textures, t => t.Name.StartsWith("sDepthTexture", StringComparison.Ordinal));
     }
 

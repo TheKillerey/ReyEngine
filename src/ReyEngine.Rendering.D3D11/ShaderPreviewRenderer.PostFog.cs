@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using Silk.NET.Core.Native;
+using ReyEngine.Formats.Shaders;
 using Silk.NET.Direct3D11;
 using Silk.NET.DXGI;
 
@@ -23,6 +24,7 @@ public sealed unsafe partial class ShaderPreviewRenderer
 {
     private byte[]? _postFogVsCode, _postFogPsCode;
     private bool _postFogTried, _postFogOk;
+    private PostFogLayout _postFogConstants = PostFogLayout.Legacy;
     private ComPtr<ID3D11VertexShader> _postFogVs;
     private ComPtr<ID3D11PixelShader> _postFogPs;
     private ComPtr<ID3D11InputLayout> _postFogLayout;
@@ -45,14 +47,41 @@ public sealed unsafe partial class ShaderPreviewRenderer
 
     public bool HasPostFogShaders => _postFogVsCode is not null && _postFogPsCode is not null;
 
+    /// <summary>Where blob 0 keeps each value in its <c>$Globals</c>. Riot's 16.23 rebuild put two debug flags
+    /// (DEBUG_RENDERTARGET_IS_SRGB_HANDLED, DEBUG_BACK_BUFFER_COPY_IS_SRGB_HANDLED) in front of CameraPos and
+    /// moved every value after them 16 bytes down, so the offsets are READ from the blob (<see cref="From"/>)
+    /// and only fall back to the original 144-byte layout for a blob that names none of them.</summary>
+    public readonly record struct PostFogLayout(int Camera, int Inverse, int DepthParams, int DepthColor,
+        int HeightParams, int HeightColor, int Size)
+    {
+        /// <summary>The pre-16.23 layout: CameraPos at 0, then the matrix, the two fogs.</summary>
+        public static readonly PostFogLayout Legacy = new(0, 16, 80, 96, 112, 128, 144);
+
+        public static PostFogLayout From(DxbcShader ps)
+        {
+            var globals = ps.ConstantBuffers.FirstOrDefault(c => c.Name == "$Globals");
+            if (globals is null) return Legacy;
+            int At(string name) => globals.Variables.FirstOrDefault(v => v.Name == name)?.Offset ?? -1;
+            int camera = At("CameraPos"), inverse = At("WorldViewProjInverse"), dp = At("DepthFogParams"),
+                dc = At("DepthFogColor"), hp = At("HeightFogParams"), hc = At("HeightFogColor");
+            // all six or none: a half-found layout would write some values to the old place and some to the new
+            if (camera < 0 || inverse < 0 || dp < 0 || dc < 0 || hp < 0 || hc < 0) return Legacy;
+            return new PostFogLayout(camera, inverse, dp, dc, hp, hc, Math.Max(globals.AllocationSize, hc + 12));
+        }
+    }
+
     /// <summary>The constant buffer exactly as blob 0 reads it. Public and pure so its layout - the part that
     /// fails silently on the GPU - is unit-tested without a device.</summary>
     public static byte[] PostFogConstants(Vector3 camera, Matrix4x4 viewProj,
         (Vector4 DepthParams, Vector3 DepthColor, Vector4 HeightParams, Vector3 HeightColor) fog)
+        => PostFogConstants(camera, viewProj, fog, PostFogLayout.Legacy);
+
+    public static byte[] PostFogConstants(Vector3 camera, Matrix4x4 viewProj,
+        (Vector4 DepthParams, Vector3 DepthColor, Vector4 HeightParams, Vector3 HeightColor) fog, PostFogLayout layout)
     {
-        var b = new byte[144];
+        var b = new byte[layout.Size];
         void F(int at, float v) => BitConverter.TryWriteBytes(b.AsSpan(at, 4), v);
-        F(0, camera.X); F(4, camera.Y); F(8, camera.Z);
+        F(layout.Camera, camera.X); F(layout.Camera + 4, camera.Y); F(layout.Camera + 8, camera.Z);
         // world.x = dot(clip, cb0[1]) ... : the registers must hold the COLUMNS of inverse(viewProj) under
         // System.Numerics' row-vector convention (clip = world * VP  =>  world = clip * inv(VP)).
         Matrix4x4.Invert(viewProj, out var inv);
@@ -62,11 +91,12 @@ public sealed unsafe partial class ShaderPreviewRenderer
             t.M11, t.M12, t.M13, t.M14, t.M21, t.M22, t.M23, t.M24,
             t.M31, t.M32, t.M33, t.M34, t.M41, t.M42, t.M43, t.M44,
         };
-        for (int i = 0; i < 16; i++) F(16 + i * 4, m[i]);
-        F(80, fog.DepthParams.X); F(84, fog.DepthParams.Y); F(88, fog.DepthParams.Z); F(92, fog.DepthParams.W);
-        F(96, fog.DepthColor.X); F(100, fog.DepthColor.Y); F(104, fog.DepthColor.Z);
-        F(112, fog.HeightParams.X); F(116, fog.HeightParams.Y); F(120, fog.HeightParams.Z); F(124, fog.HeightParams.W);
-        F(128, fog.HeightColor.X); F(132, fog.HeightColor.Y); F(136, fog.HeightColor.Z);
+        for (int i = 0; i < 16; i++) F(layout.Inverse + i * 4, m[i]);
+        int d = layout.DepthParams, dc = layout.DepthColor, h = layout.HeightParams, hc = layout.HeightColor;
+        F(d, fog.DepthParams.X); F(d + 4, fog.DepthParams.Y); F(d + 8, fog.DepthParams.Z); F(d + 12, fog.DepthParams.W);
+        F(dc, fog.DepthColor.X); F(dc + 4, fog.DepthColor.Y); F(dc + 8, fog.DepthColor.Z);
+        F(h, fog.HeightParams.X); F(h + 4, fog.HeightParams.Y); F(h + 8, fog.HeightParams.Z); F(h + 12, fog.HeightParams.W);
+        F(hc, fog.HeightColor.X); F(hc + 4, fog.HeightColor.Y); F(hc + 8, fog.HeightColor.Z);
         return b;
     }
 
@@ -86,6 +116,9 @@ public sealed unsafe partial class ShaderPreviewRenderer
             if (_device.CreatePixelShader(p, (nuint)_postFogPsCode!.Length, ref Unsafe.NullRef<ID3D11ClassLinkage>(), ref ps) < 0)
             { Log("screen fog: CreatePixelShader (gamma/postfog.ps) failed"); return false; }
         _postFogPs = ps;
+        // the constant layout is whatever THIS blob declares (16.23 moved it); an unparseable blob keeps the original
+        try { _postFogConstants = PostFogLayout.From(DxbcReflection.Parse(_postFogPsCode!)); }
+        catch { _postFogConstants = PostFogLayout.Legacy; }
 
         // postfog.vs declares one input, POSITION0 float2, and makes the clip position (v0 * 2 - 1) and the
         // UV (x, 1 - y) itself - the same contract as post_effect.vs, so the same unit-square quad.
@@ -114,7 +147,7 @@ public sealed unsafe partial class ShaderPreviewRenderer
         }
         _postFogVb = vb;
 
-        var cbDesc = new BufferDesc { ByteWidth = 144, Usage = Usage.Dynamic, BindFlags = (uint)BindFlag.ConstantBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write };
+        var cbDesc = new BufferDesc { ByteWidth = (uint)_postFogConstants.Size, Usage = Usage.Dynamic, BindFlags = (uint)BindFlag.ConstantBuffer, CPUAccessFlags = (uint)CpuAccessFlag.Write };
         ComPtr<ID3D11Buffer> cb = default;
         if (_device.CreateBuffer(in cbDesc, null, ref cb) < 0) { Log("screen fog: cbuffer failed"); return false; }
         _postFogCb = cb;
@@ -170,11 +203,11 @@ public sealed unsafe partial class ShaderPreviewRenderer
         _ctx.CopyResource(_depthCopy, _depth);
         _ctx.CopyResource(_sceneCopy, _rt);
 
-        var bytes = PostFogConstants(ShaderCamera(s), Matrix4x4.Multiply(view, proj), fog);
+        var bytes = PostFogConstants(ShaderCamera(s), Matrix4x4.Multiply(view, proj), fog, _postFogConstants);
         MappedSubresource map = default;
         if (_ctx.Map(_postFogCb, 0, Map.WriteDiscard, 0, ref map) >= 0)
         {
-            fixed (byte* src = bytes) Buffer.MemoryCopy(src, map.PData, 144, 144);
+            fixed (byte* src = bytes) Buffer.MemoryCopy(src, map.PData, bytes.Length, bytes.Length);
             _ctx.Unmap(_postFogCb, 0);
         }
 
