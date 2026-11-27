@@ -177,6 +177,31 @@ public sealed class VfxRateDefaultTests(ITestOutputHelper output)
         Assert.Equal(1, counts[(int)MathF.Round(0.1f / Dt)]);   // the first one lands at 0.1 s
     }
 
+    // M908: a finite emitter that would emit nothing in its whole lifetime emits one particle at its first emission
+    // (Fiddlesticks' scythe glow: rate 1, lifetime 0.1, particleLifetime -1 = immortal).
+    private static VfxSystemDefinition Finite(float rate, float emitterLifetime)
+    {
+        var sys = System(rate, particleLifetime: 10f);
+        return sys with { Emitters = new[] { sys.Emitters[0] with { EmitterLifetime = emitterLifetime } } };
+    }
+
+    [Fact]
+    public void AFiniteEmitterThatWouldEmitNothingInItsLifetimeEmitsExactlyOneParticle()
+    {
+        var counts = Counts(Sim(Finite(rate: 1f, emitterLifetime: 0.1f)), (int)(3f / Dt));
+        Assert.Equal(1, counts[0]);
+        Assert.All(counts, c => Assert.Equal(1, c));
+    }
+
+    [Fact]
+    public void AFiniteEmitterThatEmitsAtLeastOneAnywayKeepsItsTiming()
+    {
+        var counts = Counts(Sim(Finite(rate: 10f, emitterLifetime: 1f)), (int)MathF.Round(1.5f / Dt));
+        Assert.Equal(0, counts[0]);
+        Assert.Equal(1, counts[(int)MathF.Round(0.1f / Dt)]);
+        Assert.InRange(counts[^1], 9, 11);
+    }
+
     // ------------------------------------------------------------------ the real schema and the real game
 
     [Fact]

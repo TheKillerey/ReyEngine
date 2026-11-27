@@ -582,7 +582,11 @@ public sealed class VfxParticleSimulator
                 if (!s.FirstEmissionDone)
                 {
                     s.FirstEmissionDone = true;
-                    if (rate <= 0f) Spawn(s);
+                    // M908: the same reading for a FINITE emitter that would emit nothing in its whole lifetime
+                    // (rate * lifetime < 1, e.g. Fiddlesticks' scythe glow: rate 1, lifetime 0.1): it emits one particle
+                    // at its first emission rather than none. Emitters that emit at least one anyway keep their timing.
+                    bool nothingInLife = d.EmitterLifetime is > 0f && rate * d.EmitterLifetime.Value < 1f;
+                    if (rate <= 0f || nothingInLife) Spawn(s);
                 }
                 s.SpawnAccum += rate * dt;
                 // M853: mMaxAddedPerFrame caps how many particles a trail emitter adds in one step (0 = no cap).
